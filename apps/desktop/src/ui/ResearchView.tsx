@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useAppStore } from "../app/store";
 import type { ResearchCard } from "../app/types";
 import { Button } from "../components/ui/button";
+import { Skeleton } from "../components/ui/skeleton";
 import { NewResearchComposer } from "./research/NewResearchComposer";
 import { ResearchCardGrid } from "./research/ResearchCardGrid";
 import { ResearchDetailPane } from "./research/ResearchDetailPane";
@@ -13,6 +14,7 @@ export function ResearchView() {
   const researchOrder = useAppStore((s) => s.researchOrder);
   const selectedResearchId = useAppStore((s) => s.selectedResearchId);
   const researchListError = useAppStore((s) => s.researchListError);
+  const researchListLoading = useAppStore((s) => s.researchListLoading);
   const refreshResearchList = useAppStore((s) => s.refreshResearchList);
   const selectResearch = useAppStore((s) => s.selectResearch);
 
@@ -61,13 +63,42 @@ export function ResearchView() {
               {researchListError}
             </div>
           ) : null}
-          {research.length > 0 ? (
+          {researchListLoading && research.length === 0 ? (
+            <div
+              role="status"
+              className="flex flex-col gap-2 px-1 py-1"
+              aria-busy="true"
+              aria-label="Loading research"
+            >
+              <Skeleton className="h-16 w-full rounded-xl" />
+              <Skeleton className="h-16 w-full rounded-xl" />
+              <Skeleton className="h-16 w-full rounded-xl" />
+            </div>
+          ) : research.length > 0 ? (
             <ResearchCardGrid
               research={research}
               selectedResearchId={selectedResearchId}
               onSelectResearch={(researchId) => void selectResearch(researchId)}
             />
-          ) : null}
+          ) : (
+            <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
+              <p className="text-sm font-semibold text-foreground">Start your first research</p>
+              <p className="mx-auto mt-2 max-w-[16rem] text-xs leading-5 text-muted-foreground">
+                Investigate a market, compare vendors, or draft a cited brief. Use the composer on
+                the right — completed runs will show up here.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="mt-4 h-8 gap-1.5 rounded-md px-3 text-xs"
+                onClick={() => selectResearch(null)}
+              >
+                <PlusIcon className="h-3.5 w-3.5" />
+                New research
+              </Button>
+            </div>
+          )}
         </div>
       </section>
 

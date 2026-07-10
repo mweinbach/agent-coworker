@@ -143,7 +143,8 @@
     --overlay: var(--surface-overlay);
     --overlay-foreground: var(--text-primary);
 
-    --muted: var(--text-muted);
+    /* Align with Tailwind --color-muted (surface fill), not text — bubble hover mixes this into backgrounds. */
+    --muted: var(--surface-muted-fill);
     --scrollbar: var(--scrollbar-thumb);
 
     --default: color-mix(in srgb, var(--panel-bg) 92%, var(--app-bg));

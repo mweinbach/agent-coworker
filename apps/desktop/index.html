@@ -5,6 +5,26 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cowork Desktop</title>
+    <script>
+      // Apply theme before first paint to avoid FOUC. Prefer the last resolved
+      // theme written by the app (covers forced light/dark); fall back to OS.
+      (() => {
+        try {
+          const stored = localStorage.getItem("cowork.resolvedTheme");
+          const prefersDark =
+            window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+          const dark = stored === "dark" || (stored !== "light" && prefersDark);
+          const root = document.documentElement;
+          root.dataset.systemTheme = prefersDark ? "dark" : "light";
+          root.dataset.theme = dark ? "dark" : "light";
+          if (dark) root.classList.add("dark");
+          else root.classList.remove("dark");
+          root.style.colorScheme = dark ? "dark" : "light";
+        } catch {
+          /* ignore pre-paint theme probe failures */
+        }
+      })();
+    </script>
   </head>
 
   <body>

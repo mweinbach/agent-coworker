@@ -252,6 +252,7 @@ export class ResearchService {
   private readonly fileStore: ResearchFileStore;
   private readonly maxBufferedEvents: number;
   private readonly states = new Map<string, ResearchRuntimeState>();
+  private readonly deletingIds = new Set<string>();
   private initPromise: Promise<void> | null = null;
 
   constructor(opts: ResearchServiceOptions) {
@@ -277,9 +278,12 @@ export class ResearchService {
     const persisted = this.sessionDb.listResearch({ workspacePath: this.workspacePath });
     const byId = new Map(persisted.map((record) => [record.id, record]));
     for (const [id, state] of this.states) {
-      if (this.recordBelongsToWorkspace(state.record)) {
+      if (!this.deletingIds.has(id) && this.recordBelongsToWorkspace(state.record)) {
         byId.set(id, state.record);
       }
+    }
+    for (const id of this.deletingIds) {
+      byId.delete(id);
     }
     const resolved = await Promise.all(
       [...byId.values()].map(async (record) => await this.resolveRecordForRead(record)),
@@ -289,6 +293,9 @@ export class ResearchService {
 
   async get(id: string): Promise<ResearchRecord | null> {
     await this.init();
+    if (this.deletingIds.has(id)) {
+      return null;
+    }
     const activeState = this.states.get(id);
     if (activeState) {
       if (!this.recordBelongsToWorkspace(activeState.record)) {
@@ -437,6 +444,77 @@ export class ResearchService {
     await this.flushPersistNow(state);
     this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
     return state.record;
+  }
+
+  async delete(id: string): Promise<{ researchId: string; deleted: boolean }> {
+    await this.init();
+    const activeState = this.states.get(id);
+    const existing =
+      activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
+    if (!existing || !this.recordBelongsToWorkspace(existing)) {
+      return { researchId: id, deleted: false };
+    }
+
+    const state = this.states.get(id) ?? this.getOrCreateState(existing);
+    const subscribers = [...state.subscribers.values()];
+    this.deletingIds.add(id);
+    state.cancelRequested = true;
+    this.updateRecord(state, {
+      status: "cancelled",
+      error: "cancelled",
+      planPending: false,
+      updatedAt: new Date().toISOString(),
+    });
+
+    try {
+      if (state.record.interactionId) {
+        try {
+          await cancelResearchInteraction({
+            apiKey: this.resolveGoogleApiKey(),
+            interactionId: state.record.interactionId,
+          });
+        } catch {
+          // Remote cancellation is best effort; local deletion still waits for stream settlement.
+        }
+      }
+
+      const activeStream = state.streamPromise;
+      if (activeStream) {
+        await activeStream;
+      }
+
+      await this.clearTerminalFileSearchStore(state);
+      if (state.persistTimer) {
+        clearTimeout(state.persistTimer);
+        state.persistTimer = null;
+      }
+      state.subscribers.clear();
+      state.ringBuffer = [];
+      if (this.states.get(id) === state) {
+        this.states.delete(id);
+      }
+
+      try {
+        await this.fileStore.deleteResearchDir(id);
+      } catch {
+        // Disk cleanup is best effort; DB delete is authoritative for list visibility.
+      }
+
+      const deleted = await this.sessionDb.deleteResearch(id, {
+        workspacePath: this.workspacePath,
+      });
+      if (deleted) {
+        for (const socket of subscribers) {
+          this.sendJsonRpc(socket, {
+            method: "research/deleted",
+            params: { researchId: id },
+          });
+        }
+      }
+      return { researchId: id, deleted };
+    } finally {
+      this.deletingIds.delete(id);
+    }
   }
 
   async cancel(id: string): Promise<ResearchRecord | null> {
@@ -781,6 +859,9 @@ export class ResearchService {
     state: ResearchRuntimeState,
     event: ResearchInteractionStreamEvent,
   ): Promise<void> {
+    if (this.deletingIds.has(state.record.id)) {
+      return;
+    }
     if (state.cancelRequested && (isContentStartEvent(event) || isContentDeltaEvent(event))) {
       return;
     }
@@ -1331,7 +1412,9 @@ export class ResearchService {
     }
     if (await this.clearTerminalFileSearchStore(state)) {
       try {
-        await this.sessionDb.upsertResearch(state.record);
+        if (!this.deletingIds.has(state.record.id)) {
+          await this.sessionDb.upsertResearch(state.record);
+        }
       } catch {
         // Local cleanup persistence is best effort during shutdown/teardown races.
       }
@@ -1368,6 +1451,9 @@ export class ResearchService {
   }
 
   private schedulePersist(state: ResearchRuntimeState): void {
+    if (this.deletingIds.has(state.record.id)) {
+      return;
+    }
     if (state.persistTimer) {
       clearTimeout(state.persistTimer);
     }
@@ -1382,6 +1468,9 @@ export class ResearchService {
     if (state.persistTimer) {
       clearTimeout(state.persistTimer);
       state.persistTimer = null;
+    }
+    if (this.deletingIds.has(state.record.id)) {
+      return;
     }
     await this.sessionDb.upsertResearch(state.record);
   }
@@ -1399,6 +1488,9 @@ export class ResearchService {
     params: unknown,
     eventId: string | null,
   ): void {
+    if (this.deletingIds.has(state.record.id)) {
+      return;
+    }
     state.ringBuffer.push({ method, params, eventId });
     if (state.ringBuffer.length > this.maxBufferedEvents) {
       state.ringBuffer.splice(0, state.ringBuffer.length - this.maxBufferedEvents);

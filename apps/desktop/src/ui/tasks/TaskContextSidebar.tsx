@@ -29,6 +29,7 @@ import { Progress } from "../../components/ui/progress";
 import { Separator } from "../../components/ui/separator";
 import { Spinner } from "../../components/ui/spinner";
 import { Textarea } from "../../components/ui/textarea";
+import { confirmAction } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 import { ArtifactReviewCard } from "./ArtifactReviewCard";
 import { TaskQuestionsCard } from "./TaskQuestionsCard";
@@ -76,6 +77,8 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const [saving, setSaving] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const draftTaskId = useRef(task?.id ?? null);
 
   useEffect(() => {
@@ -148,6 +151,43 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
     await requestTaskChanges(task.id, value);
     setFeedback("");
     setFeedbackOpen(false);
+  };
+
+  const requestCancelTask = async () => {
+    if (cancelling) return;
+    // Prefer native confirm when available (desktop / web adapter), fall back to in-app dialog.
+    try {
+      const confirmed = await confirmAction({
+        title: "Cancel this task?",
+        message:
+          "This stops the task agent and marks the task as cancelled. You can reopen it later.",
+        confirmLabel: "Cancel task",
+        cancelLabel: "Keep working",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (!confirmed) return;
+      setCancelling(true);
+      try {
+        await cancelTask(task.id);
+      } finally {
+        setCancelling(false);
+      }
+      return;
+    } catch {
+      setCancelConfirmOpen(true);
+    }
+  };
+
+  const confirmCancelTask = async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelTask(task.id);
+      setCancelConfirmOpen(false);
+    } finally {
+      setCancelling(false);
+    }
   };
 
   return (
@@ -408,10 +448,16 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 size="sm"
                 variant="ghost"
                 className="text-destructive hover:text-destructive"
-                onClick={() => void cancelTask(task.id)}
+                disabled={cancelling}
+                aria-busy={cancelling || undefined}
+                onClick={() => void requestCancelTask()}
               >
-                <XCircleIcon data-icon="inline-start" />
-                Cancel task
+                {cancelling ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <XCircleIcon data-icon="inline-start" />
+                )}
+                {cancelling ? "Cancelling…" : "Cancel task"}
               </Button>
             ) : null}
             {canReopen ? (
@@ -495,6 +541,30 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel this task?</DialogTitle>
+            <DialogDescription>
+              This stops the task agent and marks the task as cancelled. You can reopen it later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCancelConfirmOpen(false)}>
+              Keep working
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelling}
+              onClick={() => void confirmCancelTask()}
+            >
+              {cancelling ? "Cancelling…" : "Cancel task"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

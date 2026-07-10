@@ -84,12 +84,16 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain(
         "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content.",
       );
+      expect(container.textContent).toContain("Diagnostics upload");
+      expect(container.textContent).toContain(
+        "Allow optional diagnostics bundles to be prepared for support. Keeps content local until you explicitly share a package.",
+      );
+      expect(container.querySelector('[aria-label="Diagnostics upload"]')).toBeTruthy();
       expect(container.textContent).not.toContain("Telemetry status");
       expect(container.textContent).not.toContain("Diagnostic log uploads");
-      expect(container.textContent).not.toContain("Diagnostics upload");
       expect(container.textContent).not.toContain("Cloud sync");
       expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
-      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(4);
+      expect(container.querySelectorAll('[role="switch"]')).toHaveLength(5);
 
       const crashReportsSwitch = container.querySelector('[aria-label="Crash reports"]');
       const aiPayloadSwitch = container.querySelector(
@@ -184,8 +188,10 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain("Enabled");
       expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain("Full payload");
-      expect(container.textContent).not.toContain("Upload configured");
-      expect(container.textContent).not.toContain("Error");
+      expect(container.textContent).toContain("Upload configured");
+      expect(container.textContent).toContain("Diagnostics upload");
+      // Cloud sync stays off the privacy page even when status reports an error.
+      expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
 
       await act(async () => {
         root.unmount();
@@ -195,7 +201,7 @@ describe("privacy telemetry settings page", () => {
     }
   });
 
-  test("renders metadata-only status without diagnostics upload or cloud sync statuses", async () => {
+  test("renders metadata-only AI status and diagnostics upload badge, not cloud sync", async () => {
     getTelemetryStatusMock.mockImplementation(async () => ({
       globalKillSwitchActive: false,
       crashReports: {
@@ -240,8 +246,11 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(container.textContent).toContain("Metadata only");
-      expect(container.textContent).not.toContain("Local only");
-      expect(container.textContent).not.toContain("Connected");
+      expect(container.textContent).toContain("Local only");
+      expect(container.textContent).toContain("Diagnostics upload");
+      expect(container.querySelector('[aria-label="Diagnostics upload"]')).toBeTruthy();
+      expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
+      expect(container.textContent).not.toContain("Cloud sync");
 
       await act(async () => {
         root.unmount();

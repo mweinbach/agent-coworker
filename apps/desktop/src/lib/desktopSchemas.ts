@@ -796,6 +796,7 @@ export const desktopMenuCommandSchema: z.ZodType<DesktopMenuCommand> = z.enum([
   "openResearch",
   "openSkills",
   "openUpdates",
+  "openCommandPalette",
 ]);
 
 export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({

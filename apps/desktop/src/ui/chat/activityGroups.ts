@@ -192,7 +192,10 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   for (let i = 0; i < feed.length; i++) {
     const item = feed[i];
     if (!item) continue;
+    // Keep the latest todos snapshot as a standalone in-feed card (not folded into activity).
     if (item.kind === "todos") {
+      flushGroup();
+      items.push({ kind: "feed-item", item });
       continue;
     }
     if (item.kind === "reasoning") {

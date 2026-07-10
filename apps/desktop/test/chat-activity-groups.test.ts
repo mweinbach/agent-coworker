@@ -56,6 +56,46 @@ describe("desktop chat activity groups", () => {
     ]);
   });
 
+  test("keeps todos as in-feed cards instead of dropping them", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "m1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "plan this",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "todoWrite",
+        state: "output-available",
+        args: { todos: [{ content: "Ship it", status: "in_progress", activeForm: "Shipping" }] },
+      },
+      {
+        id: "todos1",
+        kind: "todos",
+        ts: "2024-01-01T00:00:02.000Z",
+        todos: [{ content: "Ship it", status: "in_progress", activeForm: "Shipping" }],
+      },
+      {
+        id: "m2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:03.000Z",
+        text: "Working on it.",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual([
+      { kind: "feed-item", item: feed[0] },
+      { kind: "activity-group", id: "activity-t1", items: [feed[1]] },
+      { kind: "feed-item", item: feed[2] },
+      { kind: "feed-item", item: feed[3] },
+    ]);
+  });
+
   test("buildChatRenderItems preserves feed order instead of sorting by timestamps", () => {
     const feed: FeedItem[] = [
       { id: "m1", kind: "message", role: "user", ts: "2024-01-01T00:00:10.000Z", text: "start" },

@@ -279,6 +279,23 @@ export function summarizeActivityGroup(
     .map((item) => item.retryOf as string)) {
     recoveredToolIds.add(retryOf);
   }
+  let recoveryChanged = true;
+  while (recoveryChanged) {
+    recoveryChanged = false;
+    for (const item of toolItems) {
+      const state = effectiveToolState(item);
+      if (
+        recoveredToolIds.has(item.id) ||
+        typeof item.retryOf !== "string" ||
+        !recoveredToolIds.has(item.retryOf) ||
+        (state !== "output-error" && state !== "output-denied")
+      ) {
+        continue;
+      }
+      recoveredToolIds.add(item.id);
+      recoveryChanged = true;
+    }
+  }
   const status = hasPendingReasoning ? "running" : deriveStatus(toolItems, recoveredToolIds);
 
   return {
@@ -329,14 +346,51 @@ export function confirmedRecoveredToolIds(feed: SessionFeedItem[]): string[] {
     ) {
       continue;
     }
-    const target = toolById.get(item.retryOf);
-    if (!target) continue;
-    const targetState = effectiveToolState(target);
-    if (targetState === "output-error" || targetState === "output-denied") {
+    const visited = new Set<string>();
+    let targetId: string | undefined = item.retryOf;
+    while (targetId && !visited.has(targetId)) {
+      visited.add(targetId);
+      const target = toolById.get(targetId);
+      if (!target) break;
+      const targetState = effectiveToolState(target);
+      if (targetState !== "output-error" && targetState !== "output-denied") break;
       recovered.add(target.id);
+      targetId = target.retryOf;
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of toolById.values()) {
+      const state = effectiveToolState(item);
+      if (
+        recovered.has(item.id) ||
+        typeof item.retryOf !== "string" ||
+        !recovered.has(item.retryOf) ||
+        (state !== "output-error" && state !== "output-denied")
+      ) {
+        continue;
+      }
+      recovered.add(item.id);
+      changed = true;
     }
   }
   return [...recovered];
+}
+
+export function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
+  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+    const item = renderItems[index];
+    if (!item) continue;
+    if (item.kind === "activity-group") {
+      if (summarizeActivityGroup(item.items, item.recoveredToolIds).status === "issue") {
+        return item.id;
+      }
+      continue;
+    }
+    if (item.item.kind === "message" && item.item.role === "user") return null;
+  }
+  return null;
 }
 
 export function parseReasoningSections(text: string): Array<{ title: string; body: string }> {

@@ -196,8 +196,10 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `optOutNotificationMethods: string[]`
 
 Clients that do not request `toolRetryLineage` receive the legacy strict response shape: the
-capability and all additive `retryOf` fields are omitted from notifications, thread reads, and
-hydration snapshots.
+capability, retry metadata, and semantic retry-turn messages are omitted from notifications, thread
+reads, and hydration snapshots. New clients should retry `initialize` once without
+`toolRetryLineage` when an older strict server rejects that capability with `-32602`; exact retry UI
+must remain disabled after that fallback.
 
 ### Core JSON-RPC methods currently available
 
@@ -236,8 +238,10 @@ hydration snapshots.
 After negotiating `toolRetryLineage`, `turn/start` also accepts
 `retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server
 resolves each ID against the current bounded session snapshot, requires the target to remain failed
-or denied, and records its canonical tool name and arguments. A replacement invocation receives
-`retryOf` only when its name and canonical arguments exactly match one targeted occurrence.
+or denied, and uses its persisted SHA-256 digest and canonical byte count. The digest is derived from
+the complete raw tool name and arguments before normalization; raw arguments are never persisted in
+retry metadata. A replacement invocation receives `retryOf` only when both digest fields exactly
+match one targeted occurrence.
 Same-name calls with different arguments, unrelated tools, and turns without structured retry
 metadata do not recover a failure. Projected tool IDs are scoped by turn, provider call key, and
 occurrence, so provider call-ID reuse across turns cannot create lineage collisions.
@@ -245,7 +249,10 @@ occurrence, so provider call-ID reuse across turns cannot create lineage collisi
 Confirmed lineage is additive: both the failed tool item and its replacement remain in
 `item/started`, `item/completed`, `thread/read`, and `thread/hydrate` data. The replacement tool has
 `retryOf: "<failed projected item id>"`. Completed lineage survives snapshot persistence and server
-restart; snapshots remain bounded by the existing session-feed limit.
+restart through a bounded, versioned message-annotation sidecar that older strict snapshot parsers
+already tolerate. Failed retry attempts remain in the same explicit chain and remain retryable; only
+a successful exact descendant recovers the chain. Snapshots remain bounded by the existing
+session-feed limit.
 
 `thread/fork` takes `{ threadId, environment?, title?, prompt?, model?, thinking? }` and returns `{ sourceThreadId, thread, forked, queued, environment }`. The optional environment is `{ type: "local" }` or `{ type: "worktree", ref?, branchName?, startingState? }`; managed worktrees are created under `~/.cowork/worktrees` from `HEAD` unless a safe explicit ref is supplied. `prompt`, when present, is queued as the first follow-up turn in the forked thread. `thread/pinned/set` takes `{ threadId, pinned }` and returns `{ thread }` with `pinned` / `pinnedAt` metadata. `thread/archived/set` takes `{ threadId, archived }` and returns `{ thread }` with `archived` / `archivedAt` metadata. These flags are persisted server-side and mirrored into desktop state when available.
 

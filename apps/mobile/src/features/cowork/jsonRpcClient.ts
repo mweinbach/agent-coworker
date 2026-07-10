@@ -22,6 +22,7 @@ import {
 } from "./protocolTypes";
 
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
+const JSONRPC_INVALID_PARAMS_ERROR_CODE = -32602;
 const JSONRPC_NOT_INITIALIZED_ERROR_CODE = -32002;
 const JSONRPC_ALREADY_INITIALIZED_ERROR_CODE = -32003;
 
@@ -343,13 +344,27 @@ export class CoworkJsonRpcClient {
     const generation = this.transportGeneration;
     const initializePromise = (async () => {
       try {
-        const initializeResult = await this.request("initialize", {
-          clientInfo: this.clientInfo,
-          capabilities: {
-            experimentalApi: true,
-            toolRetryLineage: true,
-          },
-        });
+        let initializeResult: unknown;
+        try {
+          initializeResult = await this.request("initialize", {
+            clientInfo: this.clientInfo,
+            capabilities: {
+              experimentalApi: true,
+              toolRetryLineage: true,
+            },
+          });
+        } catch (error) {
+          if (readErrorCode(error) !== JSONRPC_INVALID_PARAMS_ERROR_CODE) {
+            throw error;
+          }
+          this.serverSupportsToolRetryLineage = false;
+          initializeResult = await this.request("initialize", {
+            clientInfo: this.clientInfo,
+            capabilities: {
+              experimentalApi: true,
+            },
+          });
+        }
         if (initializeResult && typeof initializeResult === "object") {
           const result = initializeResult as Record<string, unknown>;
           const capabilities =

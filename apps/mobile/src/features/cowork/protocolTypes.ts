@@ -60,6 +60,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
           .strict(),
       ),
       clientMessageId: nonEmptyStringSchema.optional(),
+      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .passthrough(),
   z

@@ -464,6 +464,17 @@ export function createMessagingModule(
         role: "user",
         ts: ctx.deps.nowIso(),
         text: displayText,
+        ...(retryToolItemIds && retryToolItemIds.length > 0
+          ? {
+              annotations: [
+                {
+                  type: "cowork.toolRetryTurn",
+                  version: 1,
+                  targetItemIds: [...retryToolItemIds],
+                },
+              ],
+            }
+          : {}),
       });
     }
 

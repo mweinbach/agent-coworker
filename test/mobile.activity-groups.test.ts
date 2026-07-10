@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildChatRenderItems,
+  latestRetryableActivityGroupId,
   parseReasoningSections,
   summarizeActivityGroup,
   unresolvedToolFailureIds,
 } from "../apps/mobile/src/features/cowork/activityGroups";
+import {
+  HIDDEN_RETRY_TURN_PROMPT,
+  isHiddenRetryTurnMessage,
+} from "../apps/mobile/src/features/cowork/chatRetry";
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 describe("mobile chat activity groups", () => {
@@ -251,7 +256,46 @@ describe("mobile chat activity groups", () => {
     ]);
   });
 
-  test("hides the legacy retry transport marker while grouping retry activity", () => {
+  test("a later successful attempt recovers failed descendants in the same retry chain", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "original",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "failed-retry",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed again" },
+        retryOf: "original",
+      },
+      {
+        id: "successful-retry",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { ok: true },
+        retryOf: "original",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.recoveredToolIds).toEqual(["original", "failed-retry"]);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "original",
+      "failed-retry",
+      "successful-retry",
+    ]);
+  });
+
+  test("hides structured retry turns while grouping retry activity", () => {
     const feed: SessionFeedItem[] = [
       {
         id: "failed",
@@ -266,7 +310,14 @@ describe("mobile chat activity groups", () => {
         kind: "message",
         role: "user",
         ts: "2024-01-01T00:00:02.000Z",
-        text: "[[cowork:hidden-retry-turn]]\nContinue.",
+        text: "Continue.",
+        annotations: [
+          {
+            type: "cowork.toolRetryTurn",
+            version: 1,
+            targetItemIds: ["failed"],
+          },
+        ],
       },
       {
         id: "replacement",
@@ -287,6 +338,19 @@ describe("mobile chat activity groups", () => {
         recoveredToolIds: ["failed"],
       },
     ]);
+  });
+
+  test("does not hide user-authored text without semantic retry metadata", () => {
+    const message: SessionFeedItem = {
+      id: "user-text",
+      kind: "message",
+      role: "user",
+      ts: "2024-01-01T00:00:00.000Z",
+      text: HIDDEN_RETRY_TURN_PROMPT,
+    };
+
+    expect(isHiddenRetryTurnMessage(message)).toBe(false);
+    expect(buildChatRenderItems([message])).toEqual([{ kind: "feed-item", item: message }]);
   });
 
   test("projects recovered status across separate turns", () => {
@@ -348,6 +412,49 @@ describe("mobile chat activity groups", () => {
     expect(unresolvedToolFailureIds(groups[0]!.items, groups[0]!.recoveredToolIds)).toEqual([
       "failed-two",
     ]);
+  });
+
+  test("targets the latest unresolved group past a trailing assistant explanation", () => {
+    const feed: SessionFeedItem[] = [
+      {
+        id: "user",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "Run the tests.",
+      },
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "explanation",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "The test command failed.",
+      },
+    ];
+
+    expect(latestRetryableActivityGroupId(buildChatRenderItems(feed))).toBe("activity-failed");
+    expect(
+      latestRetryableActivityGroupId(
+        buildChatRenderItems([
+          ...feed,
+          {
+            id: "new-user-turn",
+            kind: "message",
+            role: "user",
+            ts: "2024-01-01T00:00:03.000Z",
+            text: "Do something else.",
+          },
+        ]),
+      ),
+    ).toBeNull();
   });
 
   test("parseReasoningSections splits bold headings into collapsible sections", () => {

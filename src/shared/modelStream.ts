@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { SessionEvent } from "../server/protocol";
+import { isToolInputDigest, type ToolInputDigest } from "./toolInputDigest";
 
 const stringSchema = z.string();
 const finiteNumberSchema = z.number().finite();
@@ -71,6 +72,7 @@ export type ModelStreamUpdate =
       name: string;
       args?: unknown;
       retryOf?: string;
+      inputDigest?: ToolInputDigest;
     }
   | { kind: "tool_result"; turnId: string; key: string; name: string; result: unknown }
   | { kind: "tool_error"; turnId: string; key: string; name: string; error: unknown }
@@ -514,6 +516,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         name: toolName(evt),
         args: part.input,
         ...(asString(part.retryOf) ? { retryOf: asString(part.retryOf) } : {}),
+        ...(isToolInputDigest(part.inputDigest) ? { inputDigest: part.inputDigest } : {}),
       };
     case "tool_result":
       return {

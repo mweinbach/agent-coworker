@@ -76,6 +76,7 @@ function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem)
         role: "user",
         ts: existingTsOr(ts, existing),
         text: userMessageText(item.content),
+        ...(item.annotations ? { annotations: item.annotations } : {}),
       };
     case "agentMessage":
       return {

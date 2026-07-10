@@ -16,6 +16,16 @@ function toolItemsFromSnapshot(snapshot: unknown): Array<Record<string, unknown>
   );
 }
 
+function userMessagesFromSnapshot(snapshot: unknown): Array<Record<string, unknown>> {
+  if (!snapshot || typeof snapshot !== "object" || !("feed" in snapshot)) return [];
+  const feed = snapshot.feed;
+  if (!Array.isArray(feed)) return [];
+  return feed.filter(
+    (item): item is Record<string, unknown> =>
+      typeof item === "object" && item !== null && item.kind === "message" && item.role === "user",
+  );
+}
+
 describe("server JSON-RPC explicit tool retries", () => {
   test("confirms exact lineage, scopes reused provider ids, persists restart state, and rolls back for old clients", {
     timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
@@ -94,7 +104,12 @@ describe("server JSON-RPC explicit tool retries", () => {
 
         await rpc.sendRequest("turn/start", {
           threadId,
-          input: [{ type: "text", text: "Retry the failed test command." }],
+          input: [
+            {
+              type: "text",
+              text: "Continue from where the previous turn stopped. Retry the failed step only if it is still necessary, then finish the user's request.",
+            },
+          ],
           retry: { toolItemIds: [failedItemId] },
         });
         const replacement = await rpc.waitFor(
@@ -128,6 +143,9 @@ describe("server JSON-RPC explicit tool retries", () => {
         );
 
         const rollbackRead = await oldClient.sendRequest("thread/read", { threadId });
+        expect(
+          userMessagesFromSnapshot(rollbackRead.result.coworkSnapshot).map((item) => item.text),
+        ).toEqual(["Run the tests."]);
         expect(
           toolItemsFromSnapshot(rollbackRead.result.coworkSnapshot).find(
             (item) => item.id === replacementItemId,

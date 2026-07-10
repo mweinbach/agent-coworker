@@ -132,6 +132,77 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("falls back once when an old strict server rejects toolRetryLineage", async () => {
+    const sent: string[] = [];
+    let client: CoworkJsonRpcClient | null = null;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+        const message = JSON.parse(text) as Record<string, unknown>;
+        if (message.method !== "initialize" || typeof message.id !== "number") return;
+        const params =
+          typeof message.params === "object" && message.params !== null
+            ? (message.params as Record<string, unknown>)
+            : {};
+        const capabilities =
+          typeof params.capabilities === "object" && params.capabilities !== null
+            ? (params.capabilities as Record<string, unknown>)
+            : {};
+        const response =
+          "toolRetryLineage" in capabilities
+            ? {
+                id: message.id,
+                error: {
+                  code: -32602,
+                  message: "Unknown capability: toolRetryLineage",
+                },
+              }
+            : {
+                id: message.id,
+                result: {
+                  protocolVersion: "0.1",
+                  capabilities: {
+                    experimentalApi: true,
+                  },
+                },
+              };
+        queueMicrotask(() => {
+          void client?.handleIncoming(JSON.stringify(response));
+        });
+      },
+    });
+
+    const initializePromise = client.initialize();
+    const first = JSON.parse(sent[0]!) as {
+      id: number;
+      params: { capabilities: Record<string, unknown> };
+    };
+    expect(first.params.capabilities.toolRetryLineage).toBe(true);
+    await initializePromise;
+
+    const fallback = JSON.parse(sent[1]!) as {
+      id: number;
+      params: { capabilities: Record<string, unknown> };
+    };
+    expect(fallback.params.capabilities).toEqual({
+      experimentalApi: true,
+    });
+
+    expect(sent.map((entry) => JSON.parse(entry).method)).toEqual([
+      "initialize",
+      "initialize",
+      "initialized",
+    ]);
+    expect(client.supportsToolRetryLineage).toBe(false);
+    await expect(
+      client.startTurn("thread", "Continue.", "message", ["failed-tool"]),
+    ).rejects.toThrow("does not support exact tool retries");
+  });
+
   test("routes server requests and responses", async () => {
     const sent: string[] = [];
     const requests: Array<{ id: string | number; method: string }> = [];

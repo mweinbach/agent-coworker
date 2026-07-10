@@ -102,6 +102,11 @@ type JsonRpcRequestRetryOptions = {
   retryOnDisconnect?: boolean;
 };
 
+export function workspaceSupportsToolRetryLineage(workspaceId: string): boolean {
+  const socket = RUNTIME.jsonRpcSockets.get(workspaceId) as WorkspaceJsonRpcSocket | undefined;
+  return socket?.supportsToolRetryLineage === true;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

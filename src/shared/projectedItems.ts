@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES, type TodoItem } from "../types";
 import { type SessionFeedItem, serverErrorDataSchema } from "./sessionSnapshot";
+import { toolInputDigestSchema } from "./toolInputDigest";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const todoItemSchema = z
@@ -34,6 +35,7 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       type: z.literal("userMessage"),
       content: z.array(projectedUserMessageContentPartSchema),
       clientMessageId: nonEmptyStringSchema.optional(),
+      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .strict(),
   z
@@ -61,6 +63,7 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       args: z.unknown().optional(),
       result: z.unknown().optional(),
       retryOf: nonEmptyStringSchema.optional(),
+      inputDigest: toolInputDigestSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,
@@ -140,6 +143,7 @@ function toFeedItem(
         role: "user",
         ts: existingTsOr(ts, existing),
         text: userMessageText(item.content),
+        ...(item.annotations ? { annotations: item.annotations } : {}),
       };
     case "agentMessage":
       return {
@@ -195,6 +199,11 @@ function toFeedItem(
           ? { retryOf: item.retryOf }
           : existingTool?.retryOf !== undefined
             ? { retryOf: existingTool.retryOf }
+            : {}),
+        ...(item.inputDigest !== undefined
+          ? { inputDigest: item.inputDigest }
+          : existingTool?.inputDigest !== undefined
+            ? { inputDigest: existingTool.inputDigest }
             : {}),
         ...(approval ? { approval } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),

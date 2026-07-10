@@ -1,6 +1,6 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
-import type { ToolRetryIntent } from "../../../shared/toolRetry";
+import { type ToolRetryIntent, toolRetryTurnAnnotation } from "../../../shared/toolRetry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { ApproveCommandOptions, TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
@@ -330,6 +330,9 @@ export function createUserMessageTurnRunner(
         sessionId: context.id,
         text: visibleText,
         clientMessageId,
+        ...(opts?.toolRetryIntent
+          ? { annotations: [toolRetryTurnAnnotation(opts.toolRetryIntent)] }
+          : {}),
       });
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");

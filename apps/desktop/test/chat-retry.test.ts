@@ -11,14 +11,28 @@ describe("desktop chat retry", () => {
       role: "user",
       ts: "2024-01-01T00:00:00.000Z",
       text: HIDDEN_RETRY_TURN_PROMPT,
+      annotations: [
+        {
+          type: "cowork.toolRetryTurn",
+          version: 1,
+          targetItemIds: ["failed-tool"],
+        },
+      ],
     };
     const userMessage: FeedItem = {
       ...retryMessage,
       id: "visible",
       text: "Continue",
+      annotations: undefined,
+    };
+    const sameTextFromUser: FeedItem = {
+      ...userMessage,
+      id: "same-text",
+      text: HIDDEN_RETRY_TURN_PROMPT,
     };
 
     expect(isHiddenRetryTurnMessage(retryMessage)).toBe(true);
     expect(isHiddenRetryTurnMessage(userMessage)).toBe(false);
+    expect(isHiddenRetryTurnMessage(sameTextFromUser)).toBe(false);
   });
 });

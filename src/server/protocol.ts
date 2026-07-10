@@ -18,6 +18,7 @@ import type {
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { OpenAiNativeConnectorsEvent } from "../shared/openaiNativeConnectors";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
+import type { ToolInputDigest } from "../shared/toolInputDigest";
 import type { SkillImprovementStatusEvent } from "../skillImprovement";
 import type {
   AgentConfig,
@@ -306,7 +307,13 @@ export type SessionEvent =
       clientMessageId?: string;
       steerRequestId?: string;
     }
-  | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+      type: "user_message";
+      sessionId: string;
+      text: string;
+      clientMessageId?: string;
+      annotations?: Array<Record<string, unknown>>;
+    }
   | {
       type: "model_stream_chunk";
       sessionId: string;
@@ -329,6 +336,12 @@ export type SessionEvent =
       format: ModelStreamRawFormat;
       normalizerVersion: number;
       event: Record<string, unknown>;
+      toolCallMetadata?: Array<{
+        toolKey: string;
+        toolName: string;
+        inputDigest: ToolInputDigest;
+        retryOf?: string;
+      }>;
     }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }

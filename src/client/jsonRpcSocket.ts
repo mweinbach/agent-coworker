@@ -68,6 +68,7 @@ const DEFAULT_MAX_QUEUED_MESSAGES = 128;
 const DEFAULT_OPEN_TIMEOUT_MS = 5_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
 const DEFAULT_JSONRPC_SUBPROTOCOL = "cowork.jsonrpc.v1";
+const JSONRPC_INVALID_PARAMS_ERROR_CODE = -32602;
 
 function isBlobLike(value: unknown): value is Blob {
   return typeof Blob !== "undefined" && value instanceof Blob;
@@ -466,16 +467,33 @@ export class JsonRpcSocket {
   }
 
   private async performHandshake(): Promise<void> {
-    const initializeResult = await this.sendRequestNow("initialize", {
+    const initializeParams = (includeToolRetryLineage: boolean) => ({
       clientInfo: this.clientInfo,
       capabilities: {
         experimentalApi: this.experimentalApi,
-        ...(this.toolRetryLineage ? { toolRetryLineage: true } : {}),
+        ...(includeToolRetryLineage ? { toolRetryLineage: true } : {}),
         ...(this.optOutNotificationMethods.length > 0
           ? { optOutNotificationMethods: this.optOutNotificationMethods }
           : {}),
       },
     });
+    let initializeResult: unknown;
+    try {
+      initializeResult = await this.sendRequestNow(
+        "initialize",
+        initializeParams(this.toolRetryLineage),
+      );
+    } catch (error) {
+      const requestError = error as JsonRpcRequestError;
+      if (
+        !this.toolRetryLineage ||
+        requestError.jsonRpcCode !== JSONRPC_INVALID_PARAMS_ERROR_CODE
+      ) {
+        throw error;
+      }
+      this.serverSupportsToolRetryLineage = false;
+      initializeResult = await this.sendRequestNow("initialize", initializeParams(false));
+    }
     const capabilities =
       initializeResult &&
       typeof initializeResult === "object" &&

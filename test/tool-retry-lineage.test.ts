@@ -1,8 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 
-import { projectedItemSchema } from "../src/shared/projectedItems";
 import { type SessionFeedItem, sessionSnapshotSchema } from "../src/shared/sessionSnapshot";
-import { createToolRetryMatcher, resolveToolRetryIntent } from "../src/shared/toolRetry";
+import { sameToolInputDigest } from "../src/shared/toolInputDigest";
+import { digestToolInput } from "../src/shared/toolInputDigestHasher";
+import {
+  isFailedToolOutcome,
+  recoveredToolItemIds,
+  resolveToolRetryIntent,
+  toolRetryTurnAnnotation,
+} from "../src/shared/toolRetry";
+import { createToolRetryAttemptTracker } from "../src/shared/toolRetryAttempts";
+import {
+  encodeToolRetrySnapshotMetadata,
+  hydrateToolRetrySnapshotMetadata,
+} from "../src/shared/toolRetrySnapshot";
 
 const failedTool = (
   id: string,
@@ -16,36 +28,138 @@ const failedTool = (
   state: "output-error",
   args,
   result: { error: "failed" },
+  ...(digestToolInput(name, args) ? { inputDigest: digestToolInput(name, args) ?? undefined } : {}),
 });
 
 describe("explicit tool retry lineage", () => {
-  test("confirms only an explicitly targeted tool with the same name and canonical args", () => {
+  test("classifies structured, denied, and legacy skill failures consistently", () => {
+    expect(isFailedToolOutcome("bash", "output-available", { ok: false })).toBe(true);
+    expect(isFailedToolOutcome("bash", "output-available", { error: "failed" })).toBe(true);
+    expect(isFailedToolOutcome("bash", "output-available", { denied: true })).toBe(true);
+    expect(isFailedToolOutcome("skill", "output-available", "Skill not found: missing")).toBe(true);
+    expect(isFailedToolOutcome("skill", "output-available", "Loaded skill: documents")).toBe(false);
+  });
+
+  test("confirms only explicit targets with a complete exact digest without consuming at start", () => {
     const intent = resolveToolRetryIntent([failedTool("failure")], {
       toolItemIds: ["failure"],
     });
+    const tracker = createToolRetryAttemptTracker(intent);
 
-    expect(createToolRetryMatcher(intent).confirm("read", { command: "bun test" })).toBeUndefined();
+    expect(tracker.finalize("wrong-tool", "read", { command: "bun test" })).not.toHaveProperty(
+      "retryOf",
+    );
     expect(
-      createToolRetryMatcher(intent).confirm("bash", { command: "bun test --watch" }),
-    ).toBeUndefined();
-
-    const matcher = createToolRetryMatcher(intent);
-    expect(matcher.confirm("bash", { command: "bun test" })).toBe("failure");
-    expect(matcher.confirm("bash", { command: "bun test" })).toBeUndefined();
+      tracker.finalize("wrong-args", "bash", { command: "bun test --watch" }),
+    ).not.toHaveProperty("retryOf");
+    expect(tracker.finalize("first-match", "bash", { command: "bun test" })).toMatchObject({
+      retryOf: "failure",
+    });
+    expect(tracker.finalize("second-match", "bash", { command: "bun test" })).toMatchObject({
+      retryOf: "failure",
+    });
   });
 
-  test("matches object arguments independent of key order and consumes multiple targets once", () => {
-    const intent = resolveToolRetryIntent(
-      [
-        failedTool("first", "write", { path: "a.ts", content: "one" }),
-        failedTool("second", "write", { path: "b.ts", content: "two" }),
-      ],
-      { toolItemIds: ["first", "second"] },
-    );
-    const matcher = createToolRetryMatcher(intent);
+  test("hashes complete canonical input so large shared prefixes cannot falsely match", () => {
+    const sharedPrefix = "x".repeat(64_000);
+    const first = digestToolInput("write", { content: `${sharedPrefix}a`, path: "a.ts" });
+    const second = digestToolInput("write", { content: `${sharedPrefix}b`, path: "a.ts" });
+    const reordered = digestToolInput("write", { path: "a.ts", content: `${sharedPrefix}a` });
 
-    expect(matcher.confirm("write", { content: "two", path: "b.ts" })).toBe("second");
-    expect(matcher.confirm("write", { content: "one", path: "a.ts" })).toBe("first");
+    expect(first).not.toBeNull();
+    expect(first?.canonicalBytes).toBeGreaterThan(64_000);
+    expect(first).toEqual(reordered);
+    expect(first?.value).not.toBe(second?.value);
+  });
+
+  test("requires both digest bytes and canonical size when comparing collision metadata", () => {
+    const digest = digestToolInput("write", { path: "a.ts", content: "complete" });
+    if (!digest) throw new Error("expected input digest");
+
+    expect(
+      sameToolInputDigest(digest, {
+        ...digest,
+        canonicalBytes: digest.canonicalBytes + 1,
+      }),
+    ).toBe(false);
+    expect(digestToolInput("read", { path: "a.ts" })).not.toEqual(
+      digestToolInput("write", { path: "a.ts" }),
+    );
+  });
+
+  test("keeps a target available after a failed attempt and consumes it only after success", () => {
+    const intent = resolveToolRetryIntent([failedTool("failure")], {
+      toolItemIds: ["failure"],
+    });
+    const tracker = createToolRetryAttemptTracker(intent);
+
+    expect(tracker.finalize("attempt-1", "bash", { command: "bun test" })).toMatchObject({
+      retryOf: "failure",
+    });
+    tracker.complete("attempt-1", false);
+    expect(tracker.finalize("attempt-2", "bash", { command: "bun test" })).toMatchObject({
+      retryOf: "failure",
+    });
+    tracker.complete("attempt-2", true);
+    expect(tracker.finalize("attempt-3", "bash", { command: "bun test" })).not.toHaveProperty(
+      "retryOf",
+    );
+  });
+
+  test("assembles streaming arguments deterministically before exact matching", () => {
+    const intent = resolveToolRetryIntent(
+      [failedTool("failure", "write", { path: "a.ts", content: "complete" })],
+      { toolItemIds: ["failure"] },
+    );
+    const tracker = createToolRetryAttemptTracker(intent);
+    tracker.start("streamed", "write");
+    tracker.appendInput("streamed", '{"path":"a.ts","content":"com');
+    tracker.appendInput("streamed", 'plete"}');
+
+    expect(tracker.finalizeBuffered("streamed", "write")).toMatchObject({
+      retryOf: "failure",
+      inputDigest: digestToolInput("write", { path: "a.ts", content: "complete" }),
+    });
+  });
+
+  test("resolves transitive ancestors only through a successful descendant", () => {
+    const original = failedTool("original");
+    const failedChild = { ...failedTool("failed-child"), retryOf: "original" };
+    const successfulGrandchild: Extract<SessionFeedItem, { kind: "tool" }> = {
+      ...failedTool("successful-grandchild"),
+      state: "output-available",
+      result: { ok: true },
+      retryOf: "failed-child",
+    };
+    const recovered = recoveredToolItemIds([original, failedChild, successfulGrandchild]);
+
+    expect(recovered).toEqual(new Set(["failed-child", "original"]));
+    expect(() =>
+      resolveToolRetryIntent([original, failedChild, successfulGrandchild], {
+        toolItemIds: ["original"],
+      }),
+    ).toThrow("already recovered");
+    expect(
+      resolveToolRetryIntent([original, failedChild], {
+        toolItemIds: ["failed-child"],
+      }).targets[0]?.itemId,
+    ).toBe("failed-child");
+  });
+
+  test("a later successful sibling recovers prior failed attempts in the same explicit chain", () => {
+    const original = failedTool("original");
+    const failedAttempt = { ...failedTool("failed-attempt"), retryOf: "original" };
+    const successfulAttempt: Extract<SessionFeedItem, { kind: "tool" }> = {
+      ...failedTool("successful-attempt"),
+      state: "output-available",
+      result: { ok: true },
+      retryOf: "original",
+    };
+
+    expect(recoveredToolItemIds([original, failedAttempt])).toEqual(new Set());
+    expect(recoveredToolItemIds([original, failedAttempt, successfulAttempt])).toEqual(
+      new Set(["original", "failed-attempt"]),
+    );
   });
 
   test("rejects legacy, successful, recovered, and unsafe retry targets", () => {
@@ -70,6 +184,7 @@ describe("explicit tool retry lineage", () => {
             state: "output-available",
             args: { command: "bun test" },
             retryOf: "recovered",
+            inputDigest: digestToolInput("bash", { command: "bun test" }) ?? undefined,
           },
         ],
         { toolItemIds: ["recovered"] },
@@ -81,27 +196,32 @@ describe("explicit tool retry lineage", () => {
           {
             ...failedTool("no-args"),
             args: undefined,
+            inputDigest: undefined,
           },
         ],
         {
           toolItemIds: ["no-args"],
         },
       ),
-    ).toThrow("safely matchable arguments");
+    ).toThrow("complete input digest metadata");
+    expect(() =>
+      resolveToolRetryIntent(
+        [
+          {
+            ...failedTool("legacy-skill", "skill", { name: "missing" }),
+            state: "output-available",
+            result: "Skill not found: missing",
+            inputDigest: undefined,
+          },
+        ],
+        { toolItemIds: ["legacy-skill"] },
+      ),
+    ).toThrow("complete input digest metadata");
   });
 
-  test("lineage is additive for projected items and survives snapshot hydration", () => {
-    expect(
-      projectedItemSchema.parse({
-        id: "replacement",
-        type: "toolCall",
-        toolName: "bash",
-        state: "output-available",
-        args: { command: "bun test" },
-        retryOf: "failure",
-      }),
-    ).toMatchObject({ retryOf: "failure" });
-
+  test("uses a rollback-safe annotation sidecar that survives an old strict read-write", () => {
+    const inputDigest = digestToolInput("bash", { command: "bun test" });
+    if (!inputDigest) throw new Error("expected input digest");
     const snapshot = sessionSnapshotSchema.parse({
       sessionId: "session",
       title: "Retry",
@@ -129,7 +249,26 @@ describe("explicit tool retry lineage", () => {
       messageCount: 0,
       lastEventSeq: 0,
       feed: [
+        {
+          id: "user",
+          kind: "message",
+          role: "user",
+          ts: "2026-07-10T00:00:00.000Z",
+          text: "Run tests",
+        },
         failedTool("failure"),
+        {
+          id: "retry-turn",
+          kind: "message",
+          role: "user",
+          ts: "2026-07-10T00:00:00.500Z",
+          text: "Retry the failed step.",
+          annotations: [
+            toolRetryTurnAnnotation({
+              targets: [{ itemId: "failure", inputDigest }],
+            }),
+          ],
+        },
         {
           id: "replacement",
           kind: "tool",
@@ -138,6 +277,7 @@ describe("explicit tool retry lineage", () => {
           state: "output-available",
           args: { command: "bun test" },
           retryOf: "failure",
+          inputDigest,
         },
       ],
       agents: [],
@@ -147,10 +287,55 @@ describe("explicit tool retry lineage", () => {
       hasPendingAsk: false,
       hasPendingApproval: false,
     });
+    const encoded = encodeToolRetrySnapshotMetadata(snapshot);
+    const encodedTools = encoded.feed.filter((item) => item.kind === "tool");
+    expect(encodedTools.every((item) => !("retryOf" in item) && !("inputDigest" in item))).toBe(
+      true,
+    );
 
-    expect(snapshot.feed[1]).toMatchObject({ retryOf: "failure" });
-    const legacy = structuredClone(snapshot);
-    if (legacy.feed[1]?.kind === "tool") delete legacy.feed[1].retryOf;
-    expect(sessionSnapshotSchema.parse(legacy).feed[1]).not.toHaveProperty("retryOf");
+    const legacyToolSchema = z
+      .object({
+        id: z.string(),
+        kind: z.literal("tool"),
+        ts: z.string(),
+        name: z.string(),
+        state: z.string(),
+        args: z.unknown().optional(),
+        result: z.unknown().optional(),
+        completedAt: z.string().optional(),
+        approval: z.unknown().optional(),
+      })
+      .strict();
+    const legacyMessageSchema = z
+      .object({
+        id: z.string(),
+        kind: z.literal("message"),
+        role: z.enum(["user", "assistant"]),
+        ts: z.string(),
+        text: z.string(),
+        annotations: z.array(z.record(z.string(), z.unknown())).optional(),
+      })
+      .strict();
+    const legacyFeedSchema = z.array(
+      z.discriminatedUnion("kind", [legacyToolSchema, legacyMessageSchema]),
+    );
+    const oldBinaryFeed = legacyFeedSchema.parse(encoded.feed);
+    expect(oldBinaryFeed.map((item) => item.id)).toEqual(["user", "failure", "replacement"]);
+
+    const oldBinaryWrite = JSON.parse(
+      JSON.stringify({
+        ...encoded,
+        feed: oldBinaryFeed,
+      }),
+    ) as typeof encoded;
+    const hydrated = hydrateToolRetrySnapshotMetadata(sessionSnapshotSchema.parse(oldBinaryWrite));
+    expect(hydrated.feed.find((item) => item.id === "failure")).toMatchObject({
+      inputDigest,
+    });
+    expect(hydrated.feed.find((item) => item.id === "replacement")).toMatchObject({
+      retryOf: "failure",
+      inputDigest,
+    });
+    expect(hydrated.feed.some((item) => item.id === "retry-turn")).toBe(false);
   });
 });

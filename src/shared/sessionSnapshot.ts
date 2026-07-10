@@ -31,6 +31,7 @@ import {
   type SessionKind,
   sessionKindSchema,
 } from "./agents";
+import { type ToolInputDigest, toolInputDigestSchema } from "./toolInputDigest";
 
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const providerNameSchema = z.enum(PROVIDER_NAMES);
@@ -114,6 +115,7 @@ export type SessionFeedItem =
       args?: unknown;
       result?: unknown;
       retryOf?: string;
+      inputDigest?: ToolInputDigest;
       completedAt?: string;
       approval?: {
         approvalId: string;
@@ -211,6 +213,7 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
       args: z.unknown().optional(),
       result: z.unknown().optional(),
       retryOf: z.string().trim().min(1).optional(),
+      inputDigest: toolInputDigestSchema.optional(),
       completedAt: isoTimestampSchema.optional(),
       approval: z
         .object({

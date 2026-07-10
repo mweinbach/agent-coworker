@@ -256,7 +256,10 @@ export async function createAgentServerRuntime(
     : null;
   const sendQueue = new SocketSendQueue();
   const sendJsonRpc = (ws: StartServerSocket, payload: unknown): void => {
-    sendQueue.send(ws, projectToolRetryCompatibility(ws, payload));
+    const compatiblePayload = projectToolRetryCompatibility(ws, payload);
+    if (compatiblePayload !== null) {
+      sendQueue.send(ws, compatiblePayload);
+    }
   };
   const taskSubscribers = new WorkspaceJsonRpcSubscribers(sendQueue);
   const jsonRpcConnections = new Set<StartServerSocket>();

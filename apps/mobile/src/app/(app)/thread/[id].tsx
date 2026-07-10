@@ -17,7 +17,11 @@ import { SubagentBar } from "@/components/thread/subagent-bar";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
-import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
+import {
+  buildChatRenderItems,
+  type ChatRenderItem,
+  latestRetryableActivityGroupId,
+} from "@/features/cowork/activityGroups";
 import { HIDDEN_RETRY_TURN_PROMPT } from "@/features/cowork/chatRetry";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
@@ -150,6 +154,10 @@ export default function ThreadDetailScreen() {
     () => buildChatRenderItems(filterFeedForDisplay(thread?.feed ?? [], showDebugMessages)),
     [thread?.feed, showDebugMessages],
   );
+  const retryableActivityGroupId = useMemo(
+    () => latestRetryableActivityGroupId(renderItems),
+    [renderItems],
+  );
 
   const liveActivityGroupId = useMemo(() => {
     if (!activeTurnStartedAt) return null;
@@ -257,7 +265,14 @@ export default function ThreadDetailScreen() {
   }
 
   async function retryFailedToolCalls(toolItemIds: string[]) {
-    if (!runtimeClient || isDraftThread || turnActive || toolItemIds.length === 0) return;
+    if (
+      !runtimeClient?.supportsToolRetryLineage ||
+      isDraftThread ||
+      turnActive ||
+      toolItemIds.length === 0
+    ) {
+      return;
+    }
     const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
       ?.randomUUID
       ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
@@ -445,8 +460,14 @@ export default function ThreadDetailScreen() {
                 showDebugMessages={showDebugMessages}
                 live={item.data.kind === "activity-group" && item.data.id === liveActivityGroupId}
                 liveStartedAt={activeTurnStartedAt}
-                onRetryToolCalls={retryFailedToolCalls}
-                retryDisabled={!isConnected || turnActive}
+                onRetryToolCalls={
+                  item.data.kind === "activity-group" && item.data.id === retryableActivityGroupId
+                    ? retryFailedToolCalls
+                    : undefined
+                }
+                retryDisabled={
+                  !isConnected || turnActive || !runtimeClient?.supportsToolRetryLineage
+                }
               />
             );
           }}

@@ -235,6 +235,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - When the user explicitly stops automation or delegation, delete the automation, stop delegated work, and finish in the current primary thread without spawning or resuming agents.
 - Before claiming a comment is fixed, re-check the exact current branch path it points at.
 - Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
+- Cap review at one independent pass plus one verification pass; once findings are fixed and CI is green, merge instead of repeatedly re-reviewing unchanged code.
 
 ### Scope & Plan Discipline
 

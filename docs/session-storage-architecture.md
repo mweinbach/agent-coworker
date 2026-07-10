@@ -90,12 +90,15 @@ When connecting with `resumeSessionId`:
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority. The web
   renderer keeps each capture-buffer copy until IndexedDB acknowledges its bounded per-batch
   outbox commit or bounded recovery record, with immutable destination binding, a
-  one-owner-per-scope lease, persisted retry scheduling, deletion generations, and stable delivery
-  ids. The desktop service validates thread ids before capacity accounting and first commits
-  accepted web batches to `transcript-inbox.sqlite`; JSONL is a recoverable projection produced
-  under the same process-safe transaction lock. The user-data directory is mode `0700`, while the
-  inbox database and any WAL/SHM sidecars are mode `0600`. Indexed and bounded inbox receipts plus
-  projection delivery ids make ambiguous responses safe across service restarts and independent
-  instances. Electron continues to append through its existing IPC persistence path.
+  one-owner-per-scope lease, a transactionally allocated monotonic per-scope replay sequence,
+  persisted retry scheduling, deletion generations, and stable delivery ids. Client request
+  accounting includes the complete JSON envelope and reserved header overhead before enqueue, and
+  splits multi-event appends without crossing server request limits. The desktop service validates
+  thread ids before capacity accounting and first commits accepted web batches to
+  `transcript-inbox.sqlite`; JSONL is a recoverable projection produced under the same process-safe
+  transaction lock. The user-data directory is mode `0700`, while the inbox database and any
+  WAL/SHM sidecars are mode `0600`. Indexed and bounded inbox receipts plus projection delivery ids
+  make ambiguous responses safe across service restarts and independent instances. Electron
+  continues to append through its existing IPC persistence path.
 - Imported external conversations are normal persisted sessions. Their `session_snapshots.feed` stores the reconstructed visible replay, while `session_state.messages_json` stores only sanitized model-facing handoff context and `provider_state_json` stays null.
 - Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.

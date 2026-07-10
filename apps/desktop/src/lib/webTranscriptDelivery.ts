@@ -5,6 +5,13 @@ import {
   type ReliableBatchLimits,
   ReliableBatchQueue,
 } from "../../../../src/shared/reliableBatchQueue";
+import {
+  measureTranscriptBatchBudgetBytes,
+  serializeTranscriptBatchRequest,
+  TRANSCRIPT_REQUEST_BODY_MAX_BYTES,
+  TRANSCRIPT_REQUEST_MAX_EVENTS,
+  transcriptBatchFitsRequestLimits,
+} from "../../../../src/shared/transcriptBatchProtocol";
 import type { TranscriptBatchInput, TranscriptDeliveryFailure } from "./desktopApi";
 import { IndexedDbReliableBatchStore } from "./indexedDbReliableBatchStore";
 
@@ -12,8 +19,8 @@ export const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
   maxBatches: 512,
   maxEvents: 4_096,
   maxBytes: 4 * 1024 * 1024,
-  maxBatchEvents: 100,
-  maxBatchBytes: 240 * 1024,
+  maxBatchEvents: TRANSCRIPT_REQUEST_MAX_EVENTS,
+  maxBatchBytes: TRANSCRIPT_REQUEST_BODY_MAX_BYTES,
 };
 
 const TRANSCRIPT_REQUEST_TIMEOUT_MS = 10_000;
@@ -70,7 +77,7 @@ export type WebTranscriptDelivery = {
   ) => Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>>;
   append: (
     events: TranscriptBatchInput[],
-  ) => Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>>;
+  ) => Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>[]>;
   retry: (batchId?: string) => Promise<void>;
   discard: (batchId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<number>;
@@ -195,7 +202,12 @@ export function createWebTranscriptDelivery(
     ((handle: unknown) => {
       globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
     });
-  const limits = options.limits ?? WEB_TRANSCRIPT_LIMITS;
+  const configuredLimits = options.limits ?? WEB_TRANSCRIPT_LIMITS;
+  const limits: ReliableBatchLimits = {
+    ...configuredLimits,
+    maxBatchEvents: Math.min(configuredLimits.maxBatchEvents, TRANSCRIPT_REQUEST_MAX_EVENTS),
+    maxBatchBytes: Math.min(configuredLimits.maxBatchBytes, TRANSCRIPT_REQUEST_BODY_MAX_BYTES),
+  };
   const store =
     options.store ??
     new IndexedDbReliableBatchStore<WebTranscriptBatchInput>({
@@ -288,7 +300,7 @@ export function createWebTranscriptDelivery(
     destination: options.destination,
     store,
     createId,
-    measureItems: measureJsonBytes,
+    measureBatch: measureTranscriptBatchBudgetBytes,
     validateItem: isTranscriptBatchInput,
     clock: { now },
     scheduler: {
@@ -298,8 +310,11 @@ export function createWebTranscriptDelivery(
     limits,
     onFailure: reportFailure,
     send: async (batch, context) => {
-      const body = JSON.stringify({ batchId: batch.id, events: batch.items });
-      if (measureJsonBytes(body) > limits.maxBatchBytes) {
+      const body = serializeTranscriptBatchRequest(batch.id, batch.items);
+      if (
+        !transcriptBatchFitsRequestLimits(batch.id, batch.items) ||
+        measureTranscriptBatchBudgetBytes(batch.id, batch.items) > limits.maxBatchBytes
+      ) {
         throw new ReliableBatchDeliveryError(
           "permanent",
           "Serialized transcript request exceeds the request byte limit",
@@ -368,26 +383,28 @@ export function createWebTranscriptDelivery(
 
   const append = async (
     events: TranscriptBatchInput[],
-  ): Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>> => {
+  ): Promise<ReliableBatchEnqueueResult<WebTranscriptBatchInput>[]> => {
     if (closed) {
       const recoveryId = createId();
       const items = events.map((event) => ({
         ...structuredClone(event),
         generation: 0,
       }));
-      return {
-        accepted: false,
-        recoveryId,
-        reason: "closed",
-        items,
-        bytes: measureJsonBytes(items),
-        stats: {
-          batches: 0,
-          events: 0,
-          bytes: 0,
+      return [
+        {
+          accepted: false,
+          recoveryId,
+          reason: "closed",
+          items,
+          bytes: measureTranscriptBatchBudgetBytes(recoveryId, items),
+          stats: {
+            batches: 0,
+            events: 0,
+            bytes: 0,
+          },
+          limits,
         },
-        limits,
-      };
+      ];
     }
     return await serialize(async () => {
       const withGenerations: WebTranscriptBatchInput[] = [];
@@ -420,21 +437,23 @@ export function createWebTranscriptDelivery(
           stats,
           limits,
         });
-        return {
-          accepted: false,
-          recoveryId,
-          reason: "persistence",
-          items,
-          bytes: measureJsonBytes(items),
-          stats,
-          limits,
-        };
+        return [
+          {
+            accepted: false,
+            recoveryId,
+            reason: "persistence",
+            items,
+            bytes: measureTranscriptBatchBudgetBytes(recoveryId, items),
+            stats,
+            limits,
+          },
+        ];
       }
-      const result = await queue.enqueue(withGenerations);
-      if (result.accepted && !closed) {
+      const results = await queue.enqueueSplit(withGenerations);
+      if (results.some((result) => result.accepted) && !closed) {
         options.wakeChannel?.postMessage({ type: "transcript-outbox-updated" });
       }
-      return result;
+      return results;
     });
   };
 
@@ -453,7 +472,13 @@ export function createWebTranscriptDelivery(
   options.lifecycleTarget?.addEventListener("beforeunload", flushOnLifecycleEnd);
 
   return {
-    capture: async (event) => await append([event]),
+    capture: async (event) => {
+      const [result] = await append([event]);
+      if (!result) {
+        throw new Error("Transcript capture produced no enqueue result");
+      }
+      return result;
+    },
     append,
     retry: async (recoveryId) => {
       if (recoveryId) {

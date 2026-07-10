@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { IDBFactory } from "fake-indexeddb";
 import "fake-indexeddb/auto";
 
+import {
+  measureTranscriptEventsBytes,
+  measureUtf8Bytes,
+  TRANSCRIPT_EVENTS_MAX_BYTES,
+  TRANSCRIPT_REQUEST_BODY_MAX_BYTES,
+} from "../../../src/shared/transcriptBatchProtocol";
 import type { TranscriptBatchInput, TranscriptDeliveryFailure } from "../src/lib/desktopApi";
 import { IndexedDbReliableBatchStore } from "../src/lib/indexedDbReliableBatchStore";
 import {
@@ -92,6 +98,27 @@ function createStore(
   });
 }
 
+function eventWithSerializedSize(targetBytes: number): TranscriptBatchInput {
+  const template: WebTranscriptBatchInput = {
+    ...EVENT,
+    payload: { text: "" },
+    generation: 0,
+  };
+  const baseBytes = measureTranscriptEventsBytes([template]);
+  if (targetBytes < baseBytes) {
+    throw new Error(`Target must be at least ${baseBytes} bytes`);
+  }
+  return {
+    ...EVENT,
+    payload: { text: "x".repeat(targetBytes - baseBytes) },
+  };
+}
+
+function firstEventText(batch: { items: WebTranscriptBatchInput[] }): unknown {
+  const payload = batch.items[0]?.payload;
+  return payload && typeof payload === "object" && "text" in payload ? payload.text : undefined;
+}
+
 async function settle(): Promise<void> {
   for (let index = 0; index < 20; index += 1) {
     await Bun.sleep(1);
@@ -112,6 +139,62 @@ async function complete(transaction: IDBTransaction): Promise<void> {
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
+}
+
+async function seedLegacyOutbox(factory: IDBFactory, name: string): Promise<void> {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = factory.open(name, 1);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      const upgradeDatabase = request.result;
+      const batches = upgradeDatabase.createObjectStore("batches", {
+        keyPath: ["scope", "id"],
+      });
+      batches.createIndex("scopeOrder", ["scope", "createdAt", "id"], {
+        unique: false,
+      });
+      upgradeDatabase.createObjectStore("scopes", { keyPath: "scope" });
+      upgradeDatabase.createObjectStore("leases", { keyPath: "scope" });
+      upgradeDatabase.createObjectStore("deadLetters", {
+        keyPath: "quarantineId",
+        autoIncrement: true,
+      });
+      upgradeDatabase.createObjectStore("generations", {
+        keyPath: ["scope", "threadId"],
+      });
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+  const transaction = database.transaction(["batches", "scopes"], "readwrite");
+  const batches = transaction.objectStore("batches");
+  const legacyBatch = (id: string, text: string) => ({
+    id,
+    scope: "legacy-scope",
+    destination: "http://server/transcript",
+    createdAt: 0,
+    items: [
+      {
+        ...EVENT,
+        payload: { text },
+        generation: 0,
+      },
+    ],
+    bytes: 100,
+    attempts: 0,
+    nextAttemptAt: 0,
+    status: "pending",
+  });
+  batches.add(legacyBatch("legacy-b", "second-legacy-id"));
+  batches.add(legacyBatch("legacy-a", "first-legacy-id"));
+  transaction.objectStore("scopes").put({
+    scope: "legacy-scope",
+    capabilityAbsentUntil: null,
+    batches: 2,
+    events: 2,
+    bytes: 200,
+  });
+  await complete(transaction);
+  database.close();
 }
 
 describe("web transcript IndexedDB delivery", () => {
@@ -192,6 +275,89 @@ describe("web transcript IndexedDB delivery", () => {
     expect(await second.snapshot()).toEqual([]);
     expect(batchId).toBe("first-2");
     await second.close();
+  });
+
+  test("orders identical-timestamp captures monotonically across owners and restart", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const dbName = "monotonic-concurrent-order";
+    const createDelivery = (idPrefix: string) =>
+      createWebTranscriptDelivery({
+        scope: "monotonic-scope",
+        destination: "http://server/transcript",
+        accessHeaders: () => ({}),
+        fetch: async () => new Response(null, { status: 204 }),
+        indexedDB: factory,
+        createId: createIds(idPrefix),
+        now: () => clock.now,
+        schedule: clock.schedule,
+        cancelScheduled: clock.cancel,
+        store: createStore(factory, dbName, clock),
+      });
+    const firstOwner = createDelivery("z-owner");
+    const secondOwner = createDelivery("a-owner");
+
+    await Promise.all([
+      firstOwner.capture({
+        ...EVENT,
+        payload: { type: "agent_message", text: "first" },
+      }),
+      secondOwner.capture({
+        ...EVENT,
+        payload: { type: "agent_message", text: "second" },
+      }),
+    ]);
+
+    const captureOrder = (await firstOwner.snapshot()).map(firstEventText);
+    expect(captureOrder).toEqual(["first", "second"]);
+    expect(
+      (await firstOwner.snapshot()).map(
+        (batch) => (batch as typeof batch & { sequence?: unknown }).sequence,
+      ),
+    ).toEqual([1, 2]);
+    await firstOwner.close();
+    await secondOwner.close();
+
+    const restarted = createDelivery("restart");
+    const restartOrder = (await restarted.snapshot()).map(firstEventText);
+    expect(restartOrder).toEqual(["first", "second"]);
+    expect(
+      (await restarted.snapshot()).map(
+        (batch) => (batch as typeof batch & { sequence?: unknown }).sequence,
+      ),
+    ).toEqual([1, 2]);
+    await restarted.close();
+  });
+
+  test("migrates legacy timestamp ordering once and continues the persisted sequence", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const dbName = "legacy-monotonic-order";
+    await seedLegacyOutbox(factory, dbName);
+    const delivery = createWebTranscriptDelivery({
+      scope: "legacy-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async () => new Response(null, { status: 204 }),
+      indexedDB: factory,
+      createId: createIds("upgraded"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store: createStore(factory, dbName, clock),
+    });
+
+    await delivery.capture({ ...EVENT, payload: { text: "new-after-upgrade" } });
+    const snapshot = await delivery.snapshot();
+    expect(snapshot.map(firstEventText)).toEqual([
+      "first-legacy-id",
+      "second-legacy-id",
+      "new-after-upgrade",
+    ]);
+    expect(
+      snapshot.map((batch) => (batch as typeof batch & { sequence?: unknown }).sequence),
+    ).toEqual([1, 2, 3]);
+    await delivery.close();
   });
 
   test("allows only one tab owner and a closed owner cannot erase the replacement result", async () => {
@@ -336,6 +502,183 @@ describe("web transcript IndexedDB delivery", () => {
     expect(requests).toBe(1);
     expect(await restarted.snapshot()).toEqual([]);
     await restarted.close();
+  });
+
+  test("retries deterministic timeouts without allowing later batches past the head", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const requestTexts: string[] = [];
+    let requests = 0;
+    const delivery = createWebTranscriptDelivery({
+      scope: "timeout-order-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          events: Array<{ payload: { text: string } }>;
+        };
+        requestTexts.push(request.events[0]?.payload.text ?? "");
+        requests += 1;
+        if (requests === 1) {
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          });
+        }
+        return new Response(null, { status: 204 });
+      },
+      indexedDB: factory,
+      createId: createIds("timeout-order"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      requestTimeoutMs: 1_000,
+      store: createStore(factory, "timeout-order", clock),
+    });
+    await delivery.capture({ ...EVENT, payload: { text: "first" } });
+    await delivery.capture({ ...EVENT, payload: { text: "second" } });
+
+    await clock.advance(0);
+    expect(requestTexts).toEqual(["first"]);
+    await clock.advance(999);
+    expect(requestTexts).toEqual(["first"]);
+    await clock.advance(1);
+    expect(await delivery.snapshot()).toEqual([
+      expect.objectContaining({ attempts: 1, nextAttemptAt: 1_500 }),
+      expect.objectContaining({ attempts: 0 }),
+    ]);
+    await clock.advance(499);
+    expect(requestTexts).toEqual(["first"]);
+    await clock.advance(1);
+
+    expect(requestTexts).toEqual(["first", "first", "second"]);
+    expect(await delivery.snapshot()).toEqual([]);
+    await delivery.close();
+  });
+
+  test("honors Retry-After on transient 5xx while preserving head-of-line order", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const requestTexts: string[] = [];
+    let requests = 0;
+    const delivery = createWebTranscriptDelivery({
+      scope: "server-retry-order-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as {
+          events: Array<{ payload: { text: string } }>;
+        };
+        requestTexts.push(request.events[0]?.payload.text ?? "");
+        requests += 1;
+        return requests === 1
+          ? new Response("temporarily unavailable", {
+              status: 503,
+              headers: { "Retry-After": "2" },
+            })
+          : new Response(null, { status: 204 });
+      },
+      indexedDB: factory,
+      createId: createIds("server-retry-order"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store: createStore(factory, "server-retry-order", clock),
+    });
+    await delivery.capture({ ...EVENT, payload: { text: "first" } });
+    await delivery.capture({ ...EVENT, payload: { text: "second" } });
+
+    await clock.advance(0);
+    expect(requestTexts).toEqual(["first"]);
+    expect(await delivery.snapshot()).toEqual([
+      expect.objectContaining({ attempts: 1, nextAttemptAt: 2_000 }),
+      expect.objectContaining({ attempts: 0 }),
+    ]);
+    await clock.advance(1_999);
+    expect(requestTexts).toEqual(["first"]);
+    await clock.advance(1);
+
+    expect(requestTexts).toEqual(["first", "first", "second"]);
+    expect(await delivery.snapshot()).toEqual([]);
+    await delivery.close();
+  });
+
+  test("accepts the exact event-byte boundary and rejects one byte beyond it before fetch", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const requestBodies: string[] = [];
+    const delivery = createWebTranscriptDelivery({
+      scope: "request-boundary-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        return new Response(null, { status: 204 });
+      },
+      indexedDB: factory,
+      createId: createIds("request-boundary"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store: createStore(factory, "request-boundary", clock),
+    });
+
+    const boundary = await delivery.capture(eventWithSerializedSize(TRANSCRIPT_EVENTS_MAX_BYTES));
+    expect(boundary.accepted).toBe(true);
+    await clock.advance(0);
+    expect(requestBodies).toHaveLength(1);
+    const sent = requestBodies[0] ?? "";
+    const parsed = JSON.parse(sent) as { events: WebTranscriptBatchInput[] };
+    expect(measureTranscriptEventsBytes(parsed.events)).toBe(TRANSCRIPT_EVENTS_MAX_BYTES);
+    expect(measureUtf8Bytes(sent)).toBeLessThanOrEqual(TRANSCRIPT_REQUEST_BODY_MAX_BYTES);
+
+    const oversized = await delivery.capture(
+      eventWithSerializedSize(TRANSCRIPT_EVENTS_MAX_BYTES + 1),
+    );
+    expect(oversized).toMatchObject({ accepted: false, reason: "batch_too_large" });
+    await clock.advance(0);
+    expect(requestBodies).toHaveLength(1);
+    await delivery.close();
+  });
+
+  test("splits multi-event appends before either server request limit is exceeded", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const requestBodies: string[] = [];
+    const delivery = createWebTranscriptDelivery({
+      scope: "request-split-scope",
+      destination: "http://server/transcript",
+      accessHeaders: () => ({}),
+      fetch: async (_input, init) => {
+        requestBodies.push(String(init?.body));
+        return new Response(null, { status: 204 });
+      },
+      indexedDB: factory,
+      createId: createIds("request-split"),
+      now: () => clock.now,
+      schedule: clock.schedule,
+      cancelScheduled: clock.cancel,
+      store: createStore(factory, "request-split", clock),
+    });
+    const results = await delivery.append([
+      eventWithSerializedSize(140 * 1024),
+      eventWithSerializedSize(140 * 1024),
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(results.every((result) => result.accepted)).toBe(true);
+    await clock.advance(0);
+    expect(requestBodies).toHaveLength(2);
+    for (const body of requestBodies) {
+      const parsed = JSON.parse(body) as { events: WebTranscriptBatchInput[] };
+      expect(parsed.events).toHaveLength(1);
+      expect(measureTranscriptEventsBytes(parsed.events)).toBeLessThanOrEqual(
+        TRANSCRIPT_EVENTS_MAX_BYTES,
+      );
+      expect(measureUtf8Bytes(body)).toBeLessThanOrEqual(TRANSCRIPT_REQUEST_BODY_MAX_BYTES);
+    }
+    await delivery.close();
   });
 
   test("cancels a deleted thread and advances its persisted generation", async () => {

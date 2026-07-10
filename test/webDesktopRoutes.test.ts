@@ -6,6 +6,13 @@ import path from "node:path";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
+import {
+  measureTranscriptEventsBytes,
+  measureUtf8Bytes,
+  serializeTranscriptBatchRequest,
+  TRANSCRIPT_EVENTS_MAX_BYTES,
+  TRANSCRIPT_REQUEST_BODY_MAX_BYTES,
+} from "../src/shared/transcriptBatchProtocol";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 
 const cleanupPaths = new Set<string>();
@@ -939,6 +946,53 @@ describe("web desktop routes", () => {
     );
 
     expect(response?.status).toBe(413);
+  });
+
+  test("shares exact event and request-envelope byte boundaries with web clients", async () => {
+    const workspace = await makeTempDir("cowork-web-transcript-byte-boundary-");
+    const service = new WebDesktopService({
+      userDataDir: path.join(workspace, "user-data"),
+    });
+    const createEvent = (targetBytes: number) => {
+      const template = {
+        ts: "2026-07-10T07:00:00.000Z",
+        threadId: "thread-byte-boundary",
+        direction: "server",
+        payload: { text: "" },
+        generation: 0,
+      };
+      const baseBytes = measureTranscriptEventsBytes([template]);
+      return {
+        ...template,
+        payload: { text: "x".repeat(targetBytes - baseBytes) },
+      };
+    };
+    const atBoundary = [createEvent(TRANSCRIPT_EVENTS_MAX_BYTES)];
+    const acceptedBody = serializeTranscriptBatchRequest("byte-boundary", atBoundary);
+    expect(measureTranscriptEventsBytes(atBoundary)).toBe(TRANSCRIPT_EVENTS_MAX_BYTES);
+    expect(measureUtf8Bytes(acceptedBody)).toBeLessThanOrEqual(TRANSCRIPT_REQUEST_BODY_MAX_BYTES);
+
+    const accepted = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: acceptedBody,
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+    expect(accepted?.status).toBe(204);
+
+    const oversized = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/desktop/transcript/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: serializeTranscriptBatchRequest("byte-boundary-plus-one", [
+          createEvent(TRANSCRIPT_EVENTS_MAX_BYTES + 1),
+        ]),
+      }),
+      { cwd: workspace, desktopService: service },
+    );
+    expect(oversized?.status).toBe(413);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

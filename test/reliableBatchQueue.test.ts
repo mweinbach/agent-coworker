@@ -297,7 +297,7 @@ function createQueue(options: {
     store: options.store,
     send: options.send,
     createId: createIds(options.idPrefix ?? "id"),
-    measureItems: (items) => JSON.stringify(items).length,
+    measureBatch: (_batchId, items) => JSON.stringify(items).length,
     validateItem: (value): value is TestItem =>
       Boolean(value) &&
       typeof value === "object" &&
@@ -432,6 +432,39 @@ describe("ReliableBatchQueue", () => {
       { order: 2 },
       { order: 3 },
       { order: 4 },
+    ]);
+    await queue.close();
+  });
+
+  test("does not enqueue later split batches after an earlier chunk hits backpressure", async () => {
+    const clock = new ManualClock();
+    const store = new MemoryStore();
+    const queue = createQueue({
+      store,
+      clock,
+      send: async () => {},
+    });
+    await queue.enqueueSplit([{ order: 1 }, { order: 2 }, { order: 3 }]);
+
+    const results = await queue.enqueueSplit([{ order: 4 }, { order: 5 }, { order: 6 }]);
+
+    expect(results).toHaveLength(2);
+    expect(results).toEqual([
+      expect.objectContaining({
+        accepted: false,
+        reason: "overflow",
+        items: [{ order: 4 }, { order: 5 }],
+      }),
+      expect.objectContaining({
+        accepted: false,
+        reason: "overflow",
+        items: [{ order: 6 }],
+      }),
+    ]);
+    expect((await queue.snapshot()).flatMap((batch) => batch.items)).toEqual([
+      { order: 1 },
+      { order: 2 },
+      { order: 3 },
     ]);
     await queue.close();
   });

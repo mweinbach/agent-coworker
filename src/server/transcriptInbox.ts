@@ -2,10 +2,14 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  TRANSCRIPT_EVENTS_MAX_BYTES,
+  TRANSCRIPT_REQUEST_MAX_EVENTS,
+} from "../shared/transcriptBatchProtocol";
 
 export const TRANSCRIPT_BATCH_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
-export const TRANSCRIPT_REQUEST_MAX_EVENTS = 100;
-export const TRANSCRIPT_REQUEST_MAX_BYTES = 256 * 1024;
+export { TRANSCRIPT_REQUEST_MAX_EVENTS };
+export const TRANSCRIPT_REQUEST_MAX_BYTES = TRANSCRIPT_EVENTS_MAX_BYTES;
 export const TRANSCRIPT_DEDUPE_MAX_BATCHES = 10_000;
 export const TRANSCRIPT_DEDUPE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 

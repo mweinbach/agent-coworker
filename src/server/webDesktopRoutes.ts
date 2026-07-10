@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { TRANSCRIPT_REQUEST_MAX_BYTES, TRANSCRIPT_REQUEST_MAX_EVENTS } from "./transcriptInbox";
+import { TRANSCRIPT_REQUEST_BODY_MAX_BYTES } from "../shared/transcriptBatchProtocol";
+import { TRANSCRIPT_REQUEST_MAX_EVENTS } from "./transcriptInbox";
 import { TRANSCRIPT_BATCH_ID_PATTERN, type WebDesktopServiceLike } from "./webDesktopService";
 
 type ExplorerEntryPayload = {
@@ -15,7 +16,6 @@ type ExplorerEntryPayload = {
 
 const DEFAULT_TEXT_READ_BYTES = 256 * 1024;
 const DEFAULT_PREVIEW_MAX_BYTES = 15 * 1024 * 1024;
-const TRANSCRIPT_REQUEST_BODY_MAX_BYTES = TRANSCRIPT_REQUEST_MAX_BYTES + 16 * 1024;
 const ACTIVE_FILE_PREVIEW_MIME_TYPES = new Set([
   "application/xhtml+xml",
   "application/xml",

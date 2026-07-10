@@ -130,7 +130,7 @@ export type ReliableBatchQueueOptions<T> = {
   store: ReliableBatchStore<T>;
   send: (batch: ReliableBatchEnvelope<T>, context: ReliableBatchDeliveryContext) => Promise<void>;
   createId: () => string;
-  measureItems: (items: T[]) => number;
+  measureBatch: (batchId: string, items: T[]) => number;
   validateItem: (value: unknown) => value is T;
   clock: ReliableBatchClock;
   scheduler: ReliableBatchScheduler;
@@ -220,7 +220,7 @@ export class ReliableBatchQueue<T> {
   private readonly store: ReliableBatchStore<T>;
   private readonly sendBatch: ReliableBatchQueueOptions<T>["send"];
   private readonly createId: () => string;
-  private readonly measureItems: (items: T[]) => number;
+  private readonly measureBatch: (batchId: string, items: T[]) => number;
   private readonly validateItem: (value: unknown) => value is T;
   private readonly clock: ReliableBatchClock;
   private readonly scheduler: ReliableBatchScheduler;
@@ -231,7 +231,7 @@ export class ReliableBatchQueue<T> {
   private readonly leaseMs: number;
   private readonly ownerRetryMs: number;
   private readonly ownerId: string;
-  private readonly pendingEnqueues = new Set<Promise<ReliableBatchEnqueueResult<T>>>();
+  private readonly pendingEnqueues = new Set<Promise<unknown>>();
   private readonly reportedFailures = new Set<string>();
   private scheduled: { handle: unknown; at: number } | null = null;
   private running: Promise<void> | null = null;
@@ -245,7 +245,7 @@ export class ReliableBatchQueue<T> {
     this.store = options.store;
     this.sendBatch = options.send;
     this.createId = options.createId;
-    this.measureItems = options.measureItems;
+    this.measureBatch = options.measureBatch;
     this.validateItem = options.validateItem;
     this.clock = options.clock;
     this.scheduler = options.scheduler;
@@ -260,7 +260,16 @@ export class ReliableBatchQueue<T> {
   }
 
   enqueue(items: T[]): Promise<ReliableBatchEnqueueResult<T>> {
-    const operation = this.enqueueInternal(items);
+    const operation = this.enqueueInternal(items, this.createId());
+    this.pendingEnqueues.add(operation);
+    void operation.finally(() => {
+      this.pendingEnqueues.delete(operation);
+    });
+    return operation;
+  }
+
+  enqueueSplit(items: T[]): Promise<ReliableBatchEnqueueResult<T>[]> {
+    const operation = this.enqueueSplitInternal(items);
     this.pendingEnqueues.add(operation);
     void operation.finally(() => {
       this.pendingEnqueues.delete(operation);
@@ -363,10 +372,73 @@ export class ReliableBatchQueue<T> {
     await this.store.releaseLease(this.scope, this.ownerId);
   }
 
-  private async enqueueInternal(items: T[]): Promise<ReliableBatchEnqueueResult<T>> {
+  private async enqueueSplitInternal(items: T[]): Promise<ReliableBatchEnqueueResult<T>[]> {
+    const batches: Array<{ recoveryId: string; items: T[] }> = [];
+    let index = 0;
+    while (index < items.length) {
+      const recoveryId = this.createId();
+      let batchItems: T[] = [];
+      while (index < items.length) {
+        const candidate = [...batchItems, items[index] as T];
+        const candidateBytes = this.measureBatch(recoveryId, candidate);
+        if (
+          candidate.length > this.limits.maxBatchEvents ||
+          candidateBytes > this.limits.maxBatchBytes
+        ) {
+          if (batchItems.length === 0) {
+            batches.push({ recoveryId, items: candidate });
+            index += 1;
+          }
+          break;
+        }
+        batchItems = candidate;
+        index += 1;
+      }
+      if (batchItems.length > 0) {
+        batches.push({ recoveryId, items: batchItems });
+      }
+    }
+    const results: ReliableBatchEnqueueResult<T>[] = [];
+    let priorRejection: Extract<ReliableBatchEnqueueResult<T>, { accepted: false }> | null = null;
+    for (const batch of batches) {
+      const result: ReliableBatchEnqueueResult<T> = priorRejection
+        ? this.rejectAfterEarlierSplitFailure(batch.items, batch.recoveryId, priorRejection)
+        : await this.enqueueInternal(batch.items, batch.recoveryId);
+      results.push(result);
+      if (!result.accepted) {
+        priorRejection = result;
+      }
+    }
+    return results;
+  }
+
+  private rejectAfterEarlierSplitFailure(
+    items: T[],
+    recoveryId: string,
+    prior: Extract<ReliableBatchEnqueueResult<T>, { accepted: false }>,
+  ): Extract<ReliableBatchEnqueueResult<T>, { accepted: false }> {
     const clonedItems = structuredClone(items);
-    const bytes = this.measureItems(clonedItems);
-    const recoveryId = this.createId();
+    const result: Extract<ReliableBatchEnqueueResult<T>, { accepted: false }> = {
+      accepted: false,
+      recoveryId,
+      reason: prior.reason,
+      items: clonedItems,
+      bytes: this.measureBatch(recoveryId, clonedItems),
+      stats: prior.stats,
+      limits: prior.limits,
+    };
+    if (result.reason !== "closed") {
+      this.reportRejected(result);
+    }
+    return result;
+  }
+
+  private async enqueueInternal(
+    items: T[],
+    recoveryId: string,
+  ): Promise<ReliableBatchEnqueueResult<T>> {
+    const clonedItems = structuredClone(items);
+    const bytes = this.measureBatch(recoveryId, clonedItems);
     if (this.closed) {
       return {
         accepted: false,
@@ -438,18 +510,26 @@ export class ReliableBatchQueue<T> {
   private reportRejected(
     result: Extract<ReliableBatchEnqueueResult<T>, { accepted: false }>,
   ): void {
+    const reason =
+      result.reason === "capability_absent"
+        ? "capability_absent"
+        : result.reason === "persistence"
+          ? "persistence"
+          : "overflow";
     this.reportFailure({
       batchId: null,
       recoveryId: result.recoveryId,
       items: structuredClone(result.items),
-      reason: result.reason === "capability_absent" ? "capability_absent" : "overflow",
+      reason,
       attempts: 0,
       error: new Error(
         result.reason === "batch_too_large"
           ? "Transcript batch exceeds the per-request outbox limit"
           : result.reason === "capability_absent"
             ? "Transcript batching is unavailable on this server"
-            : "Transcript outbox capacity reached",
+            : result.reason === "persistence"
+              ? "Transcript outbox persistence failed"
+              : "Transcript outbox capacity reached",
       ),
       stats: result.stats,
       limits: result.limits,

@@ -10,18 +10,20 @@ import type {
 
 export const RELIABLE_BATCH_DB_NAME = "cowork-reliable-batch-outbox-v1";
 
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const BATCHES_STORE = "batches";
 const SCOPES_STORE = "scopes";
 const LEASES_STORE = "leases";
 const DEAD_LETTERS_STORE = "deadLetters";
 const GENERATIONS_STORE = "generations";
-const SCOPE_ORDER_INDEX = "scopeOrder";
+const LEGACY_SCOPE_ORDER_INDEX = "scopeOrder";
+const SCOPE_SEQUENCE_INDEX = "scopeSequence";
 const CAPABILITY_REPROBE_MS = 60_000;
 
 type ScopeRecord = ReliableBatchStats & {
   scope: string;
   capabilityAbsentUntil: number | null;
+  nextSequence: number;
 };
 
 type LeaseRecord = {
@@ -62,6 +64,7 @@ function defaultScopeRecord(scope: string): ScopeRecord {
   return {
     scope,
     capabilityAbsentUntil: null,
+    nextSequence: 0,
     ...EMPTY_STATS,
   };
 }
@@ -84,10 +87,7 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 }
 
 function scopeRange(scope: string): IDBKeyRange {
-  return IDBKeyRange.bound(
-    [scope, Number.MIN_SAFE_INTEGER, ""],
-    [scope, Number.MAX_SAFE_INTEGER, "\uffff"],
-  );
+  return IDBKeyRange.bound([scope, Number.MIN_SAFE_INTEGER], [scope, Number.MAX_SAFE_INTEGER]);
 }
 
 function recordScope(value: unknown): string | null {
@@ -104,6 +104,66 @@ function recordId(value: unknown): string | null {
   }
   const id = (value as { id?: unknown }).id;
   return typeof id === "string" ? id : null;
+}
+
+function recordSequence(value: unknown): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const sequence = (value as { sequence?: unknown }).sequence;
+  return typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0
+    ? sequence
+    : null;
+}
+
+function currentScopeSequence(scope: ScopeRecord): number {
+  return Number.isSafeInteger(scope.nextSequence) && scope.nextSequence >= 0
+    ? scope.nextSequence
+    : 0;
+}
+
+function nextScopeSequence(scope: ScopeRecord): number {
+  const current = currentScopeSequence(scope);
+  if (current >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("Reliable batch sequence exhausted");
+  }
+  return current + 1;
+}
+
+function migrateLegacyBatchOrder(transaction: IDBTransaction): void {
+  const batches = transaction.objectStore(BATCHES_STORE);
+  const scopes = transaction.objectStore(SCOPES_STORE);
+  const sequenceByScope = new Map<string, number>();
+  const request = batches.index(LEGACY_SCOPE_ORDER_INDEX).openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) {
+      for (const [scope, nextSequence] of sequenceByScope) {
+        const scopeRequest = scopes.get(scope);
+        scopeRequest.onsuccess = () => {
+          const current = scopeRequest.result as Partial<ScopeRecord> | undefined;
+          scopes.put({
+            ...defaultScopeRecord(scope),
+            ...current,
+            scope,
+            nextSequence,
+          } satisfies ScopeRecord);
+        };
+      }
+      return;
+    }
+    const value = cursor.value as unknown;
+    const scope = recordScope(value);
+    if (scope) {
+      const sequence = (sequenceByScope.get(scope) ?? 0) + 1;
+      sequenceByScope.set(scope, sequence);
+      cursor.update({
+        ...(value as object),
+        sequence,
+      });
+    }
+    cursor.continue();
+  };
 }
 
 function batchContribution(value: unknown): ReliableBatchStats {
@@ -173,6 +233,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
       };
     }
     scope.capabilityAbsentUntil = null;
+    const sequence = nextScopeSequence(scope);
     const nextStats = {
       batches: scope.batches + 1,
       events: scope.events + batch.items.length,
@@ -199,15 +260,20 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
         limits,
       };
     }
-    batches.add(structuredClone(batch));
+    const storedBatch = {
+      ...structuredClone(batch),
+      sequence,
+    };
+    batches.add(storedBatch);
     scopes.put({
       ...scope,
       ...nextStats,
+      nextSequence: sequence,
     } satisfies ScopeRecord);
     await completion;
     return {
       accepted: true,
-      batch: structuredClone(batch),
+      batch: structuredClone(storedBatch),
       stats: nextStats,
     };
   }
@@ -218,7 +284,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
     const completion = transactionDone(transaction);
     const request = transaction
       .objectStore(BATCHES_STORE)
-      .index(SCOPE_ORDER_INDEX)
+      .index(SCOPE_SEQUENCE_INDEX)
       .openCursor(scopeRange(scope));
     const cursor = await requestResult(request);
     await completion;
@@ -230,7 +296,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
     const transaction = database.transaction(BATCHES_STORE, "readonly");
     const completion = transactionDone(transaction);
     const values = await requestResult(
-      transaction.objectStore(BATCHES_STORE).index(SCOPE_ORDER_INDEX).getAll(scopeRange(scope)),
+      transaction.objectStore(BATCHES_STORE).index(SCOPE_SEQUENCE_INDEX).getAll(scopeRange(scope)),
     );
     await completion;
     return (values as ReliableBatchEnvelope<T>[]).map((batch) => structuredClone(batch));
@@ -298,7 +364,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
           Boolean,
         ) as ReliableBatchEnvelope<T>[])
       : ((await requestResult(
-          store.index(SCOPE_ORDER_INDEX).getAll(scopeRange(scope)),
+          store.index(SCOPE_SEQUENCE_INDEX).getAll(scopeRange(scope)),
         )) as ReliableBatchEnvelope<T>[]);
     for (const batch of batches) {
       store.put({
@@ -406,14 +472,19 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
     const transaction = database.transaction([BATCHES_STORE, SCOPES_STORE], "readwrite");
     const completion = transactionDone(transaction);
     const batchStore = transaction.objectStore(BATCHES_STORE);
+    const scopes = transaction.objectStore(SCOPES_STORE);
+    const currentScope =
+      ((await requestResult(scopes.get(scope))) as ScopeRecord | undefined) ??
+      defaultScopeRecord(scope);
     for (const batch of (await requestResult(
-      batchStore.index(SCOPE_ORDER_INDEX).getAll(scopeRange(scope)),
+      batchStore.index(SCOPE_SEQUENCE_INDEX).getAll(scopeRange(scope)),
     )) as ReliableBatchEnvelope<T>[]) {
       batchStore.delete([scope, batch.id]);
     }
-    transaction.objectStore(SCOPES_STORE).put({
+    scopes.put({
       ...defaultScopeRecord(scope),
       capabilityAbsentUntil: this.now() + CAPABILITY_REPROBE_MS,
+      nextSequence: currentScopeSequence(currentScope),
     } satisfies ScopeRecord);
     await completion;
   }
@@ -445,7 +516,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
           return;
         }
         const value = cursor.value as unknown;
-        if (recordScope(value) === scope && !validate(value)) {
+        if (recordScope(value) === scope && (!validate(value) || recordSequence(value) === null)) {
           const id = recordId(value);
           malformed.push({
             id,
@@ -500,7 +571,7 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
 
     const batches = transaction.objectStore(BATCHES_STORE);
     const matching = (await requestResult(
-      batches.index(SCOPE_ORDER_INDEX).getAll(scopeRange(scope)),
+      batches.index(SCOPE_SEQUENCE_INDEX).getAll(scopeRange(scope)),
     )) as ReliableBatchEnvelope<T>[];
     const removed = cloneStats(EMPTY_STATS);
     const scopes = transaction.objectStore(SCOPES_STORE);
@@ -596,23 +667,37 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
       const request = this.factory.open(this.dbName, DB_VERSION);
       request.onerror = () => reject(request.error ?? new Error("Unable to open IndexedDB"));
       request.onblocked = () => reject(new Error("IndexedDB upgrade was blocked"));
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const database = request.result;
-        const batches = database.createObjectStore(BATCHES_STORE, {
-          keyPath: ["scope", "id"],
-        });
-        batches.createIndex(SCOPE_ORDER_INDEX, ["scope", "createdAt", "id"], {
-          unique: false,
-        });
-        database.createObjectStore(SCOPES_STORE, { keyPath: "scope" });
-        database.createObjectStore(LEASES_STORE, { keyPath: "scope" });
-        database.createObjectStore(DEAD_LETTERS_STORE, {
-          keyPath: "quarantineId",
-          autoIncrement: true,
-        });
-        database.createObjectStore(GENERATIONS_STORE, {
-          keyPath: ["scope", "threadId"],
-        });
+        const oldVersion = (event as IDBVersionChangeEvent).oldVersion;
+        if (oldVersion < 1) {
+          const batches = database.createObjectStore(BATCHES_STORE, {
+            keyPath: ["scope", "id"],
+          });
+          batches.createIndex(SCOPE_SEQUENCE_INDEX, ["scope", "sequence"], {
+            unique: false,
+          });
+          database.createObjectStore(SCOPES_STORE, { keyPath: "scope" });
+          database.createObjectStore(LEASES_STORE, { keyPath: "scope" });
+          database.createObjectStore(DEAD_LETTERS_STORE, {
+            keyPath: "quarantineId",
+            autoIncrement: true,
+          });
+          database.createObjectStore(GENERATIONS_STORE, {
+            keyPath: ["scope", "threadId"],
+          });
+          return;
+        }
+        if (oldVersion < 2) {
+          request.transaction
+            ?.objectStore(BATCHES_STORE)
+            .createIndex(SCOPE_SEQUENCE_INDEX, ["scope", "sequence"], {
+              unique: false,
+            });
+          if (request.transaction) {
+            migrateLegacyBatchOrder(request.transaction);
+          }
+        }
       };
       request.onsuccess = () => resolve(request.result);
     });

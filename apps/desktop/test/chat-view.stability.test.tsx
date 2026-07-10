@@ -111,6 +111,7 @@ function setupChatViewJsdom() {
 
 const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
+const { setDesktopRenderMetricObserver } = await import("../src/ui/renderDiagnostics");
 
 describe("desktop chat view stability", () => {
   beforeEach(async () => {
@@ -804,7 +805,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("does not repin a completed thread after a user scrolls upward", async () => {
+  test("composer edits neither repin nor rerender a completed transcript", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -902,12 +903,28 @@ describe("desktop chat view stability", () => {
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
       });
 
-      await act(async () => {
-        useAppStore.setState({ composerText: "draft after reading" });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      const transcriptRenderMetrics: string[] = [];
+      const stopRenderMetrics = setDesktopRenderMetricObserver((event) => {
+        if (
+          event.metric === "chat-feed" ||
+          event.metric === "feed-row" ||
+          event.metric === "desktop-markdown" ||
+          event.metric === "streaming-markdown"
+        ) {
+          transcriptRenderMetrics.push(event.metric);
+        }
       });
+      try {
+        await act(async () => {
+          useAppStore.setState({ composerText: "draft after reading" });
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        });
+      } finally {
+        stopRenderMetrics();
+      }
 
       expect(feed.scrollTop).toBe(500);
+      expect(transcriptRenderMetrics).toEqual([]);
     } finally {
       if (root) {
         await act(async () => {

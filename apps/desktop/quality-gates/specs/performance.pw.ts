@@ -37,6 +37,10 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
           await page.evaluate((id) => window.__coworkQualityGate?.getFeedText(id), itemId),
       )
       .toContain(`[delta-burst-complete-${runId}]`);
+    const streamingMarkdown = page.locator('[data-slot="streaming-markdown"]');
+    await expect(streamingMarkdown).toBeVisible();
+    await quality.completeDeltaBurst(itemId);
+    await expect(streamingMarkdown).toHaveCount(0, { timeout: 5_000 });
     await settleQualityPage(page);
     const metrics = await page.evaluate(() => {
       if (!window.__coworkQualityGate) {
@@ -46,6 +50,24 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
     });
     samples.push(metrics);
     assertPositiveRendererMetrics(metrics, budgets.deltaBurst);
+    expect(metrics.contentPublications).toBeGreaterThan(0);
+    expect(metrics.contentPublications).toBeLessThanOrEqual(budgets.deltaBurst.contentPublications);
+    expect(metrics.chatFeedRenders).toBeLessThanOrEqual(budgets.deltaBurst.chatFeedRenders);
+    expect(metrics.feedRowRenders).toBeLessThanOrEqual(budgets.deltaBurst.feedRowRenders);
+    expect(metrics.streamingMarkdownRenders).toBeGreaterThan(0);
+    expect(metrics.streamingMarkdownRenders).toBeLessThanOrEqual(
+      budgets.deltaBurst.streamingMarkdownRenders,
+    );
+    expect(metrics.desktopMarkdownRenders).toBeGreaterThan(0);
+    expect(metrics.desktopMarkdownRenders).toBeLessThanOrEqual(
+      budgets.deltaBurst.desktopMarkdownRenders,
+    );
+    expect(metrics.maxFeedDerivationItems).toBeLessThanOrEqual(
+      budgets.deltaBurst.maxFeedDerivationItems,
+    );
+    expect(metrics.sidebarThreadRowRendersById["quality-draft-thread"] ?? 0).toBeLessThanOrEqual(
+      budgets.deltaBurst.unrelatedSidebarRowRenders,
+    );
   }
   await testInfo.attach("performance-delta-burst", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.deltaBurst, samples }, null, 2)}\n`),
@@ -85,6 +107,13 @@ test("1,000-message transcript stays inside publication and render budgets", asy
     });
     samples.push(metrics);
     assertPositiveRendererMetrics(metrics, budgets.longTranscript);
+    expect(metrics.maxFeedDerivationItems).toBeGreaterThan(0);
+    expect(metrics.maxFeedDerivationItems).toBeLessThanOrEqual(
+      budgets.longTranscript.maxFeedDerivationItems,
+    );
+    expect(await page.locator('[data-slot="message-scroller-item"]').count()).toBeLessThanOrEqual(
+      budgets.longTranscript.mountedFeedRows,
+    );
   }
   await testInfo.attach("performance-long-transcript", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.longTranscript, samples }, null, 2)}\n`),

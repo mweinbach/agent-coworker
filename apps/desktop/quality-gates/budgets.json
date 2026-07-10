@@ -1,7 +1,14 @@
 {
   "deltaBurst": {
-    "reactCommits": 2050,
-    "storePublications": 1002
+    "chatFeedRenders": 8,
+    "contentPublications": 6,
+    "desktopMarkdownRenders": 2,
+    "feedRowRenders": 6,
+    "maxFeedDerivationItems": 80,
+    "reactCommits": 16,
+    "storePublications": 10,
+    "streamingMarkdownRenders": 4,
+    "unrelatedSidebarRowRenders": 0
   },
   "fileTree": {
     "filesystemRequests": 2,
@@ -9,6 +16,8 @@
     "storePublications": 4
   },
   "longTranscript": {
+    "maxFeedDerivationItems": 80,
+    "mountedFeedRows": 90,
     "reactCommits": 1800,
     "storePublications": 1000
   }

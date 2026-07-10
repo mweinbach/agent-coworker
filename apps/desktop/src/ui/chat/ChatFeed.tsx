@@ -1,5 +1,5 @@
 import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon } from "lucide-react";
-import { memo, type UIEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type UIEvent, useCallback, useEffect, useMemo, useRef } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { SandboxApprovalPrompt } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -23,19 +23,13 @@ import {
   useMessageScrollerVisibility,
 } from "../../components/ui/message-scroller";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { ActivityGroupCard } from "./ActivityGroupCard";
 import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
-/**
- * Progressive feed window: mount the newest N entries, then expand upward as the
- * user scrolls near the top. MessageScroller preserveScrollOnPrepend keeps the
- * viewport stable when older rows are prepended.
- */
-const FEED_RENDER_WINDOW = 80;
-const FEED_EXPAND_BATCH = 40;
 /** Expand when within this many px of the top of the scrollable content. */
 const FEED_NEAR_TOP_PX = 160;
 /** Estimated height for unmounted older rows (scrollbar proportion only). */
@@ -265,6 +259,9 @@ export const ChatFeed = memo(function ChatFeed(props: {
   onSelectThread?: (threadId: string) => void;
   onRetryFailedTurn?: () => Promise<boolean>;
   retryFailedTurnDisabled?: boolean;
+  hiddenFeedItemCount?: number;
+  onExpandOlderFeed?: () => void;
+  onShowAllOlderFeed?: () => void;
 }) {
   const {
     transcriptOnly,
@@ -287,58 +284,24 @@ export const ChatFeed = memo(function ChatFeed(props: {
     onSelectThread,
     onRetryFailedTurn,
     retryFailedTurnDisabled,
+    hiddenFeedItemCount = 0,
+    onExpandOlderFeed = () => {},
+    onShowAllOlderFeed = () => {},
   } = props;
+  recordDesktopRenderMetric("chat-feed", selectedThreadId ?? undefined);
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
   const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
-  const feedThreadKey = selectedThreadId ?? "no-thread";
-  // How many newest entries are mounted for this chat. Grows as the user
-  // scrolls toward older history; derived reset when the chat id changes.
-  const [feedWindow, setFeedWindow] = useState({
-    threadKey: feedThreadKey,
-    visibleCount: FEED_RENDER_WINDOW,
-  });
-  const visibleCount =
-    feedWindow.threadKey === feedThreadKey ? feedWindow.visibleCount : FEED_RENDER_WINDOW;
-
-  const windowedFeedEntries = useMemo(() => {
-    if (feedListEntries.length <= visibleCount) {
-      return { entries: feedListEntries, hiddenCount: 0 };
-    }
-    const hiddenCount = feedListEntries.length - visibleCount;
-    return {
-      entries: feedListEntries.slice(hiddenCount),
-      hiddenCount,
-    };
-  }, [feedListEntries, visibleCount]);
-
-  const expandOlderMessages = useCallback(() => {
-    setFeedWindow((current) => {
-      const baseCount =
-        current.threadKey === feedThreadKey ? current.visibleCount : FEED_RENDER_WINDOW;
-      if (baseCount >= feedListEntries.length) {
-        return { threadKey: feedThreadKey, visibleCount: feedListEntries.length };
-      }
-      return {
-        threadKey: feedThreadKey,
-        visibleCount: Math.min(feedListEntries.length, baseCount + FEED_EXPAND_BATCH),
-      };
-    });
-  }, [feedListEntries.length, feedThreadKey]);
-
-  const showAllOlderMessages = useCallback(() => {
-    setFeedWindow({ threadKey: feedThreadKey, visibleCount: feedListEntries.length });
-  }, [feedListEntries.length, feedThreadKey]);
 
   const handleViewportScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
-      if (windowedFeedEntries.hiddenCount <= 0) return;
+      if (hiddenFeedItemCount <= 0) return;
       const viewport = event.currentTarget;
       if (viewport.scrollTop <= FEED_NEAR_TOP_PX) {
-        expandOlderMessages();
+        onExpandOlderFeed();
       }
     },
-    [expandOlderMessages, windowedFeedEntries.hiddenCount],
+    [hiddenFeedItemCount, onExpandOlderFeed],
   );
 
   return (
@@ -406,7 +369,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
               </MessageScrollerItem>
             ) : (
               <>
-                {windowedFeedEntries.hiddenCount > 0 ? (
+                {hiddenFeedItemCount > 0 ? (
                   <MessageScrollerItem messageId="status:show-older">
                     <div
                       aria-hidden="true"
@@ -414,7 +377,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
                       data-slot="feed-window-spacer"
                       style={{
                         minHeight: Math.min(
-                          windowedFeedEntries.hiddenCount * FEED_ESTIMATED_ROW_HEIGHT_PX,
+                          hiddenFeedItemCount * FEED_ESTIMATED_ROW_HEIGHT_PX,
                           2_400,
                         ),
                       }}
@@ -423,14 +386,14 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={showAllOlderMessages}
+                        onClick={onShowAllOlderFeed}
                       >
-                        Show {windowedFeedEntries.hiddenCount} older messages
+                        Show {hiddenFeedItemCount} older messages
                       </Button>
                     </div>
                   </MessageScrollerItem>
                 ) : null}
-                {windowedFeedEntries.entries.map((entry) => {
+                {feedListEntries.map((entry) => {
                   if (entry.kind === "day-separator") {
                     return (
                       <MessageScrollerItem key={entry.id} messageId={entry.id}>

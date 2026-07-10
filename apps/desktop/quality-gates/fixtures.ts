@@ -44,6 +44,7 @@ type QualityLifecycle = {
 };
 
 export type QualityHarness = {
+  completeDeltaBurst(itemId: string): Promise<void>;
   electronApp: ElectronApplication;
   emitCompletion(): Promise<void>;
   emitDeltaBurst(count: number, runId: number): Promise<string>;
@@ -431,6 +432,15 @@ async function launchQualityHarness(
     runtimeDir,
     userDataDir,
     harness: {
+      completeDeltaBurst: async (itemId) => {
+        await electronApp.evaluate((_electron, id) => {
+          const control = globalThis.__coworkQualityGateMain;
+          if (!control) {
+            throw new Error("Quality-gate main control is unavailable");
+          }
+          control.completeDeltaBurst(id);
+        }, itemId);
+      },
       electronApp,
       emitCompletion: async () => {
         await electronApp.evaluate(() => {

@@ -27,6 +27,8 @@ export function createHandlersModule(
     pushFeedItem: feed.pushFeedItem,
     insertFeedItemBefore: feed.insertFeedItemBefore,
     applyModelStreamUpdateToThreadFeed: feed.applyModelStreamUpdateToThreadFeed,
+    flushPendingContentForThread: feed.flushPendingContentForThread,
+    recordPendingThreadEvent: feed.recordPendingThreadEvent,
     sendUserMessageToThread: messaging.sendUserMessageToThread,
     flushOneQueuedThreadMessage: messaging.flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
@@ -50,14 +52,21 @@ export function createHandlersModule(
     }
 
     ctx.deps.appendThreadTranscript(threadId, "server", evt);
-    set((s) => ({
-      threads: s.threads.map((thread) =>
-        thread.id === threadId
-          ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
-          : thread,
-      ),
-    }));
-    void ctx.deps.persist(get);
+    const batchedContentEvent =
+      evt.type === "model_stream_chunk" || evt.type === "model_stream_raw";
+    if (batchedContentEvent) {
+      moduleContext.recordPendingThreadEvent(get, set, threadId);
+    } else {
+      moduleContext.flushPendingContentForThread(set, threadId);
+      set((s) => ({
+        threads: s.threads.map((thread) =>
+          thread.id === threadId
+            ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
+            : thread,
+        ),
+      }));
+      void ctx.deps.persist(get);
+    }
 
     const dispatch = { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued };
     if (handleLifecycleThreadEvent(moduleContext, dispatch, evt)) {

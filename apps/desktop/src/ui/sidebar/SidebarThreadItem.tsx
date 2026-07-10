@@ -1,57 +1,56 @@
 import { type MouseEvent, memo, type RefObject } from "react";
-import type { ThreadRecord, ThreadRuntime } from "../../app/types";
+import { useAppStore } from "../../app/store";
+import type { ThreadRecord } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
+import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { formatSidebarRelativeAge } from "../sidebarHelpers";
 import { ThreadOverflowMenu } from "./ThreadOverflowMenu";
 
-export type SidebarOneOffChatItemProps = {
+export type SidebarThreadItemProps = {
   editInputRef: RefObject<HTMLInputElement | null>;
   editingThreadId: string | null;
   editingTitle: string;
+  onArchiveThread: (threadId: string, title: string) => void;
   onCancelRename: () => void;
   onCommitRename: (threadId: string, title: string) => void;
+  onDeleteHistoryForThread: (threadId: string, title: string) => void;
   onEditingTitleChange: (title: string) => void;
+  onGenerateMemoryForThread: (threadId: string) => void;
   onStartEditing: (threadId: string, currentTitle: string) => void;
   onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
-  onArchive: (threadId: string, title: string) => void;
   selectedThreadId: string | null;
   selectThread: (threadId: string) => void;
   thread: ThreadRecord;
-  threadRuntimeById: Record<string, ThreadRuntime | undefined>;
   canGenerateMemory: boolean;
-  onGenerateMemory: () => void;
-  onDeleteHistory: () => void;
 };
 
 function overflowTriggerVisibilityClassName(isActive: boolean): string {
-  // Selected rows always show ⋯; inactive rows reveal on hover/focus-within.
   return isActive
     ? "opacity-100 pointer-events-auto scale-100"
     : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transform scale-75 group-hover:scale-100 group-focus-within:scale-100";
 }
 
-export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
+export const SidebarThreadItem = memo(function SidebarThreadItem({
   editInputRef,
   editingThreadId,
   editingTitle,
+  onArchiveThread,
   onCancelRename,
   onCommitRename,
+  onDeleteHistoryForThread,
   onEditingTitleChange,
+  onGenerateMemoryForThread,
   onStartEditing,
   onThreadContextMenu,
-  onArchive,
   selectedThreadId,
   selectThread,
   thread,
-  threadRuntimeById,
   canGenerateMemory,
-  onGenerateMemory,
-  onDeleteHistory,
-}: SidebarOneOffChatItemProps) {
-  const runtime = threadRuntimeById[thread.id];
-  const busy = runtime?.busy === true;
+}: SidebarThreadItemProps) {
+  const busy = useAppStore((state) => state.threadRuntimeById[thread.id]?.busy === true);
+  recordDesktopRenderMetric("sidebar-thread-row", thread.id);
   const isActive = thread.id === selectedThreadId;
   const isEditing = editingThreadId === thread.id;
   const displayTitle = thread.title || "New chat";
@@ -128,9 +127,9 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
           ariaLabelSuffix={displayTitle}
           triggerVisibilityClassName={overflowTriggerVisibilityClassName(isActive)}
           onRename={() => onStartEditing(thread.id, displayTitle)}
-          onArchive={() => onArchive(thread.id, displayTitle)}
-          onGenerateMemory={onGenerateMemory}
-          onDeleteHistory={onDeleteHistory}
+          onArchive={() => onArchiveThread(thread.id, displayTitle)}
+          onGenerateMemory={() => onGenerateMemoryForThread(thread.id)}
+          onDeleteHistory={() => onDeleteHistoryForThread(thread.id, displayTitle)}
         />
       </div>
     </div>

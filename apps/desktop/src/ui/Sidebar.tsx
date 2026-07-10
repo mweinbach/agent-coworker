@@ -40,8 +40,8 @@ import {
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
-import { SidebarOneOffChatItem } from "./sidebar/SidebarOneOffChatItem";
 import { SidebarSectionFrame } from "./sidebar/SidebarSectionFrame";
+import { SidebarThreadItem } from "./sidebar/SidebarThreadItem";
 import { SidebarWorkspaceItem, type WorkspaceMoveDirection } from "./sidebar/SidebarWorkspaceItem";
 import { useSidebarPersistence } from "./sidebar/useSidebarPersistence";
 import {
@@ -63,7 +63,6 @@ export const Sidebar = memo(function Sidebar() {
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
-  const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const sidebarSectionOrder = useAppStore((s) => s.desktopSettings.sidebarSectionOrder);
   const googleResearchAvailable = useAppStore((s) =>
@@ -381,24 +380,21 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const canGenerateMemoryForThread = useCallback(
-    (tId: string): boolean => {
-      const thread = threads.find((entry) => entry.id === tId);
-      const workspace = thread
-        ? workspaces.find((entry) => entry.id === thread.workspaceId)
-        : undefined;
-      return Boolean(
-        thread && workspace && isStandardChatThread(thread) && thread.messageCount > 0,
-      );
-    },
-    [threads, workspaces],
-  );
+  const canGenerateMemoryForThread = useCallback((tId: string): boolean => {
+    const state = useAppStore.getState();
+    const thread = state.threads.find((entry) => entry.id === tId);
+    const workspace = thread
+      ? state.workspaces.find((entry) => entry.id === thread.workspaceId)
+      : undefined;
+    return Boolean(thread && workspace && isStandardChatThread(thread) && thread.messageCount > 0);
+  }, []);
 
   const generateMemoryForThread = useCallback(
     (tId: string) => {
-      const thread = threads.find((entry) => entry.id === tId);
+      const state = useAppStore.getState();
+      const thread = state.threads.find((entry) => entry.id === tId);
       const workspace = thread
-        ? workspaces.find((entry) => entry.id === thread.workspaceId)
+        ? state.workspaces.find((entry) => entry.id === thread.workspaceId)
         : undefined;
       if (thread && workspace) {
         void generateAdvancedMemoryForThread(thread.workspaceId, thread.id, {
@@ -406,7 +402,7 @@ export const Sidebar = memo(function Sidebar() {
         });
       }
     },
-    [threads, workspaces, generateAdvancedMemoryForThread],
+    [generateAdvancedMemoryForThread],
   );
 
   const deleteThreadHistoryWithConfirm = useCallback(
@@ -448,47 +444,44 @@ export const Sidebar = memo(function Sidebar() {
     [archiveThread],
   );
 
-  const displayTitleForThread = useCallback(
-    (tId: string): string => {
-      const thread = threads.find((entry) => entry.id === tId);
-      return thread?.title || "New chat";
+  const handleThreadContextMenu = useCallback(
+    async (e: MouseEvent<HTMLElement>, tId: string, tTitle: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const result = await showContextMenu([
+        { id: "rename", label: "Rename" },
+        { id: "archive", label: "Archive" },
+        ...(!isPackagedDesktopApp()
+          ? [
+              {
+                id: "generate_memory",
+                label: "Generate memory from conversation",
+                enabled: canGenerateMemoryForThread(tId),
+              },
+            ]
+          : []),
+        { id: "delete_history", label: "Delete session history" },
+      ]);
+
+      if (result === "rename") {
+        startEditing(tId, tTitle);
+      } else if (result === "archive") {
+        void archiveThreadWithConfirm(tId, tTitle);
+      } else if (result === "generate_memory") {
+        generateMemoryForThread(tId);
+      } else if (result === "delete_history") {
+        void deleteThreadHistoryWithConfirm(tId, tTitle);
+      }
     },
-    [threads],
+    [
+      archiveThreadWithConfirm,
+      canGenerateMemoryForThread,
+      deleteThreadHistoryWithConfirm,
+      generateMemoryForThread,
+      startEditing,
+    ],
   );
-
-  const handleThreadContextMenu = async (
-    e: MouseEvent<HTMLElement>,
-    tId: string,
-    tTitle: string,
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const result = await showContextMenu([
-      { id: "rename", label: "Rename" },
-      { id: "archive", label: "Archive" },
-      ...(!isPackagedDesktopApp()
-        ? [
-            {
-              id: "generate_memory",
-              label: "Generate memory from conversation",
-              enabled: canGenerateMemoryForThread(tId),
-            },
-          ]
-        : []),
-      { id: "delete_history", label: "Delete session history" },
-    ]);
-
-    if (result === "rename") {
-      startEditing(tId, tTitle);
-    } else if (result === "archive") {
-      void archiveThreadWithConfirm(tId, tTitle);
-    } else if (result === "generate_memory") {
-      generateMemoryForThread(tId);
-    } else if (result === "delete_history") {
-      void deleteThreadHistoryWithConfirm(tId, tTitle);
-    }
-  };
 
   const workspaceItems = visibleProjectWorkspaces.map((workspace) => {
     const active = workspace.id === activeProjectWorkspaceId;
@@ -537,15 +530,14 @@ export const Sidebar = memo(function Sidebar() {
         selectTask={handleSelectTask}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
-        threadRuntimeById={threadRuntimeById}
         visibleThreads={visibleThreads}
         workspace={workspace}
         workspaceThreads={workspaceThreads}
         tasks={workspaceTasks}
         canGenerateMemoryForThread={canGenerateMemoryForThread}
         onGenerateMemoryForThread={generateMemoryForThread}
-        onDeleteHistoryForThread={(tId, tTitle) => void deleteThreadHistoryWithConfirm(tId, tTitle)}
-        onArchiveThread={(tId, tTitle) => void archiveThreadWithConfirm(tId, tTitle)}
+        onDeleteHistoryForThread={deleteThreadHistoryWithConfirm}
+        onArchiveThread={archiveThreadWithConfirm}
       />
     );
   });
@@ -603,26 +595,23 @@ export const Sidebar = memo(function Sidebar() {
                 ? oneOffChatThreads
                 : oneOffChatThreads.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS)
               ).map((thread) => (
-                <SidebarOneOffChatItem
+                <SidebarThreadItem
                   key={thread.id}
                   editInputRef={editInputRef}
                   editingThreadId={editingThreadId}
                   editingTitle={editingTitle}
+                  onArchiveThread={archiveThreadWithConfirm}
                   onCancelRename={cancelRename}
                   onCommitRename={commitRename}
+                  onDeleteHistoryForThread={deleteThreadHistoryWithConfirm}
                   onEditingTitleChange={setEditingTitle}
+                  onGenerateMemoryForThread={generateMemoryForThread}
                   onStartEditing={startEditing}
                   onThreadContextMenu={handleThreadContextMenu}
-                  onArchive={(tId, tTitle) => void archiveThreadWithConfirm(tId, tTitle)}
                   selectedThreadId={sidebarSelectedThreadId}
                   selectThread={handleSelectThread}
                   thread={thread}
-                  threadRuntimeById={threadRuntimeById}
                   canGenerateMemory={canGenerateMemoryForThread(thread.id)}
-                  onGenerateMemory={() => generateMemoryForThread(thread.id)}
-                  onDeleteHistory={() =>
-                    void deleteThreadHistoryWithConfirm(thread.id, displayTitleForThread(thread.id))
-                  }
                 />
               ))}
             </div>

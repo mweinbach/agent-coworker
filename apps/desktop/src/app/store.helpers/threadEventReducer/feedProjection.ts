@@ -28,56 +28,282 @@ export function composeFeedItemUpdates(
   return (item) => second(first(item));
 }
 
+type PendingContentOperation =
+  | {
+      kind: "assistant-delta";
+      itemId: string;
+      chunks: string[];
+      ts: string;
+    }
+  | {
+      kind: "reasoning-delta";
+      itemId: string;
+      mode: "reasoning" | "summary";
+      chunks: string[];
+      ts: string;
+    }
+  | {
+      kind: "item-update";
+      itemId: string;
+      updates: Array<(item: FeedItem) => FeedItem>;
+    }
+  | {
+      kind: "insert-content";
+      item: FeedItem;
+      beforeItemId: string | null;
+    };
+
+type PendingThreadContent = {
+  eventSequenceIncrements: number;
+  operations: PendingContentOperation[];
+};
+
+type PendingStoreContent = {
+  get: StoreGet | null;
+  set: StoreSet;
+  threads: Map<string, PendingThreadContent>;
+};
+
 export function createFeedProjectionModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<WorkspaceStateHelpers, "resetLiveModelStreamRuntime">,
 ) {
-  /** Coalesce projected assistant token deltas to one store write per animation frame. */
-  const pendingAssistantDeltas = new Map<
-    string,
-    { set: StoreSet; threadId: string; itemId: string; chunks: string[] }
-  >();
-  let assistantDeltaFlushScheduled = false;
+  /**
+   * All high-frequency content paths share one queue. A frame publishes once per
+   * Zustand store, even when multiple items or threads receive interleaved
+   * deltas. Structural and terminal events can synchronously extract one thread
+   * without disturbing pending content for other threads.
+   */
+  const pendingContentByStore = new Map<StoreSet, PendingStoreContent>();
+  let contentFlushScheduled = false;
 
-  function flushPendingAssistantDeltas() {
-    assistantDeltaFlushScheduled = false;
-    const batches = [...pendingAssistantDeltas.values()];
-    pendingAssistantDeltas.clear();
-    for (const batch of batches) {
-      const combined = batch.chunks.join("");
-      if (!combined) continue;
-      updateThreadFeed(batch.set, batch.threadId, (feed) =>
-        applyProjectedAgentMessageDelta(feed, batch.itemId, combined, ctx.deps.nowIso()),
-      );
-    }
-  }
-
-  function scheduleAssistantDeltaFlush() {
-    if (assistantDeltaFlushScheduled) return;
-    assistantDeltaFlushScheduled = true;
+  function scheduleContentFlush() {
+    if (contentFlushScheduled) return;
+    contentFlushScheduled = true;
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => flushPendingAssistantDeltas());
+      requestAnimationFrame(() => flushPendingContent());
     } else {
-      setTimeout(() => flushPendingAssistantDeltas(), 0);
+      setTimeout(() => flushPendingContent(), 0);
     }
   }
 
-  /** Ensure coalesced token text is committed before any non-delta feed mutation. */
-  function flushPendingAssistantDeltasForThread(threadId: string) {
-    let hasPending = false;
-    for (const key of pendingAssistantDeltas.keys()) {
-      if (key.startsWith(`${threadId}:`)) {
-        hasPending = true;
-        break;
+  function mergeWithLastOperation(
+    current: PendingContentOperation | undefined,
+    next: PendingContentOperation,
+  ): boolean {
+    if (
+      !current ||
+      current.kind === "insert-content" ||
+      next.kind === "insert-content" ||
+      current.itemId !== next.itemId ||
+      current.kind !== next.kind
+    ) {
+      return false;
+    }
+    switch (current.kind) {
+      case "assistant-delta": {
+        if (next.kind !== "assistant-delta") return false;
+        current.chunks.push(...next.chunks);
+        return true;
+      }
+      case "reasoning-delta": {
+        if (next.kind !== "reasoning-delta") return false;
+        current.chunks.push(...next.chunks);
+        current.mode = next.mode;
+        return true;
+      }
+      case "item-update": {
+        if (next.kind !== "item-update") return false;
+        current.updates.push(...next.updates);
+        return true;
+      }
+      default: {
+        const exhaustive: never = current;
+        return exhaustive;
       }
     }
-    if (hasPending || assistantDeltaFlushScheduled) {
-      flushPendingAssistantDeltas();
+  }
+
+  function pendingThreadContent(
+    set: StoreSet,
+    threadId: string,
+    get: StoreGet | null = null,
+  ): PendingThreadContent {
+    let storeBatch = pendingContentByStore.get(set);
+    if (!storeBatch) {
+      storeBatch = { get, set, threads: new Map() };
+      pendingContentByStore.set(set, storeBatch);
+    } else if (get) {
+      storeBatch.get = get;
     }
+    let threadBatch = storeBatch.threads.get(threadId);
+    if (!threadBatch) {
+      threadBatch = { eventSequenceIncrements: 0, operations: [] };
+      storeBatch.threads.set(threadId, threadBatch);
+    }
+    return threadBatch;
+  }
+
+  function queueContentOperation(
+    set: StoreSet,
+    threadId: string,
+    operation: PendingContentOperation,
+  ) {
+    const pending = pendingThreadContent(set, threadId);
+    const last = pending.operations[pending.operations.length - 1];
+    if (!mergeWithLastOperation(last, operation)) {
+      pending.operations.push(operation);
+    }
+    scheduleContentFlush();
+  }
+
+  function applyPendingContentOperations(
+    initialFeed: FeedItem[],
+    operations: PendingContentOperation[],
+  ): FeedItem[] {
+    let feed = initialFeed;
+    for (const operation of operations) {
+      switch (operation.kind) {
+        case "assistant-delta": {
+          const combined = operation.chunks.join("");
+          if (combined) {
+            feed = applyProjectedAgentMessageDelta(feed, operation.itemId, combined, operation.ts);
+          }
+          break;
+        }
+        case "reasoning-delta": {
+          const combined = operation.chunks.join("");
+          if (combined) {
+            feed = applyProjectedReasoningDelta(
+              feed,
+              operation.itemId,
+              operation.mode,
+              combined,
+              operation.ts,
+            );
+          }
+          break;
+        }
+        case "item-update": {
+          const index = feed.findIndex((item) => item.id === operation.itemId);
+          const current = index >= 0 ? feed[index] : undefined;
+          if (!current) break;
+          let updated = current;
+          for (const update of operation.updates) {
+            updated = update(updated);
+          }
+          if (updated !== current) {
+            feed = [...feed];
+            feed[index] = updated;
+          }
+          break;
+        }
+        case "insert-content": {
+          if (feed.some((item) => item.id === operation.item.id)) break;
+          const beforeIndex = operation.beforeItemId
+            ? feed.findIndex((item) => item.id === operation.beforeItemId)
+            : -1;
+          if (beforeIndex < 0) {
+            feed = [...feed, operation.item];
+          } else {
+            feed = [...feed];
+            feed.splice(beforeIndex, 0, operation.item);
+          }
+          break;
+        }
+        default: {
+          const exhaustive: never = operation;
+          return exhaustive;
+        }
+      }
+    }
+    return trimFeed(feed);
+  }
+
+  function publishPendingStoreContent(batch: PendingStoreContent) {
+    batch.set((state) => {
+      let nextRuntimeById = state.threadRuntimeById;
+      let runtimeChanged = false;
+      const eventSequenceIncrements = new Map<string, number>();
+
+      for (const [threadId, pending] of batch.threads) {
+        const runtime = state.threadRuntimeById[threadId];
+        if (runtime && pending.operations.length > 0) {
+          const nextFeed = applyPendingContentOperations(runtime.feed, pending.operations);
+          if (nextFeed !== runtime.feed) {
+            if (!runtimeChanged) {
+              nextRuntimeById = { ...state.threadRuntimeById };
+              runtimeChanged = true;
+            }
+            nextRuntimeById[threadId] = { ...runtime, feed: nextFeed };
+          }
+        }
+        if (pending.eventSequenceIncrements > 0) {
+          eventSequenceIncrements.set(threadId, pending.eventSequenceIncrements);
+        }
+      }
+
+      let threadsChanged = false;
+      const nextThreads =
+        eventSequenceIncrements.size === 0
+          ? state.threads
+          : state.threads.map((thread) => {
+              const increment = eventSequenceIncrements.get(thread.id) ?? 0;
+              if (increment === 0) return thread;
+              threadsChanged = true;
+              return {
+                ...thread,
+                lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + increment)),
+              };
+            });
+
+      if (!runtimeChanged && !threadsChanged) return {};
+      return {
+        ...(runtimeChanged ? { threadRuntimeById: nextRuntimeById } : {}),
+        ...(threadsChanged ? { threads: nextThreads } : {}),
+      };
+    });
+    if (batch.get) {
+      void ctx.deps.persist(batch.get);
+    }
+  }
+
+  function flushPendingContent() {
+    contentFlushScheduled = false;
+    const batches = [...pendingContentByStore.values()];
+    pendingContentByStore.clear();
+    for (const batch of batches) {
+      publishPendingStoreContent(batch);
+    }
+  }
+
+  /** Ensure content is committed before a structural or terminal mutation. */
+  function flushPendingContentForThread(set: StoreSet, threadId: string) {
+    const storeBatch = pendingContentByStore.get(set);
+    const threadBatch = storeBatch?.threads.get(threadId);
+    if (!storeBatch || !threadBatch) return;
+    storeBatch.threads.delete(threadId);
+    if (storeBatch.threads.size === 0) {
+      pendingContentByStore.delete(set);
+    }
+    if (pendingContentByStore.size === 0) {
+      contentFlushScheduled = false;
+    }
+    publishPendingStoreContent({
+      get: storeBatch.get,
+      set,
+      threads: new Map([[threadId, threadBatch]]),
+    });
+  }
+
+  function recordPendingThreadEvent(get: StoreGet, set: StoreSet, threadId: string) {
+    const pending = pendingThreadContent(set, threadId, get);
+    pending.eventSequenceIncrements += 1;
+    scheduleContentFlush();
   }
 
   function pushFeedItem(set: StoreSet, threadId: string, item: FeedItem) {
-    flushPendingAssistantDeltasForThread(threadId);
+    flushPendingContentForThread(set, threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -121,7 +347,7 @@ export function createFeedProjectionModule(
     beforeItemId: string,
     item: FeedItem,
   ) {
-    flushPendingAssistantDeltasForThread(threadId);
+    flushPendingContentForThread(set, threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -248,7 +474,7 @@ export function createFeedProjectionModule(
   }
 
   function applyProjectedStarted(set: StoreSet, threadId: string, item: ProjectedItem) {
-    flushPendingAssistantDeltasForThread(threadId);
+    flushPendingContentForThread(set, threadId);
     if (item.type === "userMessage") {
       reconcileProjectedUserItem(set, threadId, item);
       return;
@@ -276,7 +502,7 @@ export function createFeedProjectionModule(
     // Flush coalesced token deltas before applying the final projected item so
     // a late rAF cannot append after the completed snapshot replaces text, and so
     // non-message completions keep feed ordering stable relative to prior deltas.
-    flushPendingAssistantDeltasForThread(threadId);
+    flushPendingContentForThread(set, threadId);
 
     updateThreadFeed(
       set,
@@ -300,10 +526,13 @@ export function createFeedProjectionModule(
     mode: "reasoning" | "summary",
     delta: string,
   ) {
-    flushPendingAssistantDeltasForThread(threadId);
-    updateThreadFeed(set, threadId, (feed) =>
-      applyProjectedReasoningDelta(feed, itemId, mode, delta, ctx.deps.nowIso()),
-    );
+    queueContentOperation(set, threadId, {
+      kind: "reasoning-delta",
+      itemId,
+      mode,
+      chunks: [delta],
+      ts: ctx.deps.nowIso(),
+    });
   }
 
   function applyProjectedAssistantDeltaToThread(
@@ -314,46 +543,13 @@ export function createFeedProjectionModule(
   ) {
     // Do not touch threads[].lastMessageAt on intermediate token deltas —
     // that forces sidebar re-renders at stream rate. Started/completed still update.
-    // Coalesce to one React commit per animation frame under high token rates.
-    const key = `${threadId}:${itemId}`;
-    const existing = pendingAssistantDeltas.get(key);
-    if (existing) {
-      existing.chunks.push(delta);
-      existing.set = set;
-    } else {
-      pendingAssistantDeltas.set(key, { set, threadId, itemId, chunks: [delta] });
-    }
-    scheduleAssistantDeltaFlush();
-  }
-  /** Ordered per-item updates, flushed once per animation frame (model-stream path). */
-  const pendingModelStreamUpdates = new Map<
-    string,
-    { set: StoreSet; threadId: string; itemId: string; update: (item: FeedItem) => FeedItem }
-  >();
-  let modelStreamFlushScheduled = false;
-
-  function flushPendingModelStreamUpdates() {
-    modelStreamFlushScheduled = false;
-    const batches = [...pendingModelStreamUpdates.values()];
-    pendingModelStreamUpdates.clear();
-    for (const batch of batches) {
-      updateFeedItem(batch.set, batch.threadId, batch.itemId, batch.update);
-    }
-  }
-
-  function scheduleModelStreamFlush() {
-    if (modelStreamFlushScheduled) return;
-    modelStreamFlushScheduled = true;
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => flushPendingModelStreamUpdates());
-    } else {
-      setTimeout(() => flushPendingModelStreamUpdates(), 0);
-    }
-  }
-
-  function flushModelStreamBeforeStructuralChange() {
-    if (pendingModelStreamUpdates.size === 0) return;
-    flushPendingModelStreamUpdates();
+    // Coalesce all content kinds and threads into one store write per frame.
+    queueContentOperation(set, threadId, {
+      kind: "assistant-delta",
+      itemId,
+      chunks: [delta],
+      ts: ctx.deps.nowIso(),
+    });
   }
 
   function applyModelStreamUpdateToThreadFeed(
@@ -367,26 +563,38 @@ export function createFeedProjectionModule(
       makeId: ctx.deps.makeId,
       nowIso: ctx.deps.nowIso,
       pushFeedItem: (item) => {
-        flushModelStreamBeforeStructuralChange();
+        if (item.kind === "reasoning" || (item.kind === "message" && item.role === "assistant")) {
+          queueContentOperation(set, threadId, {
+            kind: "insert-content",
+            item,
+            beforeItemId: null,
+          });
+          return;
+        }
+        flushPendingContentForThread(set, threadId);
         pushFeedItem(set, threadId, item);
       },
       insertFeedItemBefore: (beforeItemId, item) => {
-        flushModelStreamBeforeStructuralChange();
+        if (item.kind === "reasoning") {
+          queueContentOperation(set, threadId, {
+            kind: "insert-content",
+            item,
+            beforeItemId,
+          });
+          return;
+        }
+        flushPendingContentForThread(set, threadId);
         insertFeedItemBefore(set, threadId, beforeItemId, item);
       },
       updateFeedItem: (itemId, updateItem) => {
-        const key = `${threadId}:${itemId}`;
-        const pending = pendingModelStreamUpdates.get(key);
-        pendingModelStreamUpdates.set(key, {
-          set,
-          threadId,
+        queueContentOperation(set, threadId, {
+          kind: "item-update",
           itemId,
-          update: pending ? composeFeedItemUpdates(pending.update, updateItem) : updateItem,
+          updates: [updateItem],
         });
-        scheduleModelStreamFlush();
       },
       onToolTerminal: () => {
-        flushModelStreamBeforeStructuralChange();
+        flushPendingContentForThread(set, threadId);
         const thread = get().threads.find((t) => t.id === threadId);
         if (thread) {
           set((state) => ({
@@ -487,6 +695,7 @@ export function createFeedProjectionModule(
     snapshot: SessionSnapshot,
     opts?: { forceFeed?: boolean },
   ) {
+    flushPendingContentForThread(set, threadId);
     set((s) => {
       const runtime = s.threadRuntimeById[threadId];
       const thread = s.threads.find((entry) => entry.id === threadId);
@@ -580,5 +789,7 @@ export function createFeedProjectionModule(
     applyProjectedAssistantDeltaToThread,
     applyModelStreamUpdateToThreadFeed,
     applyJsonRpcThreadSnapshot,
+    flushPendingContentForThread,
+    recordPendingThreadEvent,
   };
 }

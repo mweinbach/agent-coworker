@@ -61,6 +61,7 @@ type QualityLifecycle = {
 };
 
 type QualityMainControl = {
+  completeDeltaBurst(itemId: string): void;
   emitCompletion(): void;
   emitDeltaBurst(count: number, runId: number): string;
   emitLongTranscript(count: number, runId: number): string;
@@ -109,6 +110,7 @@ let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 const researchRecords = new Map<string, ResearchRecord>();
 const connectedSockets = new Set<Ws.WebSocket>();
+const pendingDeltaBursts = new Map<string, { finalText: string; turnId: string }>();
 let lifecycleSequence = 0;
 let bootstrapReleased = !holdBootstrap;
 let resolveBootstrap: (() => void) | null = null;
@@ -138,6 +140,9 @@ let metrics: QualityMainMetrics = {
 };
 
 globalThis.__coworkQualityGateMain = {
+  completeDeltaBurst: (itemId) => {
+    completeDeltaBurst(itemId);
+  },
   emitCompletion: () => {
     emitCompletion();
   },
@@ -623,6 +628,13 @@ function emitDeltaBurst(count: number, runId: number): string {
   const boundedCount = Math.max(1, Math.min(10_000, Math.floor(count)));
   const itemId = `quality-delta-${runId}`;
   const marker = `[delta-burst-complete-${runId}]`;
+  const finalText = `${".".repeat(boundedCount - 1)}${marker}`;
+  const turnId = "quality-performance-turn";
+  pendingDeltaBursts.set(itemId, { finalText, turnId });
+  sendNotification("turn/started", {
+    threadId: PROJECT_THREAD_ID,
+    turn: { id: turnId, status: "inProgress" },
+  });
   sendProjectedItem(
     "item/started",
     {
@@ -630,23 +642,44 @@ function emitDeltaBurst(count: number, runId: number): string {
       type: "agentMessage",
       text: "",
     },
-    "quality-performance-turn",
+    turnId,
   );
   for (let index = 1; index < boundedCount; index += 1) {
     sendNotification("item/agentMessage/delta", {
       threadId: PROJECT_THREAD_ID,
-      turnId: "quality-performance-turn",
+      turnId,
       itemId,
       delta: ".",
     });
   }
   sendNotification("item/agentMessage/delta", {
     threadId: PROJECT_THREAD_ID,
-    turnId: "quality-performance-turn",
+    turnId,
     itemId,
     delta: marker,
   });
   return itemId;
+}
+
+function completeDeltaBurst(itemId: string): void {
+  const pending = pendingDeltaBursts.get(itemId);
+  if (!pending) {
+    throw new Error(`Unknown pending delta burst: ${itemId}`);
+  }
+  pendingDeltaBursts.delete(itemId);
+  sendProjectedItem(
+    "item/completed",
+    {
+      id: itemId,
+      type: "agentMessage",
+      text: pending.finalText,
+    },
+    pending.turnId,
+  );
+  sendNotification("turn/completed", {
+    threadId: PROJECT_THREAD_ID,
+    turn: { id: pending.turnId, status: "completed" },
+  });
 }
 
 function emitLongTranscript(count: number, runId: number): string {

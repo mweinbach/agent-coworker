@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-
+import { setDesktopRenderMetricObserver } from "../src/ui/renderDiagnostics";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -315,6 +315,60 @@ describe("desktop sidebar", () => {
       expect(threadRowWrapper?.className).toContain("min-w-0");
       expect(title?.className).toContain("truncate");
     } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("does not rerender unrelated thread rows when one runtime changes", async () => {
+    const harness = setupSidebarJsdom();
+    const rowRenders = new Map<string, number>();
+    const stopObserving = setDesktopRenderMetricObserver((event) => {
+      if (event.metric !== "sidebar-thread-row" || !event.id) return;
+      rowRenders.set(event.id, (rowRenders.get(event.id) ?? 0) + 1);
+    });
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(2),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-2",
+          threadRuntimeById: {
+            "thread-1": { busy: false },
+            "thread-2": { busy: false },
+          },
+        });
+        root.render(createElement(Sidebar));
+      });
+      rowRenders.clear();
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"],
+              busy: true,
+            },
+          },
+        }));
+      });
+
+      expect(rowRenders.get("thread-1")).toBe(1);
+      expect(rowRenders.get("thread-2") ?? 0).toBe(0);
+    } finally {
+      stopObserving();
       if (root) {
         await act(async () => {
           root.unmount();

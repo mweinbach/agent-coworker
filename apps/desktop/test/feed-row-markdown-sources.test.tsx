@@ -98,7 +98,8 @@ describe("FeedRow assistant markdown and sources integration", () => {
       expect(container.querySelector('[data-slot="bubble"]')?.getAttribute("data-variant")).toBe(
         "ghost",
       );
-      expect(container.querySelector('[data-slot="message-footer"]')).not.toBeNull();
+      // Copy lives in an overlay toolbar (hover/focus-within), not a permanent footer.
+      expect(container.querySelector('[aria-label="Copy message"]')).not.toBeNull();
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Portfolio Methodology"),
@@ -191,7 +192,50 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
     expect(html).toContain("diagram.png");
     expect(html).toContain("findings.pdf");
-    expect(html).toContain('data-slot="message-footer"');
     expect(html).toContain('aria-label="Copy message"');
+    expect(html).toContain("group-hover/message:opacity-100");
+    expect(html).toContain("group-focus-within/message:opacity-100");
+  });
+
+  test("streams plain text instead of full markdown while isStreaming", () => {
+    const html = renderToStaticMarkup(
+      renderFeedRow(
+        {
+          id: "assistant-streaming",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-06-18T10:00:00.000Z",
+          text: "Hello **world**",
+        },
+        {},
+      ),
+    );
+    // Without isStreaming, full markdown path is used (no streaming-markdown slot).
+    expect(html).not.toContain('data-slot="streaming-markdown"');
+
+    const streamingHtml = renderToStaticMarkup(
+      createElement(
+        ChatViewContext.Provider,
+        {
+          value: {
+            developerMode: false,
+            mentionCatalog: EMPTY_MENTION_CATALOG,
+          },
+        },
+        createElement(FeedRow, {
+          item: {
+            id: "assistant-streaming",
+            kind: "message",
+            role: "assistant",
+            ts: "2026-06-18T10:00:00.000Z",
+            text: "Hello **world**",
+          },
+          isStreaming: true,
+        }),
+      ),
+    );
+    expect(streamingHtml).toContain('data-slot="streaming-markdown"');
+    expect(streamingHtml).toContain("Hello **world**");
+    expect(streamingHtml).toContain('data-slot="streaming-caret"');
   });
 });

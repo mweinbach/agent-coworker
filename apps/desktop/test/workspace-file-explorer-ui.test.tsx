@@ -104,6 +104,39 @@ describe("workspace file explorer UI", () => {
     resetAppStore();
   });
 
+  test.serial("shows row overflow control on group focus-within for keyboard users", async () => {
+    const harness = setupJsdom({
+      includeAnimationFrame: true,
+      extraGlobals: { ResizeObserver: MockResizeObserver },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
+        await flushUi();
+      });
+
+      const moreButton = container.querySelector(
+        "button[aria-label='More options for README.md']",
+      ) as HTMLButtonElement | null;
+      expect(moreButton).toBeTruthy();
+      const className = moreButton?.getAttribute("class") ?? "";
+      expect(className).toContain("group-hover:opacity-100");
+      expect(className).toContain("group-focus-within:opacity-100");
+      expect(className).toContain("focus-visible:opacity-100");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test.serial("refreshes the rendered tree when the workspace refresh signal changes", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: true,

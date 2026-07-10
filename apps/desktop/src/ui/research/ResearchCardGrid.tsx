@@ -2,8 +2,9 @@ import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } fr
 
 import { useAppStore } from "../../app/store";
 import type { ResearchCard } from "../../app/types";
+import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { showContextMenu } from "../../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../../lib/desktopCommands";
 import { formatRelativeAge } from "../../lib/time";
 import { cn } from "../../lib/utils";
 
@@ -272,6 +273,50 @@ function renderResearchTree({
   });
 }
 
+const HIDDEN_RESEARCH_KEY = "cowork.research.hiddenIds";
+
+export function collectResearchSubtreeIds(
+  research: ResearchCard[],
+  rootResearchId: string,
+): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const entry of research) {
+    if (!entry.parentResearchId) continue;
+    const children = childrenByParent.get(entry.parentResearchId) ?? [];
+    children.push(entry.id);
+    childrenByParent.set(entry.parentResearchId, children);
+  }
+  const subtreeIds = new Set<string>();
+  const pending = [rootResearchId];
+  while (pending.length > 0) {
+    const researchId = pending.pop();
+    if (!researchId || subtreeIds.has(researchId)) continue;
+    subtreeIds.add(researchId);
+    pending.push(...(childrenByParent.get(researchId) ?? []));
+  }
+  return subtreeIds;
+}
+
+function loadHiddenResearchIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_RESEARCH_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id): id is string => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistHiddenResearchIds(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(HIDDEN_RESEARCH_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
+
 export function ResearchCardGrid({
   research,
   selectedResearchId,
@@ -282,12 +327,24 @@ export function ResearchCardGrid({
   onSelectResearch: (researchId: string) => void;
 }) {
   const renameResearch = useAppStore((s) => s.renameResearch);
+  const deleteResearch = useAppStore((s) => s.deleteResearch);
+  const selectResearch = useAppStore((s) => s.selectResearch);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenResearchIds());
+  const hiddenResearchCount = useMemo(
+    () => research.filter((entry) => hiddenIds.has(entry.id)).length,
+    [hiddenIds, research],
+  );
+
+  const visibleResearch = useMemo(
+    () => research.filter((entry) => !hiddenIds.has(entry.id)),
+    [hiddenIds, research],
+  );
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string | null, ResearchCard[]>();
-    for (const entry of research) {
+    for (const entry of visibleResearch) {
       const key = entry.parentResearchId ?? null;
       const current = map.get(key) ?? [];
       current.push(entry);
@@ -300,7 +357,31 @@ export function ResearchCardGrid({
       );
     }
     return map;
-  }, [research]);
+  }, [visibleResearch]);
+
+  const hideResearch = useCallback(
+    (researchId: string) => {
+      const subtreeIds = collectResearchSubtreeIds(research, researchId);
+      setHiddenIds((current) => {
+        const next = new Set(current);
+        for (const subtreeId of subtreeIds) {
+          next.add(subtreeId);
+        }
+        persistHiddenResearchIds(next);
+        return next;
+      });
+      if (selectedResearchId && subtreeIds.has(selectedResearchId)) {
+        void selectResearch(null);
+      }
+    },
+    [research, selectResearch, selectedResearchId],
+  );
+
+  const restoreHiddenResearch = useCallback(() => {
+    const next = new Set<string>();
+    persistHiddenResearchIds(next);
+    setHiddenIds(next);
+  }, []);
 
   const startEditing = useCallback((entry: ResearchCard) => {
     setEditingId(entry.id);
@@ -333,32 +414,74 @@ export function ResearchCardGrid({
       const result = await showContextMenu([
         { id: "open", label: "Open" },
         { id: "rename", label: "Rename" },
+        { id: "hide", label: "Hide from list (including follow-ups)" },
+        { id: "delete", label: "Delete permanently" },
       ]);
       if (result === "open") {
         onSelectResearch(entry.id);
       } else if (result === "rename") {
         startEditing(entry);
+      } else if (result === "hide") {
+        hideResearch(entry.id);
+      } else if (result === "delete") {
+        const confirmed = await confirmAction({
+          title: "Delete research?",
+          message: `Permanently delete “${entry.title || entry.prompt || "this research"}”?`,
+          detail: "The report, exports, and local files for this run will be removed.",
+          kind: "warning",
+          confirmLabel: "Delete",
+          cancelLabel: "Cancel",
+          defaultAction: "cancel",
+        });
+        if (!confirmed) return;
+        await deleteResearch(entry.id);
       }
     },
-    [onSelectResearch, startEditing],
+    [deleteResearch, hideResearch, onSelectResearch, startEditing],
   );
 
+  if (visibleResearch.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-8 text-center text-xs text-muted-foreground">
+        <span>No visible research runs. Hidden runs and follow-ups stay on disk.</span>
+        {hiddenResearchCount > 0 ? (
+          <Button type="button" variant="outline" size="sm" onClick={restoreHiddenResearch}>
+            Restore hidden research ({hiddenResearchCount})
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
-    <div role="listbox" aria-label="Research history" className="flex flex-col gap-1">
-      {renderResearchTree({
-        parentId: null,
-        depth: 0,
-        childrenByParent,
-        selectedResearchId,
-        editingId,
-        editingTitle,
-        onSelect: onSelectResearch,
-        onStartEditing: startEditing,
-        onCancelEditing: cancelEditing,
-        onEditingTitleChange: setEditingTitle,
-        onCommitRename: commitRename,
-        onContextMenu: handleContextMenu,
-      })}
+    <div className="flex flex-col gap-2">
+      {hiddenResearchCount > 0 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          onClick={restoreHiddenResearch}
+        >
+          Restore hidden research ({hiddenResearchCount})
+        </Button>
+      ) : null}
+      <div role="listbox" aria-label="Research history" className="flex flex-col gap-1">
+        {renderResearchTree({
+          parentId: null,
+          depth: 0,
+          childrenByParent,
+          selectedResearchId,
+          editingId,
+          editingTitle,
+          onSelect: onSelectResearch,
+          onStartEditing: startEditing,
+          onCancelEditing: cancelEditing,
+          onEditingTitleChange: setEditingTitle,
+          onCommitRename: commitRename,
+          onContextMenu: handleContextMenu,
+        })}
+      </div>
     </div>
   );
 }

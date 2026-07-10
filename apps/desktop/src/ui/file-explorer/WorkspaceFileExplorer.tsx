@@ -1101,7 +1101,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
                       isSelected
                         ? "opacity-100 hover:bg-accent-foreground/15"
-                        : "group-hover:opacity-100 hover:bg-muted",
+                        : "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-muted",
                     )}
                     data-file-explorer-control="true"
                     onClick={() => void openEntryMenu(entry)}

@@ -1,14 +1,7 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-
-const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock-popup" }));
-
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    startWorkspaceServer: startWorkspaceServerMock,
-  }),
-);
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
 const { useAppStore } = await import("../src/app/store");
 const { reactivateWorkspaceJsonRpcSocketState } = await import(
@@ -54,11 +47,19 @@ function resetPopupWorkspace(requestMock: RequestMock) {
 
 describe("spreadsheet workbook workspace startup", () => {
   beforeEach(() => {
-    startWorkspaceServerMock.mockClear();
+    Object.assign(globalThis, {
+      [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock(),
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
 
   test("starts the workspace server before requesting workbook data", async () => {
+    let serverUrlAtRequest: string | null | undefined;
     const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
+      serverUrlAtRequest = useAppStore.getState().workspaceRuntimeById["ws-popup"]?.serverUrl;
       expect(method).toBe("cowork/workspace/spreadsheet/workbook");
       expect(params?.cwd).toBe("/Users/mweinbach/Projects/preview-workspace");
       return {
@@ -91,11 +92,7 @@ describe("spreadsheet workbook workspace startup", () => {
     const result = await useAppStore.getState().loadSpreadsheetWorkbook(PATH);
 
     expect(result.ok).toBe(true);
-    expect(startWorkspaceServerMock).toHaveBeenCalledTimes(1);
-    expect(startWorkspaceServerMock.mock.calls[0]?.[0]).toMatchObject({
-      workspaceId: "ws-popup",
-      workspacePath: "/Users/mweinbach/Projects/preview-workspace",
-    });
+    expect(serverUrlAtRequest).toBeTruthy();
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,6 +25,7 @@ type TestState = {
     {
       id: string;
       title: string;
+      parentResearchId?: string | null;
       status?: "pending" | "running" | "completed" | "cancelled" | "failed";
       outputsMarkdown?: string;
       lastEventId?: string | null;
@@ -198,6 +199,92 @@ describe("research actions", () => {
     expect(harness.state.notifications[0]?.kind).toBe("error");
     expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
     expect(harness.state.notifications[0]?.detail).toContain("Invalid research/export response");
+  });
+
+  test("deleteResearch immediately reparents follow-ups while deletion settles", async () => {
+    const deletionGate = Promise.withResolvers<void>();
+    const parent = {
+      id: "research-parent",
+      title: "Parent",
+      parentResearchId: null,
+      status: "completed" as const,
+      outputsMarkdown: "",
+      lastEventId: null,
+      updatedAt: "2026-04-21T00:00:00.000Z",
+    };
+    const child = {
+      ...parent,
+      id: "research-child",
+      title: "Child",
+      parentResearchId: parent.id,
+      updatedAt: "2026-04-21T00:01:00.000Z",
+    };
+    const grandchild = {
+      ...parent,
+      id: "research-grandchild",
+      title: "Grandchild",
+      parentResearchId: child.id,
+      updatedAt: "2026-04-21T00:02:00.000Z",
+    };
+    const harness = createHarness({
+      researchById: {
+        [parent.id]: parent,
+        [child.id]: child,
+        [grandchild.id]: grandchild,
+      },
+      researchOrder: [grandchild.id, child.id, parent.id],
+      selectedResearchId: parent.id,
+    });
+    requestJsonRpcMock.mockImplementationOnce(async () => {
+      await deletionGate.promise;
+      return { researchId: parent.id, deleted: true };
+    });
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+
+    const deletion = actions.deleteResearch(parent.id);
+    expect(harness.state.researchById[parent.id]).toBeUndefined();
+    expect(harness.state.researchById[child.id]?.parentResearchId).toBeNull();
+    expect(harness.state.researchById[grandchild.id]?.parentResearchId).toBe(child.id);
+    expect(harness.state.researchOrder).toContain(child.id);
+    expect(harness.state.selectedResearchId).toBeNull();
+
+    deletionGate.resolve();
+    await expect(deletion).resolves.toBe(true);
+  });
+
+  test("deleteResearch restores parent links when the server rejects deletion", async () => {
+    const parent = {
+      id: "research-parent",
+      title: "Parent",
+      parentResearchId: null,
+      status: "completed" as const,
+      outputsMarkdown: "",
+      lastEventId: null,
+      updatedAt: "2026-04-21T00:00:00.000Z",
+    };
+    const child = {
+      ...parent,
+      id: "research-child",
+      title: "Child",
+      parentResearchId: parent.id,
+      updatedAt: "2026-04-21T00:01:00.000Z",
+    };
+    const harness = createHarness({
+      researchById: {
+        [parent.id]: parent,
+        [child.id]: child,
+      },
+      researchOrder: [child.id, parent.id],
+    });
+    requestJsonRpcMock.mockImplementationOnce(async () => ({
+      researchId: parent.id,
+      deleted: false,
+    }));
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+
+    await expect(actions.deleteResearch(parent.id)).resolves.toBe(false);
+    expect(harness.state.researchById[parent.id]).toEqual(parent);
+    expect(harness.state.researchById[child.id]?.parentResearchId).toBe(parent.id);
   });
 
   test("startResearch rejects oversized files before reading attachment bytes", async () => {

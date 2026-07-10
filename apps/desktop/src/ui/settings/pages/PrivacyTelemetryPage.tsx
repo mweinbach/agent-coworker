@@ -5,7 +5,7 @@ import type { PrivacyTelemetrySettings } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Switch } from "../../../components/ui/switch";
 import type { TelemetryStatusEntry, TelemetryStatusSnapshot } from "../../../lib/desktopApi";
-import { getTelemetryStatus } from "../../../lib/desktopCommands";
+import { confirmAction, getTelemetryStatus } from "../../../lib/desktopCommands";
 import { SettingsPage, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 
 function badgeVariantForStatus(status: TelemetryStatusEntry["status"]) {
@@ -73,6 +73,7 @@ export function PrivacyTelemetryPage() {
   const setProductAnalyticsEnabled = useAppStore((s) => s.setProductAnalyticsEnabled);
   const setAiTraceTelemetryEnabled = useAppStore((s) => s.setAiTraceTelemetryEnabled);
   const setAiTracePayloadsEnabled = useAppStore((s) => s.setAiTracePayloadsEnabled);
+  const setDiagnosticsUploadEnabled = useAppStore((s) => s.setDiagnosticsUploadEnabled);
   const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatusSnapshot | null>(() =>
     typeof window === "undefined" ? null : (window.cowork?.telemetryStatus ?? null),
   );
@@ -157,8 +158,43 @@ export function PrivacyTelemetryPage() {
               checked={settings.aiTracePayloadsEnabled}
               disabled={!settings.aiTraceTelemetryEnabled}
               aria-label="Include prompts and responses in AI traces"
-              onCheckedChange={setAiTracePayloadsEnabled}
+              onCheckedChange={(checked) => {
+                if (!checked) {
+                  setAiTracePayloadsEnabled(false);
+                  return;
+                }
+                void (async () => {
+                  const confirmed = await confirmAction({
+                    title: "Include full AI payload traces?",
+                    message:
+                      "This may send prompts, responses, shell commands, logs, and file paths or names.",
+                    detail:
+                      "Only enable this when you intentionally want detailed AI diagnostics. You can turn it off at any time.",
+                    confirmLabel: "Enable full traces",
+                    cancelLabel: "Cancel",
+                    kind: "warning",
+                    defaultAction: "cancel",
+                  });
+                  if (confirmed) {
+                    setAiTracePayloadsEnabled(true);
+                  }
+                })();
+              }}
             />
+          }
+        />
+        <SettingsRow
+          title="Diagnostics upload"
+          description="Allow optional diagnostics bundles to be prepared for support. Keeps content local until you explicitly share a package."
+          control={
+            <div className="flex items-center gap-2">
+              {statusBadge(status.diagnosticsUpload)}
+              <Switch
+                checked={settings.diagnosticsUploadEnabled}
+                aria-label="Diagnostics upload"
+                onCheckedChange={setDiagnosticsUploadEnabled}
+              />
+            </div>
           }
         />
       </SettingsSection>

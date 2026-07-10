@@ -53,6 +53,8 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
     ready: true,
     bootstrapPending: false,
     startupError: null,
+    onboardingVisible: false,
+    promptModal: null,
     view: "task",
     workspaces: [
       {
@@ -125,6 +127,55 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
       ],
     },
     dismissPrompt,
+  } as never);
+}
+
+function seedDisconnectedChatState(hydrating: boolean) {
+  const now = "2026-04-30T00:00:00.000Z";
+  useAppStore.setState({
+    ...useAppStore.getState(),
+    ready: true,
+    bootstrapPending: false,
+    startupError: null,
+    view: "chat",
+    workspaces: [
+      {
+        id: "ws-1",
+        name: "Project",
+        path: "/tmp/workspace",
+        createdAt: now,
+        lastOpenedAt: now,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    selectedWorkspaceId: "ws-1",
+    selectedThreadId: "chat-session-1",
+    selectedTaskId: null,
+    threads: [
+      {
+        id: "chat-session-1",
+        workspaceId: "ws-1",
+        title: "Disconnected chat",
+        createdAt: now,
+        lastMessageAt: now,
+        status: "active",
+        sessionId: "chat-session-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+        draft: false,
+      },
+    ],
+    threadRuntimeById: {
+      "chat-session-1": {
+        sessionId: "chat-session-1",
+        connected: false,
+        hydrating,
+        busy: false,
+        feed: [],
+      },
+    },
   } as never);
 }
 
@@ -234,15 +285,16 @@ describe("app window-mode notification routing", () => {
   test("Escape dismisses pending sandbox approvals for terminal task threads", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       seedTerminalTaskApprovalState(dismissPrompt);
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(App));
+        root?.render(createElement(App));
       });
 
       await act(async () => {
@@ -252,11 +304,112 @@ describe("app window-mode notification routing", () => {
       });
 
       expect(dismissPrompt).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("renders one reconnect banner only after hydration completes", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedDisconnectedChatState(true);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
 
       await act(async () => {
-        root.unmount();
+        root?.render(createElement(App));
       });
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "chat-session-1": {
+              ...state.threadRuntimeById["chat-session-1"],
+              hydrating: false,
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(1);
     } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("leaves terminal task recovery to its Reopen action without a reconnect banner", async () => {
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedTerminalTaskApprovalState(() => {});
+      useAppStore.setState({
+        sandboxApprovalsByThread: {},
+        threadRuntimeById: {
+          "task-session-1": {
+            wsUrl: null,
+            connected: false,
+            sessionId: "task-session-1",
+            config: null,
+            sessionConfig: null,
+            sessionKind: "chat",
+            parentSessionId: null,
+            role: null,
+            mode: null,
+            depth: 0,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: null,
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState: null,
+            lastMessagePreview: null,
+            agents: [],
+            sessionUsage: null,
+            lastTurnUsage: null,
+            enableMcp: null,
+            busy: false,
+            busySince: null,
+            activeTurnId: null,
+            pendingTurnStart: null,
+            pendingSteer: null,
+            feed: [],
+            hydrating: false,
+            transcriptOnly: false,
+          },
+        },
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(App));
+      });
+
+      expect(container.querySelectorAll('[data-slot="connection-banner"]')).toHaveLength(0);
+      expect(container.textContent).toContain("Reopen task");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
       harness.restore();
     }
   });

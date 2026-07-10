@@ -148,7 +148,6 @@ function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hyd
     createElement(ChatFeed, {
       transcriptOnly: false,
       disconnected: false,
-      onReconnect: () => {},
       visibleFeedLength: renderItems.length,
       hydrating,
       renderItems,
@@ -161,7 +160,7 @@ function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hyd
       REMOVEDUIEnabled: false,
       composerOverlayHeight: 200,
       sandboxApprovals: [],
-      onAnswerApproval: () => {},
+      onAnswerApproval: () => true,
       selectedThreadId,
     }),
   );
@@ -439,6 +438,53 @@ describe("desktop chat message scroller", () => {
       harness.restore();
     }
   });
+
+  test("progressively windows long feeds and expands when scrolling near the top", async () => {
+    const heights = new Map<string, number>();
+    const items: ChatRenderItem[] = [];
+    for (let index = 0; index < 100; index += 1) {
+      const id = `msg-${index}`;
+      heights.set(id, 40);
+      items.push(message(id, index % 2 === 0 ? "user" : "assistant", `Message ${index}`));
+    }
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(renderFeed(items, "thread-long"));
+      });
+
+      // Soft window keeps the newest 80 entries + show-older control.
+      expect(container.querySelector('[data-message-id="msg-0"]')).toBeNull();
+      expect(container.querySelector('[data-message-id="msg-19"]')).toBeNull();
+      expect(container.querySelector('[data-message-id="msg-20"]')).not.toBeNull();
+      expect(container.querySelector('[data-message-id="msg-99"]')).not.toBeNull();
+      expect(container.querySelector('[data-message-id="status:show-older"]')).not.toBeNull();
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+
+      await act(async () => {
+        viewport.scrollTop = 0;
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // Near-top scroll expands by another batch (80 → 100 mounts everything).
+      expect(container.querySelector('[data-message-id="msg-0"]')).not.toBeNull();
+      expect(container.querySelector('[data-message-id="status:show-older"]')).toBeNull();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  }, 15_000);
 
   test("reapplies last-user-turn restoration when switching threads", async () => {
     const heights = new Map([

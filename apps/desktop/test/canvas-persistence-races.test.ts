@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
 import type {
   CanvasDocumentOpenResult,
@@ -99,10 +99,6 @@ function makeController(client: CanvasDocumentClient) {
 }
 
 describe("Canvas persistence controller", () => {
-  beforeEach(() => {
-    mock.restore();
-  });
-
   test("ignores file A when its deferred read resolves after file B", async () => {
     const readA = deferred<CanvasDocumentOpenResult>();
     const readB = deferred<CanvasDocumentOpenResult>();

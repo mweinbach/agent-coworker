@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
 import type {
   JsonRpcLiteError,
@@ -287,7 +288,7 @@ describe("workspace JSON-RPC route", () => {
   });
 
   test("Canvas document methods preserve the typed session-bound write contract", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-document-route-"));
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-document-route-"));
     try {
       const filePath = path.join(dir, "notes.md");
       await fs.writeFile(filePath, "original", "utf8");

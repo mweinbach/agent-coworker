@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
 
 type Deferred<T> = {
@@ -21,7 +21,9 @@ function deferred<T>(): Deferred<T> {
 const temporaryDirectories: string[] = [];
 
 async function makeWorkspace(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-canvas-document-"));
+  const directory = await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", "cowork-canvas-document-"),
+  );
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -76,11 +78,13 @@ describe("CanvasDocumentPersistenceService", () => {
     const filePath = path.join(cwd, "notes.md");
     await fs.writeFile(filePath, "original");
     const firstCommit = deferred<void>();
+    const firstCommitStarted = deferred<void>();
     let commitCount = 0;
     const service = new CanvasDocumentPersistenceService({
       beforeAtomicCommit: async () => {
         commitCount += 1;
         if (commitCount === 1) {
+          firstCommitStarted.resolve();
           await firstCommit.promise;
         }
       },
@@ -105,7 +109,7 @@ describe("CanvasDocumentPersistenceService", () => {
         completions.push("one");
         return result;
       });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await firstCommitStarted.promise;
     const secondSave = service
       .save({
         cwd,
@@ -118,7 +122,6 @@ describe("CanvasDocumentPersistenceService", () => {
         completions.push("two");
         return result;
       });
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(commitCount).toBe(1);
     expect(completions).toEqual([]);

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
@@ -297,9 +298,10 @@ describe("files IPC", () => {
 
   test("pickCanvasSavePath suggests a copy and rejects destinations outside workspace roots", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-canvas-save-as-ws-"));
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-canvas-save-as-ws-"));
     const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-canvas-save-as-outside-"));
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-canvas-save-as-outside-"));
     const sourcePath = path.join(tempWorkspace, "notes.md");
     const destinationPath = path.join(tempWorkspace, "notes recovered.md");
     await fs.writeFile(sourcePath, "unsaved content", "utf8");

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { buildAttachmentSignature } from "../src/app/attachmentInputs";
@@ -114,6 +114,17 @@ const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      bootstrapPending: false,
+      promptModal: null,
+      filePreview: null,
+      selectedTaskId: null,
+      tasksById: {},
+      taskSummariesByWorkspaceId: {},
+    });
+  });
+
   test("shows the universal new chat landing when no thread is selected", async () => {
     useAppStore.setState({
       ready: true,
@@ -761,6 +772,7 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
+        feed.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 10));
       });

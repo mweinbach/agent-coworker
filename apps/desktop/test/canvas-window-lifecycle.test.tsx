@@ -27,34 +27,6 @@ mock.module("../src/ui/LazyUniverSpreadsheetCanvas", () => ({
   },
 }));
 
-mock.module("../src/ui/layout/AppTopBar", () => ({
-  AppTopBar: ({
-    onPopOutCanvas,
-    onToggleCanvasMaximized,
-  }: {
-    onPopOutCanvas?: () => void;
-    onToggleCanvasMaximized?: () => void;
-  }) =>
-    createElement(
-      "div",
-      { "data-testid": "topbar" },
-      onPopOutCanvas
-        ? createElement(
-            "button",
-            { "data-testid": "popout-canvas", onClick: onPopOutCanvas },
-            "pop out",
-          )
-        : null,
-      onToggleCanvasMaximized
-        ? createElement(
-            "button",
-            { "data-testid": "toggle-canvas-maximized", onClick: onToggleCanvasMaximized },
-            "maximize",
-          )
-        : null,
-    ),
-}));
-
 const { useAppStore } = await import("../src/app/store");
 const { defaultThreadRuntime, defaultWorkspaceRuntime } = await import("../src/app/store.helpers");
 const App = (await import("../src/App")).default;
@@ -199,7 +171,7 @@ describe("canvas window lifecycle", () => {
         });
 
         expect(
-          harness.dom.window.document.querySelector("[data-testid='popout-canvas']"),
+          harness.dom.window.document.querySelector("[aria-label='Open canvas in window']"),
         ).toBeNull();
         expect(showCanvasWindowMock).not.toHaveBeenCalled();
         expect(useAppStore.getState().filePreview).toEqual({
@@ -234,7 +206,9 @@ describe("canvas window lifecycle", () => {
         createdRoot.render(createElement(App));
         await flushUi();
       });
-      const popOut = harness.dom.window.document.querySelector("[data-testid='popout-canvas']");
+      const popOut = harness.dom.window.document.querySelector(
+        "[aria-label='Open canvas in window']",
+      );
       if (!(popOut instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing pop-out button");
       }

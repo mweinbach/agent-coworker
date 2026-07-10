@@ -5,7 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { CHATS_FOLDER, resolveMemoryFolderName } from "../src/advancedMemory/store";
-import { canonicalizeRoot } from "../src/platform/sandbox/policy";
+import { canonicalizeRoot, scratchRoots, tmpScratchRoots } from "../src/platform/sandbox/policy";
 import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
@@ -1064,15 +1064,8 @@ rl.on("line", (line) => {
         });
         const sandboxPolicy = requests.find((entry) => entry.method === "turn/start")?.params
           ?.sandboxPolicy;
-        const expectedScratchRoots =
-          process.platform === "win32" ? [canonicalizeRoot(os.tmpdir())] : ["/tmp", "/private/tmp"];
-        for (const root of expectedScratchRoots) {
-          expect(sandboxPolicy?.writableRoots).toContain(root);
-        }
-        if (process.platform === "win32") {
-          expect(sandboxPolicy?.writableRoots).not.toContain("/tmp");
-          expect(sandboxPolicy?.writableRoots).not.toContain("/private/tmp");
-        }
+        const expectedScratchRoots = tmpScratchRoots([dir], scratchRoots());
+        expect(sandboxPolicy?.writableRoots).toEqual(expectedScratchRoots);
         expect(sandboxPolicy?.writableRoots).not.toContain(dir);
       } finally {
         await fs.rm(dir, { recursive: true, force: true });

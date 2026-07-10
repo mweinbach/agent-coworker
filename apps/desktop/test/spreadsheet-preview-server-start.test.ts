@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
-const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock-popup" }));
+const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock" }));
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({

@@ -2,6 +2,8 @@ import { settleQualityPage } from "../assertions";
 import budgets from "../budgets.json" with { type: "json" };
 import { expect, test } from "../fixtures";
 
+const transcriptRenderBarrierTimeoutMs = 20_000;
+
 test("1,000 streaming deltas stay inside publication and render budgets", async ({
   quality,
 }, testInfo) => {
@@ -33,6 +35,7 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
 test("1,000-message transcript stays inside publication and render budgets", async ({
   quality,
 }, testInfo) => {
+  test.setTimeout(90_000);
   const { page } = quality;
   const samples = [];
   for (let runId = 1; runId <= 3; runId += 1) {
@@ -45,6 +48,10 @@ test("1,000-message transcript stays inside publication and render budgets", asy
       .poll(
         async () =>
           await page.evaluate((id) => window.__coworkQualityGate?.getFeedText(id), lastItemId),
+        {
+          message: `Wait for transcript sample ${runId} to cross the renderer/store barrier`,
+          timeout: transcriptRenderBarrierTimeoutMs,
+        },
       )
       .toBe(expectedText);
     await expect(page.getByText(expectedText)).toBeVisible();

@@ -95,6 +95,31 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("apps/desktop/test/server-manager.test.ts");
   });
 
+  test("runs deterministic real-Electron visual, Axe, performance, and failure-proof gates", () => {
+    const qualityJob = workflow.match(/electron-quality:[\s\S]*?\n {2}windows-smoke:/)?.[0] ?? "";
+    expect(qualityJob).toContain("name: Electron UI quality gates");
+    expect(qualityJob).toContain(
+      "mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
+    );
+    expect(qualityJob).toContain("apt-get install --yes --no-install-recommends ffmpeg unzip");
+    expect(qualityJob.indexOf("- name: Install Linux quality dependencies")).toBeLessThan(
+      qualityJob.indexOf("- name: Setup dependencies"),
+    );
+    expect(qualityJob).toContain("xvfb-run");
+    expect(qualityJob).toContain("bun run desktop:quality");
+    expect(qualityJob).toContain("bun run desktop:quality:proof");
+    expect(qualityJob).toContain("if: ${{ always() && !cancelled() }}");
+    expect(qualityJob).toContain('OPENAI_API_KEY: ""');
+    expect(qualityJob).toContain("if: failure()");
+    expect(qualityJob).toContain("actions/upload-artifact@v4");
+    expect(qualityJob).toContain("if-no-files-found: error");
+    expect(qualityJob).toContain("apps/desktop/quality-gates/artifacts");
+    expect(qualityJob).toContain("apps/desktop/quality-gates/proof-artifacts");
+    expect(rootPackage.scripts?.["desktop:quality:build"]).toContain(
+      "--config quality-gates/electron.vite.config.ts",
+    );
+  });
+
   test("runs the mobile install, typecheck, autolinking, and export lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");

@@ -19,7 +19,7 @@ import {
 
 const initialState: AppStoreDataState = {
   ready: false,
-  bootstrapPending: false,
+  bootstrapPhase: "idle",
   startupError: null,
   view: "chat",
 

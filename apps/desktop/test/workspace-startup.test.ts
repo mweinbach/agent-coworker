@@ -280,7 +280,7 @@ describe("workspace startup flow", () => {
 
     useAppStore.setState({
       ready: true,
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       startupError: null,
       view: "settings",
       settingsPage: "workspaces",

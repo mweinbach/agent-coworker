@@ -113,11 +113,12 @@ const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await useAppStore.getState().drainBootstrap();
     Object.assign(globalThis, { [DESKTOP_API_OVERRIDE_KEY]: desktopApiMock });
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       promptModal: null,
       filePreview: null,
       selectedTaskId: null,
@@ -780,7 +781,7 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
-        feed.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
+        feed.dispatchEvent(new harness.dom.window.WheelEvent("wheel", { bubbles: true }));
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
@@ -1155,7 +1156,7 @@ describe("desktop chat view stability", () => {
   test("shows a loading state while the selected startup thread is still hydrating", async () => {
     useAppStore.setState({
       ready: true,
-      bootstrapPending: false,
+      bootstrapPhase: "ready",
       startupError: null,
       view: "chat",
       selectedWorkspaceId: "ws-1",

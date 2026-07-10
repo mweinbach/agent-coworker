@@ -12,7 +12,6 @@ import {
   confirmAction,
   getPlatformChrome,
   getSystemAppearance,
-  getUpdateState,
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
@@ -133,12 +132,12 @@ const ChatShell = memo(function ChatShell({
   init,
   ready,
   startupError,
-  bootstrapPending,
+  bootstrapLoading,
 }: {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
-  bootstrapPending: boolean;
+  bootstrapLoading: boolean;
 }) {
   const view = useAppStore((s) => s.view);
   const googleResearchAvailable = useAppStore((s) =>
@@ -282,7 +281,7 @@ const ChatShell = memo(function ChatShell({
     sessionId: selectedSessionId,
     hydrating:
       selectedHydrating ||
-      (bootstrapPending &&
+      (bootstrapLoading &&
         Boolean(selectedThreadId) &&
         activeThread !== null &&
         !selectedRuntimeExists),
@@ -442,9 +441,10 @@ const ChatShell = memo(function ChatShell({
 export default function App() {
   const windowMode = getDesktopWindowMode();
   const ready = useAppStore((s) => s.ready);
-  const bootstrapPending = useAppStore((s) => s.bootstrapPending);
+  const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const startupError = useAppStore((s) => s.startupError);
   const init = useAppStore((s) => s.init);
+  const invalidateBootstrap = useAppStore((s) => s.invalidateBootstrap);
   const view = useAppStore((s) => s.view);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
@@ -496,11 +496,11 @@ export default function App() {
   }, [windowMode]);
 
   useEffect(() => {
-    if (ready && !bootstrapPending) return;
+    if (bootstrapPhase !== "idle") return;
     void init().catch((err) => {
       console.error(err);
     });
-  }, [bootstrapPending, init, ready]);
+  }, [bootstrapPhase, init]);
 
   useEffect(() => {
     let disposed = false;
@@ -510,6 +510,7 @@ export default function App() {
         return;
       }
       disposed = true;
+      invalidateBootstrap();
       runJsonRpcShutdownDisposal();
     };
 
@@ -517,7 +518,7 @@ export default function App() {
     return () => {
       windowTarget.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, []);
+  }, [invalidateBootstrap]);
 
   useEffect(() => {
     const windowTarget = window;
@@ -675,13 +676,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onUpdateStateChanged(setUpdateState);
-    void getUpdateState()
-      .then(setUpdateState)
-      .catch(() => {
-        // Keep the default disabled/idle state if the updater bridge is unavailable.
-      });
-    return unsubscribe;
+    return onUpdateStateChanged(setUpdateState);
   }, [setUpdateState]);
 
   useEffect(() => {
@@ -783,7 +778,7 @@ export default function App() {
           init={init}
           ready={ready}
           startupError={startupError}
-          bootstrapPending={bootstrapPending}
+          bootstrapLoading={bootstrapPhase === "loading"}
         />
       )}
       <PromptModal />

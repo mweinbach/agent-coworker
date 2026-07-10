@@ -1,5 +1,8 @@
-type DesktopCommandsModule = typeof import("../../src/lib/desktopCommands");
-type DesktopApi = import("../../src/lib/desktopApi").DesktopApi;
+import type { DesktopApi } from "../../src/lib/desktopApi";
+import { DESKTOP_API_OVERRIDE_KEY } from "../../src/lib/desktopApiOverride";
+import type * as DesktopCommands from "../../src/lib/desktopCommands";
+
+type DesktopCommandsModule = typeof DesktopCommands;
 
 export const DEFAULT_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -240,4 +243,36 @@ export function createDesktopApiMock(overrides: Partial<DesktopCommandsModule> =
     readFile: async (opts) => ({ content: await commands.readFile(opts) }),
     showContextMenu: async ({ items }) => await commands.showContextMenu(items),
   } as DesktopApi;
+}
+
+export function createDesktopCommandsBridgeMock(): DesktopCommandsModule {
+  const fallback = createDesktopCommandsMock();
+  const getActiveDesktopApi = (): DesktopApi | undefined =>
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] as DesktopApi | undefined;
+
+  return createDesktopCommandsMock({
+    createOneOffChatWorkspace: async (options) =>
+      await (getActiveDesktopApi()?.createOneOffChatWorkspace(options) ??
+        fallback.createOneOffChatWorkspace(options)),
+    startWorkspaceServer: async (options) =>
+      await (getActiveDesktopApi()?.startWorkspaceServer(options) ??
+        fallback.startWorkspaceServer(options)),
+    getWorkspaceServerStatus: async (options) =>
+      await (getActiveDesktopApi()?.getWorkspaceServerStatus(options) ??
+        fallback.getWorkspaceServerStatus(options)),
+    stopWorkspaceServer: async (options) =>
+      await (getActiveDesktopApi()?.stopWorkspaceServer(options) ??
+        fallback.stopWorkspaceServer(options)),
+    loadState: async () => await (getActiveDesktopApi()?.loadState() ?? fallback.loadState()),
+    saveState: async (state) =>
+      await (getActiveDesktopApi()?.saveState(state) ?? fallback.saveState(state)),
+    deleteTranscript: async (options) =>
+      await (getActiveDesktopApi()?.deleteTranscript(options) ??
+        fallback.deleteTranscript(options)),
+    getUpdateState: async () =>
+      await (getActiveDesktopApi()?.getUpdateState() ?? fallback.getUpdateState()),
+    onWorkspaceServerExited: (listener) =>
+      getActiveDesktopApi()?.onWorkspaceServerExited(listener) ??
+      fallback.onWorkspaceServerExited(listener),
+  });
 }

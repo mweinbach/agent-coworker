@@ -1,9 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
@@ -71,6 +72,8 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { ActivityGroupCard } = await import("../src/ui/chat/ActivityGroupCard");
+const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
+const { CrashReportingErrorBoundary } = await import("../src/ui/CrashReportingErrorBoundary");
 
 describe("desktop activity group card", () => {
   test("renders mixed reasoning and tool entries in chronological order", () => {
@@ -440,6 +443,163 @@ describe("desktop activity group card", () => {
     expect(html).toContain("activity-thinking-shimmer");
     expect(doc.body.textContent).not.toContain("Working");
     expect(doc.body.textContent).not.toContain("Summary");
+  });
+
+  test("streams reasoning from empty through multiple deltas in Strict Mode", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const consoleErrors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    const originalWindowConsoleError = harness.dom.window.console.error;
+    const captureConsoleError = (...args: unknown[]) => {
+      consoleErrors.push(args);
+    };
+    console.error = captureConsoleError;
+    harness.dom.window.console.error = captureConsoleError;
+
+    const renderReasoning = async (text: string) => {
+      await act(async () => {
+        root.render(
+          createElement(
+            StrictMode,
+            null,
+            createElement(ActivityGroupCard, {
+              live: true,
+              liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+              items: [
+                {
+                  id: "r-stream",
+                  kind: "reasoning",
+                  mode: "summary",
+                  ts: "2024-01-01T00:00:00.000Z",
+                  text,
+                },
+              ],
+            }),
+          ),
+        );
+      });
+    };
+
+    try {
+      await renderReasoning("");
+      expect(container.textContent).toContain("Thinking");
+      const reasoningRow = container.querySelector('[data-activity-entry-kind="reasoning"]');
+      expect(reasoningRow).not.toBeNull();
+
+      await renderReasoning("first delta");
+      expect(container.textContent).toContain("first delta");
+      expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+
+      await renderReasoning("first delta and second delta");
+      expect(container.textContent).toContain("first delta and second delta");
+      expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+
+      await renderReasoning("");
+      expect(container.textContent).toContain("Thinking");
+      expect(container.querySelector('[data-activity-entry-kind="reasoning"]')).toBe(reasoningRow);
+      expect(consoleErrors).toEqual([]);
+    } finally {
+      console.error = originalConsoleError;
+      harness.dom.window.console.error = originalWindowConsoleError;
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
+  test("isolates an activity-card render failure with an inline fallback", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const brokenActivityGroup = {
+      kind: "activity-group",
+      id: "activity-broken",
+      items: [
+        {
+          id: "r-broken",
+          kind: "reasoning",
+          mode: "summary",
+          ts: "2024-01-01T00:00:00.000Z",
+          text: null,
+        },
+      ],
+    } as unknown as ChatRenderItem;
+    const healthyActivityGroup: ChatRenderItem = {
+      kind: "activity-group",
+      id: "activity-healthy",
+      items: [
+        {
+          id: "t-healthy",
+          kind: "tool",
+          ts: "2024-01-01T00:00:01.000Z",
+          name: "bash",
+          state: "approval-requested",
+          args: { command: "echo healthy" },
+        },
+      ],
+    };
+    const originalConsoleError = console.error;
+    const originalWindowConsoleError = harness.dom.window.console.error;
+    console.error = () => {};
+    harness.dom.window.console.error = () => {};
+
+    const renderFeed = async () => {
+      await act(async () => {
+        root.render(
+          createElement(
+            CrashReportingErrorBoundary,
+            { captureError: () => {} },
+            createElement(ChatFeed, {
+              transcriptOnly: false,
+              disconnected: false,
+              visibleFeedLength: 2,
+              hydrating: false,
+              renderItems: [brokenActivityGroup, healthyActivityGroup],
+              liveActivityGroupId: null,
+              liveStartedAt: null,
+              showWorkingPlaceholder: false,
+              citationUrlsByMessageId: new Map(),
+              citationSourcesByMessageId: new Map(),
+              desktopBasePath: null,
+              composerOverlayHeight: 0,
+              sandboxApprovals: [],
+              onAnswerApproval: () => true,
+              selectedThreadId: "thread-1",
+            }),
+          ),
+        );
+      });
+    };
+
+    try {
+      await renderFeed();
+
+      const alert = container.querySelector('[role="alert"]');
+      const healthyRow = container.querySelector('[data-message-id="activity-healthy"]');
+      expect(alert).not.toBeNull();
+      expect(alert?.textContent).toContain("This activity couldn't be rendered.");
+      expect(alert?.className).not.toContain("min-h-screen");
+      expect(healthyRow).not.toBeNull();
+      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).not.toContain("Something went wrong.");
+
+      await renderFeed();
+      expect(container.querySelector('[data-message-id="activity-healthy"]')).toBe(healthyRow);
+      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).not.toContain("Something went wrong.");
+    } finally {
+      console.error = originalConsoleError;
+      harness.dom.window.console.error = originalWindowConsoleError;
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
   });
 
   test("auto-expands approval tools in trace mode", () => {

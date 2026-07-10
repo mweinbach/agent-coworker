@@ -356,7 +356,14 @@ async function launchQualityHarness(
   const page = await electronApp.firstWindow();
   configurePage(page);
   await page.waitForURL((url) => url.protocol === "http:");
-  await page.waitForFunction(() => Boolean(window.__coworkQualityGate));
+  try {
+    await page.waitForFunction(() => Boolean(window.__coworkQualityGate));
+  } catch (error) {
+    throw new Error(
+      `Quality renderer did not install its runtime:\n${mainLogs.join("\n") || "(no logs captured)"}`,
+      { cause: error },
+    );
+  }
   if (!options.holdBootstrap) {
     await electronApp.evaluate(() => {
       globalThis.__coworkQualityGateMain?.releaseBootstrap();

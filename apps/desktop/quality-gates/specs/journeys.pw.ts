@@ -33,7 +33,7 @@ test.describe("first launch", () => {
     await expect(page.getByRole("dialog", { name: "Onboarding" })).toBeVisible();
     await expect(page.getByText("Welcome to Cowork")).toBeVisible();
     await assertKeyboardFocusJourney(page);
-    await assertNoViewportClipping(page, '[role="dialog"]');
+    await assertNoViewportClipping(page, '[role="dialog"]', "button");
     await assertNoSeriousAxeViolations(page, testInfo, '[role="dialog"]');
     await settleQualityPage(page);
     await expect(page).toHaveScreenshot("first-launch-dark-1024.png");

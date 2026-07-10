@@ -11,6 +11,7 @@ const repoRoot = path.resolve(appRoot, "../..");
 const coworkAlias = {
   "@cowork": path.resolve(repoRoot, "src"),
 };
+const reactDomProfilingPath = path.resolve(repoRoot, "node_modules/react-dom/profiling.js");
 
 export default defineConfig({
   main: {
@@ -57,10 +58,11 @@ export default defineConfig({
     future: "warn",
     resolve: {
       dedupe: ["react", "react-dom"],
-      alias: {
-        "@": path.resolve(appRoot, "src"),
-        ...coworkAlias,
-      },
+      alias: [
+        { find: /^react-dom\/client$/, replacement: reactDomProfilingPath },
+        { find: "@", replacement: path.resolve(appRoot, "src") },
+        { find: "@cowork", replacement: coworkAlias["@cowork"] },
+      ],
     },
     server: {
       fs: {

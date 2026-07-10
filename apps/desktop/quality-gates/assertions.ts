@@ -49,144 +49,165 @@ export async function assertNoSeriousAxeViolations(
   ).toEqual([]);
 }
 
-export async function assertNoViewportClipping(page: Page, include?: string): Promise<void> {
-  const result = await page.evaluate((includeSelector) => {
-    const root = document.documentElement;
-    const clippingTolerance = 1.5;
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const scope = includeSelector ? document.querySelector(includeSelector) : document;
-    if (!scope) {
-      throw new Error(`Clipping assertion scope was not found: ${includeSelector}`);
-    }
-    const clippedControls: Array<{
-      clippingAncestor: {
-        bottom: number;
+export async function assertNoViewportClipping(
+  page: Page,
+  include?: string,
+  criticalControlSelector = '[data-quality-critical-control="true"]',
+): Promise<void> {
+  const result = await page.evaluate(
+    ({ criticalSelector, includeSelector }) => {
+      const root = document.documentElement;
+      const clippingTolerance = 1.5;
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const scope = includeSelector ? document.querySelector(includeSelector) : document;
+      if (!scope) {
+        throw new Error(`Clipping assertion scope was not found: ${includeSelector}`);
+      }
+      const clippedControls: Array<{
+        clippingAncestor: {
+          bottom: number;
+          label: string;
+          left: number;
+          overflowX: string;
+          overflowY: string;
+          right: number;
+          top: number;
+        } | null;
         label: string;
-        left: number;
-        overflowX: string;
-        overflowY: string;
-        right: number;
-        top: number;
-      } | null;
-      label: string;
-      rect: {
-        bottom: number;
-        height: number;
-        left: number;
-        right: number;
-        top: number;
-        width: number;
-      };
-    }> = [];
-    let recoverableScrollableClipping = 0;
-    const controls = scope.querySelectorAll<HTMLElement>(
-      'button, input, textarea, select, [role="button"], [role="checkbox"], [role="switch"]',
-    );
-    for (const control of controls) {
-      const style = getComputedStyle(control);
-      const rect = control.getBoundingClientRect();
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        rect.width === 0 ||
-        rect.height === 0
-      ) {
-        continue;
-      }
-      if (
-        rect.bottom <= 0 ||
-        rect.top >= viewport.height ||
-        rect.right <= 0 ||
-        rect.left >= viewport.width
-      ) {
-        continue;
-      }
-      let clippingAncestor = control.parentElement;
-      let clippingAncestorDetails: (typeof clippedControls)[number]["clippingAncestor"] = null;
-      let clippedByScrollableAncestor = false;
-      let recoverablyClippedX = false;
-      let recoverablyClippedY = false;
-      while (clippingAncestor) {
-        const ancestorStyle = getComputedStyle(clippingAncestor);
-        const clipsX = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowX);
-        const clipsY = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowY);
-        if (clipsX || clipsY) {
-          const ancestorRect = clippingAncestor.getBoundingClientRect();
-          const clippedX =
-            clipsX &&
-            (rect.left < ancestorRect.left - clippingTolerance ||
-              rect.right > ancestorRect.right + clippingTolerance);
-          const clippedY =
-            clipsY &&
-            (rect.top < ancestorRect.top - clippingTolerance ||
-              rect.bottom > ancestorRect.bottom + clippingTolerance);
-          const canScrollX =
-            clippedX &&
-            ["auto", "scroll"].includes(ancestorStyle.overflowX) &&
-            clippingAncestor.scrollWidth > clippingAncestor.clientWidth + clippingTolerance &&
-            rect.width <= clippingAncestor.clientWidth + clippingTolerance;
-          const canScrollY =
-            clippedY &&
-            ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
-            clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
-            rect.height <= clippingAncestor.clientHeight + clippingTolerance;
-          const canRecoverX =
-            canScrollX ||
-            (recoverablyClippedX && rect.width <= clippingAncestor.clientWidth + clippingTolerance);
-          const canRecoverY =
-            canScrollY ||
-            (recoverablyClippedY &&
-              rect.height <= clippingAncestor.clientHeight + clippingTolerance);
-          recoverablyClippedX ||= canRecoverX;
-          recoverablyClippedY ||= canRecoverY;
-          if ((clippedX && !canRecoverX) || (clippedY && !canRecoverY)) {
-            clippedByScrollableAncestor = true;
-            clippingAncestorDetails = {
-              bottom: ancestorRect.bottom,
-              label: `${clippingAncestor.tagName}.${clippingAncestor.className}`,
-              left: ancestorRect.left,
-              overflowX: ancestorStyle.overflowX,
-              overflowY: ancestorStyle.overflowY,
-              right: ancestorRect.right,
-              top: ancestorRect.top,
-            };
-            break;
-          }
+        rect: {
+          bottom: number;
+          height: number;
+          left: number;
+          right: number;
+          top: number;
+          width: number;
+        };
+      }> = [];
+      const controls = scope.querySelectorAll<HTMLElement>(
+        'button, input, textarea, select, [role="button"], [role="checkbox"], [role="switch"]',
+      );
+      let recoverableScrollableClipping = 0;
+      for (const control of controls) {
+        const style = getComputedStyle(control);
+        const rect = control.getBoundingClientRect();
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          rect.width === 0 ||
+          rect.height === 0
+        ) {
+          continue;
         }
-        clippingAncestor = clippingAncestor.parentElement;
+        const critical = control.matches(criticalSelector);
+        const entirelyOutsideViewport =
+          rect.bottom <= 0 ||
+          rect.top >= viewport.height ||
+          rect.right <= 0 ||
+          rect.left >= viewport.width;
+        if (entirelyOutsideViewport && !critical) {
+          continue;
+        }
+        let clippingAncestor = control.parentElement;
+        let clippingAncestorDetails: (typeof clippedControls)[number]["clippingAncestor"] = null;
+        let clippedByAncestor = false;
+        let recoverablyClippedX = false;
+        let recoverablyClippedY = false;
+        while (clippingAncestor) {
+          const ancestorStyle = getComputedStyle(clippingAncestor);
+          const clipsX = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowX);
+          const clipsY = ["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowY);
+          if (clipsX || clipsY) {
+            const ancestorRect = clippingAncestor.getBoundingClientRect();
+            const clippedX =
+              clipsX &&
+              (rect.left < ancestorRect.left - clippingTolerance ||
+                rect.right > ancestorRect.right + clippingTolerance);
+            const clippedY =
+              clipsY &&
+              (rect.top < ancestorRect.top - clippingTolerance ||
+                rect.bottom > ancestorRect.bottom + clippingTolerance);
+            const canScrollX =
+              clippedX &&
+              ["auto", "scroll"].includes(ancestorStyle.overflowX) &&
+              clippingAncestor.scrollWidth > clippingAncestor.clientWidth + clippingTolerance &&
+              rect.width <= clippingAncestor.clientWidth + clippingTolerance;
+            const canScrollY =
+              clippedY &&
+              ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
+              clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
+              rect.height <= clippingAncestor.clientHeight + clippingTolerance;
+            const canRecoverX =
+              canScrollX ||
+              (recoverablyClippedX &&
+                rect.width <= clippingAncestor.clientWidth + clippingTolerance);
+            const canRecoverY =
+              canScrollY ||
+              (recoverablyClippedY &&
+                rect.height <= clippingAncestor.clientHeight + clippingTolerance);
+            recoverablyClippedX ||= canRecoverX;
+            recoverablyClippedY ||= canRecoverY;
+            if (
+              (critical && (clippedX || clippedY)) ||
+              (clippedX && !canRecoverX) ||
+              (clippedY && !canRecoverY)
+            ) {
+              clippedByAncestor = true;
+              clippingAncestorDetails = {
+                bottom: ancestorRect.bottom,
+                label: `${clippingAncestor.tagName}.${clippingAncestor.className}`,
+                left: ancestorRect.left,
+                overflowX: ancestorStyle.overflowX,
+                overflowY: ancestorStyle.overflowY,
+                right: ancestorRect.right,
+                top: ancestorRect.top,
+              };
+              break;
+            }
+          }
+          clippingAncestor = clippingAncestor.parentElement;
+        }
+        if (recoverablyClippedX || recoverablyClippedY) {
+          recoverableScrollableClipping += 1;
+        }
+        const clippedByViewport =
+          rect.left < -clippingTolerance ||
+          rect.right > viewport.width + clippingTolerance ||
+          rect.top < -clippingTolerance ||
+          rect.bottom > viewport.height + clippingTolerance;
+        if (
+          clippedByAncestor ||
+          (critical && clippedByViewport) ||
+          (!recoverablyClippedX &&
+            (rect.left < -clippingTolerance || rect.right > viewport.width + clippingTolerance)) ||
+          (!recoverablyClippedY &&
+            (rect.top < -clippingTolerance || rect.bottom > viewport.height + clippingTolerance))
+        ) {
+          clippedControls.push({
+            clippingAncestor: clippingAncestorDetails,
+            label:
+              control.getAttribute("aria-label") ||
+              control.textContent?.trim().slice(0, 80) ||
+              control.tagName,
+            rect: {
+              bottom: rect.bottom,
+              height: rect.height,
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              width: rect.width,
+            },
+          });
+        }
       }
-      if (recoverablyClippedX || recoverablyClippedY) {
-        recoverableScrollableClipping += 1;
-      }
-      if (
-        clippedByScrollableAncestor ||
-        (!recoverablyClippedX && (rect.left < -0.5 || rect.right > viewport.width + 0.5)) ||
-        (!recoverablyClippedY && (rect.top < -0.5 || rect.bottom > viewport.height + 0.5))
-      ) {
-        clippedControls.push({
-          clippingAncestor: clippingAncestorDetails,
-          label:
-            control.getAttribute("aria-label") ||
-            control.textContent?.trim().slice(0, 80) ||
-            control.tagName,
-          rect: {
-            bottom: rect.bottom,
-            height: rect.height,
-            left: rect.left,
-            right: rect.right,
-            top: rect.top,
-            width: rect.width,
-          },
-        });
-      }
-    }
-    return {
-      clippedControls,
-      documentScrollWidth: root.scrollWidth,
-      recoverableScrollableClipping,
-      viewport,
-    };
-  }, include);
+      return {
+        clippedControls,
+        documentScrollWidth: root.scrollWidth,
+        recoverableScrollableClipping,
+        viewport,
+      };
+    },
+    { criticalSelector: criticalControlSelector, includeSelector: include },
+  );
 
   expect(
     result.documentScrollWidth,

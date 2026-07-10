@@ -1,8 +1,25 @@
 import { settleQualityPage } from "../assertions";
 import budgets from "../budgets.json" with { type: "json" };
 import { expect, test } from "../fixtures";
+import type { QualityGateMetrics } from "../runtime";
 
 const transcriptRenderBarrierTimeoutMs = 20_000;
+
+function assertPositiveRendererMetrics(
+  metrics: QualityGateMetrics,
+  budget: { reactCommits: number; storePublications: number },
+): void {
+  expect(
+    metrics.storePublications,
+    "The scenario must publish through the production store",
+  ).toBeGreaterThan(0);
+  expect(
+    metrics.reactCommits,
+    "The profiling renderer must observe at least one React commit",
+  ).toBeGreaterThan(0);
+  expect(metrics.storePublications).toBeLessThanOrEqual(budget.storePublications);
+  expect(metrics.reactCommits).toBeLessThanOrEqual(budget.reactCommits);
+}
 
 test("1,000 streaming deltas stay inside publication and render budgets", async ({
   quality,
@@ -21,10 +38,14 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
       )
       .toContain(`[delta-burst-complete-${runId}]`);
     await settleQualityPage(page);
-    const metrics = await page.evaluate(() => window.__coworkQualityGate?.getMetrics());
+    const metrics = await page.evaluate(() => {
+      if (!window.__coworkQualityGate) {
+        throw new Error("Quality gate runtime is unavailable");
+      }
+      return window.__coworkQualityGate.getMetrics();
+    });
     samples.push(metrics);
-    expect(metrics?.storePublications).toBeLessThanOrEqual(budgets.deltaBurst.storePublications);
-    expect(metrics?.reactCommits).toBeLessThanOrEqual(budgets.deltaBurst.reactCommits);
+    assertPositiveRendererMetrics(metrics, budgets.deltaBurst);
   }
   await testInfo.attach("performance-delta-burst", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.deltaBurst, samples }, null, 2)}\n`),
@@ -56,12 +77,14 @@ test("1,000-message transcript stays inside publication and render budgets", asy
       .toBe(expectedText);
     await expect(page.getByText(expectedText)).toBeVisible();
     await settleQualityPage(page);
-    const metrics = await page.evaluate(() => window.__coworkQualityGate?.getMetrics());
+    const metrics = await page.evaluate(() => {
+      if (!window.__coworkQualityGate) {
+        throw new Error("Quality gate runtime is unavailable");
+      }
+      return window.__coworkQualityGate.getMetrics();
+    });
     samples.push(metrics);
-    expect(metrics?.storePublications).toBeLessThanOrEqual(
-      budgets.longTranscript.storePublications,
-    );
-    expect(metrics?.reactCommits).toBeLessThanOrEqual(budgets.longTranscript.reactCommits);
+    assertPositiveRendererMetrics(metrics, budgets.longTranscript);
   }
   await testInfo.attach("performance-long-transcript", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.longTranscript, samples }, null, 2)}\n`),
@@ -86,14 +109,20 @@ test("1,000-file tree stays inside filesystem, publication, and render budgets",
       .poll(async () => await page.evaluate(() => window.__coworkQualityGate?.getFileCount()))
       .toBe(1_000);
     await settleQualityPage(page);
-    const rendererMetrics = await page.evaluate(() => window.__coworkQualityGate?.getMetrics());
+    const rendererMetrics = await page.evaluate(() => {
+      if (!window.__coworkQualityGate) {
+        throw new Error("Quality gate runtime is unavailable");
+      }
+      return window.__coworkQualityGate.getMetrics();
+    });
     const mainMetrics = await quality.getMainMetrics();
     samples.push({ main: mainMetrics, renderer: rendererMetrics, runId });
+    expect(
+      mainMetrics.filesystemRequests,
+      "The file-tree scenario must cross the production filesystem bridge",
+    ).toBeGreaterThan(0);
     expect(mainMetrics.filesystemRequests).toBeLessThanOrEqual(budgets.fileTree.filesystemRequests);
-    expect(rendererMetrics?.storePublications).toBeLessThanOrEqual(
-      budgets.fileTree.storePublications,
-    );
-    expect(rendererMetrics?.reactCommits).toBeLessThanOrEqual(budgets.fileTree.reactCommits);
+    assertPositiveRendererMetrics(rendererMetrics, budgets.fileTree);
   }
   await testInfo.attach("performance-file-tree", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.fileTree, samples }, null, 2)}\n`),

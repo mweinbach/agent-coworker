@@ -38,7 +38,10 @@ let bootstrapLoadStateCalls = 0;
 let bootstrapUpdateStateCalls = 0;
 let bootstrapSaveStateCalls = 0;
 let bootstrapDeleteTranscriptCalls = 0;
+let bootstrapStartWorkspaceServerCalls = 0;
+let bootstrapSelectThreadCalls = 0;
 let bootstrapLoadedState: unknown = { version: 2, workspaces: [], threads: [] };
+let bootstrapLoadStateImplementation: () => Promise<unknown> = async () => bootstrapLoadedState;
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -50,14 +53,17 @@ mock.module("../src/lib/desktopCommands", () =>
     listDirectory: async () => [],
     loadState: async () => {
       bootstrapLoadStateCalls += 1;
-      return bootstrapLoadedState;
+      return await bootstrapLoadStateImplementation();
     },
     pickWorkspaceDirectory: async () => null,
     readTranscript: async () => [],
     saveState: async () => {
       bootstrapSaveStateCalls += 1;
     },
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    startWorkspaceServer: async () => {
+      bootstrapStartWorkspaceServerCalls += 1;
+      return { url: "ws://mock" };
+    },
     stopWorkspaceServer: async () => {},
     showContextMenu: async () => null,
     windowMinimize: async () => {},
@@ -271,6 +277,26 @@ async function flushAsyncWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      return;
+    }
+    await flushAsyncWork();
+  }
+}
+
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("App JSON-RPC shutdown disposal", () => {
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
@@ -288,7 +314,10 @@ describe("App JSON-RPC shutdown disposal", () => {
     bootstrapUpdateStateCalls = 0;
     bootstrapSaveStateCalls = 0;
     bootstrapDeleteTranscriptCalls = 0;
+    bootstrapStartWorkspaceServerCalls = 0;
+    bootstrapSelectThreadCalls = 0;
     bootstrapLoadedState = { version: 2, workspaces: [], threads: [] };
+    bootstrapLoadStateImplementation = async () => bootstrapLoadedState;
     useAppStore.setState(defaultStoreState);
   });
 
@@ -425,6 +454,10 @@ describe("App JSON-RPC shutdown disposal", () => {
         ],
         desktopSettings: { archivedChatsAutoDeleteDays: 1 },
       };
+      const selectThread = async (threadId: string) => {
+        expect(threadId).toBe("thread-current");
+        bootstrapSelectThreadCalls += 1;
+      };
       useAppStore.setState({
         ...defaultStoreState,
         ready: false,
@@ -432,6 +465,7 @@ describe("App JSON-RPC shutdown disposal", () => {
         startupError: null,
         view: "chat",
         lastNonSettingsView: "chat",
+        selectThread,
       });
       const container = harness.dom.window.document.getElementById("root");
       if (!container) {
@@ -441,17 +475,132 @@ describe("App JSON-RPC shutdown disposal", () => {
 
       await act(async () => {
         root?.render(createElement(StrictMode, null, createElement(App)));
-        await flushAsyncWork();
-        await flushAsyncWork();
+      });
+      await act(async () => {
+        await waitForCondition(() => bootstrapSelectThreadCalls === 1);
       });
 
       expect(bootstrapLoadStateCalls).toBe(1);
       expect(bootstrapUpdateStateCalls).toBe(1);
       expect(bootstrapDeleteTranscriptCalls).toBe(1);
+      expect(useAppStore.getState().selectThread).toBe(selectThread);
+      expect(useAppStore.getState().startupError).toBeNull();
+      expect(useAppStore.getState().bootstrapPhase).toBe("ready");
+      expect(useAppStore.getState().selectedThreadId).toBe("thread-current");
+      expect(bootstrapSelectThreadCalls).toBe(1);
       expect(bootstrapSaveStateCalls).toBe(1);
       expect(useAppStore.getState().selectedThreadId).toBe("thread-current");
       expect(useAppStore.getState().view).toBe("chat");
       expect(useAppStore.getState().threadRuntimeById["thread-current"]?.hydrating).toBe(true);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("window unload invalidates a deferred bootstrap before later writes or startup", async () => {
+    const harness = setupAppJsdom();
+    const authoritativeLoad = createDeferred<unknown>();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      bootstrapLoadedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: "ws-deferred",
+            name: "Deferred workspace",
+            path: "/tmp/deferred",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastOpenedAt: "2026-01-01T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "thread-deferred",
+            workspaceId: "ws-deferred",
+            title: "Deferred thread",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            lastMessageAt: "2026-01-02T00:00:00.000Z",
+            status: "active",
+            sessionId: null,
+            messageCount: 0,
+            lastEventSeq: 0,
+          },
+          {
+            id: "thread-archived",
+            workspaceId: "ws-deferred",
+            title: "Archived thread",
+            createdAt: "2025-01-01T00:00:00.000Z",
+            lastMessageAt: "2025-01-02T00:00:00.000Z",
+            status: "disconnected",
+            sessionId: "thread-archived",
+            messageCount: 0,
+            lastEventSeq: 0,
+            archived: true,
+            archivedAt: "2025-01-02T00:00:00.000Z",
+          },
+        ],
+        desktopSettings: { archivedChatsAutoDeleteDays: 1 },
+      };
+      bootstrapLoadStateImplementation = () => authoritativeLoad.promise;
+      useAppStore.setState({
+        ...defaultStoreState,
+        ready: false,
+        bootstrapPhase: "idle",
+        startupError: null,
+        view: "chat",
+        lastNonSettingsView: "chat",
+        selectThread: async () => {
+          bootstrapSelectThreadCalls += 1;
+        },
+      });
+      const stateBeforeBootstrap = useAppStore.getState();
+      const expectedWorkspaces = stateBeforeBootstrap.workspaces;
+      const expectedThreads = stateBeforeBootstrap.threads;
+      const expectedSelectedWorkspaceId = stateBeforeBootstrap.selectedWorkspaceId;
+      const expectedSelectedThreadId = stateBeforeBootstrap.selectedThreadId;
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+        await flushAsyncWork();
+      });
+
+      expect(bootstrapLoadStateCalls).toBe(1);
+      expect(useAppStore.getState().bootstrapPhase).toBe("loading");
+      const pendingBootstrap = useAppStore.getState().init();
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        expect(useAppStore.getState().init()).toBe(pendingBootstrap);
+        authoritativeLoad.resolve(bootstrapLoadedState);
+        await flushAsyncWork();
+        await flushAsyncWork();
+      });
+
+      expect(bootstrapLoadStateCalls).toBe(1);
+      expect(bootstrapUpdateStateCalls).toBe(0);
+      expect(bootstrapDeleteTranscriptCalls).toBe(0);
+      expect(bootstrapSaveStateCalls).toBe(0);
+      expect(bootstrapSelectThreadCalls).toBe(0);
+      expect(bootstrapStartWorkspaceServerCalls).toBe(0);
+      expect(useAppStore.getState().workspaces).toEqual(expectedWorkspaces);
+      expect(useAppStore.getState().threads).toEqual(expectedThreads);
+      expect(useAppStore.getState().selectedWorkspaceId).toBe(expectedSelectedWorkspaceId);
+      expect(useAppStore.getState().selectedThreadId).toBe(expectedSelectedThreadId);
+      expect(useAppStore.getState().ready).toBe(false);
     } finally {
       if (root) {
         await act(async () => {

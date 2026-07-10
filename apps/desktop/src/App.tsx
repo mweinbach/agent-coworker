@@ -355,6 +355,7 @@ export default function App() {
   const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const startupError = useAppStore((s) => s.startupError);
   const init = useAppStore((s) => s.init);
+  const invalidateBootstrap = useAppStore((s) => s.invalidateBootstrap);
   const view = useAppStore((s) => s.view);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
@@ -418,6 +419,7 @@ export default function App() {
         return;
       }
       disposed = true;
+      invalidateBootstrap();
       runJsonRpcShutdownDisposal();
     };
 
@@ -425,7 +427,7 @@ export default function App() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, []);
+  }, [invalidateBootstrap]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {

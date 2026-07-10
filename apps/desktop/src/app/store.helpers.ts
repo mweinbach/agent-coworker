@@ -294,6 +294,7 @@ export type AppStoreState = {
   canvasSidebarWidth: number;
   messageBarHeight: number;
   init: () => Promise<void>;
+  invalidateBootstrap: () => void;
 
   openSettings: (page?: SettingsPageId) => void;
   closeSettings: () => void;

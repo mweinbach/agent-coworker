@@ -46,8 +46,11 @@ import {
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
 } from "../store.helpers";
-import { createBootstrapCoordinator } from "../store.helpers/bootstrapCoordinator";
-import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import {
+  type BootstrapRunContext,
+  createBootstrapCoordinator,
+} from "../store.helpers/bootstrapCoordinator";
+import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
 import {
@@ -673,10 +676,6 @@ function normalizeCachedSessionSnapshot(
   };
 }
 
-function runAfterInitialPaint(task: () => void): void {
-  runAfterNextPaintOrTimeout(task);
-}
-
 export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDataState> | null {
   try {
     const cached = extractCachedDesktopState(value);
@@ -763,6 +762,7 @@ export function createBootstrapActions(
 ): Pick<
   AppStoreActions,
   | "init"
+  | "invalidateBootstrap"
   | "openSettings"
   | "closeSettings"
   | "setSettingsPage"
@@ -787,9 +787,101 @@ export function createBootstrapActions(
   const bootstrapCoordinator = createBootstrapCoordinator();
   const deletedArchivedTranscriptIds = new Set<string>();
 
+  async function completeStartupSelection(
+    ui: ReturnType<typeof buildResolvedDesktopUiState>,
+    isCurrent: BootstrapRunContext["isCurrent"],
+  ): Promise<void> {
+    const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
+
+    if (ui.selectedThreadId && ui.view === "chat") {
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [ui.selectedThreadId]: {
+            ...defaultThreadRuntime(),
+            ...state.threadRuntimeById[ui.selectedThreadId],
+            hydrating: true,
+          },
+        },
+      }));
+      await waitForNextPaintOrTimeout();
+      if (!isCurrent()) {
+        return;
+      }
+      const current = get();
+      if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
+        return;
+      }
+      await current.selectThread(ui.selectedThreadId);
+      return;
+    }
+
+    if (ui.selectedWorkspaceId && ui.view === "chat") {
+      const selectedWorkspaceId = ui.selectedWorkspaceId;
+      await waitForNextPaintOrTimeout();
+      if (!isCurrent()) {
+        return;
+      }
+      const current = get();
+      if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
+        return;
+      }
+      await current.selectWorkspace(selectedWorkspaceId);
+      return;
+    }
+
+    if (!ui.selectedWorkspaceId || startupSelectionContext !== "task") {
+      return;
+    }
+
+    const startupWorkspaceId = ui.selectedWorkspaceId;
+    const startupTaskId = ui.selectedTaskId;
+    const preserveStartupView = ui.view === "settings";
+    await waitForNextPaintOrTimeout();
+    if (!isCurrent()) {
+      return;
+    }
+    const current = get();
+    if (
+      current.selectedWorkspaceId !== startupWorkspaceId ||
+      current.selectedTaskId !== startupTaskId ||
+      getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
+    ) {
+      return;
+    }
+    await current.refreshTasks(startupWorkspaceId);
+    if (!isCurrent()) {
+      return;
+    }
+    const refreshed = get();
+    if (
+      refreshed.selectedWorkspaceId !== startupWorkspaceId ||
+      refreshed.selectedTaskId !== startupTaskId ||
+      getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
+    ) {
+      return;
+    }
+    if (!startupTaskId) {
+      return;
+    }
+    const taskExists = (refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []).some(
+      (task) => task.id === startupTaskId,
+    );
+    if (taskExists) {
+      await refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
+      return;
+    }
+    set({ selectedTaskId: null, selectedThreadId: null });
+    syncDesktopStateCacheNow(get);
+  }
+
   return {
+    invalidateBootstrap: () => {
+      bootstrapCoordinator.invalidate();
+    },
+
     init: () =>
-      bootstrapCoordinator.run(async ({ isCurrent }) => {
+      bootstrapCoordinator.run(async ({ isCurrent, waitUntil }) => {
         set({ startupError: null, bootstrapPhase: "loading" });
         try {
           const state = hydratePersistedDesktopState(await loadState());
@@ -933,88 +1025,7 @@ export function createBootstrapActions(
             return;
           }
 
-          const startupSelectionContext = getThreadSelectionContext(
-            ui.view,
-            ui.lastNonSettingsView,
-          );
-
-          if (ui.selectedThreadId && ui.view === "chat") {
-            set((s) => ({
-              threadRuntimeById: {
-                ...s.threadRuntimeById,
-                [ui.selectedThreadId]: {
-                  ...defaultThreadRuntime(),
-                  ...s.threadRuntimeById[ui.selectedThreadId],
-                  hydrating: true,
-                },
-              },
-            }));
-            runAfterInitialPaint(() => {
-              if (!isCurrent()) {
-                return;
-              }
-              const current = get();
-              if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
-                return;
-              }
-              void current.selectThread(ui.selectedThreadId);
-            });
-          } else if (ui.selectedWorkspaceId && ui.view === "chat") {
-            const selectedWorkspaceId = ui.selectedWorkspaceId;
-            runAfterInitialPaint(() => {
-              if (!isCurrent()) {
-                return;
-              }
-              const current = get();
-              if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
-                return;
-              }
-              void current.selectWorkspace(selectedWorkspaceId);
-            });
-          } else if (ui.selectedWorkspaceId && startupSelectionContext === "task") {
-            const startupWorkspaceId = ui.selectedWorkspaceId;
-            const startupTaskId = ui.selectedTaskId;
-            const preserveStartupView = ui.view === "settings";
-            runAfterInitialPaint(() => {
-              if (!isCurrent()) {
-                return;
-              }
-              const current = get();
-              if (
-                current.selectedWorkspaceId !== startupWorkspaceId ||
-                current.selectedTaskId !== startupTaskId ||
-                getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
-              ) {
-                return;
-              }
-              void current.refreshTasks(startupWorkspaceId).then(() => {
-                if (!isCurrent()) {
-                  return;
-                }
-                const refreshed = get();
-                if (
-                  refreshed.selectedWorkspaceId !== startupWorkspaceId ||
-                  refreshed.selectedTaskId !== startupTaskId ||
-                  getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !==
-                    "task"
-                ) {
-                  return;
-                }
-                if (!startupTaskId) {
-                  return;
-                }
-                const taskExists = (
-                  refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []
-                ).some((task) => task.id === startupTaskId);
-                if (taskExists) {
-                  void refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
-                  return;
-                }
-                set({ selectedTaskId: null, selectedThreadId: null });
-                syncDesktopStateCacheNow(get);
-              });
-            });
-          }
+          waitUntil(completeStartupSelection(ui, isCurrent));
           return;
         } catch (error) {
           if (!isCurrent()) {

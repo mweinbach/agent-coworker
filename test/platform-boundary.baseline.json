@@ -203,6 +203,7 @@
   "test/server.commands.test.ts": 1,
   "test/server.test.ts": 1,
   "test/server.toolstream.test.ts": 1,
+  "test/server/runtime/configPatchStore.test.ts": 3,
   "test/server/runtime/workspaceJsonRpcSubscribers.test.ts": 11,
   "test/session-backup-delta.test.ts": 1,
   "test/session-backup-path-traversal.test.ts": 2,

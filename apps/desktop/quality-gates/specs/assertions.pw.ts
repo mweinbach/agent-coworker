@@ -1,13 +1,13 @@
-import { assertNoViewportClipping } from "../assertions";
+import { assertNoSeriousAxeViolations, assertNoViewportClipping } from "../assertions";
 import { expect, test } from "../fixtures";
 
-async function captureClippingFailure(action: () => Promise<void>): Promise<Error> {
+async function captureExpectedFailure(action: () => Promise<void>): Promise<Error> {
   try {
     await action();
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
-  throw new Error("Expected the clipping assertion to fail");
+  throw new Error("Expected the quality assertion to fail");
 }
 
 test("clipping gate rejects an entirely off-viewport critical control", async ({ quality }) => {
@@ -29,7 +29,7 @@ test("clipping gate rejects an entirely off-viewport critical control", async ({
     document.body.append(fixture);
   });
 
-  const error = await captureClippingFailure(async () => {
+  const error = await captureExpectedFailure(async () => {
     await assertNoViewportClipping(page, '[data-quality-clipping-fixture="off-viewport"]');
   });
   expect(error.message).toContain(
@@ -59,10 +59,27 @@ test("clipping gate rejects a control clipped by a scrollable ancestor", async (
     document.body.append(fixture);
   });
 
-  const error = await captureClippingFailure(async () => {
+  const error = await captureExpectedFailure(async () => {
     await assertNoViewportClipping(page, '[data-quality-clipping-fixture="scroll-ancestor"]');
   });
   expect(error.message).toContain(
     "Visible interactive controls must remain inside the viewport and every clipping ancestor",
   );
+});
+
+test("Axe gate rejects an unbaselined color-contrast regression", async ({ quality }, testInfo) => {
+  const { page } = quality;
+  await page.evaluate(() => {
+    const label = document.createElement("span");
+    label.dataset.qualityContrastRegression = "true";
+    label.style.cssText = "display:block;padding:8px;background:#fff;color:#aaa";
+    label.textContent = "Unbaselined contrast regression";
+    document.querySelector("#main-content")?.prepend(label);
+  });
+
+  const error = await captureExpectedFailure(async () => {
+    await assertNoSeriousAxeViolations(page, testInfo);
+  });
+  expect(error.message).toContain("color-contrast");
+  expect(error.message).toContain("[data-quality-contrast-regression");
 });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { scratchRoots } from "../../../src/platform/sandbox";
 import {
   mergeConfigPatch,
   type ProjectConfigPatch,
@@ -10,17 +10,9 @@ import {
 import { defaultRuntimeNameForProvider } from "../../../src/types";
 import { makeConfig } from "../../session/agentSession.harness";
 
-async function makeTestDirectory(): Promise<string> {
-  const [scratchRoot] = scratchRoots();
-  if (!scratchRoot) {
-    throw new Error("The platform did not provide a scratch root");
-  }
-  return await fs.mkdtemp(path.join(scratchRoot, "cowork-config-patch-"));
-}
-
 describe("ConfigPatchStore", () => {
   test("persists model selection defaults and round-trips them through runtime config", async () => {
-    const dir = await makeTestDirectory();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     const modelPatch = {
@@ -61,7 +53,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("persists advanced memory defaults to global config when provided", async () => {
-    const dir = await makeTestDirectory();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");
     const globalConfigDir = path.join(dir, "home", ".cowork", "config");
 
@@ -99,7 +91,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("clears a persisted memory generation model override", async () => {
-    const dir = await makeTestDirectory();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     await fs.mkdir(projectCoworkDir, { recursive: true });
@@ -130,7 +122,7 @@ describe("ConfigPatchStore", () => {
   });
 
   test("clears persisted and runtime skill improvement model overrides", async () => {
-    const dir = await makeTestDirectory();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");
     const configPath = path.join(projectCoworkDir, "config.json");
     await fs.mkdir(projectCoworkDir, { recursive: true });

@@ -4,6 +4,16 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { expect } from "@playwright/test";
 import type { Page, TestInfo } from "playwright";
 
+import axeBaseline from "./axe-baseline.json" with { type: "json" };
+
+const knownColorContrastTargets = new Set(axeBaseline.colorContrast.selectors);
+
+function isKnownColorContrastTarget(target: Array<string | string[]>): boolean {
+  return target.length === 1 && typeof target[0] === "string"
+    ? knownColorContrastTargets.has(target[0])
+    : false;
+}
+
 export async function settleQualityPage(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -22,15 +32,23 @@ export async function assertNoSeriousAxeViolations(
   let builder = new AxeBuilder({ page })
     .setLegacyMode()
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-    .exclude(".sidebar-symbol-slot")
-    .disableRules(["color-contrast"]);
+    .exclude(".sidebar-symbol-slot");
   if (include) {
     builder = builder.include(include);
   }
   const results = await builder.analyze();
-  const seriousViolations = results.violations.filter(
-    (violation) => violation.impact === "critical" || violation.impact === "serious",
-  );
+  const seriousViolations = results.violations.flatMap((violation) => {
+    if (violation.impact !== "critical" && violation.impact !== "serious") {
+      return [];
+    }
+    if (violation.id !== "color-contrast") {
+      return [violation];
+    }
+    const unexpectedNodes = violation.nodes.filter(
+      (node) => !isKnownColorContrastTarget(node.target),
+    );
+    return unexpectedNodes.length > 0 ? [{ ...violation, nodes: unexpectedNodes }] : [];
+  });
   const axeResultsPath = testInfo.outputPath("axe-results.json");
   await fs.writeFile(axeResultsPath, `${JSON.stringify(results, null, 2)}\n`, "utf8");
   await testInfo.attach("axe-results", {

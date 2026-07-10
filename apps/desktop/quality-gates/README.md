@@ -30,14 +30,15 @@ declared critical controls, including controls entirely off-viewport or clipped 
 ancestor. Noncritical list controls may remain offscreen only when their scroll ancestor can reveal
 them.
 
-Axe runs in its Electron-compatible legacy injection mode. The scan disables `color-contrast`
-because existing mainline theme opacity values fail that rule in the shipping sidebar and context
-panel; issue #235 explicitly does not change product theme tokens. It also has one narrow mainline
-exclusion for `.sidebar-symbol-slot`: the existing custom animated workspace disclosure uses a
-Radix trigger without a Radix content node, so Radix emits a dangling generated `aria-controls`
-value. Every other selected WCAG A/AA rule and element remains enforced, including the intentional
-serious violation used by the proof suite. Reviewed light/dark/forced-colors baselines cover visual
-theme regressions but are not a substitute for a future product contrast correction.
+Axe runs every selected WCAG A/AA rule, including `color-contrast`, in its Electron-compatible
+legacy injection mode. `axe-baseline.json` contains the exact selectors for pre-existing light/dark
+sidebar and top-bar contrast debt; issue #235 adds enforcement without changing shipping theme
+tokens. Only `color-contrast` results at those selectors are filtered after analysis, so every
+other rule still evaluates those elements and any new contrast target fails. The dedicated
+assertion test injects an unbaselined low-contrast label and proves the gate rejects it. Axe also
+has one narrow mainline exclusion for `.sidebar-symbol-slot`: the existing custom animated
+workspace disclosure uses a Radix trigger without a Radix content node, so Radix emits a dangling
+generated `aria-controls` value.
 
 ## Coverage
 

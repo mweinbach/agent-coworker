@@ -1,0 +1,37 @@
+{
+  "colorContrast": {
+    "rationale": "Issue #235 adds enforcement without changing shipping theme tokens. These exact selectors are the pre-existing light/dark sidebar and top-bar contrast debt observed in the pinned Linux image; every other color-contrast node remains blocking.",
+    "selectors": [
+      ".app-sidebar__new-chat-button",
+      ".app-topbar__thread-subtitle",
+      ".app-topbar__thread-title",
+      ".bg-foreground\\/\\[0\\.05\\] > .flex-1 > .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
+      ".block.tracking-\\[-0\\.015em\\].text-\\[13px\\]",
+      ".hover\\:bg-primary\\/90",
+      ".ml-3 > .text-muted-foreground\\/65.text-\\[9px\\].tracking-\\[0\\.14em\\]",
+      ".mt-2 > .text-muted-foreground\\/65.text-\\[9px\\].tracking-\\[0\\.14em\\]",
+      ".text-foreground\\/78",
+      ".text-foreground\\/80.h-8.justify-start:nth-child(1)",
+      ".text-foreground\\/80.h-8.justify-start:nth-child(3)",
+      ".text-muted-foreground\\/80.text-\\[10px\\].tracking-\\[0\\.16em\\]",
+      ".tracking-wide",
+      "button[title=\"Controlled fixture draft\"] > .flex-1 > .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
+      "button[title=\"Quick release note\"] > .flex-1 > .tracking-\\[-0\\.018em\\].block.text-\\[13px\\]",
+      "div[data-sidebar-section=\"chats\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.uppercase.tracking-\\[0\\.16em\\]",
+      "div[data-sidebar-section=\"chats\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.tracking-\\[0\\.16em\\].uppercase",
+      "div[data-sidebar-section=\"chats\"] > .flex-col.gap-2.flex > .px-1.group[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.text-\\[11px\\].tracking-\\[0\\.16em\\]",
+      "div[data-sidebar-section=\"projects\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.uppercase.tracking-\\[0\\.16em\\]",
+      "div[data-sidebar-section=\"projects\"] > .flex-col.gap-2.flex > .justify-between.px-1[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.tracking-\\[0\\.16em\\].uppercase",
+      "div[data-sidebar-section=\"projects\"] > .flex-col.gap-2.flex > .px-1.group[data-sidebar-section-drag-handle=\"true\"] > .cursor-grab.active\\:cursor-grabbing.gap-1\\.5 > .text-muted-foreground\\/75.text-\\[11px\\].tracking-\\[0\\.16em\\]",
+      "nav > .text-foreground\\/80.h-8.justify-start:nth-child(2)",
+      "section:nth-child(3) > h2",
+      "section:nth-child(5) > h2",
+      "section:nth-child(7) > h2",
+      "section:nth-child(9) > h2",
+      "section[data-sidebar-panel=\"subagents\"] > .leading-5.text-muted-foreground\\/82.py-3 > span",
+      "section[data-sidebar-panel=\"subagents\"] > .pt-2\\.5.pb-1.px-3 > .text-muted-foreground\\/78.text-\\[10px\\].tracking-\\[0\\.16em\\]",
+      "section[data-sidebar-panel=\"tasks\"] > .leading-5.text-muted-foreground\\/82.py-3 > span",
+      "section[data-sidebar-panel=\"tasks\"] > .pt-2\\.5.pb-1.px-3 > .text-muted-foreground\\/78.text-\\[10px\\].tracking-\\[0\\.16em\\]"
+    ]
+  }
+}

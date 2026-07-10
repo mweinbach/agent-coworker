@@ -276,7 +276,9 @@ export function createWorkspaceActions(
       });
     },
 
-    selectWorkspace: async (workspaceId: string) => {
+    selectWorkspace: async (workspaceId: string, options = {}) => {
+      const isCurrent = () => options.signal?.aborted !== true;
+      if (!isCurrent()) return;
       const wasSelected = get().selectedWorkspaceId === workspaceId;
       const currentState = get();
       const threadSelectionIntent = getThreadSelectionIntent(
@@ -301,8 +303,10 @@ export function createWorkspaceActions(
             preserveView: true,
             reconnectAfterHydration: true,
             skipWorkspaceSelectOnReconnect: true,
+            signal: options.signal,
           })
         : null;
+      if (!isCurrent()) return;
       set((s) => {
         const retargetNewTask =
           getThreadSelectionIntent(s.view, s.lastNonSettingsView, selectedTaskId).context ===
@@ -318,27 +322,36 @@ export function createWorkspaceActions(
           view: s.view === "settings" ? "settings" : s.view,
         };
       });
+      if (!isCurrent()) return;
       ensureWorkspaceRuntime(get, set, workspaceId);
 
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
 
       if (!wasSelected) {
+        if (!isCurrent()) return;
         set((s) => ({
           workspaces: s.workspaces.map((w) =>
             w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w,
           ),
         }));
         await persistNow(get);
+        if (!isCurrent()) return;
       }
 
-      await ensureServerRunning(get, set, workspaceId);
+      await ensureServerRunning(get, set, workspaceId, { signal: options.signal });
+      if (!isCurrent()) return;
       ensureControlSocket(get, set, workspaceId);
-      void requestWorkspaceSessions(get, set, workspaceId);
-      void get().refreshTasks(workspaceId);
-      if (hydrateSelectedThreadPromise) {
-        await hydrateSelectedThreadPromise;
-      }
+      if (!isCurrent()) return;
+      const requestSessionsPromise = requestWorkspaceSessions(get, set, workspaceId, {
+        signal: options.signal,
+      });
+      const refreshTasksPromise = get().refreshTasks(workspaceId, { signal: options.signal });
+      await Promise.all([
+        requestSessionsPromise,
+        refreshTasksPromise,
+        hydrateSelectedThreadPromise ?? Promise.resolve(),
+      ]);
     },
 
     reorderWorkspaces: async (sourceWorkspaceId: string, targetWorkspaceId: string) => {

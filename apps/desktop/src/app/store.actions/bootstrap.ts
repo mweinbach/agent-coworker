@@ -46,7 +46,11 @@ import {
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
 } from "../store.helpers";
-import { runAfterNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import {
+  type BootstrapRunContext,
+  createBootstrapCoordinator,
+} from "../store.helpers/bootstrapCoordinator";
+import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
 import {
@@ -672,10 +676,6 @@ function normalizeCachedSessionSnapshot(
   };
 }
 
-function runAfterInitialPaint(task: () => void): void {
-  runAfterNextPaintOrTimeout(task);
-}
-
 export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDataState> | null {
   try {
     const cached = extractCachedDesktopState(value);
@@ -710,7 +710,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     );
     return {
       ready: true,
-      bootstrapPending: true,
+      bootstrapPhase: "idle",
       startupError: null,
       workspaces: state.workspaces,
       threads: state.threads,
@@ -762,6 +762,8 @@ export function createBootstrapActions(
 ): Pick<
   AppStoreActions,
   | "init"
+  | "invalidateBootstrap"
+  | "drainBootstrap"
   | "openSettings"
   | "closeSettings"
   | "setSettingsPage"
@@ -783,206 +785,296 @@ export function createBootstrapActions(
   | "setContextSidebarWidth"
   | "setMessageBarHeight"
 > {
-  return {
-    init: async () => {
-      set({ startupError: null, bootstrapPending: true });
-      try {
-        const state = hydratePersistedDesktopState(await loadState());
-        const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
-        let updateState = get().updateState;
-        try {
-          updateState = await getUpdateState();
-        } catch (error) {
-          console.warn("Desktop updater state load failed:", error);
-        }
-        const ui = buildResolvedDesktopUiState(
-          state.workspaces,
-          state.threads,
-          desktopFeatureFlags,
-          {
-            selectedWorkspaceId: get().selectedWorkspaceId,
-            selectedThreadId: get().selectedThreadId,
-            selectedTaskId: get().selectedTaskId,
-            view: get().view,
-            settingsPage: get().settingsPage,
-            lastNonSettingsView: get().lastNonSettingsView,
-            sidebarCollapsed: get().sidebarCollapsed,
-            sidebarWidth: get().sidebarWidth,
-            contextSidebarCollapsed: get().contextSidebarCollapsed,
-            contextSidebarWidth: get().contextSidebarWidth,
-            canvasSidebarWidth: get().canvasSidebarWidth,
-            messageBarHeight: get().messageBarHeight,
+  const bootstrapCoordinator = createBootstrapCoordinator();
+  const deletedArchivedTranscriptIds = new Set<string>();
+
+  async function completeStartupSelection(
+    ui: ReturnType<typeof buildResolvedDesktopUiState>,
+    isCurrent: BootstrapRunContext["isCurrent"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!isCurrent()) return;
+    const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
+
+    if (ui.selectedThreadId && ui.view === "chat") {
+      if (!isCurrent()) return;
+      set((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [ui.selectedThreadId]: {
+            ...defaultThreadRuntime(),
+            ...state.threadRuntimeById[ui.selectedThreadId],
+            hydrating: true,
           },
-        );
-        const connectedProviders = deriveConnectedProviders(
-          state.providerState as PersistedProviderState | undefined,
-        );
-        const onboardingOpts = {
-          onboarding: state.onboarding,
-          workspaceCount: state.workspaces.length,
-          threadCount: state.threads.length,
-          hasConnectedProvider: connectedProviders.length > 0,
-        };
-
-        const startupOnboarding = resolveStartupOnboarding({
-          ...onboardingOpts,
-          demoMode: isDesktopDemoMode(),
-          nowIso,
-        });
-        const resolvedOnboarding = startupOnboarding.onboardingState;
-        const autoOpen = startupOnboarding.visible;
-
-        const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
-        const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
-        let finalThreads = state.threads;
-
-        if (autoDeleteDays && autoDeleteDays > 0) {
-          const nowMs = Date.now();
-          const thresholdMs = autoDeleteDays * 24 * 60 * 60 * 1000;
-          const remainingThreads: typeof state.threads = [];
-          for (const thread of state.threads) {
-            if (thread.archived && thread.archivedAt) {
-              const archivedTime = Date.parse(thread.archivedAt);
-              if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
-                const transcriptIds = [
-                  thread.legacyTranscriptId ?? null,
-                  thread.sessionId ?? null,
-                  thread.id,
-                ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-                for (const transcriptId of new Set(transcriptIds)) {
-                  try {
-                    await deleteTranscript({ threadId: transcriptId });
-                  } catch {
-                    // ignore
-                  }
-                }
-                continue;
-              }
-            }
-            remainingThreads.push(thread);
-          }
-          finalThreads = remainingThreads;
-        }
-
-        set({
-          workspaces: state.workspaces,
-          threads: finalThreads,
-          selectedWorkspaceId: ui.selectedWorkspaceId,
-          selectedThreadId: ui.selectedThreadId,
-          selectedTaskId: ui.selectedTaskId,
-          providerStatusByName: state.providerState?.statusByName ?? {},
-          providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
-          providerConnected: connectedProviders,
-          providerUiState: state.providerUiState,
-          developerMode: state.developerMode,
-          showHiddenFiles: state.showHiddenFiles,
-          perWorkspaceSettings: state.perWorkspaceSettings,
-          desktopSettings: normalizeDesktopSettings(state.desktopSettings),
-          privacyTelemetrySettings: normalizePrivacyTelemetrySettings(
-            state.privacyTelemetrySettings,
-          ),
-          cloudSync: normalizeCloudSyncSettings(state.cloudSync),
-          desktopFeatureFlags,
-          desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
-          updateState,
-          ready: true,
-          bootstrapPending: false,
-          startupError: null,
-          onboardingState: resolvedOnboarding,
-          onboardingVisible: autoOpen,
-          onboardingStep: "welcome",
-          view: ui.view,
-          settingsPage: ui.settingsPage,
-          lastNonSettingsView: ui.lastNonSettingsView,
-          sidebarCollapsed: ui.sidebarCollapsed,
-          sidebarWidth: ui.sidebarWidth,
-          contextSidebarCollapsed: ui.contextSidebarCollapsed,
-          contextSidebarWidth: ui.contextSidebarWidth,
-          canvasSidebarWidth: ui.canvasSidebarWidth,
-          messageBarHeight: ui.messageBarHeight,
-        });
-
-        // Persist backfilled onboarding status if we changed it.
-        if (startupOnboarding.shouldPersist) {
-          void persistNow(get);
-        } else {
-          syncDesktopStateCacheNow(get);
-        }
-
-        const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
-
-        if (ui.selectedThreadId && ui.view === "chat") {
-          set((s) => ({
-            threadRuntimeById: {
-              ...s.threadRuntimeById,
-              [ui.selectedThreadId]: {
-                ...defaultThreadRuntime(),
-                ...s.threadRuntimeById[ui.selectedThreadId],
-                hydrating: true,
-              },
-            },
-          }));
-          runAfterInitialPaint(() => {
-            const current = get();
-            if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
-              return;
-            }
-            void current.selectThread(ui.selectedThreadId);
-          });
-        } else if (ui.selectedWorkspaceId && ui.view === "chat") {
-          const selectedWorkspaceId = ui.selectedWorkspaceId;
-          runAfterInitialPaint(() => {
-            const current = get();
-            if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
-              return;
-            }
-            void current.selectWorkspace(selectedWorkspaceId);
-          });
-        } else if (ui.selectedWorkspaceId && startupSelectionContext === "task") {
-          const startupWorkspaceId = ui.selectedWorkspaceId;
-          const startupTaskId = ui.selectedTaskId;
-          const preserveStartupView = ui.view === "settings";
-          runAfterInitialPaint(() => {
-            const current = get();
-            if (
-              current.selectedWorkspaceId !== startupWorkspaceId ||
-              current.selectedTaskId !== startupTaskId ||
-              getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
-            ) {
-              return;
-            }
-            void current.refreshTasks(startupWorkspaceId).then(() => {
-              const refreshed = get();
-              if (
-                refreshed.selectedWorkspaceId !== startupWorkspaceId ||
-                refreshed.selectedTaskId !== startupTaskId ||
-                getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
-              ) {
-                return;
-              }
-              if (!startupTaskId) {
-                return;
-              }
-              const taskExists = (
-                refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []
-              ).some((task) => task.id === startupTaskId);
-              if (taskExists) {
-                void refreshed.selectTask(startupTaskId, { preserveView: preserveStartupView });
-                return;
-              }
-              set({ selectedTaskId: null, selectedThreadId: null });
-              syncDesktopStateCacheNow(get);
-            });
-          });
-        }
+        },
+      }));
+      await waitForNextPaintOrTimeout();
+      if (!isCurrent()) {
         return;
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error("Desktop init failed:", error);
-        if (get().ready) {
+      }
+      const current = get();
+      if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
+        return;
+      }
+      await current.selectThread(ui.selectedThreadId, { signal });
+      return;
+    }
+
+    if (ui.selectedWorkspaceId && ui.view === "chat") {
+      const selectedWorkspaceId = ui.selectedWorkspaceId;
+      await waitForNextPaintOrTimeout();
+      if (!isCurrent()) {
+        return;
+      }
+      const current = get();
+      if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
+        return;
+      }
+      await current.selectWorkspace(selectedWorkspaceId, { signal });
+      return;
+    }
+
+    if (!ui.selectedWorkspaceId || startupSelectionContext !== "task") {
+      return;
+    }
+
+    const startupWorkspaceId = ui.selectedWorkspaceId;
+    const startupTaskId = ui.selectedTaskId;
+    const preserveStartupView = ui.view === "settings";
+    await waitForNextPaintOrTimeout();
+    if (!isCurrent()) {
+      return;
+    }
+    const current = get();
+    if (
+      current.selectedWorkspaceId !== startupWorkspaceId ||
+      current.selectedTaskId !== startupTaskId ||
+      getThreadSelectionContext(current.view, current.lastNonSettingsView) !== "task"
+    ) {
+      return;
+    }
+    await current.refreshTasks(startupWorkspaceId, { signal });
+    if (!isCurrent()) {
+      return;
+    }
+    const refreshed = get();
+    if (
+      refreshed.selectedWorkspaceId !== startupWorkspaceId ||
+      refreshed.selectedTaskId !== startupTaskId ||
+      getThreadSelectionContext(refreshed.view, refreshed.lastNonSettingsView) !== "task"
+    ) {
+      return;
+    }
+    if (!startupTaskId) {
+      return;
+    }
+    const taskExists = (refreshed.taskSummariesByWorkspaceId[startupWorkspaceId] ?? []).some(
+      (task) => task.id === startupTaskId,
+    );
+    if (taskExists) {
+      await refreshed.selectTask(startupTaskId, {
+        preserveView: preserveStartupView,
+        signal,
+      });
+      return;
+    }
+    set({ selectedTaskId: null, selectedThreadId: null });
+    syncDesktopStateCacheNow(get);
+  }
+
+  return {
+    invalidateBootstrap: () => {
+      bootstrapCoordinator.invalidate();
+    },
+
+    drainBootstrap: () => bootstrapCoordinator.drain(),
+
+    init: () =>
+      bootstrapCoordinator.run(async ({ isCurrent, signal, waitUntil }) => {
+        set({ startupError: null, bootstrapPhase: "loading" });
+        try {
+          const state = hydratePersistedDesktopState(await loadState());
+          if (!isCurrent()) {
+            return;
+          }
+          const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
+          let updateState = get().updateState;
+          try {
+            updateState = await getUpdateState();
+          } catch (error) {
+            console.warn("Desktop updater state load failed:", error);
+          }
+          if (!isCurrent()) {
+            return;
+          }
+          const ui = buildResolvedDesktopUiState(
+            state.workspaces,
+            state.threads,
+            desktopFeatureFlags,
+            {
+              selectedWorkspaceId: get().selectedWorkspaceId,
+              selectedThreadId: get().selectedThreadId,
+              selectedTaskId: get().selectedTaskId,
+              view: get().view,
+              settingsPage: get().settingsPage,
+              lastNonSettingsView: get().lastNonSettingsView,
+              sidebarCollapsed: get().sidebarCollapsed,
+              sidebarWidth: get().sidebarWidth,
+              contextSidebarCollapsed: get().contextSidebarCollapsed,
+              contextSidebarWidth: get().contextSidebarWidth,
+              canvasSidebarWidth: get().canvasSidebarWidth,
+              messageBarHeight: get().messageBarHeight,
+            },
+          );
+          const connectedProviders = deriveConnectedProviders(
+            state.providerState as PersistedProviderState | undefined,
+          );
+          const onboardingOpts = {
+            onboarding: state.onboarding,
+            workspaceCount: state.workspaces.length,
+            threadCount: state.threads.length,
+            hasConnectedProvider: connectedProviders.length > 0,
+          };
+
+          const startupOnboarding = resolveStartupOnboarding({
+            ...onboardingOpts,
+            demoMode: isDesktopDemoMode(),
+            nowIso,
+          });
+          const resolvedOnboarding = startupOnboarding.onboardingState;
+          const autoOpen = startupOnboarding.visible;
+
+          const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
+          const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
+          let finalThreads = state.threads;
+
+          if (autoDeleteDays && autoDeleteDays > 0) {
+            const nowMs = Date.now();
+            const thresholdMs = autoDeleteDays * 24 * 60 * 60 * 1000;
+            const remainingThreads: typeof state.threads = [];
+            for (const thread of state.threads) {
+              if (thread.archived && thread.archivedAt) {
+                const archivedTime = Date.parse(thread.archivedAt);
+                if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
+                  const transcriptIds = [
+                    thread.legacyTranscriptId ?? null,
+                    thread.sessionId ?? null,
+                    thread.id,
+                  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+                  for (const transcriptId of new Set(transcriptIds)) {
+                    if (deletedArchivedTranscriptIds.has(transcriptId)) {
+                      continue;
+                    }
+                    try {
+                      await deleteTranscript({ threadId: transcriptId });
+                      deletedArchivedTranscriptIds.add(transcriptId);
+                    } catch {
+                      // ignore
+                    }
+                    if (!isCurrent()) {
+                      return;
+                    }
+                  }
+                  continue;
+                }
+              }
+              remainingThreads.push(thread);
+            }
+            finalThreads = remainingThreads;
+          }
+
+          if (!isCurrent()) {
+            return;
+          }
+          set({
+            workspaces: state.workspaces,
+            threads: finalThreads,
+            selectedWorkspaceId: ui.selectedWorkspaceId,
+            selectedThreadId: ui.selectedThreadId,
+            selectedTaskId: ui.selectedTaskId,
+            providerStatusByName: state.providerState?.statusByName ?? {},
+            providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
+            providerConnected: connectedProviders,
+            providerUiState: state.providerUiState,
+            developerMode: state.developerMode,
+            showHiddenFiles: state.showHiddenFiles,
+            perWorkspaceSettings: state.perWorkspaceSettings,
+            desktopSettings: normalizeDesktopSettings(state.desktopSettings),
+            privacyTelemetrySettings: normalizePrivacyTelemetrySettings(
+              state.privacyTelemetrySettings,
+            ),
+            cloudSync: normalizeCloudSyncSettings(state.cloudSync),
+            desktopFeatureFlags,
+            desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
+            updateState,
+            ready: true,
+            bootstrapPhase: "ready",
+            startupError: null,
+            onboardingState: resolvedOnboarding,
+            onboardingVisible: autoOpen,
+            onboardingStep: "welcome",
+            view: ui.view,
+            settingsPage: ui.settingsPage,
+            lastNonSettingsView: ui.lastNonSettingsView,
+            sidebarCollapsed: ui.sidebarCollapsed,
+            sidebarWidth: ui.sidebarWidth,
+            contextSidebarCollapsed: ui.contextSidebarCollapsed,
+            contextSidebarWidth: ui.contextSidebarWidth,
+            canvasSidebarWidth: ui.canvasSidebarWidth,
+            messageBarHeight: ui.messageBarHeight,
+          });
+
+          // Persist backfilled onboarding status if we changed it.
+          if (startupOnboarding.shouldPersist) {
+            await persistNow(get);
+          } else {
+            syncDesktopStateCacheNow(get);
+          }
+          if (!isCurrent()) {
+            return;
+          }
+
+          waitUntil(completeStartupSelection(ui, isCurrent, signal));
+          return;
+        } catch (error) {
+          if (!isCurrent()) {
+            return;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error("Desktop init failed:", error);
+          if (get().ready) {
+            set((s) => ({
+              bootstrapPhase: "error",
+              startupError: detail,
+              notifications: pushNotification(s.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "error",
+                title: "Startup recovery mode",
+                detail,
+              }),
+            }));
+            return;
+          }
           set((s) => ({
-            bootstrapPending: false,
+            workspaces: [],
+            threads: [],
+            selectedWorkspaceId: null,
+            selectedThreadId: null,
+            workspaceRuntimeById: {},
+            threadRuntimeById: {},
+            providerCatalog: [],
+            providerDefaultModelByProvider: {},
+            providerConnected: [],
+            providerAuthMethodsByProvider: {},
+            providerLastAuthChallenge: null,
+            providerLastAuthResult: null,
+            providerUiState: normalizePersistedProviderUiState(undefined),
+            ready: true,
+            bootstrapPhase: "error",
             startupError: detail,
+            onboardingVisible: false,
+            onboardingStep: "welcome" as const,
             notifications: pushNotification(s.notifications, {
               id: makeId(),
               ts: nowIso(),
@@ -993,36 +1085,7 @@ export function createBootstrapActions(
           }));
           return;
         }
-        set((s) => ({
-          workspaces: [],
-          threads: [],
-          selectedWorkspaceId: null,
-          selectedThreadId: null,
-          workspaceRuntimeById: {},
-          threadRuntimeById: {},
-          providerCatalog: [],
-          providerDefaultModelByProvider: {},
-          providerConnected: [],
-          providerAuthMethodsByProvider: {},
-          providerLastAuthChallenge: null,
-          providerLastAuthResult: null,
-          providerUiState: normalizePersistedProviderUiState(undefined),
-          ready: true,
-          bootstrapPending: false,
-          startupError: detail,
-          onboardingVisible: false,
-          onboardingStep: "welcome" as const,
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Startup recovery mode",
-            detail,
-          }),
-        }));
-        return;
-      }
-    },
+      }),
 
     openSettings: (page) => {
       set((s) => ({

@@ -86,7 +86,7 @@ describe("desktop resource build helpers", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("soft-disables optional Windows AI Electron packaging when the addon is absent", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));

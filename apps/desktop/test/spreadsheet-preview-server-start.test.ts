@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
-import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
+import {
+  createDesktopApiMock,
+  createDesktopCommandsBridgeMock,
+} from "./helpers/mockDesktopCommands";
+
+const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock-popup" }));
+const desktopApiMock = createDesktopApiMock({
+  startWorkspaceServer: startWorkspaceServerMock,
+});
+(globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsBridgeMock());
 
 const { useAppStore } = await import("../src/app/store");
 const { reactivateWorkspaceJsonRpcSocketState } = await import(
@@ -47,13 +57,12 @@ function resetPopupWorkspace(requestMock: RequestMock) {
 
 describe("spreadsheet workbook workspace startup", () => {
   beforeEach(() => {
-    Object.assign(globalThis, {
-      [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock(),
-    });
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    startWorkspaceServerMock.mockClear();
   });
 
   afterEach(() => {
-    Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("starts the workspace server before requesting workbook data", async () => {
@@ -93,6 +102,11 @@ describe("spreadsheet workbook workspace startup", () => {
 
     expect(result.ok).toBe(true);
     expect(serverUrlAtRequest).toBeTruthy();
+    expect(startWorkspaceServerMock).toHaveBeenCalledTimes(1);
+    expect(startWorkspaceServerMock.mock.calls[0]?.[0]).toMatchObject({
+      workspaceId: "ws-popup",
+      workspacePath: "/Users/mweinbach/Projects/preview-workspace",
+    });
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
 });

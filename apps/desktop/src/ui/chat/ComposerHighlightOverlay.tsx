@@ -31,10 +31,7 @@ export const ComposerHighlightOverlay = forwardRef<
     >
       {segments.map((segment) =>
         segment.type === "mention" ? (
-          <span
-            key={`mention-${segment.start}-${segment.name}`}
-            className={cn(MENTION_CHIP_CLASS, "-mx-0.5 px-0.5")}
-          >
+          <span key={`mention-${segment.start}-${segment.name}`} className={MENTION_CHIP_CLASS}>
             {segment.raw}
           </span>
         ) : (

@@ -249,13 +249,148 @@ function ReasoningTimelineNode({
   );
 }
 
-function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+function toPrettyJson(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function ToolTimelineNode({
+  item,
+  isLast,
+}: {
+  item: Extract<ActivityFeedItem, { kind: "tool" }>;
+  isLast: boolean;
+}) {
+  const formatting = useMemo(
+    () => formatToolCard(item.name, item.args, item.result, item.state),
+    [item.args, item.name, item.result, item.state],
+  );
+  const detailRows = useMemo(
+    () => formatting.details.filter((row) => row.label !== "Status"),
+    [formatting.details],
+  );
+  const argsText = useMemo(() => toPrettyJson(item.args), [item.args]);
+  const resultText = useMemo(() => toPrettyJson(item.result), [item.result]);
+  const hasDetails = detailRows.length > 0 || Boolean(argsText || resultText || item.approval);
+  const shouldAutoExpand =
+    item.state === "approval-requested" ||
+    item.state === "output-error" ||
+    item.state === "output-denied";
+  const [open, setOpen] = useState(shouldAutoExpand && hasDetails);
 
   useEffect(() => {
-    if (live && containerRef.current && summary) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    if (shouldAutoExpand && hasDetails) {
+      setOpen(true);
     }
+  }, [hasDetails, shouldAutoExpand]);
+
+  return (
+    <TimelineNode
+      icon={
+        <TimelineToolIcon title={formatting.title} className="size-3 text-muted-foreground/45" />
+      }
+      isLast={isLast}
+    >
+      {hasDetails ? (
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-muted/20 focus-visible:ring-1 focus-visible:ring-ring/40">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
+                <ToolStateIndicator state={item.state} />
+              </div>
+              {formatting.subtitle ? (
+                <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
+                  {formatting.subtitle}
+                </div>
+              ) : null}
+            </div>
+            <ChevronRightIcon
+              className={cn(
+                "mt-0.5 size-3.5 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
+                open && "rotate-90",
+              )}
+              aria-hidden
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-1.5">
+            {detailRows.length > 0 ? (
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {detailRows.map((row) => (
+                  <div
+                    key={`${item.id}-${row.label}`}
+                    className="rounded-md border border-border/45 bg-muted/15 px-2 py-1.5"
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      {row.label}
+                    </div>
+                    <div className="mt-0.5 break-words text-[11px] leading-snug text-foreground/85">
+                      {row.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {argsText ? (
+              <pre className="mt-1.5 max-h-40 overflow-auto rounded-md border border-border/40 bg-background/50 p-2 text-[11px] leading-relaxed text-foreground/80">
+                {argsText}
+              </pre>
+            ) : null}
+            {resultText ? (
+              <pre
+                className={cn(
+                  "mt-1.5 max-h-48 overflow-auto rounded-md border p-2 text-[11px] leading-relaxed",
+                  item.state === "output-error" || item.state === "output-denied"
+                    ? "border-destructive/30 bg-destructive/5 text-destructive"
+                    : "border-border/40 bg-background/50 text-foreground/80",
+                )}
+              >
+                {resultText}
+              </pre>
+            ) : null}
+          </CollapsibleContent>
+        </Collapsible>
+      ) : (
+        <div className="min-w-0 py-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
+            <ToolStateIndicator state={item.state} />
+          </div>
+          {formatting.subtitle ? (
+            <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
+              {formatting.subtitle}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </TimelineNode>
+  );
+}
+
+function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const onScroll = () => {
+      const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+      stickToBottomRef.current = distanceFromBottom < 48;
+    };
+    node.addEventListener("scroll", onScroll, { passive: true });
+    return () => node.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!live || !containerRef.current || !summary) return;
+    if (!stickToBottomRef.current) return;
+    containerRef.current.scrollTop = containerRef.current.scrollHeight;
   }, [live, summary]);
 
   const lastReasoningEntryId = useMemo(() => {
@@ -283,38 +418,9 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           );
         }
 
-        const formatting = formatToolCard(
-          entry.item.name,
-          entry.item.args,
-          entry.item.result,
-          entry.item.state,
-        );
-
         return (
           <div key={entry.item.id} data-activity-entry-kind="tool">
-            <TimelineNode
-              icon={
-                <TimelineToolIcon
-                  title={formatting.title}
-                  className="size-3 text-muted-foreground/45"
-                />
-              }
-              isLast={isLast}
-            >
-              <div className="min-w-0 py-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[13px] font-medium text-foreground">
-                    {formatting.title}
-                  </span>
-                  <ToolStateIndicator state={entry.item.state} />
-                </div>
-                {formatting.subtitle && (
-                  <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
-                    {formatting.subtitle}
-                  </div>
-                )}
-              </div>
-            </TimelineNode>
+            <ToolTimelineNode item={entry.item} isLast={isLast} />
           </div>
         );
       })}
@@ -359,7 +465,12 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         )
       : null;
   const displayElapsedLabel = liveElapsedLabel ?? summary.elapsedLabel;
-  const shouldAutoExpand = displayStatus === "approval" || displayStatus === "running";
+  // Live issue groups stay expanded so unrecovered tool errors remain visible
+  // in the audit trail while the turn is still running.
+  const shouldAutoExpand =
+    displayStatus === "approval" ||
+    displayStatus === "running" ||
+    (props.live === true && displayStatus === "issue");
   const [expanded, setExpanded] = useState(shouldAutoExpand);
   const [retrying, setRetrying] = useState(false);
   // Remember whether the user has manually expanded/collapsed this group, so a
@@ -382,18 +493,19 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   useEffect(() => {
     if (shouldAutoExpand) {
       setExpanded(true);
-    } else if (isComplete && !userToggledRef.current) {
-      setExpanded(false);
     }
-  }, [shouldAutoExpand, isComplete]);
+    // Do not auto-collapse on complete — users often want the audit trail.
+    // Collapse only when a new turn starts (parent remounts) or the user toggles.
+  }, [shouldAutoExpand]);
 
   const showStateBadge = displayStatus === "approval" || displayStatus === "issue";
   const isPendingReasoning = displayStatus === "running" && summary.preview === "Thinking...";
   const useThinkingTreatment =
     isPendingReasoning ||
     (summary.reasoningCount > 0 && summary.toolCount === 0 && !showStateBadge);
-  const useCompactElapsedHeader =
-    isComplete || hasUnrecoveredIssue || (props.live === true && !showStateBadge);
+  // Keep one structural shell for live turns (including mid-turn approval) and
+  // terminal compact rows so chrome does not jump between Marker and Card.
+  const useCompactElapsedHeader = isComplete || hasUnrecoveredIssue || props.live === true;
 
   if (useCompactElapsedHeader) {
     return (

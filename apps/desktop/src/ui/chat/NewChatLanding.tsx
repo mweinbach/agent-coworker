@@ -332,6 +332,34 @@ export function NewChatLanding() {
     }
   }, [addWorkspace, setNewChatLandingTarget]);
 
+  const starterPrompts = useMemo(
+    () =>
+      [
+        {
+          id: "summarize-repo",
+          label: "Summarize this repo",
+          prompt:
+            "Summarize this repository: structure, main technologies, and how to get started.",
+        },
+        {
+          id: "explain-folder",
+          label: "Explain this folder",
+          prompt: "Explain the current folder: purpose, important files, and how pieces connect.",
+        },
+        {
+          id: "find-bugs",
+          label: "Find rough edges",
+          prompt: "Scan the workspace for rough edges, bugs, or brittle spots worth fixing next.",
+        },
+        {
+          id: "write-tests",
+          label: "Suggest tests",
+          prompt: "Suggest high-value tests for the most important behavior in this workspace.",
+        },
+      ] as const,
+    [],
+  );
+
   return (
     <div className="relative flex h-full min-h-0 flex-col items-center justify-center overflow-hidden bg-panel px-5 py-10">
       <div
@@ -347,6 +375,24 @@ export function NewChatLanding() {
             Describe a task, idea, or question — Cowork will take it from here.
           </p>
         </header>
+        <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
+          {starterPrompts.map((starter) => (
+            <Button
+              key={starter.id}
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={submitting}
+              className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => {
+                setComposerText(starter.prompt);
+                requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+            >
+              {starter.label}
+            </Button>
+          ))}
+        </div>
         <MessageComposerRoot
           className="w-full max-w-[42rem] rounded-[28px] border-border/55 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={
@@ -379,7 +425,10 @@ export function NewChatLanding() {
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
                 textareaClassName="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
+                onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+                  const isComposing =
+                    event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
                   if (
                     event.key === "Enter" &&
                     !event.shiftKey &&
@@ -387,9 +436,15 @@ export function NewChatLanding() {
                     !event.ctrlKey &&
                     !event.altKey
                   ) {
+                    if (isComposing) return;
                     event.preventDefault();
+                    if (!canSubmitNewChat || submitting) return;
                     void submitNewChat();
-                  } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  } else if (
+                    event.key === "Enter" &&
+                    (event.metaKey || event.ctrlKey) &&
+                    !isComposing
+                  ) {
                     event.preventDefault();
                     const textarea = event.currentTarget;
                     const start = textarea.selectionStart;

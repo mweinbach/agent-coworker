@@ -598,6 +598,17 @@ export class SessionDb {
     );
   }
 
+  async deleteResearch(
+    researchId: string,
+    opts?: { workspacePath?: string | null },
+  ): Promise<boolean> {
+    return await this.writeCoordinator.runExclusive(
+      "delete_research",
+      async () => this.repository.deleteResearch(researchId, opts),
+      { researchId },
+    );
+  }
+
   listTasks(workspacePath?: string | null): TaskSummary[] {
     return this.readTaskRepository.listTasks(workspacePath);
   }

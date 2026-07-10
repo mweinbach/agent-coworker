@@ -100,6 +100,35 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
   );
 }
 
+function CommandShortcut({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="command-shortcut"
+      className={cn(
+        "ml-auto inline-flex items-center gap-0.5 text-[11px] tracking-wide text-muted-foreground/80",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+/** Renders a platform-styled keyboard shortcut as kbd chips (⌘N / Ctrl+N). */
+function CommandKbd({ keys }: { keys: string[] }) {
+  return (
+    <CommandShortcut>
+      {keys.map((key) => (
+        <kbd
+          key={key}
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/50 px-1 font-sans text-[10px] font-medium text-muted-foreground"
+        >
+          {key}
+        </kbd>
+      ))}
+    </CommandShortcut>
+  );
+}
+
 /**
  * Command palette shell: a centered Dialog hosting a Command. Mirrors the
  * standard shadcn CommandDialog composition. The dialog owns open state and
@@ -134,6 +163,8 @@ export {
   CommandGroup,
   CommandInput,
   CommandItem,
+  CommandKbd,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 };

@@ -6,8 +6,10 @@ import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility"
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
+import { Button } from "./components/ui/button";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
+  confirmAction,
   getPlatformChrome,
   getSystemAppearance,
   getUpdateState,
@@ -32,8 +34,10 @@ import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
+import { shouldShowReconnectBanner } from "./ui/chat/chatLogic";
 import { LmStudioStartDialog } from "./ui/chat/LmStudioStartDialog";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
+import { InAppToasts } from "./ui/InAppToasts";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
@@ -45,7 +49,9 @@ import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 import { TranscriptDeliveryRecovery } from "./ui/TranscriptDeliveryRecovery";
-import { TaskConversationSidebar } from "./ui/tasks/TaskConversationSidebar";
+import { TaskContextSidebar } from "./ui/tasks/TaskContextSidebar";
+
+const EMPTY_AGENTS: never[] = [];
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -78,7 +84,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
     showCanvas && !canvasMaximized
       ? canvasSidebarWidth
       : view === "task"
-        ? Math.max(contextSidebarWidth, 420)
+        ? Math.max(contextSidebarWidth, 360)
         : contextSidebarWidth;
   const canvasContainerStyle: CSSProperties = canvasMaximized
     ? {
@@ -110,7 +116,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
             <Canvas path={filePreview.path} />
           </InlineErrorBoundary>
         ) : view === "task" ? (
-          <TaskConversationSidebar />
+          <TaskContextSidebar variant="sidebar" />
         ) : (
           <ContextSidebar />
         )}
@@ -127,10 +133,12 @@ const ChatShell = memo(function ChatShell({
   init,
   ready,
   startupError,
+  bootstrapPending,
 }: {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
+  bootstrapPending: boolean;
 }) {
   const view = useAppStore((s) => s.view);
   const googleResearchAvailable = useAppStore((s) =>
@@ -143,7 +151,39 @@ const ChatShell = memo(function ChatShell({
   const selectedTask = useAppStore((s) =>
     s.selectedTaskId ? s.tasksById[s.selectedTaskId] : null,
   );
-  const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const selectedThreadBusy = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.busy === true : false,
+  );
+  const selectedSessionUsage = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionUsage ?? null) : null,
+  );
+  const selectedLastTurnUsage = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.lastTurnUsage ?? null) : null,
+  );
+  const selectedAgents = useAppStore((s) => {
+    if (!s.selectedThreadId) return EMPTY_AGENTS;
+    return s.threadRuntimeById[s.selectedThreadId]?.agents ?? EMPTY_AGENTS;
+  });
+  const selectedSessionUsageStop = useAppStore((s) =>
+    s.selectedThreadId
+      ? s.threadRuntimeById[s.selectedThreadId]?.sessionUsage?.budgetStatus.stopTriggered === true
+      : false,
+  );
+  const selectedTranscriptOnly = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.transcriptOnly === true : false,
+  );
+  const selectedConnected = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.connected === true : false,
+  );
+  const selectedHydrating = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.hydrating === true : false,
+  );
+  const selectedRuntimeExists = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId] !== undefined : false,
+  );
+  const selectedSessionId = useAppStore((s) =>
+    s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionId ?? null) : null,
+  );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -175,8 +215,7 @@ const ChatShell = memo(function ChatShell({
     const workspaceId = activeThread?.workspaceId ?? selectedWorkspaceId;
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
-  const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
-  const busy = runtime?.busy === true;
+  const busy = selectedThreadBusy;
   const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
   const isConversationView = effectiveView === "chat" || effectiveView === "task";
   const showContextSidebar =
@@ -201,7 +240,7 @@ const ChatShell = memo(function ChatShell({
       ? "Research"
       : effectiveView === "task"
         ? (selectedTask?.title ?? "New task")
-        : activeThread?.title?.trim() || "New thread";
+        : activeThread?.title?.trim() || "New chat";
   const topBarSubtitle: string | null =
     effectiveView === "research"
       ? null
@@ -209,10 +248,10 @@ const ChatShell = memo(function ChatShell({
         ? null
         : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
-    runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
-    runtime?.transcriptOnly !== true &&
-    runtime?.connected === true &&
-    Boolean(runtime?.sessionId) &&
+    selectedSessionUsageStop &&
+    !selectedTranscriptOnly &&
+    selectedConnected &&
+    Boolean(selectedSessionId) &&
     activeThread?.status === "active";
   const quickChatPopOutThreadId =
     effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
@@ -228,7 +267,31 @@ const ChatShell = memo(function ChatShell({
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
+  const terminalTaskConversation =
+    effectiveView === "task" &&
+    selectedTask !== null &&
+    (selectedTask.status === "completed" ||
+      selectedTask.status === "cancelled" ||
+      selectedTask.status === "failed");
+  const showReconnectBanner = shouldShowReconnectBanner({
+    conversationVisible: isConversationView,
+    threadId: selectedThreadId,
+    threadStatus: activeThread?.status ?? null,
+    transcriptOnly: selectedTranscriptOnly,
+    connected: selectedConnected,
+    sessionId: selectedSessionId,
+    hydrating:
+      selectedHydrating ||
+      (bootstrapPending &&
+        Boolean(selectedThreadId) &&
+        activeThread !== null &&
+        !selectedRuntimeExists),
+    workspaceStarting: workspaceStartupProgress !== null,
+    terminalTaskConversation,
+  });
   useEffect(() => {
+    const documentBody = document.body;
+    const windowTarget = window;
     const sidebarStateChanged =
       previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
       previousSidebarStateRef.current.contextSidebarCollapsed !== contextSidebarCollapsed;
@@ -244,13 +307,13 @@ const ChatShell = memo(function ChatShell({
     if (!sidebarStateChanged) {
       return;
     }
-    document.body.classList.add("app-animating-sidebars");
-    const timer = window.setTimeout(() => {
-      document.body.classList.remove("app-animating-sidebars");
+    documentBody.classList.add("app-animating-sidebars");
+    const timer = windowTarget.setTimeout(() => {
+      documentBody.classList.remove("app-animating-sidebars");
     }, 340);
     return () => {
-      window.clearTimeout(timer);
-      document.body.classList.remove("app-animating-sidebars");
+      windowTarget.clearTimeout(timer);
+      documentBody.classList.remove("app-animating-sidebars");
     };
   }, [contextSidebarCollapsed, sidebarCollapsed]);
 
@@ -280,9 +343,9 @@ const ChatShell = memo(function ChatShell({
         subtitle={topBarSubtitle}
         suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
-        sessionUsage={isConversationView ? (runtime?.sessionUsage ?? null) : null}
-        lastTurnUsage={isConversationView ? (runtime?.lastTurnUsage ?? null) : null}
-        agents={isConversationView ? (runtime?.agents ?? []) : []}
+        sessionUsage={isConversationView ? selectedSessionUsage : null}
+        lastTurnUsage={isConversationView ? selectedLastTurnUsage : null}
+        agents={isConversationView ? selectedAgents : []}
         canClearHardCap={canClearHardCap}
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
@@ -295,7 +358,11 @@ const ChatShell = memo(function ChatShell({
         canvasActiveTab={canvasActiveTab}
         onSetCanvasActiveTab={setCanvasActiveTab}
         canvasShowFormattingBar={canvasShowFormattingBar}
-        onToggleCanvasFormattingBar={() => setCanvasShowFormattingBar(!canvasShowFormattingBar)}
+        onToggleCanvasFormattingBar={
+          canvasIsMarkdown && canvasActiveTab === "edit"
+            ? () => setCanvasShowFormattingBar(!canvasShowFormattingBar)
+            : undefined
+        }
         canvasMaximized={isCanvasMaximized}
         onToggleCanvasMaximized={
           showCanvasInTopBar ? () => setCanvasMaximized(!isCanvasMaximized) : undefined
@@ -309,6 +376,27 @@ const ChatShell = memo(function ChatShell({
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
+      {showReconnectBanner ? (
+        <div
+          role="status"
+          data-slot="connection-banner"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-warning/15 px-4 py-2 text-sm text-foreground"
+        >
+          <span className="min-w-0 truncate">
+            Disconnected from this chat. Reconnect to continue.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (selectedThreadId) void useAppStore.getState().reconnectThread(selectedThreadId);
+            }}
+          >
+            Reconnect
+          </Button>
+        </div>
+      ) : null}
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main
@@ -400,9 +488,10 @@ export default function App() {
   }, [handleWorkspaceServerExited, windowMode]);
 
   useEffect(() => {
-    document.documentElement.dataset.windowMode = windowMode;
+    const documentElement = document.documentElement;
+    documentElement.dataset.windowMode = windowMode;
     return () => {
-      delete document.documentElement.dataset.windowMode;
+      delete documentElement.dataset.windowMode;
     };
   }, [windowMode]);
 
@@ -415,6 +504,7 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
+    const windowTarget = window;
     const handleBeforeUnload = () => {
       if (disposed) {
         return;
@@ -423,17 +513,44 @@ export default function App() {
       runJsonRpcShutdownDisposal();
     };
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    windowTarget.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      windowTarget.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
 
   useEffect(() => {
+    const windowTarget = window;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
         if (state.onboardingVisible) {
+          // Onboarding owns Escape; do not also cancel a busy turn.
+          event.preventDefault();
+          // Incomplete first-run setup: do not fully dismiss without confirmation.
+          const hasConnectedProvider =
+            state.providerConnected.length > 0 ||
+            Object.values(state.providerStatusByName).some(
+              (status) => status?.authorized === true || status?.verified === true,
+            );
+          const incompleteSetup = state.workspaces.length === 0 || !hasConnectedProvider;
+          if (incompleteSetup) {
+            void confirmAction({
+              title: "Skip setup?",
+              message: "You have not finished connecting a provider or adding a workspace yet.",
+              detail:
+                "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
+              confirmLabel: "Skip for now",
+              cancelLabel: "Continue setup",
+              kind: "warning",
+              defaultAction: "cancel",
+            }).then((confirmed) => {
+              if (confirmed) {
+                state.dismissOnboarding();
+              }
+            });
+            return;
+          }
           state.dismissOnboarding();
           return;
         }
@@ -468,23 +585,39 @@ export default function App() {
           state.closeSettings();
           return;
         }
+        // Layers own Escape before turn cancel (popover/dialog/menu/palette).
+        if (event.defaultPrevented) return;
+        if (
+          document.querySelector(
+            '[role="dialog"][data-state="open"], [data-radix-menu-content], [data-slot="command-dialog"][data-state="open"]',
+          )
+        ) {
+          return;
+        }
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false);
+          event.preventDefault();
+          return;
+        }
         if (state.selectedThreadId) {
           const runtime = state.threadRuntimeById[state.selectedThreadId];
           if (runtime?.busy) {
+            event.preventDefault();
             state.cancelThread(state.selectedThreadId);
           }
         }
       }
     }
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    windowTarget.addEventListener("keydown", handleKeyDown);
+    return () => windowTarget.removeEventListener("keydown", handleKeyDown);
+  }, [commandPaletteOpen]);
 
   // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
   // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
   useEffect(() => {
     if (windowMode !== "main") return;
+    const windowTarget = window;
     function handlePaletteShortcut(event: KeyboardEvent) {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -496,8 +629,8 @@ export default function App() {
         setCommandPaletteOpen((open) => !open);
       }
     }
-    window.addEventListener("keydown", handlePaletteShortcut);
-    return () => window.removeEventListener("keydown", handlePaletteShortcut);
+    windowTarget.addEventListener("keydown", handlePaletteShortcut);
+    return () => windowTarget.removeEventListener("keydown", handlePaletteShortcut);
   }, [windowMode]);
 
   useEffect(() => {
@@ -530,6 +663,10 @@ export default function App() {
       }
       if (command === "openSkills") {
         void state.openSkills();
+        return;
+      }
+      if (command === "openCommandPalette") {
+        setCommandPaletteOpen(true);
       }
     }
 
@@ -564,6 +701,13 @@ export default function App() {
       root.style.colorScheme = theme;
       root.classList.toggle("dark", theme === "dark");
       root.classList.toggle("light", theme !== "dark");
+      try {
+        // Survives reload so the pre-paint script in index.html can match the
+        // last resolved theme (including forced light/dark) before React boots.
+        localStorage.setItem("cowork.resolvedTheme", theme);
+      } catch {
+        // Private mode / storage quota — media-query FOUC fallback still works.
+      }
     }
 
     const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);
@@ -635,7 +779,12 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <ChatShell init={init} ready={ready} startupError={startupError} />
+        <ChatShell
+          init={init}
+          ready={ready}
+          startupError={startupError}
+          bootstrapPending={bootstrapPending}
+        />
       )}
       <PromptModal />
       <LmStudioStartDialog />
@@ -645,6 +794,7 @@ export default function App() {
       ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
       {windowMode === "main" ? <TranscriptDeliveryRecovery /> : null}
+      {windowMode === "main" ? <InAppToasts /> : null}
     </>
   );
 }

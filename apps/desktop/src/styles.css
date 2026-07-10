@@ -540,17 +540,59 @@ samp {
 }
 
 /*
- * Global reduced-motion guard for Tailwind animation utilities (animate-pulse,
- * animate-spin, animate-bounce, animate-ping). The hand-rolled keyframes above
- * are each guarded individually, but these utility classes were not — neutralize
- * them in one place so the whole app respects the OS preference.
+ * Global reduced-motion guard. Neutralize common motion utilities and use a
+ * broad catch-all so hand-rolled animations / transitions also respect the OS
+ * preference without needing a per-selector override for every new effect.
  */
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+
   .animate-pulse.animate-pulse,
   .animate-spin.animate-spin,
   .animate-bounce.animate-bounce,
   .animate-ping.animate-ping {
     animation: none;
+  }
+
+  .animate-in,
+  .animate-out,
+  .fade-in,
+  .fade-out,
+  .zoom-in,
+  .zoom-out,
+  .slide-in-from-top-2,
+  .slide-in-from-bottom-2,
+  .slide-in-from-left-2,
+  .slide-in-from-right-2 {
+    animation: none;
+    transition: none;
+  }
+
+  body.app-animating-sidebars .app-left-sidebar-pane,
+  body.app-animating-sidebars .app-right-sidebar-pane,
+  body.app-animating-sidebars .app-topbar__sidebar-fill,
+  body.app-animating-sidebars .app-topbar__content-fill,
+  body.app-animating-sidebars .app-topbar__thread-shell,
+  body.app-animating-sidebars .app-topbar__thread-anchor {
+    transition: none;
+  }
+
+  .settings-page {
+    animation: none;
+  }
+
+  .activity-thinking-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: var(--text-muted);
+    color: var(--text-muted);
   }
 }
 
@@ -584,14 +626,6 @@ samp {
 
   to {
     background-position: -160% 50%;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-thinking-shimmer {
-    background: none;
-    -webkit-text-fill-color: currentColor;
-    animation: none;
   }
 }
 

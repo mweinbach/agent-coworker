@@ -71,6 +71,7 @@ const initialState: AppStoreDataState = {
   providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
   composerText: "",
+  composerTextByThreadId: {},
   newChatLandingTarget: null,
   injectContext: false,
   developerMode: false,

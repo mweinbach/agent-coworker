@@ -1,12 +1,17 @@
 import {
+  BookOpenIcon,
+  ClipboardPlusIcon,
   FolderIcon,
   HistoryIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
   Settings2Icon,
   SparklesIcon,
+  SquareIcon,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 
+import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
@@ -16,6 +21,7 @@ import {
   CommandGroup,
   CommandInput,
   CommandItem,
+  CommandKbd,
   CommandList,
   CommandSeparator,
 } from "../components/ui/command";
@@ -26,8 +32,21 @@ export type CommandPaletteProps = {
   onOpenChange: (open: boolean) => void;
 };
 
+const IS_APPLE =
+  typeof navigator !== "undefined" &&
+  (/Mac|iPhone|iPad|iPod/i.test(navigator.platform) ||
+    // navigator.platform is deprecated; userAgentData may be present in Chromium.
+    (typeof (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ===
+      "string" &&
+      /mac/i.test(
+        (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? "",
+      )));
+
+const MOD = IS_APPLE ? "⌘" : "Ctrl";
+const SHIFT = IS_APPLE ? "⇧" : "Shift";
+
 /**
- * Cmd/Ctrl+K command palette. Surfaces recent threads, workspaces, settings
+ * Cmd/Ctrl+K command palette. Surfaces recent chats, workspaces, settings
  * pages, and skills so power users can navigate without the mouse. All data
  * comes from the existing zustand store and selection reuses existing store
  * actions (selectThread / selectWorkspace / openSettings / openSkills).
@@ -39,14 +58,26 @@ export const CommandPalette = memo(function CommandPalette({
   const threads = useAppStore((s) => s.threads);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectedThreadBusy = useAppStore((s) =>
+    s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.busy === true : false,
+  );
   const developerMode = useAppStore((s) => s.developerMode);
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
+  const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
+  const googleResearchAvailable = useAppStore((s) =>
+    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
+  );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
 
   const selectThread = useAppStore((s) => s.selectThread);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
+  const openNewTask = useAppStore((s) => s.openNewTask);
+  const openResearch = useAppStore((s) => s.openResearch);
+  const cancelThread = useAppStore((s) => s.cancelThread);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
 
   // Recent ordinary chat threads, newest first.
   const recentThreads = useMemo(() => {
@@ -134,9 +165,31 @@ export const CommandPalette = memo(function CommandPalette({
     close();
   }, [handleNewChat, close]);
 
+  const handleNewTaskClick = useCallback(() => {
+    void openNewTask();
+    close();
+  }, [openNewTask, close]);
+
+  const handleResearchClick = useCallback(() => {
+    void openResearch();
+    close();
+  }, [openResearch, close]);
+
+  const handleStopTurnClick = useCallback(() => {
+    if (selectedThreadId && selectedThreadBusy) {
+      cancelThread(selectedThreadId);
+    }
+    close();
+  }, [cancelThread, close, selectedThreadBusy, selectedThreadId]);
+
+  const handleToggleSidebarClick = useCallback(() => {
+    toggleSidebar();
+    close();
+  }, [close, toggleSidebar]);
+
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Search threads, workspaces, settings, skills…" />
+      <CommandInput placeholder="Search chats, workspaces, settings, skills…" />
       <CommandList>
         <CommandEmpty>No results.</CommandEmpty>
 
@@ -144,17 +197,43 @@ export const CommandPalette = memo(function CommandPalette({
           <CommandItem onSelect={handleNewChatClick} value="new chat">
             <MessageSquareIcon />
             <span>New chat</span>
+            <CommandKbd keys={[MOD, "N"]} />
+          </CommandItem>
+          {tasksEnabled ? (
+            <CommandItem onSelect={handleNewTaskClick} value="new task">
+              <ClipboardPlusIcon />
+              <span>New task</span>
+            </CommandItem>
+          ) : null}
+          {googleResearchAvailable ? (
+            <CommandItem onSelect={handleResearchClick} value="research open">
+              <BookOpenIcon />
+              <span>Research</span>
+              <CommandKbd keys={[MOD, SHIFT, "R"]} />
+            </CommandItem>
+          ) : null}
+          {selectedThreadBusy ? (
+            <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
+              <SquareIcon />
+              <span>Stop current turn</span>
+            </CommandItem>
+          ) : null}
+          <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">
+            <PanelLeftIcon />
+            <span>{sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
+            <CommandKbd keys={[MOD, "B"]} />
           </CommandItem>
           <CommandItem onSelect={handleOpenSkills} value="browse skills">
             <SparklesIcon />
             <span>Browse skills</span>
+            <CommandKbd keys={[MOD, SHIFT, "K"]} />
           </CommandItem>
         </CommandGroup>
 
         {recentThreads.length > 0 ? (
           <>
             <CommandSeparator />
-            <CommandGroup heading="Recent threads">
+            <CommandGroup heading="Recent chats">
               {recentThreads.map((thread) => (
                 <ThreadCommandItem
                   key={thread.id}
@@ -183,7 +262,7 @@ export const CommandPalette = memo(function CommandPalette({
           <>
             <CommandSeparator />
             <CommandGroup heading="Settings">
-              {settingsPages.map((page) => (
+              {settingsPages.map((page, index) => (
                 <CommandItem
                   key={page.id}
                   value={`settings ${page.label}`}
@@ -191,6 +270,7 @@ export const CommandPalette = memo(function CommandPalette({
                 >
                   <Settings2Icon />
                   <span>{page.label}</span>
+                  {index === 0 ? <CommandKbd keys={[MOD, ","]} /> : null}
                 </CommandItem>
               ))}
             </CommandGroup>

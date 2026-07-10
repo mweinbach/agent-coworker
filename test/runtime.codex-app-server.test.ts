@@ -1039,9 +1039,10 @@ rl.on("line", (line) => {
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
       try {
-        const runtime = createRuntime(makeConfig(dir));
+        const config = makeConfig(dir);
+        const runtime = createRuntime(config);
         await runtime.runTurn({
-          config: makeConfig(dir),
+          config,
           system: "You are a no-project-write child agent.",
           messages: [{ role: "user", content: "Inspect only" }],
           tools: {},

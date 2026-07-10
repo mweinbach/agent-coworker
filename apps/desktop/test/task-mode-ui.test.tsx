@@ -492,6 +492,14 @@ describe("desktop task mode UI", () => {
         expect(projectSelect?.value).toBe("ws-2");
 
         await act(async () => {
+          const showAdvanced = container.querySelector(
+            'button[aria-expanded="false"]',
+          ) as HTMLButtonElement | null;
+          showAdvanced?.click();
+          await Promise.resolve();
+        });
+
+        await act(async () => {
           changeValue(
             harness,
             container.querySelector("#new-task-title") as HTMLInputElement | null,
@@ -528,6 +536,18 @@ describe("desktop task mode UI", () => {
         });
 
         await act(async () => {
+          const hideAdvanced = container.querySelector(
+            'button[aria-expanded="true"]',
+          ) as HTMLButtonElement | null;
+          hideAdvanced?.click();
+          await Promise.resolve();
+        });
+        expect(container.querySelector('input[id^="work-item-title-"]')).toBeNull();
+        expect(container.textContent).toContain(
+          "Your customized work graph is preserved and will be submitted.",
+        );
+
+        await act(async () => {
           submitForm(harness, container.querySelector("form"));
           await Promise.resolve();
         });
@@ -536,6 +556,114 @@ describe("desktop task mode UI", () => {
           workspaceId: "ws-2",
           task: expect.objectContaining({
             title: "Ship dashboard hardening",
+            workItems: [
+              expect.objectContaining({
+                key: "step-1",
+                title: "Implement the invariant",
+                expectedOutputs: ["Passing regression tests"],
+              }),
+            ],
+          }),
+        });
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
+    "removes deleted work-item keys from remaining dependencies before submit",
+    async () => {
+      const harness = setupJsdom();
+      const startTask = mock(async () => null);
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+        const root = createRoot(container);
+        resetStore(null);
+        useAppStore.setState({ startTask } as never);
+
+        await act(async () => root.render(createElement(NewTaskLanding)));
+        await act(async () => {
+          changeValue(
+            harness,
+            container.querySelector("#new-task-title") as HTMLInputElement | null,
+            "Ship a dependency-safe plan",
+          );
+          changeValue(
+            harness,
+            container.querySelector("#new-task-objective") as HTMLTextAreaElement | null,
+            "Submit a valid graph after deleting an intermediate step.",
+          );
+          const showAdvanced = container.querySelector(
+            'button[aria-expanded="false"]',
+          ) as HTMLButtonElement | null;
+          showAdvanced?.click();
+          await Promise.resolve();
+        });
+
+        const addStep = () =>
+          Array.from(container.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Add step",
+          ) as HTMLButtonElement | undefined;
+        await act(async () => {
+          addStep()?.click();
+          await Promise.resolve();
+          addStep()?.click();
+          await Promise.resolve();
+        });
+
+        const titleInputs = Array.from(
+          container.querySelectorAll('input[id^="work-item-title-"]'),
+        ) as HTMLInputElement[];
+        const dependencyInputs = Array.from(
+          container.querySelectorAll('input[id^="work-item-dependencies-"]'),
+        ) as HTMLInputElement[];
+        const outputInputs = Array.from(
+          container.querySelectorAll('textarea[id^="work-item-outputs-"]'),
+        ) as HTMLTextAreaElement[];
+        expect(titleInputs).toHaveLength(3);
+        expect(dependencyInputs).toHaveLength(3);
+
+        await act(async () => {
+          changeValue(harness, titleInputs[0] ?? null, "Prepare");
+          changeValue(harness, titleInputs[1] ?? null, "Discarded intermediate");
+          changeValue(harness, titleInputs[2] ?? null, "Deliver");
+          changeValue(harness, outputInputs[0] ?? null, "Prepared input");
+          changeValue(harness, outputInputs[1] ?? null, "Temporary output");
+          changeValue(harness, outputInputs[2] ?? null, "Final output");
+          changeValue(harness, dependencyInputs[2] ?? null, "step-1, step-2");
+          await Promise.resolve();
+        });
+
+        const removeSecondStep = container.querySelector(
+          'button[aria-label="Remove step 2"]',
+        ) as HTMLButtonElement | null;
+        await act(async () => {
+          removeSecondStep?.click();
+          await Promise.resolve();
+        });
+
+        const remainingDependencies = Array.from(
+          container.querySelectorAll('input[id^="work-item-dependencies-"]'),
+        ) as HTMLInputElement[];
+        expect(remainingDependencies).toHaveLength(2);
+        expect(remainingDependencies[1]?.value).toBe("step-1");
+
+        await act(async () => {
+          submitForm(harness, container.querySelector("form"));
+          await Promise.resolve();
+        });
+        expect(startTask).toHaveBeenCalledWith({
+          workspaceId: "ws-1",
+          task: expect.objectContaining({
+            workItems: [
+              expect.objectContaining({ key: "step-1", dependsOn: [] }),
+              expect.objectContaining({ key: "step-3", dependsOn: ["step-1"] }),
+            ],
           }),
         });
 
@@ -641,21 +769,28 @@ describe("desktop task mode UI", () => {
     }
   });
 
-  test.serial("uses the work panel as the primary task view", async () => {
+  test.serial("uses the conversation as the primary task view", async () => {
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const { TaskView } = await import("../src/ui/tasks/TaskView");
+      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
       const root = createRoot(container);
       resetStore(taskRecord());
 
+      // Center pane: conversation (chat shell for the task thread).
       await act(async () => root.render(createElement(TaskView)));
+      expect(container.textContent).toMatch(
+        /Conversation|Message|No messages yet|What should we work on/,
+      );
+      expect(container.textContent).not.toContain("Work plan");
 
+      // Right rail: brief / work plan / controls.
+      await act(async () => root.render(createElement(TaskContextSidebar, { variant: "sidebar" })));
       expect(container.textContent).toContain("Work plan");
       expect(container.textContent).toContain("Review and control");
       expect(container.querySelector(".app-context-sidebar")).not.toBeNull();
-      expect(container.textContent).not.toContain("Add task thread");
 
       await act(async () => root.unmount());
     } finally {

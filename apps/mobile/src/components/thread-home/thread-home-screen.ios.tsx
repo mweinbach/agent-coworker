@@ -99,6 +99,8 @@ function ChatThreadRow({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Open chat ${thread.title}`}
       style={({ pressed }) => ({
         backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
       })}
@@ -267,6 +269,13 @@ function ProjectRow({
     <View>
       <Pressable
         onPress={onToggleProject}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: group.expanded }}
+        accessibilityLabel={
+          group.expanded
+            ? `Collapse project ${group.workspace.name}`
+            : `Expand project ${group.workspace.name}`
+        }
         style={({ pressed }) => ({
           backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
         })}
@@ -339,6 +348,8 @@ function ProjectRow({
               <Pressable
                 key={thread.id}
                 onPress={() => onOpenThread(thread.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open chat ${thread.title}`}
                 style={({ pressed }) => ({
                   backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
                 })}

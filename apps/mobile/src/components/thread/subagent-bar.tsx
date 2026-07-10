@@ -2,6 +2,11 @@ import { ScrollView, Text, View } from "react-native";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
+/**
+ * Compact horizontal chip strip for active subagents in a thread.
+ * Mounted from the thread detail header when snapshot.agents is non-empty.
+ */
+
 type AgentEntry = {
   sessionId?: string;
   nickname?: string | null;

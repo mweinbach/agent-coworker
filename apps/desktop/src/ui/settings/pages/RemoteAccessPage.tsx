@@ -21,6 +21,7 @@ import type {
   MobileRelayTrustedPhoneDevice,
 } from "../../../lib/desktopApi";
 import {
+  confirmAction,
   copyText,
   forgetMobileRelayTrustedPhone,
   getMobileRelayState,
@@ -379,9 +380,21 @@ export function RemoteAccessPage() {
                         variant="ghost"
                         aria-label={`Forget ${describeTrustedDevice(device)}`}
                         onClick={() =>
-                          runAction(`forget:${device.deviceId}`, async () => {
-                            await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
-                          })
+                          void (async () => {
+                            const confirmed = await confirmAction({
+                              title: "Forget this device?",
+                              message: `Remove trusted access for ${describeTrustedDevice(device)}?`,
+                              detail: "It will need to scan the QR again to reconnect.",
+                              confirmLabel: "Forget device",
+                              cancelLabel: "Cancel",
+                              kind: "warning",
+                              defaultAction: "cancel",
+                            });
+                            if (!confirmed) return;
+                            await runAction(`forget:${device.deviceId}`, async () => {
+                              await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
+                            });
+                          })()
                         }
                         disabled={busyAction !== null}
                       >
@@ -435,9 +448,21 @@ export function RemoteAccessPage() {
                   type="button"
                   variant="outline"
                   onClick={() =>
-                    runAction("forget-all", async () => {
-                      await forgetMobileRelayTrustedPhone();
-                    })
+                    void (async () => {
+                      const confirmed = await confirmAction({
+                        title: "Forget all trusted devices?",
+                        message: "Remove remote access for every paired phone?",
+                        detail: "Every device will need to scan the QR code again to reconnect.",
+                        confirmLabel: "Forget all",
+                        cancelLabel: "Cancel",
+                        kind: "warning",
+                        defaultAction: "cancel",
+                      });
+                      if (!confirmed) return;
+                      await runAction("forget-all", async () => {
+                        await forgetMobileRelayTrustedPhone();
+                      });
+                    })()
                   }
                   disabled={busyAction !== null}
                 >

@@ -1,10 +1,10 @@
 import { Ionicons, MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
-import type { StyleProp, TextStyle } from "react-native";
+import type { ColorValue, StyleProp, TextStyle } from "react-native";
 
 type SFSymbolProps = {
   name: string;
   size?: number;
-  color: string;
+  color: ColorValue;
   style?: StyleProp<TextStyle>;
 };
 

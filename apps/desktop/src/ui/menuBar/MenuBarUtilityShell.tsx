@@ -112,6 +112,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                           thread.workspaceId,
                           "Cowork",
                         );
+                        const threadTitle = thread.title?.trim() || "New chat";
                         return (
                           <div
                             key={thread.id}
@@ -127,7 +128,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                               }
                             >
                               <div className="truncate text-[13px] font-medium tracking-[-0.016em] text-foreground">
-                                {thread.title}
+                                {threadTitle}
                               </div>
                               <div className="truncate text-[11px] text-muted-foreground">
                                 {workspaceName}
@@ -138,7 +139,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                               variant="ghost"
                               size="icon-sm"
                               className="h-7 w-7 min-h-7 min-w-7 shrink-0 rounded-full p-0 text-muted-foreground opacity-75 transition group-hover/menu-row:opacity-100 hover:bg-background hover:text-foreground"
-                              aria-label={`Open ${thread.title} in quick chat`}
+                              aria-label={`Open ${threadTitle} in quick chat`}
                               onClick={() =>
                                 void showQuickChatWindow({ threadId: thread.id }).then(() =>
                                   windowClose(),

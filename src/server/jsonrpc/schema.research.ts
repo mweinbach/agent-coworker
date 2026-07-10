@@ -41,6 +41,11 @@ export const jsonRpcResearchRequestSchemas = {
       title: z.string().trim().min(1).max(200),
     })
     .strict(),
+  "research/delete": z
+    .object({
+      researchId: nonEmptyTrimmedStringSchema,
+    })
+    .strict(),
   "research/followup": z
     .object({
       parentResearchId: nonEmptyTrimmedStringSchema,
@@ -122,6 +127,12 @@ export const jsonRpcResearchResultSchemas = {
   "research/rename": z
     .object({
       research: researchSummarySchema.nullable(),
+    })
+    .strict(),
+  "research/delete": z
+    .object({
+      researchId: nonEmptyTrimmedStringSchema,
+      deleted: z.boolean(),
     })
     .strict(),
   "research/followup": z
@@ -210,6 +221,11 @@ export const jsonRpcResearchNotificationSchemas = {
       researchId: nonEmptyTrimmedStringSchema,
       status: z.enum(["failed", "cancelled"]),
       error: z.string(),
+    })
+    .strict(),
+  "research/deleted": z
+    .object({
+      researchId: nonEmptyTrimmedStringSchema,
     })
     .strict(),
 } as const;

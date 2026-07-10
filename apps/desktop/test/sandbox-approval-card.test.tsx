@@ -51,6 +51,7 @@ describe("SandboxApprovalCard", () => {
           },
           onAnswer: (threadId, requestId, approved) => {
             calls.push([threadId, requestId, approved]);
+            return true;
           },
         }),
       );
@@ -62,12 +63,50 @@ describe("SandboxApprovalCard", () => {
     expect(text).toContain("blocked network access");
 
     clickButton("Run with full access");
+    // Second click must not double-submit after the first answer.
     clickButton("Keep blocked");
 
+    expect(calls).toEqual([["thread-1", "req-1", true]]);
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    for (const button of buttons) {
+      if ((button.textContent ?? "").includes("Keep blocked")) {
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+      }
+      if ((button.textContent ?? "").includes("Run with full access")) {
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+      }
+    }
+  });
+
+  test("keeps actions enabled when the approval response is not accepted", () => {
+    const calls: Array<[string, string, boolean]> = [];
+    act(() => {
+      root?.render(
+        createElement(SandboxApprovalCard, {
+          threadId: "thread-1",
+          prompt: { requestId: "req-retry", command: "curl https://example.com" },
+          onAnswer: (threadId, requestId, approved) => {
+            calls.push([threadId, requestId, approved]);
+            return false;
+          },
+        }),
+      );
+    });
+
+    clickButton("Run with full access");
+    clickButton("Run with full access");
+
     expect(calls).toEqual([
-      ["thread-1", "req-1", true],
-      ["thread-1", "req-1", false],
+      ["thread-1", "req-retry", true],
+      ["thread-1", "req-retry", true],
     ]);
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(
+      buttons
+        .filter((button) => /Keep blocked|Run with full access/.test(button.textContent ?? ""))
+        .every((button) => !(button as HTMLButtonElement).disabled),
+    ).toBe(true);
   });
 
   test("falls back to a filesystem message when no detail is provided", () => {
@@ -76,7 +115,7 @@ describe("SandboxApprovalCard", () => {
         createElement(SandboxApprovalCard, {
           threadId: "thread-1",
           prompt: { requestId: "req-2", command: "touch /etc/x" },
-          onAnswer: () => {},
+          onAnswer: () => true,
         }),
       );
     });

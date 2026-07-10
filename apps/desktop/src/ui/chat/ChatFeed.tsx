@@ -454,21 +454,23 @@ export const ChatFeed = memo(function ChatFeed(props: {
                       scrollAnchor={isVisibleUserTurn(item)}
                     >
                       {item.kind === "activity-group" ? (
-                        <ActivityGroupCard
-                          items={item.items}
-                          recoveredToolIds={item.recoveredToolIds}
-                          live={item.id === liveActivityGroupId}
-                          liveStartedAt={liveStartedAt}
-                          onRetry={
-                            item.id === retryableActivityGroupId && onRetryFailedTurn
-                              ? () =>
-                                  onRetryFailedTurn(
-                                    unresolvedToolFailureIds(item.items, item.recoveredToolIds),
-                                  )
-                              : undefined
-                          }
-                          retryDisabled={retryFailedTurnDisabled}
-                        />
+                        <InlineErrorBoundary label="This activity couldn't be rendered.">
+                          <ActivityGroupCard
+                            items={item.items}
+                            recoveredToolIds={item.recoveredToolIds}
+                            live={item.id === liveActivityGroupId}
+                            liveStartedAt={liveStartedAt}
+                            onRetry={
+                              item.id === retryableActivityGroupId && onRetryFailedTurn
+                                ? () =>
+                                    onRetryFailedTurn(
+                                      unresolvedToolFailureIds(item.items, item.recoveredToolIds),
+                                    )
+                                : undefined
+                            }
+                            retryDisabled={retryFailedTurnDisabled}
+                          />
+                        </InlineErrorBoundary>
                       ) : (
                         <InlineErrorBoundary
                           label={`This message couldn't be rendered (${item.item.kind}).`}

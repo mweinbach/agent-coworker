@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { resolveAdvancedMemoryWriteRoots } from "../../advancedMemory/store";
 import {
@@ -10,7 +9,7 @@ import {
   type SandboxPolicy as CoworkSandboxPolicy,
   resolveSandboxPolicy,
 } from "../../platform/sandbox";
-import { tmpScratchRoots } from "../../platform/sandbox/policy";
+import { scratchRoots, tmpScratchRoots } from "../../platform/sandbox/policy";
 import type { CodexAppServerClient } from "../../providers/codexAppServerClient";
 import { asArray, asFiniteNumber, asRecord, asString } from "../../shared/recordParsing";
 import { isCodexDynamicCoworkToolName } from "../../tools/codexBoundary";
@@ -303,7 +302,7 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
   const writableRoots =
     sandbox.kind === "workspace-write"
       ? sandbox.writableRoots
-      : tmpScratchRoots(sandbox.projectRoots ?? [], codexScratchRoots());
+      : tmpScratchRoots(sandbox.projectRoots ?? [], scratchRoots());
   return {
     type: "workspaceWrite",
     writableRoots,
@@ -317,10 +316,6 @@ export function codexSandboxPolicy(params: RuntimeRunTurnParams): CodexSandboxPo
       (root) => root.startsWith("/tmp/") || root.startsWith("/private/tmp/"),
     ),
   };
-}
-
-function codexScratchRoots(): string[] {
-  return process.platform === "win32" ? [os.tmpdir()] : ["/tmp", "/private/tmp"];
 }
 
 function resolveCodexCoworkSandboxPolicy(params: RuntimeRunTurnParams): CoworkSandboxPolicy {

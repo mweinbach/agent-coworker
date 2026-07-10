@@ -50,6 +50,12 @@
     "desktop:web": "bun apps/desktop/scripts/start_web_dev.ts",
     "web:dev": "bun apps/desktop/scripts/start_web_dev.ts",
     "desktop:build": "cd apps/desktop && bun run build",
+    "desktop:quality:build": "bun run --cwd apps/desktop electron-vite -- build --config quality-gates/electron.vite.config.ts",
+    "desktop:quality:test": "playwright test --config apps/desktop/quality-gates/playwright.config.ts",
+    "desktop:quality": "bun run desktop:quality:build && bun run desktop:quality:test && bun run desktop:quality:screenshot:check",
+    "desktop:quality:update": "bun run desktop:quality:build && bun run desktop:quality:test --update-snapshots && bun apps/desktop/quality-gates/syncProductScreenshot.ts",
+    "desktop:quality:screenshot:check": "bun apps/desktop/quality-gates/syncProductScreenshot.ts --check",
+    "desktop:quality:proof": "bun apps/desktop/quality-gates/verifyFailureProofs.ts",
     "app:mobile:dev": "cd apps/mobile && npx expo start --dev-client",
     "app:mobile:ios": "cd apps/mobile && npx expo run:ios",
     "app:mobile:android": "cd apps/mobile && npx expo run:android",
@@ -107,7 +113,9 @@
     "tsfm-sdk": "^0.3.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@biomejs/biome": "^2.5.3",
+    "@playwright/test": "^1.61.1",
     "@types/jsdom": "^28.0.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
@@ -115,6 +123,7 @@
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
     "bun-types": "^1.3.14",
+    "fake-indexeddb": "^6.2.5",
     "knip": "^6.25.0",
     "typescript": "^7.0.2"
   }

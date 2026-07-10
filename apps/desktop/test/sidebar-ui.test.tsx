@@ -97,7 +97,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
   useAppStore.setState({
     ...defaultStoreState,
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     view: "chat",
     settingsPage: "providers",

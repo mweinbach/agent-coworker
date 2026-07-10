@@ -1325,6 +1325,7 @@ describe("desktop workspaces page", () => {
       await act(async () => {
         useAppStore.setState({
           ready: true,
+          bootstrapPhase: "ready",
           startupError: null,
           view: "settings",
           settingsPage: "workspaces",

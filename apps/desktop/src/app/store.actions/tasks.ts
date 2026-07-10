@@ -20,7 +20,7 @@ import {
   taskSummarySchema,
 } from "../../../../../src/shared/tasks";
 import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
-import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
+import type { AbortableActionOptions, AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
   ensureServerRunning,
@@ -358,9 +358,13 @@ async function ensureTaskTransport(
   set: StoreSet,
   workspaceId: string,
   deps: TaskActionDependencies,
+  options: AbortableActionOptions = {},
 ): Promise<void> {
-  await deps.ensureServerRunning(get, set, workspaceId);
+  if (options.signal?.aborted) return;
+  await deps.ensureServerRunning(get, set, workspaceId, options);
+  if (options.signal?.aborted) return;
   deps.ensureControlSocket(get, set, workspaceId);
+  if (options.signal?.aborted) return;
   ensureTaskRouter(get, set, workspaceId, deps);
 }
 
@@ -535,13 +539,16 @@ export function createTaskActions(
       await get().refreshTasks(project.id);
     },
 
-    refreshTasks: async (workspaceId) => {
+    refreshTasks: async (workspaceId, options = {}) => {
+      const isCurrent = () => options.signal?.aborted !== true;
+      if (!isCurrent()) return;
       if (get().desktopFeatureFlags.tasks !== true) return;
       const resolvedWorkspaceId = workspaceId ?? get().selectedWorkspaceId;
       const workspace = resolvedWorkspaceId
         ? get().workspaces.find((item) => item.id === resolvedWorkspaceId)
         : null;
       if (!resolvedWorkspaceId || !workspace) return;
+      if (!isCurrent()) return;
       set((state) => ({
         taskListLoadingByWorkspaceId: {
           ...state.taskListLoadingByWorkspaceId,
@@ -549,10 +556,12 @@ export function createTaskActions(
         },
       }));
       try {
-        await ensureTaskTransport(get, set, resolvedWorkspaceId, deps);
+        await ensureTaskTransport(get, set, resolvedWorkspaceId, deps, options);
+        if (!isCurrent()) return;
         const result = await deps.requestJsonRpc(get, set, resolvedWorkspaceId, "task/list", {
           cwd: workspace.path,
         });
+        if (!isCurrent()) return;
         const values = Array.isArray(result?.tasks) ? result.tasks : [];
         const tasks = values.flatMap((value: unknown) => {
           const parsed = taskSummarySchema.safeParse(value);
@@ -570,6 +579,7 @@ export function createTaskActions(
           taskError: null,
         }));
       } catch (error) {
+        if (!isCurrent()) return;
         set((state) => ({
           taskListLoadingByWorkspaceId: {
             ...state.taskListLoadingByWorkspaceId,
@@ -617,7 +627,9 @@ export function createTaskActions(
       }
     },
 
-    selectTask: async (taskId, options) => {
+    selectTask: async (taskId, options = {}) => {
+      const isCurrent = () => options.signal?.aborted !== true;
+      if (!isCurrent()) return;
       if (get().desktopFeatureFlags.tasks !== true) return;
       const summaryEntry = Object.entries(get().taskSummariesByWorkspaceId).find(([, tasks]) =>
         tasks.some((task) => task.id === taskId),
@@ -629,15 +641,19 @@ export function createTaskActions(
         : null;
       if (!workspaceId || !workspace) return;
       try {
-        await ensureTaskTransport(get, set, workspaceId, deps);
+        await ensureTaskTransport(get, set, workspaceId, deps, options);
+        if (!isCurrent()) return;
         const result = await deps.requestJsonRpc(get, set, workspaceId, "task/read", {
           cwd: workspace.path,
           taskId,
         });
+        if (!isCurrent()) return;
         const parsed = taskRecordSchema.safeParse(result?.task);
         if (!parsed.success) throw new Error("Task was not found");
+        if (!isCurrent()) return;
         upsertTask(set, get, parsed.data, deps);
         const mainThread = parsed.data.threads[0];
+        if (!isCurrent()) return;
         set({
           selectedWorkspaceId: workspaceId,
           selectedTaskId: taskId,
@@ -650,10 +666,14 @@ export function createTaskActions(
           await get().reconnectThread(mainThread.sessionId, undefined, {
             skipWorkspaceSelect: true,
             refreshSnapshot: true,
+            signal: options.signal,
           });
+          if (!isCurrent()) return;
         }
+        if (!isCurrent()) return;
         deps.syncDesktopStateCache(get);
       } catch (error) {
+        if (!isCurrent()) return;
         notifyError(set, "Unable to open task", error);
       }
     },

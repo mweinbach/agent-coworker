@@ -43,7 +43,7 @@ function resetAppStore() {
   setAppState(initialState);
   useAppStore.setState({
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     view: "chat",
     workspaces: [

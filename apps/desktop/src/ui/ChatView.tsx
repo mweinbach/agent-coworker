@@ -107,7 +107,7 @@ type ChatViewProps = {
 };
 
 export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
-  const bootstrapPending = useAppStore((s) => s.bootstrapPending);
+  const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const thread = useAppStore((s) => {
     if (!s.selectedThreadId) return null;
@@ -798,7 +798,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
-    (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
+    (bootstrapPhase === "loading" && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
   const modelSelectorDisabled =
     !threadModelConfig ||

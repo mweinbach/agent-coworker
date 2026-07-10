@@ -228,7 +228,7 @@ function ReasoningTimelineNode({
     );
   }
 
-  const sections = useMemo(() => parseReasoningSections(reasoningText), [reasoningText]);
+  const sections = parseReasoningSections(reasoningText);
 
   return (
     <TimelineNode icon={<ClockIcon className="size-3 text-muted-foreground/38" />} isLast={isLast}>

@@ -1,13 +1,18 @@
 import {
+  AlertTriangleIcon,
   ArrowUpIcon,
+  CircleCheckIcon,
   FileAudioIcon,
   FileTextIcon,
   LoaderCircleIcon,
+  PencilIcon,
+  RotateCcwIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react";
 import type { ComponentProps, DragEvent } from "react";
 import { forwardRef, useCallback, useState } from "react";
+import type { ComposerSubmission } from "../../app/composerSubmission";
 import {
   Attachment,
   AttachmentAction,
@@ -21,7 +26,7 @@ import {
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 
-type MessageComposerSubmissionStatus = "ready" | "pending" | "submitted" | "streaming" | "error";
+type MessageComposerSubmissionStatus = "ready" | "pending";
 type MessageComposerMode = "send" | "steer-ready" | "steer-pending";
 
 type MessageComposerFileDropOptions = {
@@ -293,7 +298,6 @@ export const MessageComposerTextarea = forwardRef<HTMLTextAreaElement, Component
 
 type MessageComposerSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
   mode?: MessageComposerMode;
-  onStop?: () => void;
   status: MessageComposerSubmissionStatus;
 };
 
@@ -301,29 +305,11 @@ export function MessageComposerSubmit({
   className,
   disabled,
   mode = "send",
-  onStop,
   status,
   ...props
 }: MessageComposerSubmitProps) {
-  if (status === "submitted" || status === "streaming") {
-    return (
-      <Button
-        type="button"
-        size="icon"
-        variant="destructive"
-        className={cn(
-          "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
-          className,
-        )}
-        disabled={disabled || !onStop}
-        onClick={onStop}
-        aria-label="Stop generating response"
-        {...props}
-      >
-        <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />
-      </Button>
-    );
-  }
+  const steerReady = mode === "steer-ready";
+  const steerPending = mode === "steer-pending";
 
   if (status === "pending") {
     return (
@@ -336,17 +322,15 @@ export function MessageComposerSubmit({
           className,
         )}
         disabled
-        aria-label="Sending message"
-        title="Sending message"
+        aria-label={steerPending ? "Sending guidance to current response" : "Sending message"}
+        title={steerPending ? "Sending guidance to current response" : "Sending message"}
+        aria-busy="true"
         {...props}
       >
         <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
       </Button>
     );
   }
-
-  const steerReady = mode === "steer-ready";
-  const steerPending = mode === "steer-pending";
 
   return (
     <Button
@@ -361,12 +345,12 @@ export function MessageComposerSubmit({
         className,
       )}
       disabled={disabled}
-      aria-label={steerReady || steerPending ? "Steer current response" : "Send message"}
+      aria-label={steerReady || steerPending ? "Send guidance to current response" : "Send message"}
       title={
         steerPending
           ? "Steer sent, waiting for acceptance"
           : steerReady
-            ? "Steer the current response"
+            ? "Send guidance to the current response"
             : "Send message"
       }
       {...props}
@@ -377,5 +361,108 @@ export function MessageComposerSubmit({
         <ArrowUpIcon data-icon="send" className="size-4" strokeWidth={2.25} />
       )}
     </Button>
+  );
+}
+
+type MessageComposerStopProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
+  pending?: boolean;
+  onStop: () => void;
+};
+
+export function MessageComposerStop({
+  className,
+  disabled,
+  pending = false,
+  onStop,
+  ...props
+}: MessageComposerStopProps) {
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="destructive"
+      className={cn(
+        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90 disabled:border-destructive/20 disabled:bg-destructive/80 disabled:text-destructive-foreground disabled:opacity-100",
+        className,
+      )}
+      disabled={disabled || pending}
+      onClick={onStop}
+      aria-label={pending ? "Stopping current response" : "Stop current response"}
+      title={pending ? "Stopping current response" : "Stop current response"}
+      aria-busy={pending || undefined}
+      {...props}
+    >
+      {pending ? (
+        <LoaderCircleIcon data-icon="stop" className="size-4 animate-spin" strokeWidth={2.25} />
+      ) : (
+        <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />
+      )}
+    </Button>
+  );
+}
+
+export function MessageComposerSubmissionNotice({
+  submission,
+  onRetry,
+  onEdit,
+  canEditAccepted = true,
+  onDismiss,
+}: {
+  submission: ComposerSubmission | null;
+  onRetry: () => void;
+  onEdit?: () => void;
+  canEditAccepted?: boolean;
+  onDismiss: () => void;
+}) {
+  if (!submission || (submission.phase !== "failed" && submission.phase !== "accepted")) {
+    return null;
+  }
+
+  const failed = submission.phase === "failed";
+  return (
+    <div
+      data-slot="composer-submission-notice"
+      role={failed ? "alert" : "status"}
+      aria-live={failed ? "assertive" : "polite"}
+      className={cn(
+        "mx-0.5 flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-2 text-xs",
+        failed
+          ? "border-destructive/30 bg-destructive/8 text-destructive"
+          : "border-primary/25 bg-primary/8 text-foreground",
+      )}
+    >
+      {failed ? (
+        <AlertTriangleIcon className="size-3.5 shrink-0" aria-hidden />
+      ) : (
+        <CircleCheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden />
+      )}
+      <span className="min-w-0 flex-1">
+        {failed
+          ? `Message wasn’t sent. ${submission.error ?? "Try again."}`
+          : canEditAccepted
+            ? "Guidance accepted. Restore it to edit and send as a follow-up."
+            : "Guidance accepted. Your newer draft stays unchanged."}
+      </span>
+      {failed ? (
+        <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+          <RotateCcwIcon data-icon="inline-start" />
+          Retry exact message
+        </Button>
+      ) : canEditAccepted && onEdit ? (
+        <Button type="button" variant="outline" size="xs" onClick={onEdit}>
+          <PencilIcon data-icon="inline-start" />
+          Edit as follow-up
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        onClick={onDismiss}
+        aria-label={failed ? "Dismiss send failure" : "Dismiss guidance status"}
+      >
+        <XIcon />
+      </Button>
+    </div>
   );
 }

@@ -29,5 +29,10 @@
     "mountedFeedRows": 90,
     "reactCommits": 1800,
     "storePublications": 1000
+  },
+  "scrollOwnership": {
+    "anchorDriftPx": 1,
+    "appendMessagesMs": 1500,
+    "threadRoundTripMs": 1500
   }
 }

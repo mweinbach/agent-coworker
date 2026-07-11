@@ -7,6 +7,7 @@ import {
   assertNoViewportClipping,
   settleQualityPage,
 } from "../assertions";
+import budgets from "../budgets.json" with { type: "json" };
 import { expect, test } from "../fixtures";
 import {
   assertIndependentMentionGeometry,
@@ -201,28 +202,101 @@ test("resolves one queued interaction without disturbing its siblings", async ({
   ).toBeVisible();
 });
 
-test("switches through a draft chat and restores the conversation scroll anchor", async ({
+test("preserves detached transcript ownership and exact thread anchors", async ({
   quality,
-}) => {
+}, testInfo) => {
   const { page } = quality;
   await quality.emitLongTranscript(200, 0);
   const viewport = page.locator('[data-slot="message-scroller-viewport"]');
   await expect(page.getByText("Deterministic transcript run 0 message 200")).toBeAttached();
-  await viewport.evaluate((element) => {
-    element.scrollTop = 0;
+  const showOlderButton = page.locator('[data-slot="feed-window-spacer"] button');
+  await expect(showOlderButton).toBeVisible();
+  await showOlderButton.click();
+  await settleQualityPage(page);
+  const anchor = page.locator('[data-message-id="quality-long-0-1"]');
+  await expect(anchor).toBeAttached();
+  await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    const desiredOffset = -24;
+    viewportElement.scrollTop +=
+      element.getBoundingClientRect().top -
+      viewportElement.getBoundingClientRect().top -
+      desiredOffset;
+    viewportElement.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -80 }));
+    viewportElement.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(viewport).toHaveAttribute("data-scroll-mode", "detached");
+  await settleQualityPage(page);
+  const before = await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    return {
+      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+      scrollTop: viewportElement.scrollTop,
+    };
   });
 
   const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Keep this controlled draft while switching chats.");
+  const navigationStartedAt = performance.now();
   await page.getByRole("button", { name: /^Controlled fixture draft / }).click();
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
   await expect(composer).toBeEditable();
 
+  const appendStartedAt = performance.now();
+  await quality.emitLongTranscript(3, 1);
+  const appendElapsedMs = performance.now() - appendStartedAt;
   await page.getByRole("button", { name: /^Electron release review / }).click();
-  await expect(page.getByText("Deterministic transcript run 0 message 200")).toBeAttached();
+  await expect(anchor).toBeAttached();
+  await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
   await expect
-    .poll(async () => await viewport.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(0);
+    .poll(
+      async () =>
+        await anchor.evaluate((element) => {
+          const viewportElement = element.closest<HTMLElement>(
+            '[data-slot="message-scroller-viewport"]',
+          );
+          if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+          return Math.round(
+            element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+          );
+        }),
+    )
+    .toBe(Math.round(before.offset));
+  const navigationElapsedMs = performance.now() - navigationStartedAt;
+  const restored = await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    return {
+      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+      scrollTop: viewportElement.scrollTop,
+    };
+  });
+  const sample = {
+    anchorDriftAfterAwayArrivalPx: Math.abs(restored.offset - before.offset),
+    appendElapsedMs,
+    navigationElapsedMs,
+    scrollCompensationAfterAwayArrivalPx: Math.abs(restored.scrollTop - before.scrollTop),
+  };
+  expect(sample.anchorDriftAfterAwayArrivalPx).toBeLessThanOrEqual(
+    budgets.scrollOwnership.anchorDriftPx,
+  );
+  expect(sample.appendElapsedMs).toBeLessThanOrEqual(budgets.scrollOwnership.appendMessagesMs);
+  expect(sample.navigationElapsedMs).toBeLessThanOrEqual(budgets.scrollOwnership.threadRoundTripMs);
+  await testInfo.attach("scroll-ownership-performance", {
+    body: Buffer.from(
+      `${JSON.stringify(
+        {
+          budget: budgets.scrollOwnership,
+          sample,
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    contentType: "application/json",
+  });
 });
 
 test.describe("connection recovery", () => {

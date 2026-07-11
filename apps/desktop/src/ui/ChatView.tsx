@@ -38,6 +38,7 @@ import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed, type VisibleInteraction } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
+import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
   composerBusyHint,
   countActiveChildAgents,
@@ -47,7 +48,11 @@ import {
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
-import { selectFeedDerivationWindow } from "./chat/feedWindow";
+import {
+  type FeedDerivationWindowState,
+  resolveFeedDerivationVisibleCount,
+  selectFeedDerivationWindow,
+} from "./chat/feedWindow";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import {
   buildOverflowCitationPathSignature,
@@ -224,7 +229,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   overflowCitationSourcesRef.current = overflowCitationSourcesByMessageId;
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
-  const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
+  const [transcriptBottomOffset, setTranscriptBottomOffset] = useState(composerOverlayMinHeight);
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
   const preparingAttachments = composerSubmission?.phase === "preparing";
   const setAttachmentPickerError = useCallback(
@@ -241,10 +246,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [composerDraftKey],
   );
-  const [feedDerivationWindow, setFeedDerivationWindow] = useState({
-    threadId: selectedThreadId,
-    visibleCount: FEED_DERIVATION_WINDOW,
-  });
+  const [feedDerivationWindows, setFeedDerivationWindows] = useState<
+    Map<string, FeedDerivationWindowState>
+  >(() => new Map());
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading =
@@ -295,17 +299,24 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }, []);
   useLayoutEffect(() => {
     const el = messageBarOverlayElement;
-    if (!el) {
-      // Source-task lock bar is in-flow (not absolute), so the feed must not
-      // also reserve overlay space — that double-counts bottom chrome.
-      setComposerOverlayHeight(sourceTask && !readOnlyNotice ? 0 : composerOverlayMinHeight);
+    const chrome = sourceTask && !readOnlyNotice ? "in-flow" : "overlay";
+    if (chrome === "in-flow" || !el) {
+      setTranscriptBottomOffset(
+        resolveChatBottomOffset({
+          chrome,
+          minimumOverlayHeight: composerOverlayMinHeight,
+        }),
+      );
       return;
     }
 
     const updateHeight = () => {
-      const measuredHeight = Math.ceil(el.getBoundingClientRect().height);
-      const nextHeight = Math.max(composerOverlayMinHeight, measuredHeight);
-      setComposerOverlayHeight((current) => (current === nextHeight ? current : nextHeight));
+      const nextHeight = resolveChatBottomOffset({
+        chrome,
+        measuredOverlayHeight: el.getBoundingClientRect().height,
+        minimumOverlayHeight: composerOverlayMinHeight,
+      });
+      setTranscriptBottomOffset((current) => (current === nextHeight ? current : nextHeight));
     };
 
     updateHeight();
@@ -361,10 +372,14 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   );
 
   const feed = rt?.feed ?? [];
-  const feedDerivationVisibleCount =
-    feedDerivationWindow.threadId === selectedThreadId
-      ? feedDerivationWindow.visibleCount
-      : FEED_DERIVATION_WINDOW;
+  const savedFeedDerivationWindow = selectedThreadId
+    ? feedDerivationWindows.get(selectedThreadId)
+    : undefined;
+  const feedDerivationVisibleCount = resolveFeedDerivationVisibleCount(
+    savedFeedDerivationWindow,
+    feed.length,
+    FEED_DERIVATION_WINDOW,
+  );
   const windowedSourceFeed = useMemo(
     () => selectFeedDerivationWindow(feed, feedDerivationVisibleCount),
     [feed, feedDerivationVisibleCount],
@@ -375,17 +390,29 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     windowedSourceFeed.feed.length,
   );
   const expandOlderFeed = useCallback(() => {
-    setFeedDerivationWindow((current) => {
-      const currentVisibleCount =
-        current.threadId === selectedThreadId ? current.visibleCount : FEED_DERIVATION_WINDOW;
-      return {
-        threadId: selectedThreadId,
-        visibleCount: Math.min(feed.length, currentVisibleCount + FEED_DERIVATION_EXPAND_BATCH),
-      };
+    if (!selectedThreadId) return;
+    setFeedDerivationWindows((current) => {
+      const next = new Map(current);
+      next.set(selectedThreadId, {
+        feedLength: feed.length,
+        visibleCount: Math.min(
+          feed.length,
+          feedDerivationVisibleCount + FEED_DERIVATION_EXPAND_BATCH,
+        ),
+      });
+      return next;
     });
-  }, [feed.length, selectedThreadId]);
+  }, [feed.length, feedDerivationVisibleCount, selectedThreadId]);
   const showAllOlderFeed = useCallback(() => {
-    setFeedDerivationWindow({ threadId: selectedThreadId, visibleCount: feed.length });
+    if (!selectedThreadId) return;
+    setFeedDerivationWindows((current) => {
+      const next = new Map(current);
+      next.set(selectedThreadId, {
+        feedLength: feed.length,
+        visibleCount: feed.length,
+      });
+      return next;
+    });
   }, [feed.length, selectedThreadId]);
   const normalizedFeed = useMemo(
     () => normalizeFeedForToolCards(windowedSourceFeed.feed, developerMode),
@@ -826,7 +853,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           citationUrlsByMessageId={citationUrlsByMessageId}
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}
-          composerOverlayHeight={composerOverlayHeight}
+          bottomOffset={transcriptBottomOffset}
           interactions={interactions}
           onAnswerAsk={answerAsk}
           onAnswerApproval={answerApproval}

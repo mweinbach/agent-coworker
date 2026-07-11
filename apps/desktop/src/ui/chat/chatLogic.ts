@@ -126,7 +126,7 @@ export function shouldShowReconnectBanner(opts: {
   return (
     opts.conversationVisible &&
     Boolean(opts.threadId) &&
-    opts.threadStatus === "active" &&
+    opts.threadStatus === "disconnected" &&
     !opts.transcriptOnly &&
     !opts.connected &&
     Boolean(opts.sessionId) &&

@@ -26,6 +26,7 @@ export type QualityLaunchOptions = {
   height: number;
   holdBootstrap?: boolean;
   mode: QualityMode;
+  recordVideo?: boolean;
   reconnectDelayMs?: number;
   scenario: QualityScenario;
   startupFailureCount?: number;
@@ -253,7 +254,7 @@ async function launchQualityHarness(
   harness: QualityHarness;
   mainLogs: string[];
   pages: Page[];
-  recorder: ScreenRecorder;
+  recorder: ScreenRecorder | null;
   runtimeDir: string;
   userDataDir: string;
 }> {
@@ -264,7 +265,8 @@ async function launchQualityHarness(
   const errors: string[] = [];
   const mainLogs: string[] = [];
   const pages: Page[] = [];
-  const recorder = await startScreenRecorder(runtimeDir, options);
+  const recorder =
+    options.recordVideo === false ? null : await startScreenRecorder(runtimeDir, options);
   const captureReadyPath = path.join(runtimeDir, "capture-ready");
   await fs.writeFile(captureReadyPath, "recorder-ready\n", "utf8");
   const launchArgs = [mainEntry, "--disable-dev-shm-usage", "--disable-gpu"];
@@ -302,7 +304,9 @@ async function launchQualityHarness(
       }),
     });
   } catch (error) {
-    await stopScreenRecorder(recorder);
+    if (recorder) {
+      await stopScreenRecorder(recorder);
+    }
     throw error;
   }
 
@@ -609,9 +613,11 @@ export const test = base.extend<QualityFixtures>({
         errors.push(`[trace] ${error instanceof Error ? error.message : String(error)}`);
       });
 
-    await stopScreenRecorder(recorder).catch((error) => {
-      errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
-    });
+    if (recorder) {
+      await stopScreenRecorder(recorder).catch((error) => {
+        errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
     await harness.electronApp.close().catch((error) => {
       errors.push(`[electron:close] ${error instanceof Error ? error.message : String(error)}`);
     });
@@ -647,7 +653,9 @@ export const test = base.extend<QualityFixtures>({
       await fs.writeFile(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`, "utf8");
       await attachIfPresent(testInfo, "quality-gate-diagnostics", diagnosticsPath);
       await attachIfPresent(testInfo, "quality-gate-trace", tracePath);
-      await attachIfPresent(testInfo, "quality-gate-video", recorder.path);
+      if (recorder) {
+        await attachIfPresent(testInfo, "quality-gate-video", recorder.path);
+      }
       for (const [index] of pages.entries()) {
         await attachIfPresent(
           testInfo,

@@ -1529,7 +1529,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("busy composer keeps Stop separate while guidance changes Send state", async () => {
+  test("busy composer keeps Stop enabled during modal approval while guidance Send is gated", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -1611,12 +1611,39 @@ describe("desktop chat view stability", () => {
         useAppStore.getState().setComposerText("tighten scope");
       });
 
-      // Stop remains available while typing a steer (audit P0).
-      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      await act(async () => {
+        useAppStore.setState({
+          promptModal: {
+            kind: "approval",
+            threadId: "thread-1",
+            prompt: {
+              requestId: "approval-while-busy",
+              command: "rm -rf build",
+              dangerous: true,
+              reasonCode: "requires_manual_review",
+            },
+          },
+        });
+      });
+
+      expect((container.querySelector("textarea") as HTMLTextAreaElement | null)?.disabled).toBe(
+        true,
+      );
+      const gatedSteerButton = container.querySelector(
+        '[aria-label="Send guidance to current response"]',
+      );
+      expect((gatedSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
+      const modalStopButton = container.querySelector('[aria-label="Stop current response"]');
+      expect((modalStopButton as HTMLButtonElement | null)?.disabled).toBe(false);
+
+      await act(async () => {
+        useAppStore.setState({ promptModal: null });
+      });
+
       const steerButton = container.querySelector(
         '[aria-label="Send guidance to current response"]',
       );
-      expect(steerButton).not.toBeNull();
+      expect((steerButton as HTMLButtonElement | null)?.disabled).toBe(false);
       expect(steerButton?.className).toContain("bg-warning");
       const steerRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(steerRow?.textContent).toContain(

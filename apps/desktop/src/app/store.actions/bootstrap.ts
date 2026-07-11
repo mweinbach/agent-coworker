@@ -27,6 +27,7 @@ import {
   revokeComposerDraftAttachmentPreviews,
   sanitizePersistedComposerDrafts,
 } from "../composerDrafts";
+import { hydrateCreationDrafts } from "../creationDrafts";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -57,6 +58,7 @@ import {
   type BootstrapRunContext,
   createBootstrapCoordinator,
 } from "../store.helpers/bootstrapCoordinator";
+import { invalidateNavigationIntent } from "../store.helpers/operationIntent";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
@@ -514,6 +516,7 @@ const persistedStateSchema = z
         .optional(),
     ),
     composerDrafts: z.unknown().optional(),
+    creationDrafts: z.unknown().optional(),
   })
   .passthrough()
   .transform((state) => {
@@ -544,6 +547,7 @@ const persistedStateSchema = z
       providerUiState,
       onboarding,
       composerDrafts: sanitizePersistedComposerDrafts(state.composerDrafts),
+      creationDrafts: state.creationDrafts,
     };
   });
 
@@ -757,6 +761,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     const connectedProviders = deriveConnectedProviders(
       state.providerState as PersistedProviderState | undefined,
     );
+    const creationDrafts = hydrateCreationDrafts(state.creationDrafts);
     return {
       ready: true,
       bootstrapPhase: "idle",
@@ -778,6 +783,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
           newChatLandingTarget: ui.newChatLandingTarget,
         },
       ),
+      ...creationDrafts,
       newChatLandingTarget: ui.newChatLandingTarget,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
@@ -1064,6 +1070,8 @@ export function createBootstrapActions(
           revokeComposerDraftAttachmentPreviews(
             Object.values(previousDrafts).flatMap((draft) => draft.attachments),
           );
+          const creationDrafts = hydrateCreationDrafts(state.creationDrafts);
+          revokeComposerDraftAttachmentPreviews(get().researchCreationDraft.attachments);
           set({
             workspaces: state.workspaces,
             threads: finalThreads,
@@ -1073,6 +1081,7 @@ export function createBootstrapActions(
             composerDraftRevisionFloorByKey: {},
             composerAttachmentIngestionCountByKey: {},
             composerDraftsByKey: restoredComposerDrafts,
+            ...creationDrafts,
             newChatLandingTarget: ui.newChatLandingTarget,
             providerStatusByName: state.providerState?.statusByName ?? {},
             providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
@@ -1170,6 +1179,7 @@ export function createBootstrapActions(
       }),
 
     openSettings: (page) => {
+      invalidateNavigationIntent();
       set((s) => ({
         view: "settings",
         settingsPage: normalizeSettingsPageId(
@@ -1183,6 +1193,7 @@ export function createBootstrapActions(
     },
 
     closeSettings: () => {
+      invalidateNavigationIntent();
       set((s) => ({
         view: s.lastNonSettingsView === "settings" ? "chat" : s.lastNonSettingsView,
       }));

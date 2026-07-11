@@ -7,6 +7,7 @@ import {
   createComposerDraftAttachment,
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
+import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
@@ -740,6 +741,89 @@ describe("desktop bootstrap cache", () => {
       reasoningEffort: "high",
     });
     expect(await seed?.composerDraftsByKey?.[key]?.attachments[0]?.file.text()).toBe("draft file");
+  });
+
+  test("buildCachedDesktopStateSeed restores revision-owned Research and Task creation state", () => {
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(9, "ws-cached"),
+      updatedAt: "2099-03-20T00:00:00.000Z",
+      idempotencyKey: "persisted-task-key",
+      title: "Persisted task",
+      objective: "Restore this exact brief.",
+    };
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        creationDrafts: {
+          research: {
+            revision: 7,
+            generation: 2,
+            updatedAt: "2099-03-20T00:00:00.000Z",
+            text: "Persisted research question",
+            attachments: [],
+            references: [],
+            provider: null,
+            model: null,
+            reasoningEffort: null,
+          },
+          researchError: { revision: 7, message: "Research failed after navigation" },
+          task: taskDraft,
+          taskError: { revision: 9, message: "Task failed after navigation" },
+        },
+      },
+    });
+
+    expect(seed?.researchCreationDraft).toMatchObject({
+      revision: 7,
+      generation: 2,
+      text: "Persisted research question",
+    });
+    expect(seed?.researchCreationError).toEqual({
+      revision: 7,
+      message: "Research failed after navigation",
+    });
+    expect(seed?.taskCreationDraft).toEqual(taskDraft);
+    expect(seed?.taskCreationError).toEqual({
+      revision: 9,
+      message: "Task failed after navigation",
+    });
+  });
+
+  test("desktop persistence serializes Research and Task creation drafts with matching errors", () => {
+    const researchDraft = {
+      ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
+      revision: 3,
+      text: "Persist this research",
+    };
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(4, "ws-cached"),
+      updatedAt: "2099-03-20T00:00:00.000Z",
+      title: "Persist this task",
+      objective: "Keep the brief and error together.",
+    };
+    useAppStore.setState({
+      researchCreationDraft: researchDraft,
+      researchCreationError: { revision: 3, message: "research error" },
+      taskCreationDraft: taskDraft,
+      taskCreationError: { revision: 4, message: "task error" },
+    });
+
+    const persisted = syncDesktopStateCacheNow(useAppStore.getState);
+
+    expect(persisted.creationDrafts).toMatchObject({
+      research: {
+        revision: 3,
+        text: "Persist this research",
+      },
+      researchError: { revision: 3, message: "research error" },
+      task: {
+        revision: 4,
+        title: "Persist this task",
+        objective: "Keep the brief and error together.",
+      },
+      taskError: { revision: 4, message: "task error" },
+    });
   });
 
   test("durable persistence includes attachment bytes while the fast cache omits them", async () => {

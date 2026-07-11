@@ -5,6 +5,7 @@ import {
   resolveActiveComposerDraftKey,
   serializeComposerDrafts,
 } from "../composerDrafts";
+import { serializeCreationDrafts } from "../creationDrafts";
 import { saveDesktopStateCache } from "../localStateCache";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizePersistedProviderUiState } from "../providerUiState";
@@ -88,6 +89,7 @@ function buildPersistedState(
     providerUiState,
     onboarding: state.onboardingState,
     composerDrafts,
+    creationDrafts: serializeCreationDrafts(state),
   };
 }
 

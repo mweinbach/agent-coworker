@@ -28,6 +28,7 @@ import {
   requestJsonRpcThreadRead,
   type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
+import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
 
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
@@ -586,7 +587,9 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     timeoutMs = 3_000,
+    options: AbortableActionOptions = {},
   ): Promise<boolean> {
+    throwIfOperationAborted(options.signal);
     if (isWorkspaceDisposed(workspaceId)) {
       return false;
     }
@@ -600,7 +603,7 @@ export function createControlSocketHelpers(
         return false;
       }
       const startedAt = Date.now();
-      const ready = await waitForReady(socket, timeoutMs);
+      const ready = await waitForOperation(waitForReady(socket, timeoutMs), options.signal);
       if (!ready) {
         return false;
       }
@@ -616,7 +619,10 @@ export function createControlSocketHelpers(
       if (remainingMs <= 0) {
         return false;
       }
-      return await waitForPromiseCompletion(bootstrap, remainingMs);
+      return await waitForOperation(
+        waitForPromiseCompletion(bootstrap, remainingMs),
+        options.signal,
+      );
     });
   }
 

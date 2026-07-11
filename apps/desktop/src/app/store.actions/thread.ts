@@ -65,6 +65,14 @@ import {
 import type { FileAttachmentInput } from "../store.helpers/jsonRpcSocket";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
+import {
+  beginCreationOperationIntent,
+  invalidateNavigationIntent,
+  isCreationNavigationIntentCurrent,
+  isOperationAbortError,
+  recordThreadNavigationIntent,
+  waitForOperation,
+} from "../store.helpers/operationIntent";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { persist } from "../store.helpers/persistence";
 import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
@@ -914,6 +922,11 @@ export function createThreadActions(
     },
 
     newThread: async (opts) => {
+      const operationIntent = opts?.intent ?? beginCreationOperationIntent();
+      const canNavigate = () => isCreationNavigationIntentCurrent(operationIntent);
+      const reportPhase = opts?.onPhase ?? (() => {});
+      reportPhase("preparing");
+      if (opts?.signal?.aborted) return false;
       const explicitWorkspace = opts?.workspaceId
         ? (get().workspaces.find((workspace) => workspace.id === opts.workspaceId) ?? null)
         : null;
@@ -929,17 +942,20 @@ export function createThreadActions(
       let workspaceId: string | null = null;
       if (scope === "oneOff") {
         try {
-          const oneOffWorkspace = await createOneOffWorkspaceRecord(
-            get,
-            opts?.titleHint ?? opts?.firstMessage,
+          const oneOffWorkspace = await waitForOperation(
+            createOneOffWorkspaceRecord(get, opts?.titleHint ?? opts?.firstMessage),
+            opts?.signal,
           );
           workspaceId = oneOffWorkspace.id;
-          set((s) => ({
-            workspaces: [oneOffWorkspace, ...s.workspaces],
-            selectedWorkspaceId: oneOffWorkspace.id,
-          }));
+          set((s) => {
+            const next = {
+              workspaces: [oneOffWorkspace, ...s.workspaces],
+            };
+            return canNavigate() ? { ...next, selectedWorkspaceId: oneOffWorkspace.id } : next;
+          });
           ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
         } catch (error) {
+          if (isOperationAbortError(error)) return false;
           set((s) => ({
             notifications: pushNotification(s.notifications, {
               id: makeId(),
@@ -977,12 +993,12 @@ export function createThreadActions(
             }));
             return false;
           }
-          await get().addWorkspace();
+          await get().addWorkspace({ intent: operationIntent });
           workspaceId = projectWorkspaces()[0]?.id ?? null;
           if (!workspaceId) return false;
         }
 
-        if (get().selectedWorkspaceId !== workspaceId) {
+        if (canNavigate() && get().selectedWorkspaceId !== workspaceId) {
           set({ selectedWorkspaceId: workspaceId });
         }
 
@@ -991,12 +1007,14 @@ export function createThreadActions(
             (thread) => thread.workspaceId === workspaceId && thread.draft === true,
           );
           if (existingDraft) {
-            set({
-              selectedThreadId: existingDraft.id,
-              selectedTaskId: null,
-              view: "chat",
-              newChatLandingTarget: null,
-            });
+            if (canNavigate()) {
+              set({
+                selectedThreadId: existingDraft.id,
+                selectedTaskId: null,
+                view: "chat",
+                newChatLandingTarget: null,
+              });
+            }
             ensureThreadRuntime(get, set, existingDraft.id);
             await persistNow(get);
             return true;
@@ -1008,7 +1026,13 @@ export function createThreadActions(
 
       let url: string | null = null;
       if (createSessionImmediately) {
-        await ensureServerRunning(get, set, workspaceId);
+        reportPhase("starting-server");
+        try {
+          await ensureServerRunning(get, set, workspaceId, { signal: opts?.signal });
+        } catch (error) {
+          if (isOperationAbortError(error)) return false;
+          throw error;
+        }
         ensureControlSocket(get, set, workspaceId);
 
         const wsRt = get().workspaceRuntimeById[workspaceId];
@@ -1028,6 +1052,27 @@ export function createThreadActions(
       }
 
       const threadId = makeId();
+      let firstMessage = opts?.firstMessage ?? "";
+      let resolvedAttachments = opts?.attachments;
+      if (opts?.attachmentFiles && opts.attachmentFiles.length > 0) {
+        reportPhase("processing-attachments");
+        try {
+          const resolved = await resolveComposerAttachmentsForWorkspace(
+            get,
+            set,
+            workspaceId,
+            opts.attachmentFiles.map(createComposerAttachmentFile),
+            { threadId, signal: opts.signal },
+          );
+          resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
+          firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
+        } catch (error) {
+          if (isOperationAbortError(error)) return false;
+          throw error;
+        }
+      }
+      if (opts?.signal?.aborted) return false;
+      reportPhase("creating");
       const createdAt = nowIso();
       const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
 
@@ -1062,14 +1107,20 @@ export function createThreadActions(
             };
           }
         }
-        return {
+        const next = {
           threads: [thread, ...s.threads],
-          selectedThreadId: threadId,
-          selectedTaskId: null,
-          view: "chat",
           composerDraftsByKey,
-          newChatLandingTarget: null,
         };
+        return canNavigate()
+          ? {
+              ...next,
+              selectedWorkspaceId: workspaceId,
+              selectedThreadId: threadId,
+              selectedTaskId: null,
+              view: "chat" as const,
+              newChatLandingTarget: null,
+            }
+          : next;
       });
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({
@@ -1094,20 +1145,6 @@ export function createThreadActions(
         return false;
       }
 
-      let firstMessage = opts?.firstMessage ?? "";
-      let resolvedAttachments = opts?.attachments;
-      if (opts?.attachmentFiles && opts.attachmentFiles.length > 0) {
-        const resolved = await resolveComposerAttachmentsForWorkspace(
-          get,
-          set,
-          workspaceId,
-          opts.attachmentFiles.map(createComposerAttachmentFile),
-          { threadId },
-        );
-        resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
-        firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
-      }
-
       const hasFirstMessage = Boolean(firstMessage.trim());
       const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
       if (hasFirstMessage || hasResolvedAttachments) {
@@ -1119,6 +1156,7 @@ export function createThreadActions(
           opts?.references,
           queuedDraftSubmission,
         );
+        recordThreadNavigationIntent(threadId, operationIntent);
       }
       ensureThreadSocket(
         get,
@@ -1136,6 +1174,7 @@ export function createThreadActions(
       defaultTargetKind?: "project" | "oneOff";
       target?: NewChatLandingTarget;
     }) => {
+      invalidateNavigationIntent();
       const state = get();
       const landingTarget: NewChatLandingTarget =
         opts?.target ??
@@ -1153,12 +1192,14 @@ export function createThreadActions(
     },
 
     setNewChatLandingTarget: (target) => {
+      invalidateNavigationIntent();
       set({ newChatLandingTarget: target });
       syncDesktopStateCache(get);
     },
 
     selectThread: async (threadId: string, options = {}) => {
       if (options.signal?.aborted) return;
+      invalidateNavigationIntent();
       set({ newChatLandingTarget: null });
       if (options.signal?.aborted) return;
       await hydrateThreadSelection(get, set, threadId, {
@@ -1286,6 +1327,7 @@ export function createThreadActions(
       const taskCommand = !hasAttachments ? trimmed.match(/^\/task(?:\s+([\s\S]*))?$/i) : null;
       if (taskCommand) {
         try {
+          recordThreadNavigationIntent(activeThreadId);
           await ensureServerRunning(get, set, thread.workspaceId);
           ensureControlSocket(get, set, thread.workspaceId);
           await requestJsonRpc(get, set, thread.workspaceId, "command/execute", {
@@ -1337,6 +1379,7 @@ export function createThreadActions(
           draftSubmission,
         });
         if (!reconnected) return false;
+        recordThreadNavigationIntent(activeThreadId);
         return true;
       }
 
@@ -1353,6 +1396,7 @@ export function createThreadActions(
         options?.retryToolItemIds,
       );
       if (!accepted) return false;
+      recordThreadNavigationIntent(activeThreadId);
       return true;
     },
 

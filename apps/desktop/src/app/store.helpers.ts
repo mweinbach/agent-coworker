@@ -56,10 +56,12 @@ import type {
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
+  ComposerDraft,
   ComposerDraftRevision,
   ComposerDraftRevisionFloor,
   ComposerDraftsByKey,
 } from "./composerDrafts";
+import type { CreationDraftError, TaskCreationDraft } from "./creationDrafts";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -68,6 +70,11 @@ import {
   disposeWorkspaceJsonRpcSocketState,
   reactivateWorkspaceJsonRpcSocketState,
 } from "./store.helpers/jsonRpcSocket";
+import type {
+  CreationOperationControl,
+  CreationOperationIntent,
+} from "./store.helpers/operationIntent";
+import { throwIfOperationAborted, waitForOperation } from "./store.helpers/operationIntent";
 import { operationError, operationKey, runAcknowledgedOperation } from "./store.helpers/operations";
 import {
   persist,
@@ -284,6 +291,10 @@ export type AppStoreState = {
   composerDraftRevisionFloorByKey: Record<string, ComposerDraftRevisionFloor>;
   composerAttachmentIngestionCountByKey: Record<string, number>;
   newChatLandingTarget: NewChatLandingTarget | null;
+  researchCreationDraft: ComposerDraft;
+  researchCreationError: CreationDraftError | null;
+  taskCreationDraft: TaskCreationDraft;
+  taskCreationError: CreationDraftError | null;
   injectContext: boolean;
   developerMode: boolean;
   showHiddenFiles: boolean;
@@ -323,26 +334,31 @@ export type AppStoreState = {
   closeSettings: () => void;
   setSettingsPage: (page: SettingsPageId) => void;
 
-  addWorkspace: () => Promise<void>;
+  addWorkspace: (options?: { intent?: CreationOperationIntent }) => Promise<void>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
-  selectWorkspace: (workspaceId: string, options?: AbortableActionOptions) => Promise<void>;
+  selectWorkspace: (
+    workspaceId: string,
+    options?: AbortableActionOptions & { intent?: CreationOperationIntent },
+  ) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
   setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
-  newThread: (opts?: {
-    workspaceId?: string;
-    scope?: "oneOff" | "project";
-    titleHint?: string;
-    firstMessage?: string;
-    references?: import("../lib/wsProtocol").TurnReference[];
-    mode?: "draft" | "session";
-    attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
-    attachmentFiles?: File[];
-    provider?: ProviderName;
-    model?: string;
-    reasoningEffort?: ReasoningEffortValue;
-    draftSubmission?: ComposerDraftRevision;
-  }) => Promise<boolean>;
+  newThread: (
+    opts?: {
+      workspaceId?: string;
+      scope?: "oneOff" | "project";
+      titleHint?: string;
+      firstMessage?: string;
+      references?: import("../lib/wsProtocol").TurnReference[];
+      mode?: "draft" | "session";
+      attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+      attachmentFiles?: File[];
+      provider?: ProviderName;
+      model?: string;
+      reasoningEffort?: ReasoningEffortValue;
+      draftSubmission?: ComposerDraftRevision;
+    } & CreationOperationControl,
+  ) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
     target?: NewChatLandingTarget;
@@ -469,10 +485,18 @@ export type AppStoreState = {
   }>;
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string, options?: AbortableActionOptions) => Promise<void>;
-  startTask: (opts: {
-    workspaceId: string;
-    task: TaskCreationInput;
-  }) => Promise<OperationResult<TaskRecord>>;
+  startTask: (
+    opts: {
+      workspaceId: string;
+      task: TaskCreationInput;
+      draftRevision?: number;
+    } & CreationOperationControl,
+  ) => Promise<OperationResult<TaskRecord>>;
+  setTaskCreationDraft: (
+    patch: Partial<Omit<TaskCreationDraft, "revision" | "updatedAt" | "idempotencyKey">>,
+  ) => void;
+  setTaskCreationError: (revision: number, message: string | null) => boolean;
+  clearTaskCreationDraft: (revision: number) => boolean;
   selectTask: (
     taskId: string,
     options?: AbortableActionOptions & { preserveView?: boolean },
@@ -482,6 +506,7 @@ export type AppStoreState = {
     taskId: string,
     title: string,
     workItemId?: string,
+    options?: CreationOperationControl,
   ) => Promise<OperationResult>;
   updateTaskBrief: (
     taskId: string,
@@ -597,12 +622,20 @@ export type AppStoreState = {
 
   refreshResearchList: () => Promise<void>;
   selectResearch: (researchId: string | null) => Promise<void>;
-  startResearch: (opts: {
-    input: string;
-    title?: string;
-    files?: File[];
-    settings?: Partial<ResearchSettingsState>;
-  }) => Promise<OperationResult<ResearchCard>>;
+  startResearch: (
+    opts: {
+      input: string;
+      title?: string;
+      files?: File[];
+      settings?: Partial<ResearchSettingsState>;
+      draftRevision?: number;
+    } & CreationOperationControl,
+  ) => Promise<OperationResult<ResearchCard>>;
+  setResearchCreationInput: (input: string) => void;
+  addResearchCreationAttachments: (files: File[]) => Promise<void>;
+  removeResearchCreationAttachment: (index: number) => void;
+  setResearchCreationError: (revision: number, message: string | null) => boolean;
+  clearResearchCreationDraft: (revision: number) => boolean;
   cancelResearch: (researchId: string) => Promise<OperationResult>;
   renameResearch: (researchId: string, title: string) => Promise<OperationResult>;
   deleteResearch: (researchId: string) => Promise<OperationResult>;
@@ -1162,8 +1195,8 @@ async function ensureServerRunning(
   options: AbortableActionOptions = {},
 ) {
   const lifecycleGeneration = jsonRpcLifecycleGeneration;
-  const isCurrent = () =>
-    options.signal?.aborted !== true && jsonRpcLifecycleGeneration === lifecycleGeneration;
+  const isCurrent = () => jsonRpcLifecycleGeneration === lifecycleGeneration;
+  throwIfOperationAborted(options.signal);
   if (!isCurrent()) return;
   const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
   if (!ws) return;
@@ -1176,13 +1209,16 @@ async function ensureServerRunning(
   let forceRestart = false;
   if (rt.serverUrl && !rt.error) {
     if (!isCurrent()) return;
-    const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
-      workspaceId,
-      running: false as const,
-      url: rt.serverUrl,
-      reason: "health_failed" as const,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    const status = await waitForOperation(
+      getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
+        workspaceId,
+        running: false as const,
+        url: rt.serverUrl,
+        reason: "health_failed" as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      options.signal,
+    );
     if (!isCurrent()) return;
     if (status.running) {
       syncWorkspaceServerRunningUrl(get, set, workspaceId, status.url);
@@ -1202,14 +1238,15 @@ async function ensureServerRunning(
     if (status.reason === "health_failed") {
       if (!isCurrent()) return;
       try {
-        await stopWorkspaceServer({ workspaceId });
+        await waitForOperation(stopWorkspaceServer({ workspaceId }), options.signal);
       } catch {
+        throwIfOperationAborted(options.signal);
         // ignore; startup below will surface persistent failures
       }
       if (!isCurrent()) return;
     }
     if (!isCurrent()) return;
-    await waitForWorkspaceServerRestartBackoff(workspaceId);
+    await waitForOperation(waitForWorkspaceServerRestartBackoff(workspaceId), options.signal);
     if (!isCurrent()) return;
     reactivateWorkspaceJsonRpcState(workspaceId);
     forceRestart = status.reason === "health_failed";
@@ -1219,7 +1256,7 @@ async function ensureServerRunning(
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
   const generation = getWorkspaceStartGeneration(workspaceId);
   if (inFlight && inFlight.generation === generation) {
-    await inFlight.promise;
+    await waitForOperation(inFlight.promise, options.signal);
     return;
   }
 
@@ -1291,19 +1328,15 @@ async function ensureServerRunning(
     }
   })();
 
-  if (!isCurrent()) {
-    await startPromise;
-    return;
-  }
   RUNTIME.workspaceStartPromises.set(workspaceId, { generation, promise: startPromise });
-  try {
-    await startPromise;
-  } finally {
+  const clearStartPromise = () => {
     const active = RUNTIME.workspaceStartPromises.get(workspaceId);
     if (active?.generation === generation && active.promise === startPromise) {
       RUNTIME.workspaceStartPromises.delete(workspaceId);
     }
-  }
+  };
+  void startPromise.then(clearStartPromise, clearStartPromise);
+  await waitForOperation(startPromise, options.signal);
 }
 
 export {

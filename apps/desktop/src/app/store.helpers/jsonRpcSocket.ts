@@ -18,9 +18,10 @@ import { JsonRpcSocket } from "../../lib/agentSocket";
 import { writeRendererLog } from "../../lib/desktopCommands";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
 import type { TurnReference } from "../../lib/wsProtocol";
-import type { StoreGet, StoreSet } from "../store.helpers";
+import type { AbortableActionOptions, StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
 import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
+import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import {
   bumpWorkspaceJsonRpcSocketGeneration,
   getWorkspaceJsonRpcSocketGeneration,
@@ -523,12 +524,18 @@ export async function requestJsonRpc<T = Record<string, unknown>>(
   workspaceId: string,
   method: string,
   params?: unknown,
+  options: AbortableActionOptions = {},
 ): Promise<T> {
+  throwIfOperationAborted(options.signal);
   const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   if (!socket) {
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
-  return (await socket.request(method, params, getJsonRpcRequestRetryOptions(method, params))) as T;
+  throwIfOperationAborted(options.signal);
+  return (await waitForOperation(
+    socket.request(method, params, getJsonRpcRequestRetryOptions(method, params)),
+    options.signal,
+  )) as T;
 }
 
 function hasStableStringKey(params: unknown, key: string): boolean {
@@ -738,13 +745,21 @@ export async function uploadJsonRpcWorkspaceFile(
   workspaceId: string,
   filename: string,
   contentBase64: string,
+  options: AbortableActionOptions = {},
 ): Promise<{ filename: string; path: string }> {
   const workspace = getWorkspaceById(get, workspaceId);
-  const result = await requestJsonRpc(get, set, workspaceId, "cowork/session/file/upload", {
-    cwd: workspace?.path,
-    filename,
-    contentBase64,
-  });
+  const result = await requestJsonRpc(
+    get,
+    set,
+    workspaceId,
+    "cowork/session/file/upload",
+    {
+      cwd: workspace?.path,
+      filename,
+      contentBase64,
+    },
+    options,
+  );
   const event = isRecord(result) && isRecord(result.event) ? result.event : null;
   return {
     filename: typeof event?.filename === "string" ? event.filename : filename,

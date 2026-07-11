@@ -127,6 +127,23 @@ export function samePath(
   return keyA === keyB;
 }
 
+/**
+ * Compare paths that callers have already canonicalized without resolving them
+ * again. This is for security revalidation where resolving either input a
+ * second time could hide a symlink swap between the original resolution and
+ * the comparison.
+ */
+export function canonicalPathsEqual(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  if (platform === "win32") {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return a === b;
+}
+
 function isRelativeOutsideRoot(rel: string, impl: typeof path.posix | typeof path.win32): boolean {
   return rel === ".." || rel.startsWith(`..${impl.sep}`) || impl.isAbsolute(rel);
 }

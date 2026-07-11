@@ -54,6 +54,7 @@ describe("jsonRpc workspace thread migration", () => {
         applyProjectedCompleted() {},
         applyProjectedReasoningDeltaToThread() {},
         applyProjectedAssistantDeltaToThread() {},
+        flushPendingContentForThread() {},
       } as any,
       { handleThreadEvent() {} },
       { ensureThreadSocket() {} },

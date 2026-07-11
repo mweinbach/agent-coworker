@@ -12,6 +12,7 @@ function makeHarness(opts: {
   const events = opts.events ?? [];
   const results: unknown[] = [];
   const errors: Array<{ code?: number; message?: string; data?: Record<string, unknown> }> = [];
+  const claimUserMessage = mock(() => ({ kind: "owner", key: "client-1" }) as const);
   const sendUserMessage = mock(async () => {});
   const getStatus = mock(async () => ({
     installed: true,
@@ -28,7 +29,7 @@ function makeHarness(opts: {
         config: { providerOptions: { lmstudio: { baseUrl: "http://localhost:1234" } } },
       },
     },
-    turns: { sendUserMessage },
+    turns: { claimUserMessage, sendUserMessage },
   };
   const binding = { runtime };
   const context = {
@@ -72,7 +73,7 @@ function makeHarness(opts: {
       ) => errors.push(error),
     },
   } as unknown as JsonRpcRouteContext;
-  return { context, errors, getStatus, results, sendUserMessage };
+  return { claimUserMessage, context, errors, getStatus, results, sendUserMessage };
 }
 
 const START_PARAMS = {
@@ -91,6 +92,7 @@ describe("turn/start LM Studio guard", () => {
     });
 
     expect(harness.sendUserMessage).not.toHaveBeenCalled();
+    expect(harness.claimUserMessage).not.toHaveBeenCalled();
     expect(harness.results).toEqual([]);
     expect(harness.errors).toHaveLength(1);
     expect(harness.errors[0]?.data).toMatchObject({

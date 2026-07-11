@@ -10,6 +10,16 @@ import { hostPlatform } from "../../../src/platform/host";
 
 export type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
 export type QualityScenario = "first-launch" | "product";
+export type QualityDeltaBurstPath = "legacy-chunk" | "legacy-raw" | "projected";
+
+export type QualityDeltaBurstDescriptor = {
+  count: number;
+  expectedText: string;
+  itemId: string;
+  lookupPrefix: string;
+  path: QualityDeltaBurstPath;
+  runId: number;
+};
 
 export type QualityLaunchOptions = {
   height: number;
@@ -44,12 +54,18 @@ type QualityLifecycle = {
 };
 
 export type QualityHarness = {
+  completeDeltaBurst(itemId: string): Promise<void>;
   electronApp: ElectronApplication;
   emitCompletion(): Promise<void>;
-  emitDeltaBurst(count: number, runId: number): Promise<string>;
+  emitDeltaBurst(
+    count: number,
+    runId: number,
+    path: QualityDeltaBurstPath,
+  ): Promise<QualityDeltaBurstDescriptor>;
   emitLongTranscript(count: number, runId: number): Promise<string>;
   emitStreamingActivity(): Promise<void>;
   getExternalNetworkProofUrl(): Promise<string>;
+  getDeltaBurstProgress(itemId: string): Promise<{ count: number; emitted: number }>;
   getLifecycle(): Promise<QualityLifecycle>;
   getMainMetrics(): Promise<QualityMainMetrics>;
   openWindow(trigger: () => Promise<void>): Promise<Page>;
@@ -431,22 +447,31 @@ async function launchQualityHarness(
     runtimeDir,
     userDataDir,
     harness: {
+      completeDeltaBurst: async (itemId) => {
+        await electronApp.evaluate((_electron, id) => {
+          const control = globalThis.__coworkQualityGateMain;
+          if (!control) {
+            throw new Error("Quality-gate main control is unavailable");
+          }
+          control.completeDeltaBurst(id);
+        }, itemId);
+      },
       electronApp,
       emitCompletion: async () => {
         await electronApp.evaluate(() => {
           globalThis.__coworkQualityGateMain?.emitCompletion();
         });
       },
-      emitDeltaBurst: async (count, runId) =>
+      emitDeltaBurst: async (count, runId, path) =>
         await electronApp.evaluate(
           (_electron, input) => {
             const control = globalThis.__coworkQualityGateMain;
             if (!control) {
               throw new Error("Quality-gate main control is unavailable");
             }
-            return control.emitDeltaBurst(input.count, input.runId);
+            return control.emitDeltaBurst(input.count, input.runId, input.path);
           },
-          { count, runId },
+          { count, path, runId },
         ),
       emitLongTranscript: async (count, runId) =>
         await electronApp.evaluate(
@@ -472,6 +497,14 @@ async function launchQualityHarness(
           }
           return control.getExternalNetworkProofUrl();
         }),
+      getDeltaBurstProgress: async (itemId) =>
+        await electronApp.evaluate((_electron, id) => {
+          const control = globalThis.__coworkQualityGateMain;
+          if (!control) {
+            throw new Error("Quality-gate main control is unavailable");
+          }
+          return control.getDeltaBurstProgress(id);
+        }, itemId),
       getLifecycle: async () =>
         await electronApp.evaluate(() => {
           const control = globalThis.__coworkQualityGateMain;

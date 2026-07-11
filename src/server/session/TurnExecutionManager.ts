@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+
+import { type IdempotencyClaim, IdempotencyLedger } from "../../shared/idempotencyLedger";
+import type { ToolRetryIntent, ToolRetryRequest } from "../../shared/toolRetry";
 import type { TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
@@ -21,9 +25,33 @@ import {
   getTurnAttachmentValidationMessage,
 } from "./turnExecution/userMessageAttachments";
 
+export type UserMessageReceipt = {
+  turnId: string;
+};
+
+export type UserMessageIdempotencyClaim = IdempotencyClaim<UserMessageReceipt>;
+
+export type SendUserMessageOptions = {
+  allowThreadManagementTools?: boolean;
+  idempotencyClaim?: UserMessageIdempotencyClaim | null;
+  toolRetryIntent?: ToolRetryIntent;
+};
+
+export type UserMessageIdempotencyInput = {
+  text: string;
+  clientMessageId?: string;
+  displayText?: string;
+  attachments?: FileAttachment[];
+  inputParts?: OrderedInputPart[];
+  references?: TurnReference[];
+  retry?: ToolRetryRequest;
+};
+
 export class TurnExecutionManager {
   private readonly steerCoordinator: SteerCoordinator;
   private readonly userMessageTurnRunner: UserMessageTurnRunner;
+  private readonly userMessageLedger = new IdempotencyLedger<UserMessageReceipt>();
+  private userMessageLedgerHydrated = false;
   private activeTurnSettlement: Promise<void> | null = null;
   private readonly activeSteerSettlements = new Set<Promise<void>>();
 
@@ -69,6 +97,11 @@ export class TurnExecutionManager {
       triggerSkillImprovementUsage: this.deps.triggerSkillImprovementUsage,
       onAdvancedMemoryChanged: this.deps.onAdvancedMemoryChanged,
       waitForLiveSteerSettlement: async () => await this.waitForLiveSteerSettlement(),
+      onUserMessageAccepted: (clientMessageId, turnId) => {
+        if (clientMessageId) {
+          this.userMessageLedger.accept(clientMessageId, { turnId });
+        }
+      },
     });
   }
 
@@ -145,22 +178,39 @@ export class TurnExecutionManager {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: SendUserMessageOptions,
   ) {
+    const claim = opts?.idempotencyClaim ?? null;
+    if (claim?.kind === "replay") {
+      await claim.outcome;
+      return;
+    }
+    if (claim && clientMessageId && claim.key !== clientMessageId) {
+      throw new Error("User-message idempotency claim does not match clientMessageId.");
+    }
+
     const taskLock = this.getTaskLock();
     if (taskLock) {
       this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
+      if (claim) {
+        this.userMessageLedger.reject(claim.key, taskLock.message);
+      }
       return;
     }
-    const turnPromise = this.userMessageTurnRunner.sendUserMessage(
-      text,
-      clientMessageId,
-      displayText,
-      attachments,
-      inputParts,
-      references,
-      opts,
-    );
+    const turnPromise = this.userMessageTurnRunner
+      .sendUserMessage(text, clientMessageId, displayText, attachments, inputParts, references, {
+        allowThreadManagementTools: opts?.allowThreadManagementTools,
+        ...(claim?.kind === "owner" ? { idempotencyFingerprint: claim.fingerprint } : {}),
+        ...(opts?.toolRetryIntent ? { toolRetryIntent: opts.toolRetryIntent } : {}),
+      })
+      .finally(() => {
+        if (claim) {
+          this.userMessageLedger.reject(
+            claim.key,
+            "The original user-message request was not accepted.",
+          );
+        }
+      });
     let trackedSettlement!: Promise<void>;
     trackedSettlement = turnPromise
       .then(
@@ -174,6 +224,51 @@ export class TurnExecutionManager {
       });
     this.activeTurnSettlement = trackedSettlement;
     return await turnPromise;
+  }
+
+  claimUserMessage(input: UserMessageIdempotencyInput): UserMessageIdempotencyClaim | null {
+    const clientMessageId = input.clientMessageId?.trim();
+    if (!clientMessageId) return null;
+    this.hydrateUserMessageLedger();
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          text: input.text,
+          displayText: input.displayText ?? null,
+          attachments: input.attachments ?? [],
+          inputParts: input.inputParts ?? [],
+          references: input.references ?? [],
+          retry: input.retry ?? null,
+        }),
+      )
+      .digest("hex");
+    return this.userMessageLedger.claim(clientMessageId, fingerprint);
+  }
+
+  rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
+    if (claim?.kind !== "owner") return;
+    this.userMessageLedger.reject(claim.key, message);
+  }
+
+  private hydrateUserMessageLedger(): void {
+    if (this.userMessageLedgerHydrated) return;
+    this.userMessageLedgerHydrated = true;
+    const sessionDb = this.context.deps.sessionDb;
+    if (!sessionDb) return;
+    const events = sessionDb.listThreadJournalEvents(this.context.id);
+    for (const event of events) {
+      if (event.eventType !== "internal/userMessageAccepted") continue;
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as Record<string, unknown>)
+          : null;
+      const clientMessageId =
+        typeof payload?.clientMessageId === "string" ? payload.clientMessageId : null;
+      const fingerprint = typeof payload?.fingerprint === "string" ? payload.fingerprint : null;
+      const turnId = typeof payload?.turnId === "string" ? payload.turnId : event.turnId;
+      if (!clientMessageId || !fingerprint || !turnId) continue;
+      this.userMessageLedger.seedAccepted(clientMessageId, fingerprint, { turnId });
+    }
   }
 
   private trackLiveSteerSettlement<T>(operation: () => Promise<T>): Promise<T> {

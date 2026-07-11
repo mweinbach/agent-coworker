@@ -6,6 +6,10 @@ import { defaultThreadRuntime } from "../src/app/store.helpers";
 import type { SettingsPageId } from "../src/app/types";
 import type { ProviderName } from "../src/lib/wsProtocol";
 import {
+  type DesktopRenderMetricEvent,
+  setDesktopRenderMetricObserver,
+} from "../src/ui/renderDiagnostics";
+import {
   createQualityTaskFixture,
   FIXED_NOW,
   PROJECT_THREAD_ID,
@@ -15,13 +19,22 @@ import {
 const RESEARCH_ID = "quality-research";
 
 export type QualityGateMetrics = {
+  chatFeedRenders: number;
+  chatFeedRendersByThreadId: Record<string, number>;
+  contentPublications: number;
+  desktopMarkdownRenders: number;
+  feedRowRenders: number;
+  maxFeedDerivationItems: number;
   reactCommits: number;
+  sidebarThreadRowRendersById: Record<string, number>;
   storePublications: number;
+  streamingMarkdownRenders: number;
 };
 
 export type QualityGateRuntime = {
   getFileCount(): number;
   getFeedText(itemId: string): string | null;
+  getFeedTextByPrefix(prefix: string): string | null;
   getMetrics(): QualityGateMetrics;
   isReady(): boolean;
   openSettings(page: SettingsPageId): void;
@@ -43,8 +56,16 @@ declare global {
 }
 
 let metrics: QualityGateMetrics = {
+  chatFeedRenders: 0,
+  chatFeedRendersByThreadId: {},
+  contentPublications: 0,
+  desktopMarkdownRenders: 0,
+  feedRowRenders: 0,
+  maxFeedDerivationItems: 0,
   reactCommits: 0,
+  sidebarThreadRowRendersById: {},
   storePublications: 0,
+  streamingMarkdownRenders: 0,
 };
 let installed = false;
 
@@ -137,6 +158,40 @@ function googleProviderStatus() {
   };
 }
 
+function recordRenderMetric(event: DesktopRenderMetricEvent): void {
+  switch (event.metric) {
+    case "chat-feed":
+      metrics.chatFeedRenders += 1;
+      if (event.id) {
+        metrics.chatFeedRendersByThreadId[event.id] =
+          (metrics.chatFeedRendersByThreadId[event.id] ?? 0) + 1;
+      }
+      return;
+    case "desktop-markdown":
+      metrics.desktopMarkdownRenders += 1;
+      return;
+    case "feed-derivation":
+      metrics.maxFeedDerivationItems = Math.max(metrics.maxFeedDerivationItems, event.value ?? 0);
+      return;
+    case "feed-row":
+      metrics.feedRowRenders += 1;
+      return;
+    case "sidebar-thread-row": {
+      if (!event.id) return;
+      metrics.sidebarThreadRowRendersById[event.id] =
+        (metrics.sidebarThreadRowRendersById[event.id] ?? 0) + 1;
+      return;
+    }
+    case "streaming-markdown":
+      metrics.streamingMarkdownRenders += 1;
+      return;
+    default: {
+      const exhaustive: never = event.metric;
+      throw new Error(`Unhandled desktop render metric: ${exhaustive}`);
+    }
+  }
+}
+
 export function installQualityGateRuntime(): void {
   if (installed) {
     return;
@@ -145,8 +200,15 @@ export function installQualityGateRuntime(): void {
   if (window.innerWidth <= 640) {
     useAppStore.setState({ contextSidebarCollapsed: true });
   }
-  useAppStore.subscribe(() => {
+  setDesktopRenderMetricObserver(recordRenderMetric);
+  useAppStore.subscribe((state, previousState) => {
     metrics.storePublications += 1;
+    const contentChanged = Object.entries(state.threadRuntimeById).some(
+      ([threadId, runtime]) => runtime?.feed !== previousState.threadRuntimeById[threadId]?.feed,
+    );
+    if (contentChanged) {
+      metrics.contentPublications += 1;
+    }
   });
 
   window.__coworkQualityGate = {
@@ -156,6 +218,19 @@ export function installQualityGateRuntime(): void {
       const runtime = useAppStore.getState().threadRuntimeById[selectedThreadId()];
       const item = runtime?.feed.find((entry) => entry.id === itemId);
       return item?.kind === "message" ? item.text : null;
+    },
+    getFeedTextByPrefix: (prefix) => {
+      const state = useAppStore.getState();
+      for (const runtime of Object.values(state.threadRuntimeById)) {
+        const item = runtime.feed.find(
+          (entry) =>
+            entry.kind === "message" && entry.role === "assistant" && entry.text.startsWith(prefix),
+        );
+        if (item?.kind === "message") {
+          return item.text;
+        }
+      }
+      return null;
     },
     getMetrics: () => ({ ...metrics }),
     isReady: () => {
@@ -189,7 +264,18 @@ export function installQualityGateRuntime(): void {
       }));
     },
     resetMetrics: () => {
-      metrics = { reactCommits: 0, storePublications: 0 };
+      metrics = {
+        chatFeedRenders: 0,
+        chatFeedRendersByThreadId: {},
+        contentPublications: 0,
+        desktopMarkdownRenders: 0,
+        feedRowRenders: 0,
+        maxFeedDerivationItems: 0,
+        reactCommits: 0,
+        sidebarThreadRowRendersById: {},
+        storePublications: 0,
+        streamingMarkdownRenders: 0,
+      };
     },
     showDisconnect: () => {
       const threadId = selectedThreadId();

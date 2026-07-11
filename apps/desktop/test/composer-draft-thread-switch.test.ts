@@ -1,11 +1,29 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
+  createEmptyComposerDraft,
+  MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE,
+  MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT,
+  MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES,
+  MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES,
+  selectActiveComposerDraft,
+} from "../src/app/composerDrafts";
+import { syncDesktopStateCacheNow } from "../src/app/store.helpers/persistence";
+import { createComposerAttachmentFile } from "../src/lib/composerAttachments";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
 const { useAppStore } = await import("../src/app/store");
-const { defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
+const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import(
   "../src/app/store.helpers/runtimeState"
 );
+
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 describe("composer draft clear after send", () => {
   let snapshot: ReturnType<typeof useAppStore.getState>;
@@ -56,14 +74,17 @@ describe("composer draft clear after send", () => {
         },
       ],
       workspaceRuntimeById: {
-        "ws-1": defaultWorkspaceRuntime(),
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+        },
       },
       threadRuntimeById: {
         "thread-a": {
           ...defaultThreadRuntime(),
           sessionId: "session-a",
           connected: true,
-          transcriptOnly: true,
+          transcriptOnly: false,
         },
         "thread-b": {
           ...defaultThreadRuntime(),
@@ -71,11 +92,20 @@ describe("composer draft clear after send", () => {
           connected: true,
         },
       },
-      composerText: "send from A",
-      composerTextByThreadId: {
-        "thread-a": "send from A",
-        "thread-b": "draft for B",
+      composerDraftsByKey: {
+        [composerDraftKeyForThread("thread-a")]: {
+          ...createEmptyComposerDraft("2026-01-01T00:00:00.000Z"),
+          revision: 1,
+          text: "send from A",
+        },
+        [composerDraftKeyForThread("thread-b")]: {
+          ...createEmptyComposerDraft("2026-01-01T00:00:00.000Z"),
+          revision: 1,
+          text: "draft for B",
+        },
       },
+      composerDraftRevisionFloorByKey: {},
+      composerAttachmentIngestionCountByKey: {},
       taskSummariesByWorkspaceId: {
         "ws-1": [],
       },
@@ -84,81 +114,619 @@ describe("composer draft clear after send", () => {
   });
 
   afterEach(() => {
+    RUNTIME.jsonRpcSockets.delete("ws-1");
+    RUNTIME.composerAttachmentIngestionTail = null;
     useAppStore.setState(snapshot, true);
     Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
 
-  test("preserves New Chat landing draft when selecting a chat and returning", async () => {
+  test("keeps existing-chat and New Chat target drafts independent", async () => {
     useAppStore.setState({
       selectedThreadId: null,
-      composerText: "landing draft",
-      composerTextByThreadId: {
-        "thread-a": "draft for A",
-        "thread-b": "draft for B",
-      },
+      newChatLandingTarget: { kind: "oneOff" },
+      composerDraftsByKey: {},
     } as never);
 
-    useAppStore.getState().setComposerText("landing draft");
-    expect(useAppStore.getState().composerTextByThreadId.__landing__).toBe("landing draft");
+    useAppStore.getState().setComposerText("one-off landing draft");
+    useAppStore.getState().setNewChatLandingTarget({
+      kind: "project",
+      workspaceId: "ws-1",
+    });
+    useAppStore.getState().setComposerText("project landing draft");
 
     await useAppStore.getState().selectThread("thread-a");
-    // selectThread hydrates; swap should restore thread-a draft when hydrate path runs.
-    // Force a pure swap via openNewChatLanding after manually selecting A.
-    useAppStore.setState({
-      selectedThreadId: "thread-a",
-      composerText: "draft for A",
-      composerTextByThreadId: {
-        __landing__: "landing draft",
-        "thread-a": "draft for A",
-        "thread-b": "draft for B",
-      },
-    } as never);
+    useAppStore.getState().setComposerText("draft for A");
 
     await useAppStore.getState().openNewChatLanding({ defaultTargetKind: "oneOff" });
     const state = useAppStore.getState();
     expect(state.selectedThreadId).toBeNull();
-    expect(state.composerText).toBe("landing draft");
-    expect(state.composerTextByThreadId.__landing__).toBe("landing draft");
+    expect(selectActiveComposerDraft(state).text).toBe("one-off landing draft");
+    expect(
+      state.composerDraftsByKey[
+        composerDraftKeyForNewChatTarget({ kind: "project", workspaceId: "ws-1" })
+      ]?.text,
+    ).toBe("project landing draft");
+    expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]?.text).toBe(
+      "draft for A",
+    );
   });
 
-  test("keeps the newly selected thread draft when send resolves after a switch", async () => {
-    let releaseNewThread: (() => void) | null = null;
-    const newThreadGate = new Promise<boolean>((resolve) => {
-      releaseNewThread = () => resolve(true);
+  test("a delayed clear from A clears only its captured revision and never B", async () => {
+    const owner = {
+      key: composerDraftKeyForThread("thread-a"),
+      revision: useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]
+        ?.revision as number,
+    };
+    let releaseClear: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseClear = resolve;
     });
+    const delayedClear = (async () => {
+      await gate;
+      return useAppStore.getState().clearComposerDraft(owner);
+    })();
 
-    const previousNewThread = useAppStore.getState().newThread;
-    useAppStore.setState({
-      newThread: async () => {
-        await newThreadGate;
-        return true;
+    useAppStore.setState({ selectedThreadId: "thread-b" });
+    useAppStore.getState().setComposerText("new text in B");
+    releaseClear?.();
+
+    expect(await delayedClear).toBe(true);
+    const afterClear = useAppStore.getState();
+    expect(afterClear.composerDraftsByKey[composerDraftKeyForThread("thread-a")]).toBeUndefined();
+    expect(afterClear.composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text).toBe(
+      "new text in B",
+    );
+
+    useAppStore.setState({ selectedThreadId: "thread-a" });
+    useAppStore.getState().setComposerText("newer text in A");
+    expect(useAppStore.getState().clearComposerDraft(owner)).toBe(false);
+    expect(
+      useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]?.text,
+    ).toBe("newer text in A");
+  });
+
+  test("clears the submitted revision only after turn/start succeeds", async () => {
+    let resolveTurnStart: (() => void) | undefined;
+    const turnStartGate = new Promise<void>((resolve) => {
+      resolveTurnStart = resolve;
+    });
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request: async (method: string) => {
+        if (method === "turn/start") await turnStartGate;
+        return {};
       },
     } as never);
+    const owner = {
+      key: composerDraftKeyForThread("thread-a"),
+      revision: useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]
+        ?.revision as number,
+    };
+
+    expect(
+      await useAppStore.getState().sendMessage("send from A", "reject", undefined, undefined, {
+        targetThreadId: "thread-a",
+        draftSubmission: owner,
+      }),
+    ).toBe(true);
+    expect(
+      useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]?.text,
+    ).toBe("send from A");
+
+    useAppStore.setState({ selectedThreadId: "thread-b" });
+    useAppStore.getState().setComposerText("new text in B");
+    resolveTurnStart?.();
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]).toBeUndefined();
+    expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text).toBe(
+      "new text in B",
+    );
+  });
+
+  test("a delayed task command clears only A while B receives new text", async () => {
+    let resolveCommand: (() => void) | undefined;
+    const commandGate = new Promise<void>((resolve) => {
+      resolveCommand = resolve;
+    });
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request: async (method: string) => {
+        if (method === "command/execute") await commandGate;
+        return {};
+      },
+    } as never);
+    useAppStore.getState().setComposerText("/task investigate the race");
+    const key = composerDraftKeyForThread("thread-a");
+    const owner = {
+      key,
+      revision: useAppStore.getState().composerDraftsByKey[key]?.revision as number,
+    };
+
+    const send = useAppStore
+      .getState()
+      .sendMessage("/task investigate the race", "reject", undefined, undefined, {
+        targetThreadId: "thread-a",
+        draftSubmission: owner,
+      });
+    useAppStore.setState({ selectedThreadId: "thread-b" });
+    useAppStore.getState().setComposerText("B changed while task creation was pending");
+    resolveCommand?.();
+
+    expect(await send).toBe(true);
+    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
+    expect(
+      useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text,
+    ).toBe("B changed while task creation was pending");
+  });
+
+  test("retains the full draft after failure and clears it after retry succeeds", async () => {
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request: async (method: string) => {
+        if (method === "turn/start") throw new Error("offline");
+        return {};
+      },
+    } as never);
+    await useAppStore
+      .getState()
+      .addComposerAttachments([
+        new File(["retry bytes"], "retry.txt", { type: "text/plain", lastModified: 30 }),
+      ]);
+    const key = composerDraftKeyForThread("thread-a");
+    const failedOwner = {
+      key,
+      revision: useAppStore.getState().composerDraftsByKey[key]?.revision as number,
+    };
+    const wireAttachment = {
+      filename: "retry.txt",
+      mimeType: "text/plain",
+      contentBase64: "cmV0cnkgYnl0ZXM=",
+    };
+
+    expect(
+      await useAppStore
+        .getState()
+        .sendMessage("send from A", "reject", [wireAttachment], undefined, {
+          targetThreadId: "thread-a",
+          draftSubmission: failedOwner,
+        }),
+    ).toBe(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
+      revision: failedOwner.revision,
+      text: "send from A",
+      attachments: [{ filename: "retry.txt" }],
+    });
+
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request: async () => ({}),
+    } as never);
+    expect(
+      await useAppStore
+        .getState()
+        .sendMessage("send from A", "reject", [wireAttachment], undefined, {
+          targetThreadId: "thread-a",
+          draftSubmission: failedOwner,
+        }),
+    ).toBe(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
+  });
+
+  test("preserves exact attachments across switches and revokes only on removal", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = mock(() => "blob:thread-a-preview");
+    const revokeObjectURL = mock(() => {});
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
 
     try {
-      const sendPromise = useAppStore.getState().sendMessage("send from A");
+      const image = new File(["image bytes"], "diagram.png", {
+        type: "image/png",
+        lastModified: 1_720_000_000_000,
+      });
+      await useAppStore.getState().addComposerAttachments([image]);
 
-      // User switches chats while the send path is still awaiting network work.
-      useAppStore.setState({
-        selectedThreadId: "thread-b",
-        composerText: "draft for B",
-        composerTextByThreadId: {
-          "thread-a": "send from A",
-          "thread-b": "draft for B",
-        },
-      } as never);
+      useAppStore.setState({ selectedThreadId: "thread-b" });
+      useAppStore.getState().setComposerText("updated B");
+      expect(revokeObjectURL).not.toHaveBeenCalled();
 
-      releaseNewThread?.();
-      const accepted = await sendPromise;
-      expect(accepted).toBe(true);
+      useAppStore.setState({ selectedThreadId: "thread-a" });
+      const restored = selectActiveComposerDraft(useAppStore.getState());
+      expect(restored.attachments).toHaveLength(1);
+      expect(restored.attachments[0]).toMatchObject({
+        filename: "diagram.png",
+        mimeType: "image/png",
+        previewUrl: "blob:thread-a-preview",
+      });
+      expect(await restored.attachments[0]?.file.text()).toBe("image bytes");
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
 
-      const state = useAppStore.getState();
-      expect(state.selectedThreadId).toBe("thread-b");
-      expect(state.composerText).toBe("draft for B");
-      expect(state.composerTextByThreadId["thread-a"]).toBeUndefined();
-      expect(state.composerTextByThreadId["thread-b"]).toBe("draft for B");
+      useAppStore.getState().removeComposerAttachment(0);
+      expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:thread-a-preview");
     } finally {
-      useAppStore.setState({ newThread: previousNewThread } as never);
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("revokes completed previews when another file in the batch cannot be read", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.createObjectURL = () => "blob:completed-preview";
+    URL.revokeObjectURL = revokeObjectURL;
+    const unreadable = new File(["bad"], "bad.txt", {
+      type: "text/plain",
+      lastModified: 2,
+    });
+    Object.defineProperty(unreadable, "arrayBuffer", {
+      value: async () => {
+        throw new Error("read failed");
+      },
+    });
+
+    try {
+      await expect(
+        useAppStore
+          .getState()
+          .addComposerAttachments([
+            new File(["image"], "good.png", { type: "image/png", lastModified: 1 }),
+            unreadable,
+          ]),
+      ).rejects.toThrow("read failed");
+
+      expect(selectActiveComposerDraft(useAppStore.getState()).attachments).toEqual([]);
+      expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:completed-preview");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("rejects count, per-file, per-draft, and persisted aggregate limits before reading files", async () => {
+    const readFile = mock(async () => new Uint8Array([1]).buffer);
+    const sizedFile = (name: string, size: number) =>
+      ({
+        name,
+        type: "application/octet-stream",
+        size,
+        lastModified: 1,
+        arrayBuffer: readFile,
+      }) as File;
+
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments(
+          Array.from({ length: MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT + 1 }, (_, index) =>
+            sizedFile(`count-${index}.bin`, 0),
+          ),
+        ),
+    ).rejects.toThrow(`max ${MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT}`);
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments([
+          sizedFile("oversized.bin", MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE + 1),
+        ]),
+    ).rejects.toThrow("File too large");
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments([
+          sizedFile(
+            "aggregate-a.bin",
+            Math.floor(MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES / 2) + 1,
+          ),
+          sizedFile(
+            "aggregate-b.bin",
+            Math.floor(MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES / 2) + 1,
+          ),
+        ]),
+    ).rejects.toThrow("Draft attachments too large in total");
+
+    const existingFile = new File(["x"], "existing.bin", {
+      type: "application/octet-stream",
+      lastModified: 1,
+    });
+    useAppStore.setState((state) => ({
+      selectedThreadId: "thread-b",
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [composerDraftKeyForThread("thread-a")]: {
+          ...state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]!,
+          attachments: [
+            {
+              filename: existingFile.name,
+              mimeType: existingFile.type,
+              size: MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES - 1,
+              lastModified: existingFile.lastModified,
+              file: existingFile,
+              signature: "existing",
+              contentBase64: "eA==",
+            },
+          ],
+        },
+      },
+    }));
+    await expect(
+      useAppStore.getState().addComposerAttachments([sizedFile("global-overflow.bin", 2)]),
+    ).rejects.toThrow("Saved draft attachments too large in total");
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(useAppStore.getState().composerAttachmentIngestionCountByKey).toEqual({});
+  });
+
+  test("serializes concurrent ingestion batches before validating their combined count", async () => {
+    const firstBatch = Array.from(
+      { length: 5 },
+      (_, index) => new File([], `first-${index}.txt`, { type: "text/plain", lastModified: index }),
+    );
+    const secondBatch = Array.from(
+      { length: 4 },
+      (_, index) =>
+        new File([], `second-${index}.txt`, { type: "text/plain", lastModified: index }),
+    );
+
+    const firstIngestion = useAppStore.getState().addComposerAttachments(firstBatch);
+    const secondIngestion = useAppStore.getState().addComposerAttachments(secondBatch);
+
+    expect(
+      useAppStore.getState().composerAttachmentIngestionCountByKey[
+        composerDraftKeyForThread("thread-a")
+      ],
+    ).toBe(2);
+    await firstIngestion;
+    await expect(secondIngestion).rejects.toThrow(`max ${MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT}`);
+    expect(
+      useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]
+        ?.attachments,
+    ).toHaveLength(5);
+    expect(useAppStore.getState().composerAttachmentIngestionCountByKey).toEqual({});
+  });
+
+  test("one-off send adaptation does not allocate a duplicate image object URL", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const createObjectURL = mock(() => "blob:persistent-draft-preview");
+    URL.createObjectURL = createObjectURL;
+
+    try {
+      const file = new File(["image"], "one-off.png", {
+        type: "image/png",
+        lastModified: 1,
+      });
+      await useAppStore.getState().addComposerAttachments([file]);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+
+      const transient = createComposerAttachmentFile(file);
+      expect(transient).not.toHaveProperty("previewUrl");
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+    }
+  });
+
+  test("restores the complete draft unit for each New Chat target", async () => {
+    useAppStore.setState({
+      selectedThreadId: null,
+      newChatLandingTarget: { kind: "project", workspaceId: "ws-1" },
+      composerDraftsByKey: {},
+    });
+    useAppStore.getState().setComposerText("project text", [{ kind: "skill", name: "documents" }]);
+    useAppStore.getState().setComposerDraftModel("openai", "gpt-5.4");
+    useAppStore.getState().setComposerDraftReasoningEffort("high");
+    await useAppStore
+      .getState()
+      .addComposerAttachments([
+        new File(["project file"], "project.txt", { type: "text/plain", lastModified: 10 }),
+      ]);
+
+    useAppStore.getState().setNewChatLandingTarget({ kind: "oneOff" });
+    useAppStore.getState().setComposerText("one-off text");
+    useAppStore.getState().setComposerDraftModel("google", "gemini-2.5-pro");
+
+    const oneOff = selectActiveComposerDraft(useAppStore.getState());
+    expect(oneOff).toMatchObject({
+      text: "one-off text",
+      attachments: [],
+      provider: "google",
+      model: "gemini-2.5-pro",
+      reasoningEffort: null,
+    });
+
+    useAppStore.getState().setNewChatLandingTarget({
+      kind: "project",
+      workspaceId: "ws-1",
+    });
+    const project = selectActiveComposerDraft(useAppStore.getState());
+    expect(project).toMatchObject({
+      text: "project text",
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+    expect(project.attachments).toHaveLength(1);
+    expect(await project.attachments[0]?.file.text()).toBe("project file");
+  });
+
+  test("workspace removal prunes its New Chat draft and revokes the preview", async () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.revokeObjectURL = revokeObjectURL;
+    const key = composerDraftKeyForNewChatTarget({ kind: "project", workspaceId: "ws-1" });
+    const file = new File(["image"], "project.png", {
+      type: "image/png",
+      lastModified: 40,
+    });
+    useAppStore.setState({
+      selectedThreadId: null,
+      newChatLandingTarget: { kind: "project", workspaceId: "ws-1" },
+      composerDraftsByKey: {
+        [key]: {
+          ...createEmptyComposerDraft("2026-07-10T20:00:00.000Z"),
+          revision: 1,
+          attachments: [
+            {
+              filename: file.name,
+              mimeType: file.type,
+              size: file.size,
+              lastModified: file.lastModified,
+              file,
+              previewUrl: "blob:removed-workspace-preview",
+              signature: "project.png\u0000image/png\u00005\u000040",
+              contentBase64: "aW1hZ2U=",
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await useAppStore.getState().removeWorkspace("ws-1");
+
+      expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:removed-workspace-preview");
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("store pruning keeps memory and restart persistence aligned and revokes removed previews", () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.revokeObjectURL = revokeObjectURL;
+    const nowMs = Date.parse("2026-07-10T20:00:00.000Z");
+    const realThreads = Array.from({ length: 51 }, (_, index) => ({
+      id: `real-${index}`,
+      workspaceId: "ws-1",
+      title: `Real ${index}`,
+      status: "active" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastMessageAt: "2026-01-01T00:00:00.000Z",
+      sessionId: `real-${index}`,
+      messageCount: 0,
+      lastEventSeq: 0,
+    }));
+    const tombstoneThreads = Array.from({ length: 20 }, (_, index) => ({
+      ...realThreads[0]!,
+      id: `tombstone-${index}`,
+      title: `Tombstone ${index}`,
+      sessionId: `tombstone-${index}`,
+    }));
+    const oldFile = new File(["x"], "old.png", { type: "image/png", lastModified: 1 });
+    const realDrafts = Object.fromEntries(
+      realThreads.map((thread, index) => [
+        composerDraftKeyForThread(thread.id),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index * 1_000).toISOString()),
+          revision: index + 1,
+          text: `real draft ${index}`,
+          attachments:
+            index === 50
+              ? [
+                  {
+                    filename: oldFile.name,
+                    mimeType: oldFile.type,
+                    size: oldFile.size,
+                    lastModified: oldFile.lastModified,
+                    file: oldFile,
+                    previewUrl: "blob:pruned-store-preview",
+                    signature: "old.png\u0000image/png\u00001\u00001",
+                    contentBase64: "eA==",
+                  },
+                ]
+              : [],
+        },
+      ]),
+    );
+    const tombstones = Object.fromEntries(
+      tombstoneThreads.map((thread, index) => [
+        composerDraftKeyForThread(thread.id),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index).toISOString()),
+          revision: index + 1,
+          generation: index + 1,
+        },
+      ]),
+    );
+
+    try {
+      useAppStore.setState({
+        selectedThreadId: "real-0",
+        threads: [...realThreads, ...tombstoneThreads],
+        composerDraftsByKey: { ...tombstones, ...realDrafts },
+        composerAttachmentIngestionCountByKey: {},
+      });
+      useAppStore.getState().pruneComposerDrafts(nowMs);
+      const persistedState = syncDesktopStateCacheNow(useAppStore.getState);
+
+      const memoryDraftKeys = Object.keys(useAppStore.getState().composerDraftsByKey);
+      const persistedDraftKeys = Object.keys(persistedState.composerDrafts ?? {});
+      expect(memoryDraftKeys).toHaveLength(50);
+      expect(memoryDraftKeys.every((key) => key.startsWith("thread:real-"))).toBe(true);
+      expect(persistedDraftKeys).toEqual(memoryDraftKeys);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:pruned-store-preview");
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("does not resurrect an attachment after its draft is discarded mid-read", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.createObjectURL = () => "blob:stale-preview";
+    URL.revokeObjectURL = revokeObjectURL;
+    let releaseRead: ((buffer: ArrayBuffer) => void) | undefined;
+    const readGate = new Promise<ArrayBuffer>((resolve) => {
+      releaseRead = resolve;
+    });
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const file = new File([new Uint8Array([1, 2, 3, 4])], "slow.png", {
+      type: "image/png",
+      lastModified: 20,
+    });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: () => {
+        markReadStarted?.();
+        return readGate;
+      },
+    });
+
+    try {
+      useAppStore.setState({ composerDraftsByKey: {} });
+      const addPromise = useAppStore.getState().addComposerAttachments([file]);
+      await readStarted;
+      expect(useAppStore.getState().discardComposerDraft()).toBe(true);
+      releaseRead?.(new Uint8Array([1, 2, 3, 4]).buffer);
+      await addPromise;
+
+      const draft = selectActiveComposerDraft(useAppStore.getState());
+      expect(draft.attachments).toEqual([]);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:stale-preview");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
     }
   });
 });

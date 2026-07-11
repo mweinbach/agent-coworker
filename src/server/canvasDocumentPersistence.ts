@@ -1,0 +1,733 @@
+import { createHash, randomUUID } from "node:crypto";
+import fs, { type FileHandle } from "node:fs/promises";
+import path from "node:path";
+
+import { canonicalKey, canonicalPathsEqual, coworkPaths } from "../platform/paths";
+import {
+  CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
+  CANVAS_DOCUMENT_MAX_BYTES,
+  type CanvasDocumentCloseRequest,
+  type CanvasDocumentCloseResult,
+  type CanvasDocumentOpenRequest,
+  type CanvasDocumentOpenResult,
+  type CanvasDocumentRevision,
+  type CanvasDocumentRevisionRequest,
+  type CanvasDocumentRevisionResult,
+  type CanvasDocumentSaveAsRequest,
+  type CanvasDocumentSaveFailure,
+  type CanvasDocumentSaveRequest,
+  type CanvasDocumentSaveResult,
+} from "../shared/canvasDocument";
+import { withFileLock } from "../utils/fileLock";
+
+const OUTSIDE_WORKSPACE_MESSAGE = "Path is outside the workspace root.";
+const SESSION_NOT_FOUND_MESSAGE = "The Canvas document session is no longer available.";
+const CONFLICT_MESSAGE = "File changed on disk. Your unsaved changes were not overwritten.";
+
+type CanvasDocumentSession = {
+  workspaceRoot: string;
+  path: string;
+  baseRevision: CanvasDocumentRevision;
+  highestRequestedEditRevision: number;
+};
+
+type StableFileRead = {
+  content: string;
+  truncated: boolean;
+  revision: CanvasDocumentRevision;
+};
+
+export type CanvasDocumentPersistenceHooks = {
+  beforeTempCreate?: (input: { path: string }) => Promise<void> | void;
+  beforeAtomicCommit?: (input: {
+    path: string;
+    content: string;
+    expectedRevision: CanvasDocumentRevision | null;
+  }) => Promise<void> | void;
+  afterAtomicCommit?: (input: {
+    path: string;
+    content: string;
+    revision: CanvasDocumentRevision;
+  }) => Promise<void> | void;
+};
+
+function sessionKey(input: { documentId: string; generation: number }): string {
+  return `${input.documentId}:${input.generation}`;
+}
+
+function transactionLockTarget(filePath: string): string {
+  const lockKey = canonicalKey(filePath);
+  const pathDigest = createHash("sha256").update(lockKey).digest("hex");
+  return path.join(coworkPaths().root, "locks", "canvas", pathDigest);
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EEXIST"
+  );
+}
+
+function isOutsideWorkspaceError(error: unknown): boolean {
+  return error instanceof Error && error.message === OUTSIDE_WORKSPACE_MESSAGE;
+}
+
+function revisionMetadataMatches(
+  left: { size: number; mtimeMs: number; ctimeMs: number },
+  right: { size: number; mtimeMs: number; ctimeMs: number },
+): boolean {
+  return (
+    left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+  );
+}
+
+function revisionFromStatAndDigest(
+  stat: { size: number; mtimeMs: number; ctimeMs: number },
+  digest: string,
+): CanvasDocumentRevision {
+  return {
+    modifiedAtMs: stat.mtimeMs,
+    changeTimeMs: stat.ctimeMs,
+    size: stat.size,
+    fingerprint: `sha256:${digest}`,
+  };
+}
+
+function digestContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+async function digestFileHandle(handle: FileHandle): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = handle.createReadStream({ autoClose: false, start: 0 });
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
+async function readStableFile(filePath: string, maxBytes: number): Promise<StableFileRead> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const handle = await fs.open(filePath, "r");
+    try {
+      const before = await handle.stat();
+      if (!before.isFile()) {
+        throw new Error("Path is not a file.");
+      }
+      const prefixLength = Math.min(before.size, maxBytes);
+      const prefix = Buffer.alloc(prefixLength);
+      if (prefixLength > 0) {
+        await handle.read(prefix, 0, prefixLength, 0);
+      }
+      const digest = await digestFileHandle(handle);
+      const after = await handle.stat();
+      if (!revisionMetadataMatches(before, after)) {
+        continue;
+      }
+      return {
+        content: prefix.toString("utf8"),
+        truncated: before.size > maxBytes,
+        revision: revisionFromStatAndDigest(after, digest),
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+  throw new Error("File kept changing while it was being read. Try again.");
+}
+
+async function readFileRevision(filePath: string): Promise<CanvasDocumentRevision> {
+  return (await readStableFile(filePath, 0)).revision;
+}
+
+async function resolveWorkspaceRoot(cwd: string): Promise<string> {
+  return await fs.realpath(cwd);
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  return canonicalPathsEqual(left, right);
+}
+
+function assertInsideWorkspace(workspaceRoot: string, candidate: string): void {
+  const relative = path.relative(workspaceRoot, candidate);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function resolveExistingWorkspaceFile(
+  workspaceRootInput: string,
+  filePath: string,
+): Promise<{
+  workspaceRoot: string;
+  path: string;
+}> {
+  const workspaceRoot = await resolveWorkspaceRoot(workspaceRootInput);
+  const candidate = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(workspaceRoot, filePath);
+  const resolvedPath = await fs.realpath(candidate);
+  assertInsideWorkspace(workspaceRoot, resolvedPath);
+  return { workspaceRoot, path: resolvedPath };
+}
+
+async function resolveNewWorkspaceFile(
+  workspaceRootInput: string,
+  filePath: string,
+): Promise<{
+  workspaceRoot: string;
+  path: string;
+}> {
+  const workspaceRoot = await resolveWorkspaceRoot(workspaceRootInput);
+  const candidate = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(workspaceRoot, filePath);
+  const parent = await fs.realpath(path.dirname(candidate));
+  const resolvedPath = path.join(parent, path.basename(candidate));
+  assertInsideWorkspace(workspaceRoot, resolvedPath);
+  return { workspaceRoot, path: resolvedPath };
+}
+
+async function revalidateCanonicalWorkspaceRoot(workspaceRoot: string): Promise<void> {
+  let currentRoot: string;
+  try {
+    currentRoot = await fs.realpath(workspaceRoot);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  if (!sameCanonicalPath(currentRoot, workspaceRoot)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateCanonicalParent(workspaceRoot: string, filePath: string): Promise<string> {
+  await revalidateCanonicalWorkspaceRoot(workspaceRoot);
+  const expectedParent = path.dirname(filePath);
+  let currentParent: string;
+  try {
+    currentParent = await fs.realpath(expectedParent);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentParent);
+  if (!sameCanonicalPath(currentParent, expectedParent)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  return currentParent;
+}
+
+async function revalidateExistingWorkspaceFile(
+  workspaceRoot: string,
+  filePath: string,
+): Promise<void> {
+  await revalidateCanonicalParent(workspaceRoot, filePath);
+  let currentPath: string;
+  try {
+    currentPath = await fs.realpath(filePath);
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      throw error;
+    }
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentPath);
+  if (!sameCanonicalPath(currentPath, filePath)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateNewWorkspaceFile(
+  workspaceRoot: string,
+  requestedPath: string,
+  expectedPath: string,
+): Promise<void> {
+  const current = await resolveNewWorkspaceFile(workspaceRoot, requestedPath);
+  if (
+    !sameCanonicalPath(current.workspaceRoot, workspaceRoot) ||
+    !sameCanonicalPath(current.path, expectedPath)
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateTemporaryWorkspaceFile(
+  workspaceRoot: string,
+  tempPath: string,
+): Promise<void> {
+  await revalidateCanonicalParent(workspaceRoot, tempPath);
+  let currentPath: string;
+  try {
+    currentPath = await fs.realpath(tempPath);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentPath);
+  if (!sameCanonicalPath(currentPath, tempPath)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  const stat = await fs.lstat(tempPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(directoryPath, "r");
+    await handle.sync();
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? (error as { code?: unknown }).code
+        : null;
+    if (
+      code !== "EINVAL" &&
+      code !== "ENOTSUP" &&
+      code !== "EBADF" &&
+      code !== "EISDIR" &&
+      code !== "EPERM" &&
+      code !== "EACCES"
+    ) {
+      throw error;
+    }
+  } finally {
+    await handle?.close();
+  }
+}
+
+export class CanvasDocumentPersistenceService {
+  private readonly sessions = new Map<string, CanvasDocumentSession>();
+  private readonly operationChains = new Map<string, Promise<void>>();
+
+  constructor(private readonly hooks: CanvasDocumentPersistenceHooks = {}) {}
+
+  async open(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentOpenRequest,
+  ): Promise<CanvasDocumentOpenResult> {
+    const maxBytes = Math.min(
+      request.maxBytes ?? CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
+      CANVAS_DOCUMENT_MAX_BYTES,
+    );
+    try {
+      const resolved = await resolveExistingWorkspaceFile(serverWorkspaceRoot, request.path);
+      const snapshot = await readStableFile(resolved.path, maxBytes);
+      this.sessions.set(sessionKey(request), {
+        workspaceRoot: resolved.workspaceRoot,
+        path: resolved.path,
+        baseRevision: snapshot.revision,
+        highestRequestedEditRevision: 0,
+      });
+      return {
+        ok: true,
+        document: {
+          documentId: request.documentId,
+          generation: request.generation,
+          path: resolved.path,
+          content: snapshot.content,
+          truncated: snapshot.truncated,
+          revision: snapshot.revision,
+        },
+      };
+    } catch (error) {
+      const kind = isFileNotFoundError(error)
+        ? "not_found"
+        : isOutsideWorkspaceError(error)
+          ? "outside_workspace"
+          : "read_error";
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        path: request.path,
+        error: {
+          kind,
+          message:
+            kind === "not_found"
+              ? "File was not found."
+              : error instanceof Error
+                ? error.message
+                : String(error),
+        },
+      };
+    }
+  }
+
+  async revision(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentRevisionRequest,
+  ): Promise<CanvasDocumentRevisionResult> {
+    const session = this.sessions.get(sessionKey(request));
+    if (!session) {
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        error: { kind: "session_not_found", message: SESSION_NOT_FOUND_MESSAGE },
+      };
+    }
+    try {
+      await this.assertSessionWorkspace(serverWorkspaceRoot, session);
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, session.path);
+      return {
+        ok: true,
+        documentId: request.documentId,
+        generation: request.generation,
+        path: session.path,
+        revision: await readFileRevision(session.path),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        error: {
+          kind: isOutsideWorkspaceError(error) ? "outside_workspace" : "read_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  save(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentSaveRequest,
+  ): Promise<CanvasDocumentSaveResult> {
+    const key = sessionKey(request);
+    const session = this.sessions.get(key);
+    if (!session) {
+      return Promise.resolve(this.sessionNotFoundSaveResult(request));
+    }
+    session.highestRequestedEditRevision = Math.max(
+      session.highestRequestedEditRevision,
+      request.editRevision,
+    );
+    return this.withOperationLock(`session:${key}`, async () => {
+      const currentSession = this.sessions.get(key);
+      if (!currentSession) {
+        return this.sessionNotFoundSaveResult(request);
+      }
+      await this.assertSessionWorkspace(serverWorkspaceRoot, currentSession);
+      if (request.editRevision < currentSession.highestRequestedEditRevision) {
+        return {
+          ok: true,
+          documentId: request.documentId,
+          generation: request.generation,
+          editRevision: request.editRevision,
+          path: currentSession.path,
+          revision: currentSession.baseRevision,
+          status: "superseded",
+        };
+      }
+      return await this.withOperationLock(`path:${currentSession.path}`, async () => {
+        try {
+          const revision = await withFileLock(
+            transactionLockTarget(currentSession.path),
+            async () =>
+              await this.replaceFileAtomically(
+                currentSession,
+                request.content,
+                currentSession.baseRevision,
+              ),
+          );
+          currentSession.baseRevision = revision;
+          return {
+            ok: true,
+            documentId: request.documentId,
+            generation: request.generation,
+            editRevision: request.editRevision,
+            path: currentSession.path,
+            revision,
+            status: "saved",
+          };
+        } catch (error) {
+          return await this.saveFailureResult(request, currentSession.path, error);
+        }
+      });
+    });
+  }
+
+  saveAs(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentSaveAsRequest,
+  ): Promise<CanvasDocumentSaveResult> {
+    const key = sessionKey(request);
+    const session = this.sessions.get(key);
+    if (!session) {
+      return Promise.resolve(this.sessionNotFoundSaveResult(request));
+    }
+    session.highestRequestedEditRevision = Math.max(
+      session.highestRequestedEditRevision,
+      request.editRevision,
+    );
+    return this.withOperationLock(`session:${key}`, async () => {
+      const currentSession = this.sessions.get(key);
+      if (!currentSession) {
+        return this.sessionNotFoundSaveResult(request);
+      }
+      await this.assertSessionWorkspace(serverWorkspaceRoot, currentSession);
+      if (request.editRevision < currentSession.highestRequestedEditRevision) {
+        return {
+          ok: true,
+          documentId: request.documentId,
+          generation: request.generation,
+          editRevision: request.editRevision,
+          path: currentSession.path,
+          revision: currentSession.baseRevision,
+          status: "superseded",
+        };
+      }
+
+      let target: Awaited<ReturnType<typeof resolveNewWorkspaceFile>>;
+      try {
+        target = await resolveNewWorkspaceFile(currentSession.workspaceRoot, request.path);
+      } catch (error) {
+        return {
+          ok: false,
+          documentId: request.documentId,
+          generation: request.generation,
+          editRevision: request.editRevision,
+          path: request.path,
+          error: {
+            kind: isOutsideWorkspaceError(error) ? "outside_workspace" : "write_error",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+
+      return await this.withOperationLock(`path:${target.path}`, async () => {
+        try {
+          const revision = await withFileLock(
+            transactionLockTarget(target.path),
+            async () =>
+              await this.createFileAtomically(
+                currentSession.workspaceRoot,
+                request.path,
+                target.path,
+                request.content,
+              ),
+          );
+          currentSession.path = target.path;
+          currentSession.baseRevision = revision;
+          return {
+            ok: true,
+            documentId: request.documentId,
+            generation: request.generation,
+            editRevision: request.editRevision,
+            path: target.path,
+            revision,
+            status: "saved",
+          };
+        } catch (error) {
+          return await this.saveFailureResult(request, target.path, error);
+        }
+      });
+    });
+  }
+
+  close(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentCloseRequest,
+  ): Promise<CanvasDocumentCloseResult> {
+    const key = sessionKey(request);
+    return this.withOperationLock(`session:${key}`, async () => {
+      const session = this.sessions.get(key);
+      if (session) {
+        await this.assertSessionWorkspace(serverWorkspaceRoot, session);
+        this.sessions.delete(key);
+      }
+      return {
+        ok: true,
+        documentId: request.documentId,
+        generation: request.generation,
+      };
+    });
+  }
+
+  private async assertSessionWorkspace(
+    serverWorkspaceRoot: string,
+    session: CanvasDocumentSession,
+  ): Promise<void> {
+    const workspaceRoot = await resolveWorkspaceRoot(serverWorkspaceRoot);
+    if (!sameCanonicalPath(workspaceRoot, session.workspaceRoot)) {
+      throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+    }
+  }
+
+  private sessionNotFoundSaveResult(request: CanvasDocumentSaveRequest): CanvasDocumentSaveFailure {
+    return {
+      ok: false,
+      documentId: request.documentId,
+      generation: request.generation,
+      editRevision: request.editRevision,
+      error: { kind: "session_not_found", message: SESSION_NOT_FOUND_MESSAGE },
+    };
+  }
+
+  private async saveFailureResult(
+    request: CanvasDocumentSaveRequest,
+    filePath: string,
+    error: unknown,
+  ): Promise<CanvasDocumentSaveFailure> {
+    if (error instanceof CanvasDocumentConflictError || isAlreadyExistsError(error)) {
+      const currentRevision = await readFileRevision(filePath).catch(() => undefined);
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        editRevision: request.editRevision,
+        path: filePath,
+        ...(currentRevision ? { currentRevision } : {}),
+        error: { kind: "conflict", message: CONFLICT_MESSAGE },
+      };
+    }
+    if (isOutsideWorkspaceError(error)) {
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        editRevision: request.editRevision,
+        path: filePath,
+        error: { kind: "outside_workspace", message: OUTSIDE_WORKSPACE_MESSAGE },
+      };
+    }
+    return {
+      ok: false,
+      documentId: request.documentId,
+      generation: request.generation,
+      editRevision: request.editRevision,
+      path: filePath,
+      error: {
+        kind: "write_error",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+
+  private async replaceFileAtomically(
+    session: CanvasDocumentSession,
+    content: string,
+    expectedRevision: CanvasDocumentRevision,
+  ): Promise<CanvasDocumentRevision> {
+    const filePath = session.path;
+    await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
+    const currentRevision = await readFileRevision(filePath);
+    if (currentRevision.fingerprint !== expectedRevision.fingerprint) {
+      throw new CanvasDocumentConflictError();
+    }
+
+    const directory = path.dirname(filePath);
+    const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+    let tempExists = false;
+    let handle: FileHandle | undefined;
+    try {
+      await this.hooks.beforeTempCreate?.({ path: filePath });
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
+      const originalStat = await fs.stat(filePath);
+      handle = await fs.open(tempPath, "wx", originalStat.mode);
+      tempExists = true;
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+      const digest = digestContent(content);
+      await this.hooks.beforeAtomicCommit?.({
+        path: filePath,
+        content,
+        expectedRevision,
+      });
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
+      await revalidateTemporaryWorkspaceFile(session.workspaceRoot, tempPath);
+      const revisionBeforeCommit = await readFileRevision(filePath);
+      if (revisionBeforeCommit.fingerprint !== expectedRevision.fingerprint) {
+        throw new CanvasDocumentConflictError();
+      }
+      await fs.rename(tempPath, filePath);
+      tempExists = false;
+      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
+      await syncDirectory(directory);
+      return revision;
+    } finally {
+      await handle?.close();
+      if (tempExists) {
+        await fs.rm(tempPath, { force: true }).catch(() => {});
+      }
+    }
+  }
+
+  private async createFileAtomically(
+    workspaceRoot: string,
+    requestedPath: string,
+    filePath: string,
+    content: string,
+  ): Promise<CanvasDocumentRevision> {
+    const directory = path.dirname(filePath);
+    const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+    let tempExists = false;
+    let handle: FileHandle | undefined;
+    try {
+      await this.hooks.beforeTempCreate?.({ path: filePath });
+      await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
+      handle = await fs.open(tempPath, "wx", 0o600);
+      tempExists = true;
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+      const digest = digestContent(content);
+      await this.hooks.beforeAtomicCommit?.({
+        path: filePath,
+        content,
+        expectedRevision: null,
+      });
+      await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
+      await revalidateTemporaryWorkspaceFile(workspaceRoot, tempPath);
+      await fs.link(tempPath, filePath);
+      await fs.rm(tempPath, { force: true });
+      tempExists = false;
+      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
+      await syncDirectory(directory);
+      return revision;
+    } finally {
+      await handle?.close();
+      if (tempExists) {
+        await fs.rm(tempPath, { force: true }).catch(() => {});
+      }
+    }
+  }
+
+  private withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationChains.get(lockKey) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.operationChains.set(lockKey, settled);
+    void settled.then(() => {
+      if (this.operationChains.get(lockKey) === settled) {
+        this.operationChains.delete(lockKey);
+      }
+    });
+    return result;
+  }
+}
+
+class CanvasDocumentConflictError extends Error {
+  constructor() {
+    super(CONFLICT_MESSAGE);
+    this.name = "CanvasDocumentConflictError";
+  }
+}
+
+export const canvasDocumentPersistence = new CanvasDocumentPersistenceService();

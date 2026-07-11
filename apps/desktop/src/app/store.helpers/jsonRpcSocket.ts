@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+import type {
+  CanvasDocumentCloseResult,
+  CanvasDocumentOpenResult,
+  CanvasDocumentRevisionResult,
+  CanvasDocumentSaveResult,
+} from "../../../../../src/shared/canvasDocument";
 import type { SessionSnapshot } from "../../../../../src/shared/sessionSnapshot";
 import type {
   SpreadsheetBatchPatchOperation,
@@ -87,6 +93,7 @@ export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   __coworkReconnectPending?: boolean;
   __coworkUrl?: string;
   __coworkGeneration?: number;
+  readonly supportsToolRetryLineage?: boolean;
 };
 type JsonRpcSocketConstructor = new (options: Record<string, unknown>) => WorkspaceJsonRpcSocket;
 type JsonRpcSocketMessage = {
@@ -100,6 +107,11 @@ type JsonRpcRequestRetryOptions = {
   retryable?: boolean;
   retryOnDisconnect?: boolean;
 };
+
+export function workspaceSupportsToolRetryLineage(workspaceId: string): boolean {
+  const socket = RUNTIME.jsonRpcSockets.get(workspaceId) as WorkspaceJsonRpcSocket | undefined;
+  return socket?.supportsToolRetryLineage === true;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -397,6 +409,7 @@ export function ensureWorkspaceJsonRpcSocket(
       title: "Cowork Desktop",
       version: "0.1.0",
     },
+    toolRetryLineage: true,
     autoReconnect: true,
     openTimeoutMs: DESKTOP_JSONRPC_OPEN_TIMEOUT_MS,
     handshakeTimeoutMs: DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS,
@@ -539,6 +552,8 @@ function getJsonRpcRequestRetryOptions(
     method === "cowork/provider/authMethods/read" ||
     method === "cowork/provider/status/refresh" ||
     method === "cowork/runtime/libreoffice/check" ||
+    method === "cowork/workspace/document/open" ||
+    method === "cowork/workspace/document/revision" ||
     method === "cowork/workspace/spreadsheet/workbook" ||
     method === "cowork/workspace/spreadsheet/version"
   ) {
@@ -622,6 +637,7 @@ export async function startJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
   references?: TurnReference[],
+  retryToolItemIds?: string[],
 ): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
@@ -646,11 +662,21 @@ export async function startJsonRpcTurn(
       }
     }
   }
+  const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
+  if (!socket) {
+    throw new Error("JSON-RPC workspace socket is unavailable");
+  }
+  if (retryToolItemIds && retryToolItemIds.length > 0 && !socket.supportsToolRetryLineage) {
+    throw new Error("This server does not support exact tool retries.");
+  }
   return await requestJsonRpc(get, set, workspaceId, "turn/start", {
     threadId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(references && references.length > 0 ? { references } : {}),
+    ...(retryToolItemIds && retryToolItemIds.length > 0
+      ? { retry: { toolItemIds: retryToolItemIds } }
+      : {}),
   });
 }
 
@@ -724,6 +750,77 @@ export async function uploadJsonRpcWorkspaceFile(
     filename: typeof event?.filename === "string" ? event.filename : filename,
     path: typeof event?.path === "string" ? event.path : "",
   };
+}
+
+export async function openJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    path: string;
+    documentId: string;
+    generation: number;
+    maxBytes?: number;
+  },
+): Promise<CanvasDocumentOpenResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/open", {
+    ...input,
+  })) as CanvasDocumentOpenResult;
+}
+
+export async function revisionJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: { documentId: string; generation: number },
+): Promise<CanvasDocumentRevisionResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/revision", {
+    ...input,
+  })) as CanvasDocumentRevisionResult;
+}
+
+export async function saveJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    documentId: string;
+    generation: number;
+    editRevision: number;
+    content: string;
+  },
+): Promise<CanvasDocumentSaveResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/save", {
+    ...input,
+  })) as CanvasDocumentSaveResult;
+}
+
+export async function saveAsJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    documentId: string;
+    generation: number;
+    editRevision: number;
+    content: string;
+    path: string;
+  },
+): Promise<CanvasDocumentSaveResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/saveAs", {
+    ...input,
+  })) as CanvasDocumentSaveResult;
+}
+
+export async function closeJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: { documentId: string; generation: number },
+): Promise<CanvasDocumentCloseResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/close", {
+    ...input,
+  })) as CanvasDocumentCloseResult;
 }
 
 export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(
@@ -828,6 +925,13 @@ export function buildSyntheticServerHelloFromJsonRpcThread(
   thread: JsonRpcThreadRecord,
   opts?: { isResume?: boolean },
 ) {
+  const activeTurnId =
+    thread.status &&
+    "turnId" in thread.status &&
+    typeof thread.status.turnId === "string" &&
+    thread.status.turnId.trim()
+      ? thread.status.turnId
+      : null;
   return {
     type: "server_hello" as const,
     sessionId: thread.id,
@@ -836,7 +940,13 @@ export function buildSyntheticServerHelloFromJsonRpcThread(
       model: thread.model,
       workingDirectory: thread.cwd,
     },
-    ...(opts?.isResume ? { isResume: true, busy: thread.status?.type === "running" } : {}),
+    ...(opts?.isResume
+      ? {
+          isResume: true,
+          busy: thread.status?.type === "running",
+          ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        }
+      : {}),
   };
 }
 

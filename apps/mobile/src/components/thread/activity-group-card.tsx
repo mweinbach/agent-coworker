@@ -1,6 +1,10 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-
+import {
+  buildActivityEntryPage,
+  nextActivityPageStart,
+  previousActivityPageStart,
+} from "@/features/cowork/activityEntryPagination";
 import type { ActivityFeedItem, ActivityGroupSummary } from "@/features/cowork/activityGroups";
 import {
   activityTimestampMs,
@@ -8,6 +12,7 @@ import {
   formatActivityElapsedMs,
   parseReasoningSections,
   summarizeActivityGroup,
+  unresolvedToolFailureIds,
 } from "@/features/cowork/activityGroups";
 import { formatToolCard } from "@/features/cowork/toolCardFormatting";
 import type { ToolFeedState } from "@/features/cowork/toolFeedState";
@@ -17,8 +22,11 @@ import { MarkdownText } from "./markdown-text";
 
 type ActivityGroupCardProps = {
   items: ActivityFeedItem[];
+  recoveredToolIds?: string[];
   live?: boolean;
   liveStartedAt?: string | null;
+  onRetry?: (toolItemIds: string[]) => Promise<void>;
+  retryDisabled?: boolean;
 };
 
 function toolIconName(title: string): string {
@@ -194,8 +202,107 @@ function ToolStateIndicator({ state }: { state: ToolFeedState }) {
   return <SFSymbol name="clock" size={12} color={theme.primary} />;
 }
 
+type ActivityTimelineEntry = ActivityGroupSummary["entries"][number];
+
+function ActivityTimelineEntryView({
+  entry,
+  isLast,
+  lastReasoningEntryId,
+  live,
+  recoveredToolIds,
+}: {
+  entry: ActivityTimelineEntry;
+  isLast: boolean;
+  lastReasoningEntryId: string | null;
+  live?: boolean;
+  recoveredToolIds: ReadonlySet<string>;
+}) {
+  const theme = useAppTheme();
+
+  if (entry.kind === "reasoning") {
+    return (
+      <ReasoningTimelineNode
+        text={entry.item.text}
+        isLast={isLast}
+        live={live}
+        isMostRecent={entry.item.id === lastReasoningEntryId}
+      />
+    );
+  }
+
+  const formatting = formatToolCard(
+    entry.item.name,
+    entry.item.args,
+    entry.item.result,
+    entry.item.state,
+  );
+
+  return (
+    <TimelineNode iconName={toolIconName(formatting.title)} isLast={isLast}>
+      <View style={{ gap: 2, paddingTop: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Text
+            selectable
+            style={{
+              color: theme.text,
+              fontSize: 14,
+              fontWeight: "600",
+              lineHeight: 20,
+            }}
+          >
+            {formatting.title}
+          </Text>
+          {recoveredToolIds.has(entry.item.id) ? (
+            <Text
+              style={{ color: theme.textTertiary, fontSize: 10, fontWeight: "700" }}
+              accessibilityLabel="Recovered after retry"
+            >
+              Recovered
+            </Text>
+          ) : (
+            <ToolStateIndicator state={entry.item.state} />
+          )}
+        </View>
+        {formatting.subtitle ? (
+          <Text
+            selectable
+            style={{
+              color: theme.textTertiary,
+              fontSize: 12,
+              lineHeight: 17,
+            }}
+          >
+            {formatting.subtitle}
+          </Text>
+        ) : null}
+        {entry.item.retryOf ? (
+          <Text
+            style={{
+              color: theme.textTertiary,
+              fontSize: 10,
+              fontWeight: "600",
+              lineHeight: 14,
+            }}
+          >
+            Retry of failed call
+          </Text>
+        ) : null}
+      </View>
+    </TimelineNode>
+  );
+}
+
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const theme = useAppTheme();
+  const [requestedStartIndex, setRequestedStartIndex] = useState<number | null>(null);
+  const page = useMemo(
+    () => buildActivityEntryPage(summary.entries, requestedStartIndex),
+    [requestedStartIndex, summary.entries],
+  );
+  const recoveredToolIds = useMemo(
+    () => new Set(summary.recoveredToolIds),
+    [summary.recoveredToolIds],
+  );
 
   const lastReasoningEntryId = useMemo(() => {
     const reasoningEntries = summary.entries.filter((entry) => entry.kind === "reasoning");
@@ -205,74 +312,91 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
   return (
     <View style={{ gap: 0 }}>
-      {summary.entries.map((entry, index) => {
-        const isLast = index === summary.entries.length - 1;
-
-        if (entry.kind === "reasoning") {
-          const isMostRecent = entry.item.id === lastReasoningEntryId;
-          return (
-            <ReasoningTimelineNode
-              key={entry.item.id}
-              text={entry.item.text}
-              isLast={isLast}
-              live={live}
-              isMostRecent={isMostRecent}
-            />
-          );
-        }
-
-        const formatting = formatToolCard(
-          entry.item.name,
-          entry.item.args,
-          entry.item.result,
-          entry.item.state,
-        );
-
-        return (
-          <TimelineNode
-            key={entry.item.id}
-            iconName={toolIconName(formatting.title)}
-            isLast={isLast}
+      {page.totalCount > page.entries.length ? (
+        <View
+          style={{
+            minHeight: 34,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            paddingBottom: 8,
+          }}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show earlier activity"
+            disabled={page.hiddenBefore === 0}
+            onPress={() => setRequestedStartIndex(previousActivityPageStart(page))}
+            hitSlop={8}
           >
-            <View style={{ gap: 2, paddingTop: 1 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Text
-                  selectable
-                  style={{
-                    color: theme.text,
-                    fontSize: 14,
-                    fontWeight: "600",
-                    lineHeight: 20,
-                  }}
-                >
-                  {formatting.title}
-                </Text>
-                <ToolStateIndicator state={entry.item.state} />
-              </View>
-              {formatting.subtitle ? (
-                <Text
-                  selectable
-                  style={{
-                    color: theme.textTertiary,
-                    fontSize: 12,
-                    lineHeight: 17,
-                  }}
-                >
-                  {formatting.subtitle}
-                </Text>
-              ) : null}
-            </View>
-          </TimelineNode>
-        );
-      })}
+            <Text
+              style={{
+                color: page.hiddenBefore > 0 ? theme.primary : theme.textTertiary,
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Earlier
+            </Text>
+          </Pressable>
+          <Text
+            selectable
+            style={{
+              color: theme.textTertiary,
+              fontSize: 11,
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {page.startIndex + 1}–{page.endIndexExclusive} of {page.totalCount}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show newer activity"
+            disabled={page.hiddenAfter === 0}
+            onPress={() => setRequestedStartIndex(nextActivityPageStart(page))}
+            hitSlop={8}
+          >
+            <Text
+              style={{
+                color: page.hiddenAfter > 0 ? theme.primary : theme.textTertiary,
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Newer
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {page.entries.map((entry, index) => (
+        <ActivityTimelineEntryView
+          key={entry.item.id}
+          entry={entry}
+          isLast={index === page.entries.length - 1}
+          lastReasoningEntryId={lastReasoningEntryId}
+          live={live}
+          recoveredToolIds={recoveredToolIds}
+        />
+      ))}
     </View>
   );
 }
 
-export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupCardProps) {
+export function ActivityGroupCard({
+  items,
+  recoveredToolIds,
+  live,
+  liveStartedAt,
+  onRetry,
+  retryDisabled,
+}: ActivityGroupCardProps) {
   const theme = useAppTheme();
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const summary = useMemo(() => summarizeActivityGroup(items), [items]);
+  const summary = useMemo(
+    () => summarizeActivityGroup(items, recoveredToolIds),
+    [items, recoveredToolIds],
+  );
   const displayStatus = live && summary.status === "done" ? "running" : summary.status;
   const isComplete = displayStatus === "done";
   const liveStartedAtMs =
@@ -289,6 +413,16 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
   const shouldAutoExpand =
     displayStatus === "approval" || displayStatus === "issue" || displayStatus === "running";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    if (!onRetry || retryDisabled || retrying) return;
+    setRetrying(true);
+    try {
+      await onRetry(unresolvedToolFailureIds(items, recoveredToolIds));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   useEffect(() => {
     if (!live) return;
@@ -431,6 +565,28 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
           />
         </View>
       </Pressable>
+      {displayStatus === "issue" && onRetry ? (
+        <Pressable
+          onPress={() => void handleRetry()}
+          disabled={retryDisabled || retrying}
+          accessibilityRole="button"
+          accessibilityLabel="Retry failed tool calls"
+          style={{
+            alignSelf: "flex-end",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 5,
+            marginHorizontal: 12,
+            marginBottom: 8,
+            opacity: retryDisabled ? 0.5 : 1,
+          }}
+        >
+          <SFSymbol name="arrow.clockwise" size={12} color={theme.textSecondary} />
+          <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>
+            {retrying ? "Retrying" : "Retry"}
+          </Text>
+        </Pressable>
+      ) : null}
       {expanded ? (
         <View
           style={{

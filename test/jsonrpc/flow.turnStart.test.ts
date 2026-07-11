@@ -126,6 +126,188 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start deduplicates retries by clientMessageId across reconnects", async () => {
+    const tmpDir = await makeTmpProject();
+    let runCount = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          runCount += 1;
+          return {
+            text: "one reply",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const firstClient = await connectJsonRpc(url);
+      const started = await firstClient.sendRequest("thread/start", { cwd: tmpDir });
+      await firstClient.waitFor((message) => message.method === "thread/started");
+      const request = {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-reconnect-retry",
+        input: [{ type: "text", text: "send exactly once" }],
+      };
+
+      const firstResponse = await firstClient.sendRequest("turn/start", request);
+      await firstClient.waitFor((message) => message.method === "turn/completed");
+      firstClient.close();
+
+      const retryClient = await connectJsonRpc(url);
+      const retryResponse = await retryClient.sendRequest("turn/start", request);
+
+      expect(retryResponse.result.turn.id).toBe(firstResponse.result.turn.id);
+      expect(retryResponse.result.replayed).toBe(true);
+      expect(runCount).toBe(1);
+      retryClient.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/start retains payload fingerprints across a server restart", async () => {
+    const tmpDir = await makeTmpProject();
+    let runCount = 0;
+    const options = serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        runCount += 1;
+        return {
+          text: "one durable reply",
+          responseMessages: [],
+        };
+      }) as any,
+    });
+    let runningServer: Awaited<ReturnType<typeof startAgentServer>>["server"] | null = null;
+
+    try {
+      const first = await startAgentServer(options);
+      runningServer = first.server;
+      const firstClient = await connectJsonRpc(first.url);
+      const started = await firstClient.sendRequest("thread/start", { cwd: tmpDir });
+      await firstClient.waitFor((message) => message.method === "thread/started");
+      const request = {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-durable-retry",
+        input: [{ type: "text", text: "persist this fingerprint" }],
+      };
+
+      const firstResponse = await firstClient.sendRequest("turn/start", request);
+      await firstClient.waitFor((message) => message.method === "turn/completed");
+      firstClient.close();
+      await stopTestServer(first.server);
+      runningServer = null;
+
+      const second = await startAgentServer(options);
+      runningServer = second.server;
+      const retryClient = await connectJsonRpc(second.url);
+      const retryResponse = await retryClient.sendRequest("turn/start", request);
+      expect(retryResponse.result.turn.id).toBe(firstResponse.result.turn.id);
+      expect(retryResponse.result.replayed).toBe(true);
+      expect(runCount).toBe(1);
+
+      const conflict = await retryClient.sendRequest("turn/start", {
+        ...request,
+        input: [{ type: "text", text: "different input after restart" }],
+      });
+      expect(conflict.error?.message).toContain("clientMessageId conflict");
+      expect(runCount).toBe(1);
+      retryClient.close();
+    } finally {
+      if (runningServer) {
+        await stopTestServer(runningServer);
+      }
+    }
+  });
+
+  test("turn/start deduplicates a retry while the original turn is active", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseTurn: () => void = () => undefined;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let runCount = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          runCount += 1;
+          await turnGate;
+          return {
+            text: "one reply",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const request = {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-active-retry",
+        input: [{ type: "text", text: "send exactly once" }],
+      };
+
+      const firstResponse = await rpc.sendRequest("turn/start", request);
+      const retryResponse = await rpc.sendRequest("turn/start", request);
+
+      expect(retryResponse.result.turn.id).toBe(firstResponse.result.turn.id);
+      expect(retryResponse.result.replayed).toBe(true);
+      expect(runCount).toBe(1);
+
+      releaseTurn();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      releaseTurn();
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/start rejects reusing a clientMessageId for different input", async () => {
+    const tmpDir = await makeTmpProject();
+    let runCount = 0;
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => {
+          runCount += 1;
+          return {
+            text: "one reply",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-conflict",
+        input: [{ type: "text", text: "original" }],
+      });
+      await rpc.waitFor((message) => message.method === "turn/completed");
+
+      const conflict = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-conflict",
+        input: [{ type: "text", text: "different" }],
+      });
+
+      expect(conflict.error?.message).toContain("clientMessageId");
+      expect(runCount).toBe(1);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start mirrors live stream notifications to every subscribed connection", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

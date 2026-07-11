@@ -49,7 +49,11 @@ import type {
   TurnReference,
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
-import type { ComposerDraftRevision, ComposerDraftsByKey } from "./composerDrafts";
+import type {
+  ComposerDraftRevision,
+  ComposerDraftRevisionFloor,
+  ComposerDraftsByKey,
+} from "./composerDrafts";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -266,6 +270,8 @@ export type AppStoreState = {
   providerUiState: PersistedProviderUiState;
 
   composerDraftsByKey: ComposerDraftsByKey;
+  composerDraftRevisionFloorByKey: Record<string, ComposerDraftRevisionFloor>;
+  composerAttachmentIngestionCountByKey: Record<string, number>;
   newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;
@@ -376,7 +382,7 @@ export type AppStoreState = {
   setComposerDraftReasoningEffort: (effort: ReasoningEffortValue | null) => void;
   clearComposerDraft: (owner: ComposerDraftRevision) => boolean;
   discardComposerDraft: (key?: string) => boolean;
-  pruneComposerDrafts: (nowMs?: number) => void;
+  pruneComposerDrafts: (nowMs?: number, maxAgeMs?: number) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
   setShowHiddenFiles: (v: boolean) => void;

@@ -6,6 +6,7 @@ import {
   createComposerDraftAttachment,
   createEmptyComposerDraft,
   hydrateComposerDrafts,
+  MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE,
   MAX_COMPOSER_DRAFTS,
   pruneComposerDrafts,
   revokeComposerDraftAttachmentPreviews,
@@ -163,6 +164,68 @@ describe("composer draft ownership", () => {
     expect(result.removedKeys).toContain(missingKey);
   });
 
+  test("drops empty tombstones before capping real drafts and preserves that result on restart", () => {
+    const nowMs = Date.parse("2026-07-10T20:00:00.000Z");
+    const realDrafts = Object.fromEntries(
+      Array.from({ length: MAX_COMPOSER_DRAFTS + 1 }, (_, index) => [
+        composerDraftKeyForThread(`real-${index}`),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index * 1_000).toISOString()),
+          revision: index + 1,
+          text: `real draft ${index}`,
+          attachments:
+            index === MAX_COMPOSER_DRAFTS
+              ? [
+                  {
+                    filename: "oldest.png",
+                    mimeType: "image/png",
+                    size: 1,
+                    lastModified: 1,
+                    file: new File(["x"], "oldest.png", { type: "image/png", lastModified: 1 }),
+                    previewUrl: "blob:oldest-preview",
+                    signature: "oldest.png\u0000image/png\u00001\u00001",
+                    contentBase64: "eA==",
+                  },
+                ]
+              : [],
+        },
+      ]),
+    );
+    const tombstones = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [
+        composerDraftKeyForThread(`tombstone-${index}`),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index).toISOString()),
+          revision: index + 10,
+          generation: index + 10,
+        },
+      ]),
+    );
+    const validThreadIds = new Set([
+      ...Array.from({ length: MAX_COMPOSER_DRAFTS + 1 }, (_, index) => `real-${index}`),
+      ...Array.from({ length: 20 }, (_, index) => `tombstone-${index}`),
+    ]);
+
+    const result = pruneComposerDrafts(
+      { ...tombstones, ...realDrafts },
+      {
+        nowMs,
+        validThreadIds,
+        validProjectWorkspaceIds: new Set(),
+      },
+    );
+    const revokeObjectURL = mock(() => {});
+    revokeComposerDraftAttachmentPreviews(result.removedAttachments, revokeObjectURL);
+    const restored = hydrateComposerDrafts(serializeComposerDrafts(result.drafts));
+
+    expect(Object.keys(result.drafts)).toHaveLength(MAX_COMPOSER_DRAFTS);
+    expect(Object.keys(result.drafts).every((key) => key.startsWith("thread:real-"))).toBe(true);
+    expect(result.drafts[composerDraftKeyForThread(`real-${MAX_COMPOSER_DRAFTS}`)]).toBeUndefined();
+    expect(Object.keys(restored)).toEqual(Object.keys(result.drafts));
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:oldest-preview");
+  });
+
   test("drops corrupt persisted attachments without allocating preview URLs", () => {
     const createObjectURL = mock(() => "blob:should-not-exist");
     const restored = hydrateComposerDrafts(
@@ -186,6 +249,37 @@ describe("composer draft ownership", () => {
 
     expect(restored[composerDraftKeyForThread("thread-a")]?.attachments).toEqual([]);
     expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  test("rejects oversized persisted attachments before attempting base64 decoding", () => {
+    const originalAtob = globalThis.atob;
+    const decodeBase64 = mock(() => {
+      throw new Error("oversized payload should not be decoded");
+    });
+    globalThis.atob = decodeBase64;
+
+    try {
+      const restored = hydrateComposerDrafts({
+        [composerDraftKeyForThread("thread-a")]: {
+          ...createEmptyComposerDraft("2026-07-10T20:00:00.000Z"),
+          attachments: [
+            {
+              filename: "oversized.bin",
+              mimeType: "application/octet-stream",
+              size: MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE + 1,
+              lastModified: 1,
+              signature: "oversized",
+              contentBase64: "eA==",
+            },
+          ],
+        },
+      });
+
+      expect(restored[composerDraftKeyForThread("thread-a")]?.attachments).toEqual([]);
+      expect(decodeBase64).not.toHaveBeenCalled();
+    } finally {
+      globalThis.atob = originalAtob;
+    }
   });
 
   test("revokes every preview returned by pruning", async () => {

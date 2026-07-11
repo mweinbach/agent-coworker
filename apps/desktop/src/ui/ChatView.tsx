@@ -8,13 +8,11 @@ import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
 } from "../../../../src/shared/displayCitationMarkers";
-import {
-  buildAttachmentSignature,
-  getAttachmentPickerValidationMessage,
-} from "../app/attachmentInputs";
+import { buildAttachmentSignature } from "../app/attachmentInputs";
 import {
   type ComposerDraftAttachment,
   type ComposerDraftRevision,
+  getComposerDraftAttachmentValidationMessage,
   resolveActiveComposerDraftKey,
   selectActiveComposerDraft,
 } from "../app/composerDrafts";
@@ -122,6 +120,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   });
   const composerDraft = useAppStore(selectActiveComposerDraft);
   const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
+  const attachmentIngestionPending = useAppStore(
+    (state) => (state.composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0,
+  );
   const composerText = composerDraft.text;
   const pendingAttachments = composerDraft.attachments;
   const composerWorkspaceId = thread?.workspaceId ?? "";
@@ -219,7 +220,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     Record<string, string>
   >({});
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
-  const preparingAttachments = preparingDraftKeys.has(composerDraftKey);
+  const preparingAttachments =
+    preparingDraftKeys.has(composerDraftKey) || attachmentIngestionPending;
   const submittedAttachmentSignature = submittedAttachmentSignatures[composerDraftKey] ?? null;
   const setAttachmentPickerError = useCallback(
     (message: string | null) => {
@@ -330,8 +332,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     async (selectedFiles: File[]) => {
       if (selectedFiles.length === 0) return;
 
-      const validationMessage = getAttachmentPickerValidationMessage(
-        pendingAttachments,
+      const validationMessage = getComposerDraftAttachmentValidationMessage(
+        useAppStore.getState().composerDraftsByKey,
+        composerDraftKey,
         selectedFiles,
       );
       if (validationMessage) {
@@ -341,11 +344,15 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
       setAttachmentPickerError(null);
       setSubmittedAttachmentSignature(null);
-      await addComposerAttachments(selectedFiles);
+      try {
+        await addComposerAttachments(selectedFiles);
+      } catch (error) {
+        setAttachmentPickerError(error instanceof Error ? error.message : String(error));
+      }
     },
     [
       addComposerAttachments,
-      pendingAttachments,
+      composerDraftKey,
       setAttachmentPickerError,
       setSubmittedAttachmentSignature,
     ],
@@ -629,6 +636,11 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       if (!thread) return;
       if (submitInFlightRef.current.has(composerDraftKey)) return;
       if (preparingAttachments) return;
+      if (
+        (useAppStore.getState().composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0
+      ) {
+        return;
+      }
       if (pendingTurnStart?.status === "sending") return;
       if (!composerText.trim() && pendingAttachments.length === 0) return;
 

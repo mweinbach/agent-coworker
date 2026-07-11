@@ -140,6 +140,8 @@ describe("desktop chat view stability", () => {
       tasksById: {},
       taskSummariesByWorkspaceId: {},
       composerDraftsByKey: {},
+      composerDraftRevisionFloorByKey: {},
+      composerAttachmentIngestionCountByKey: {},
       newChatLandingTarget: null,
     });
   });
@@ -1621,6 +1623,161 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("blocks an immediate submit until selected attachment ingestion completes", async () => {
+    const originalState = useAppStore.getState();
+    let releaseRead: ((buffer: ArrayBuffer) => void) | undefined;
+    const readGate = new Promise<ArrayBuffer>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readFile = mock(() => readGate);
+    const sendMessage = mock(
+      async (
+        text: string,
+        _busyPolicy?: "reject" | "steer",
+        attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>,
+      ) => {
+        expect(text).toBe("send with attachment");
+        expect(attachments).toEqual([
+          {
+            filename: "slow.txt",
+            contentBase64: "AQID",
+            mimeType: "text/plain",
+          },
+        ]);
+        return true;
+      },
+    );
+    const draftKey = composerDraftKeyForThread("thread-1");
+
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: { provider: "openai", model: "gpt-5.4" },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [],
+          pendingSteer: null,
+          pendingTurnStart: null,
+          transcriptOnly: false,
+          activeTurnId: null,
+        },
+      },
+      composerDraftsByKey: composerDraftsWithText(draftKey, "send with attachment"),
+      composerAttachmentIngestionCountByKey: {},
+      sendMessage,
+    } as never);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      const form = container.querySelector("form");
+      if (!fileInput || !form) throw new Error("missing composer controls");
+      const slowFile = {
+        name: "slow.txt",
+        type: "text/plain",
+        size: 3,
+        lastModified: 1,
+        arrayBuffer: readFile,
+      } as File;
+      Object.defineProperty(fileInput, "files", {
+        configurable: true,
+        value: [slowFile],
+      });
+
+      await act(async () => {
+        fileInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        form.dispatchEvent(
+          new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composerAttachmentIngestionCountByKey[draftKey]).toBe(1);
+      expect(
+        (container.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null)
+          ?.disabled,
+      ).toBe(true);
+
+      await act(async () => {
+        releaseRead?.(new Uint8Array([1, 2, 3]).buffer);
+        await readGate;
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(
+        useAppStore.getState().composerAttachmentIngestionCountByKey[draftKey],
+      ).toBeUndefined();
+      expect(useAppStore.getState().composerDraftsByKey[draftKey]?.attachments).toHaveLength(1);
+
+      await act(async () => {
+        form.dispatchEvent(
+          new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseRead?.(new Uint8Array([1, 2, 3]).buffer);
+      await readGate;
+      await Promise.resolve();
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(originalState, true);
       harness.restore();
     }
   });

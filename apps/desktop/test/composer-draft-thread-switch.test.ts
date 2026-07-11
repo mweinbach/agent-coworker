@@ -3,8 +3,14 @@ import {
   composerDraftKeyForNewChatTarget,
   composerDraftKeyForThread,
   createEmptyComposerDraft,
+  MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE,
+  MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT,
+  MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES,
+  MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES,
   selectActiveComposerDraft,
 } from "../src/app/composerDrafts";
+import { syncDesktopStateCacheNow } from "../src/app/store.helpers/persistence";
+import { createComposerAttachmentFile } from "../src/lib/composerAttachments";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
@@ -98,6 +104,8 @@ describe("composer draft clear after send", () => {
           text: "draft for B",
         },
       },
+      composerDraftRevisionFloorByKey: {},
+      composerAttachmentIngestionCountByKey: {},
       taskSummariesByWorkspaceId: {
         "ws-1": [],
       },
@@ -107,6 +115,7 @@ describe("composer draft clear after send", () => {
 
   afterEach(() => {
     RUNTIME.jsonRpcSockets.delete("ws-1");
+    RUNTIME.composerAttachmentIngestionTail = null;
     useAppStore.setState(snapshot, true);
     Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
@@ -163,7 +172,7 @@ describe("composer draft clear after send", () => {
 
     expect(await delayedClear).toBe(true);
     const afterClear = useAppStore.getState();
-    expect(afterClear.composerDraftsByKey[composerDraftKeyForThread("thread-a")]?.text).toBe("");
+    expect(afterClear.composerDraftsByKey[composerDraftKeyForThread("thread-a")]).toBeUndefined();
     expect(afterClear.composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text).toBe(
       "new text in B",
     );
@@ -212,7 +221,7 @@ describe("composer draft clear after send", () => {
     await flushAsyncWork();
 
     const state = useAppStore.getState();
-    expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]?.text).toBe("");
+    expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]).toBeUndefined();
     expect(state.composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text).toBe(
       "new text in B",
     );
@@ -250,7 +259,7 @@ describe("composer draft clear after send", () => {
     resolveCommand?.();
 
     expect(await send).toBe(true);
-    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("");
+    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
     expect(
       useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-b")]?.text,
     ).toBe("B changed while task creation was pending");
@@ -312,11 +321,7 @@ describe("composer draft clear after send", () => {
         }),
     ).toBe(true);
     await flushAsyncWork();
-    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
-      revision: failedOwner.revision + 1,
-      text: "",
-      attachments: [],
-    });
+    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
   });
 
   test("preserves exact attachments across switches and revokes only on removal", async () => {
@@ -391,6 +396,129 @@ describe("composer draft clear after send", () => {
     } finally {
       URL.createObjectURL = originalCreateObjectURL;
       URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("rejects count, per-file, per-draft, and persisted aggregate limits before reading files", async () => {
+    const readFile = mock(async () => new Uint8Array([1]).buffer);
+    const sizedFile = (name: string, size: number) =>
+      ({
+        name,
+        type: "application/octet-stream",
+        size,
+        lastModified: 1,
+        arrayBuffer: readFile,
+      }) as File;
+
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments(
+          Array.from({ length: MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT + 1 }, (_, index) =>
+            sizedFile(`count-${index}.bin`, 0),
+          ),
+        ),
+    ).rejects.toThrow(`max ${MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT}`);
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments([
+          sizedFile("oversized.bin", MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE + 1),
+        ]),
+    ).rejects.toThrow("File too large");
+    await expect(
+      useAppStore
+        .getState()
+        .addComposerAttachments([
+          sizedFile(
+            "aggregate-a.bin",
+            Math.floor(MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES / 2) + 1,
+          ),
+          sizedFile(
+            "aggregate-b.bin",
+            Math.floor(MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES / 2) + 1,
+          ),
+        ]),
+    ).rejects.toThrow("Draft attachments too large in total");
+
+    const existingFile = new File(["x"], "existing.bin", {
+      type: "application/octet-stream",
+      lastModified: 1,
+    });
+    useAppStore.setState((state) => ({
+      selectedThreadId: "thread-b",
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [composerDraftKeyForThread("thread-a")]: {
+          ...state.composerDraftsByKey[composerDraftKeyForThread("thread-a")]!,
+          attachments: [
+            {
+              filename: existingFile.name,
+              mimeType: existingFile.type,
+              size: MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES - 1,
+              lastModified: existingFile.lastModified,
+              file: existingFile,
+              signature: "existing",
+              contentBase64: "eA==",
+            },
+          ],
+        },
+      },
+    }));
+    await expect(
+      useAppStore.getState().addComposerAttachments([sizedFile("global-overflow.bin", 2)]),
+    ).rejects.toThrow("Saved draft attachments too large in total");
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(useAppStore.getState().composerAttachmentIngestionCountByKey).toEqual({});
+  });
+
+  test("serializes concurrent ingestion batches before validating their combined count", async () => {
+    const firstBatch = Array.from(
+      { length: 5 },
+      (_, index) => new File([], `first-${index}.txt`, { type: "text/plain", lastModified: index }),
+    );
+    const secondBatch = Array.from(
+      { length: 4 },
+      (_, index) =>
+        new File([], `second-${index}.txt`, { type: "text/plain", lastModified: index }),
+    );
+
+    const firstIngestion = useAppStore.getState().addComposerAttachments(firstBatch);
+    const secondIngestion = useAppStore.getState().addComposerAttachments(secondBatch);
+
+    expect(
+      useAppStore.getState().composerAttachmentIngestionCountByKey[
+        composerDraftKeyForThread("thread-a")
+      ],
+    ).toBe(2);
+    await firstIngestion;
+    await expect(secondIngestion).rejects.toThrow(`max ${MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT}`);
+    expect(
+      useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-a")]
+        ?.attachments,
+    ).toHaveLength(5);
+    expect(useAppStore.getState().composerAttachmentIngestionCountByKey).toEqual({});
+  });
+
+  test("one-off send adaptation does not allocate a duplicate image object URL", async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const createObjectURL = mock(() => "blob:persistent-draft-preview");
+    URL.createObjectURL = createObjectURL;
+
+    try {
+      const file = new File(["image"], "one-off.png", {
+        type: "image/png",
+        lastModified: 1,
+      });
+      await useAppStore.getState().addComposerAttachments([file]);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+
+      const transient = createComposerAttachmentFile(file);
+      expect(transient).not.toHaveProperty("previewUrl");
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
     }
   });
 
@@ -480,6 +608,86 @@ describe("composer draft clear after send", () => {
     }
   });
 
+  test("store pruning keeps memory and restart persistence aligned and revokes removed previews", () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.revokeObjectURL = revokeObjectURL;
+    const nowMs = Date.parse("2026-07-10T20:00:00.000Z");
+    const realThreads = Array.from({ length: 51 }, (_, index) => ({
+      id: `real-${index}`,
+      workspaceId: "ws-1",
+      title: `Real ${index}`,
+      status: "active" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastMessageAt: "2026-01-01T00:00:00.000Z",
+      sessionId: `real-${index}`,
+      messageCount: 0,
+      lastEventSeq: 0,
+    }));
+    const tombstoneThreads = Array.from({ length: 20 }, (_, index) => ({
+      ...realThreads[0]!,
+      id: `tombstone-${index}`,
+      title: `Tombstone ${index}`,
+      sessionId: `tombstone-${index}`,
+    }));
+    const oldFile = new File(["x"], "old.png", { type: "image/png", lastModified: 1 });
+    const realDrafts = Object.fromEntries(
+      realThreads.map((thread, index) => [
+        composerDraftKeyForThread(thread.id),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index * 1_000).toISOString()),
+          revision: index + 1,
+          text: `real draft ${index}`,
+          attachments:
+            index === 50
+              ? [
+                  {
+                    filename: oldFile.name,
+                    mimeType: oldFile.type,
+                    size: oldFile.size,
+                    lastModified: oldFile.lastModified,
+                    file: oldFile,
+                    previewUrl: "blob:pruned-store-preview",
+                    signature: "old.png\u0000image/png\u00001\u00001",
+                    contentBase64: "eA==",
+                  },
+                ]
+              : [],
+        },
+      ]),
+    );
+    const tombstones = Object.fromEntries(
+      tombstoneThreads.map((thread, index) => [
+        composerDraftKeyForThread(thread.id),
+        {
+          ...createEmptyComposerDraft(new Date(nowMs - index).toISOString()),
+          revision: index + 1,
+          generation: index + 1,
+        },
+      ]),
+    );
+
+    try {
+      useAppStore.setState({
+        selectedThreadId: "real-0",
+        threads: [...realThreads, ...tombstoneThreads],
+        composerDraftsByKey: { ...tombstones, ...realDrafts },
+        composerAttachmentIngestionCountByKey: {},
+      });
+      useAppStore.getState().pruneComposerDrafts(nowMs);
+      const persistedState = syncDesktopStateCacheNow(useAppStore.getState);
+
+      const memoryDraftKeys = Object.keys(useAppStore.getState().composerDraftsByKey);
+      const persistedDraftKeys = Object.keys(persistedState.composerDrafts ?? {});
+      expect(memoryDraftKeys).toHaveLength(50);
+      expect(memoryDraftKeys.every((key) => key.startsWith("thread:real-"))).toBe(true);
+      expect(persistedDraftKeys).toEqual(memoryDraftKeys);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:pruned-store-preview");
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
   test("does not resurrect an attachment after its draft is discarded mid-read", async () => {
     const originalCreateObjectURL = URL.createObjectURL;
     const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -490,17 +698,25 @@ describe("composer draft clear after send", () => {
     const readGate = new Promise<ArrayBuffer>((resolve) => {
       releaseRead = resolve;
     });
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
     const file = new File([new Uint8Array([1, 2, 3, 4])], "slow.png", {
       type: "image/png",
       lastModified: 20,
     });
     Object.defineProperty(file, "arrayBuffer", {
-      value: () => readGate,
+      value: () => {
+        markReadStarted?.();
+        return readGate;
+      },
     });
 
     try {
       useAppStore.setState({ composerDraftsByKey: {} });
       const addPromise = useAppStore.getState().addComposerAttachments([file]);
+      await readStarted;
       expect(useAppStore.getState().discardComposerDraft()).toBe(true);
       releaseRead?.(new Uint8Array([1, 2, 3, 4]).buffer);
       await addPromise;

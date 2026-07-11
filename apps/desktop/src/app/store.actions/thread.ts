@@ -7,12 +7,14 @@ import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../attachmentInputs";
 import {
+  type ComposerDraft,
   type ComposerDraftAttachment,
   type ComposerDraftRevision,
   clearComposerDraftRevision,
   composerDraftKeyForThread,
   createComposerDraftAttachment,
   createEmptyComposerDraft,
+  getComposerDraftAttachmentValidationMessage,
   pruneComposerDrafts as pruneComposerDraftEntries,
   resolveActiveComposerDraftKey,
   revokeComposerDraftAttachmentPreviews,
@@ -83,6 +85,18 @@ type HydrateThreadSelectionOptions = {
   reconnectAfterHydration?: boolean;
   skipWorkspaceSelectOnReconnect?: boolean;
 } & AbortableActionOptions;
+
+function createEmptyComposerDraftForState(state: AppStoreState, key: string): ComposerDraft {
+  const draft = createEmptyComposerDraft(nowIso());
+  const revisionFloor = state.composerDraftRevisionFloorByKey[key];
+  return revisionFloor
+    ? {
+        ...draft,
+        revision: revisionFloor.revision,
+        generation: revisionFloor.generation,
+      }
+    : draft;
+}
 
 /**
  * Queue the first message of a brand-new chat AND render its user bubble
@@ -1497,7 +1511,8 @@ export function createThreadActions(
     setComposerText: (text, references = []) => {
       set((state) => {
         const key = resolveActiveComposerDraftKey(state);
-        const current = state.composerDraftsByKey[key] ?? createEmptyComposerDraft(nowIso());
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
         return {
           composerDraftsByKey: {
             ...state.composerDraftsByKey,
@@ -1511,6 +1526,7 @@ export function createThreadActions(
           },
         };
       });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
       persist(get);
     },
 
@@ -1520,9 +1536,9 @@ export function createThreadActions(
       let ownerGeneration = 1;
       set((state) => {
         const existing = state.composerDraftsByKey[ownerKey];
-        const current = existing ?? createEmptyComposerDraft(nowIso());
+        const current = existing ?? createEmptyComposerDraftForState(state, ownerKey);
         ownerGeneration = Math.max(1, current.generation);
-        if (existing && existing.generation === ownerGeneration) return {};
+        const pendingCount = (state.composerAttachmentIngestionCountByKey[ownerKey] ?? 0) + 1;
         return {
           composerDraftsByKey: {
             ...state.composerDraftsByKey,
@@ -1531,39 +1547,78 @@ export function createThreadActions(
               generation: ownerGeneration,
             },
           },
-        };
-      });
-      const attachments: ComposerDraftAttachment[] = [];
-      try {
-        for (const file of files) {
-          attachments.push(await createComposerDraftAttachment(file));
-        }
-      } catch (error) {
-        revokeComposerDraftAttachmentPreviews(attachments);
-        throw error;
-      }
-      let accepted = false;
-      set((state) => {
-        const current = state.composerDraftsByKey[ownerKey] ?? createEmptyComposerDraft(nowIso());
-        if (current.generation !== ownerGeneration) return {};
-        accepted = true;
-        return {
-          composerDraftsByKey: {
-            ...state.composerDraftsByKey,
-            [ownerKey]: {
-              ...current,
-              revision: current.revision + 1,
-              updatedAt: nowIso(),
-              attachments: [...current.attachments, ...attachments],
-            },
+          composerAttachmentIngestionCountByKey: {
+            ...state.composerAttachmentIngestionCountByKey,
+            [ownerKey]: pendingCount,
           },
         };
       });
-      if (!accepted) {
-        revokeComposerDraftAttachmentPreviews(attachments);
-        return;
-      }
-      persist(get);
+      const previousIngestion = RUNTIME.composerAttachmentIngestionTail ?? Promise.resolve();
+      const ingestion = previousIngestion
+        .catch(() => undefined)
+        .then(async () => {
+          const current = get().composerDraftsByKey[ownerKey];
+          if (current?.generation !== ownerGeneration) return;
+          const validationMessage = getComposerDraftAttachmentValidationMessage(
+            get().composerDraftsByKey,
+            ownerKey,
+            files,
+          );
+          if (validationMessage) {
+            throw new Error(validationMessage);
+          }
+
+          const attachments: ComposerDraftAttachment[] = [];
+          try {
+            for (const file of files) {
+              attachments.push(await createComposerDraftAttachment(file));
+            }
+          } catch (error) {
+            revokeComposerDraftAttachmentPreviews(attachments);
+            throw error;
+          }
+
+          let accepted = false;
+          set((state) => {
+            const draft = state.composerDraftsByKey[ownerKey];
+            if (draft?.generation !== ownerGeneration) return {};
+            accepted = true;
+            return {
+              composerDraftsByKey: {
+                ...state.composerDraftsByKey,
+                [ownerKey]: {
+                  ...draft,
+                  revision: draft.revision + 1,
+                  updatedAt: nowIso(),
+                  attachments: [...draft.attachments, ...attachments],
+                },
+              },
+            };
+          });
+          if (!accepted) {
+            revokeComposerDraftAttachmentPreviews(attachments);
+            return;
+          }
+          persist(get);
+        });
+      let trackedIngestion: Promise<void>;
+      trackedIngestion = ingestion.finally(() => {
+        set((state) => {
+          const pendingCount = (state.composerAttachmentIngestionCountByKey[ownerKey] ?? 1) - 1;
+          const nextPendingCounts = {
+            ...state.composerAttachmentIngestionCountByKey,
+          };
+          if (pendingCount > 0) nextPendingCounts[ownerKey] = pendingCount;
+          else delete nextPendingCounts[ownerKey];
+          return { composerAttachmentIngestionCountByKey: nextPendingCounts };
+        });
+        if (RUNTIME.composerAttachmentIngestionTail === trackedIngestion) {
+          RUNTIME.composerAttachmentIngestionTail = null;
+        }
+        get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      });
+      RUNTIME.composerAttachmentIngestionTail = trackedIngestion;
+      await trackedIngestion;
     },
 
     removeComposerAttachment: (index) => {
@@ -1588,6 +1643,7 @@ export function createThreadActions(
         };
       });
       revokeComposerDraftAttachmentPreviews(removed);
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
       persist(get);
     },
 
@@ -1596,7 +1652,8 @@ export function createThreadActions(
       if (!normalizedModel) return;
       set((state) => {
         const key = resolveActiveComposerDraftKey(state);
-        const current = state.composerDraftsByKey[key] ?? createEmptyComposerDraft(nowIso());
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
         if (current.provider === provider && current.model === normalizedModel) return {};
         return {
           composerDraftsByKey: {
@@ -1612,13 +1669,15 @@ export function createThreadActions(
           },
         };
       });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
       persist(get);
     },
 
     setComposerDraftReasoningEffort: (effort) => {
       set((state) => {
         const key = resolveActiveComposerDraftKey(state);
-        const current = state.composerDraftsByKey[key] ?? createEmptyComposerDraft(nowIso());
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
         if (current.reasoningEffort === effort) return {};
         return {
           composerDraftsByKey: {
@@ -1632,6 +1691,7 @@ export function createThreadActions(
           },
         };
       });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
       persist(get);
     },
 
@@ -1647,6 +1707,7 @@ export function createThreadActions(
       });
       if (cleared) {
         revokeComposerDraftAttachmentPreviews(removedAttachments);
+        get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
         persist(get);
       }
       return cleared;
@@ -1660,7 +1721,7 @@ export function createThreadActions(
       return get().clearComposerDraft(owner);
     },
 
-    pruneComposerDrafts: (nowMs) => {
+    pruneComposerDrafts: (nowMs, maxAgeMs) => {
       let removedAttachments: ReturnType<typeof pruneComposerDraftEntries>["removedAttachments"] =
         [];
       let changed = false;
@@ -1674,10 +1735,32 @@ export function createThreadActions(
               .map((workspace) => workspace.id),
           ),
           activeKey: resolveActiveComposerDraftKey(state),
+          maxAgeMs,
+          protectedKeys: new Set(
+            Object.entries(state.composerAttachmentIngestionCountByKey)
+              .filter(([, count]) => count > 0)
+              .map(([key]) => key),
+          ),
         });
         removedAttachments = result.removedAttachments;
         changed = result.removedKeys.length > 0;
-        return result.removedKeys.length > 0 ? { composerDraftsByKey: result.drafts } : {};
+        if (result.removedKeys.length === 0) return {};
+        const composerDraftRevisionFloorByKey = {
+          ...state.composerDraftRevisionFloorByKey,
+        };
+        for (const key of result.removedKeys) {
+          const removedDraft = state.composerDraftsByKey[key];
+          if (!removedDraft) continue;
+          const currentFloor = composerDraftRevisionFloorByKey[key];
+          composerDraftRevisionFloorByKey[key] = {
+            revision: Math.max(currentFloor?.revision ?? 0, removedDraft.revision),
+            generation: Math.max(currentFloor?.generation ?? 0, removedDraft.generation),
+          };
+        }
+        return {
+          composerDraftsByKey: result.drafts,
+          composerDraftRevisionFloorByKey,
+        };
       });
       revokeComposerDraftAttachmentPreviews(removedAttachments);
       if (changed) persist(get);

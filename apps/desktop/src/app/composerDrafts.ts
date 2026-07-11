@@ -1,3 +1,9 @@
+import {
+  MAX_ATTACHMENT_BASE64_SIZE,
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
+  MAX_TURN_ATTACHMENT_COUNT,
+  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
+} from "../../../../src/shared/attachments";
 import { type NewChatLandingTarget, resolveNewChatLandingTarget } from "../lib/newChatLanding";
 import type { TurnReference } from "../lib/wsProtocol";
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
@@ -17,6 +23,11 @@ const REASONING_EFFORT_VALUES = new Set([
 ]);
 
 export const MAX_COMPOSER_DRAFTS = 50;
+export const MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT = MAX_TURN_ATTACHMENT_COUNT;
+export const MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE = MAX_ATTACHMENT_INLINE_BYTE_SIZE;
+export const MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES = MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
+export const MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES =
+  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
 
 export type ComposerDraftAttachment = {
   filename: string;
@@ -48,6 +59,11 @@ export type ComposerDraftRevision = {
   revision: number;
 };
 
+export type ComposerDraftRevisionFloor = {
+  revision: number;
+  generation: number;
+};
+
 export type PersistedComposerDraftAttachment = Omit<ComposerDraftAttachment, "file" | "previewUrl">;
 
 export type PersistedComposerDraft = Omit<ComposerDraft, "attachments"> & {
@@ -69,6 +85,7 @@ type PruneComposerDraftOptions = {
   validThreadIds: ReadonlySet<string>;
   validProjectWorkspaceIds: ReadonlySet<string>;
   activeKey?: string | null;
+  protectedKeys?: ReadonlySet<string>;
   maxDrafts?: number;
   maxAgeMs?: number;
 };
@@ -141,6 +158,46 @@ export async function createComposerDraftAttachment(
   };
 }
 
+export function getComposerDraftAttachmentValidationMessage(
+  drafts: ComposerDraftsByKey,
+  ownerKey: string,
+  selectedFiles: readonly Pick<File, "size">[],
+): string | null {
+  const currentAttachments = drafts[ownerKey]?.attachments ?? [];
+  const totalCount = currentAttachments.length + selectedFiles.length;
+  if (totalCount > MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT) {
+    return `Too many file attachments (max ${MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT})`;
+  }
+
+  const selectedBytes = sumAttachmentBytes(selectedFiles);
+  if (!Number.isFinite(selectedBytes)) {
+    return "File attachment size is invalid";
+  }
+  if (selectedFiles.some((file) => file.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE)) {
+    return "File too large to save in a draft (max 25MB)";
+  }
+
+  const currentDraftBytes = sumAttachmentBytes(currentAttachments);
+  if (
+    !Number.isFinite(currentDraftBytes) ||
+    currentDraftBytes + selectedBytes > MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES
+  ) {
+    return "Draft attachments too large in total (max 25MB combined)";
+  }
+
+  const persistedBytes = Object.values(drafts).reduce(
+    (total, draft) => total + sumAttachmentBytes(draft.attachments),
+    0,
+  );
+  if (
+    !Number.isFinite(persistedBytes) ||
+    persistedBytes + selectedBytes > MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
+  ) {
+    return "Saved draft attachments too large in total (max 25MB across chats)";
+  }
+  return null;
+}
+
 export function serializeComposerDrafts(drafts: ComposerDraftsByKey): PersistedComposerDrafts {
   return Object.fromEntries(
     Object.entries(drafts)
@@ -174,8 +231,14 @@ export function serializeComposerDrafts(drafts: ComposerDraftsByKey): PersistedC
 export function sanitizePersistedComposerDrafts(value: unknown): PersistedComposerDrafts {
   if (!isRecord(value)) return {};
   const drafts: PersistedComposerDrafts = {};
-  for (const [key, candidate] of Object.entries(value)) {
-    if (!isRecord(candidate)) continue;
+  let persistedAttachmentBytes = 0;
+  const candidates = Object.entries(value)
+    .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
+    .sort(([leftKey, left], [rightKey, right]) => {
+      const updatedAtDelta = persistedDraftUpdatedAtMs(right) - persistedDraftUpdatedAtMs(left);
+      return updatedAtDelta || leftKey.localeCompare(rightKey);
+    });
+  for (const [key, candidate] of candidates) {
     const revision =
       typeof candidate.revision === "number" &&
       Number.isInteger(candidate.revision) &&
@@ -192,12 +255,26 @@ export function sanitizePersistedComposerDrafts(value: unknown): PersistedCompos
       typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
         ? candidate.updatedAt
         : new Date(0).toISOString();
-    const attachments = Array.isArray(candidate.attachments)
-      ? candidate.attachments.flatMap((attachment) => {
-          const normalized = sanitizePersistedComposerDraftAttachment(attachment);
-          return normalized ? [normalized] : [];
-        })
-      : [];
+    const attachments: PersistedComposerDraftAttachment[] = [];
+    let draftAttachmentBytes = 0;
+    if (Array.isArray(candidate.attachments)) {
+      for (const attachment of candidate.attachments) {
+        if (attachments.length >= MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT) break;
+        const declaredSize = persistedAttachmentDeclaredSize(attachment);
+        if (declaredSize === null) continue;
+        if (
+          draftAttachmentBytes + declaredSize > MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES ||
+          persistedAttachmentBytes + declaredSize > MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
+        ) {
+          continue;
+        }
+        const normalized = sanitizePersistedComposerDraftAttachment(attachment);
+        if (!normalized) continue;
+        attachments.push(normalized);
+        draftAttachmentBytes += declaredSize;
+        persistedAttachmentBytes += declaredSize;
+      }
+    }
     drafts[key] = {
       revision,
       generation,
@@ -266,9 +343,14 @@ export function pruneComposerDrafts(
   const nowMs = options.nowMs ?? Date.now();
   const maxDrafts = options.maxDrafts ?? MAX_COMPOSER_DRAFTS;
   const maxAgeMs = options.maxAgeMs ?? COMPOSER_DRAFT_MAX_AGE_MS;
+  const protectedEntries = Object.entries(drafts).filter(
+    ([key]) => options.protectedKeys?.has(key) === true && isValidComposerDraftKey(key, options),
+  );
   const eligible = Object.entries(drafts)
     .filter(([key, draft]) => {
       if (!isValidComposerDraftKey(key, options)) return false;
+      if (options.protectedKeys?.has(key) === true) return false;
+      if (!hasComposerDraftState(draft)) return false;
       if (key === options.activeKey) return true;
       const updatedAtMs = Date.parse(draft.updatedAt);
       return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs <= maxAgeMs;
@@ -279,9 +361,26 @@ export function pruneComposerDrafts(
       return (
         Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || leftKey.localeCompare(rightKey)
       );
-    })
-    .slice(0, Math.max(0, maxDrafts));
-  const next = Object.fromEntries(eligible);
+    });
+  const retainedDrafts: Array<[string, ComposerDraft]> = [];
+  let persistedAttachmentBytes = protectedEntries.reduce(
+    (total, [, draft]) => total + validatedDraftAttachmentBytes(draft),
+    0,
+  );
+  for (const entry of eligible) {
+    if (retainedDrafts.length >= Math.max(0, maxDrafts)) break;
+    const draftAttachmentBytes = validatedDraftAttachmentBytes(entry[1]);
+    if (
+      !Number.isFinite(draftAttachmentBytes) ||
+      persistedAttachmentBytes + draftAttachmentBytes >
+        MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES
+    ) {
+      continue;
+    }
+    retainedDrafts.push(entry);
+    persistedAttachmentBytes += draftAttachmentBytes;
+  }
+  const next = Object.fromEntries([...protectedEntries, ...retainedDrafts]);
   const retainedKeys = new Set(Object.keys(next));
   const removedKeys = Object.keys(drafts).filter((key) => !retainedKeys.has(key));
   return {
@@ -368,10 +467,12 @@ function hydrateComposerDraftAttachment(
     typeof value.size !== "number" ||
     !Number.isFinite(value.size) ||
     value.size < 0 ||
+    value.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE ||
     typeof value.lastModified !== "number" ||
     !Number.isFinite(value.lastModified) ||
     typeof value.signature !== "string" ||
-    typeof value.contentBase64 !== "string"
+    typeof value.contentBase64 !== "string" ||
+    value.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE
   ) {
     return null;
   }
@@ -410,10 +511,12 @@ function sanitizePersistedComposerDraftAttachment(
     typeof value.size !== "number" ||
     !Number.isFinite(value.size) ||
     value.size < 0 ||
+    value.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE ||
     typeof value.lastModified !== "number" ||
     !Number.isFinite(value.lastModified) ||
     typeof value.signature !== "string" ||
-    typeof value.contentBase64 !== "string"
+    typeof value.contentBase64 !== "string" ||
+    value.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE
   ) {
     return null;
   }
@@ -430,6 +533,52 @@ function sanitizePersistedComposerDraftAttachment(
     signature: value.signature,
     contentBase64: value.contentBase64,
   };
+}
+
+function persistedAttachmentDeclaredSize(value: unknown): number | null {
+  if (
+    !isRecord(value) ||
+    typeof value.size !== "number" ||
+    !Number.isFinite(value.size) ||
+    value.size < 0 ||
+    value.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE ||
+    typeof value.contentBase64 !== "string" ||
+    value.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE
+  ) {
+    return null;
+  }
+  return value.size;
+}
+
+function persistedDraftUpdatedAtMs(value: Record<string, unknown>): number {
+  if (typeof value.updatedAt !== "string") return 0;
+  const updatedAtMs = Date.parse(value.updatedAt);
+  return Number.isFinite(updatedAtMs) ? updatedAtMs : 0;
+}
+
+function sumAttachmentBytes(attachments: readonly Pick<{ size: number }, "size">[]): number {
+  let total = 0;
+  for (const attachment of attachments) {
+    if (!Number.isFinite(attachment.size) || attachment.size < 0) return Number.POSITIVE_INFINITY;
+    total += attachment.size;
+    if (!Number.isSafeInteger(total)) return Number.POSITIVE_INFINITY;
+  }
+  return total;
+}
+
+function validatedDraftAttachmentBytes(draft: ComposerDraft): number {
+  if (draft.attachments.length > MAX_COMPOSER_DRAFT_ATTACHMENT_COUNT) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (
+    draft.attachments.some(
+      (attachment) => attachment.size > MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE,
+    )
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const total = sumAttachmentBytes(draft.attachments);
+  return total <= MAX_COMPOSER_DRAFT_TOTAL_ATTACHMENT_BYTES ? total : Number.POSITIVE_INFINITY;
 }
 
 function hydrateReferences(value: unknown): TurnReference[] {

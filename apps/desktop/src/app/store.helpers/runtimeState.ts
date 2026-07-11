@@ -81,6 +81,8 @@ export type RuntimeMaps = {
   mcpOAuthRefreshPollGenerations: Map<string, number>;
   /** Per-workspace counter used to ignore stale subagent profile catalog reads after mutations. */
   agentProfilesCatalogGenerations: Map<string, number>;
+  /** Serializes persisted attachment conversion so cross-draft byte reservations cannot race. */
+  composerAttachmentIngestionTail: Promise<void> | null;
 };
 
 export const RUNTIME: RuntimeMaps = {
@@ -106,6 +108,7 @@ export const RUNTIME: RuntimeMaps = {
   providerStatusRefreshGeneration: 0,
   mcpOAuthRefreshPollGenerations: new Map(),
   agentProfilesCatalogGenerations: new Map(),
+  composerAttachmentIngestionTail: null,
 };
 
 export function getAgentProfilesCatalogGeneration(workspaceId: string): number {

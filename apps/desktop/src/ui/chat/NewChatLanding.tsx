@@ -9,10 +9,10 @@ import {
 } from "lucide-react";
 import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getAttachmentCountValidationMessage } from "../../../../../src/shared/attachments";
 import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
 import {
   type ComposerDraftRevision,
+  getComposerDraftAttachmentValidationMessage,
   resolveActiveComposerDraftKey,
   selectActiveComposerDraft,
 } from "../../app/composerDrafts";
@@ -66,6 +66,9 @@ export function NewChatLanding() {
   );
   const composerDraft = useAppStore(selectActiveComposerDraft);
   const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
+  const attachmentIngestionPending = useAppStore(
+    (state) => (state.composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0,
+  );
   const composerText = composerDraft.text;
   const pendingAttachments = composerDraft.attachments;
   const setComposerText = useAppStore((s) => s.setComposerText);
@@ -85,6 +88,7 @@ export function NewChatLanding() {
   const [submittingDraftKeys, setSubmittingDraftKeys] = useState<Set<string>>(() => new Set());
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
   const submitting = submittingDraftKeys.has(composerDraftKey);
+  const composerLocked = submitting || attachmentIngestionPending;
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
   const setSubmitting = useCallback(
     (next: boolean) => {
@@ -154,7 +158,8 @@ export function NewChatLanding() {
 
   const trimmedComposerText = composerText.trim();
   const hasPendingAttachments = pendingAttachments.length > 0;
-  const canSubmitNewChat = Boolean(trimmedComposerText || hasPendingAttachments);
+  const canSubmitNewChat =
+    !attachmentIngestionPending && Boolean(trimmedComposerText || hasPendingAttachments);
   const modelDisplayNames = useMemo(
     () => modelDisplayNamesFromCatalog(providerCatalog),
     [providerCatalog],
@@ -192,10 +197,12 @@ export function NewChatLanding() {
 
   const ingestAttachmentFiles = useCallback(
     async (selectedFiles: File[]) => {
-      if (selectedFiles.length === 0 || submitting) return;
+      if (selectedFiles.length === 0 || composerLocked) return;
 
-      const validationMessage = getAttachmentCountValidationMessage(
-        pendingAttachments.length + selectedFiles.length,
+      const validationMessage = getComposerDraftAttachmentValidationMessage(
+        useAppStore.getState().composerDraftsByKey,
+        composerDraftKey,
+        selectedFiles,
       );
       if (validationMessage) {
         setAttachmentPickerError(validationMessage);
@@ -203,9 +210,13 @@ export function NewChatLanding() {
       }
 
       setAttachmentPickerError(null);
-      await addComposerAttachments(selectedFiles);
+      try {
+        await addComposerAttachments(selectedFiles);
+      } catch (error) {
+        setAttachmentPickerError(error instanceof Error ? error.message : String(error));
+      }
     },
-    [addComposerAttachments, pendingAttachments.length, setAttachmentPickerError, submitting],
+    [addComposerAttachments, composerDraftKey, composerLocked, setAttachmentPickerError],
   );
 
   const handleFileSelect = useCallback(
@@ -230,6 +241,11 @@ export function NewChatLanding() {
     async (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
       if (!canSubmitNewChat || submitting) {
+        return;
+      }
+      if (
+        (useAppStore.getState().composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0
+      ) {
         return;
       }
 
@@ -394,7 +410,7 @@ export function NewChatLanding() {
               type="button"
               variant="outline"
               size="sm"
-              disabled={submitting}
+              disabled={composerLocked}
               className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground"
               onClick={() => {
                 updateComposerText(starter.prompt);
@@ -432,7 +448,7 @@ export function NewChatLanding() {
                 textareaRef={textareaRef}
                 value={composerText}
                 setValue={updateComposerText}
-                disabled={submitting}
+                disabled={composerLocked}
                 placeholder="Message Cowork..."
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
@@ -485,7 +501,7 @@ export function NewChatLanding() {
                   variant="ghost"
                   size="icon"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={submitting}
+                  disabled={composerLocked}
                   className="rounded-full text-muted-foreground hover:bg-muted/45 hover:text-foreground"
                   aria-label="Attach files"
                   title="Attach files"
@@ -500,7 +516,7 @@ export function NewChatLanding() {
                       size="sm"
                       className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground/90 hover:bg-muted/35 hover:text-foreground"
                       aria-label="Select chat target"
-                      disabled={submitting}
+                      disabled={composerLocked}
                     >
                       {target.kind === "project" ? (
                         <FolderIcon className="size-4 shrink-0" />
@@ -584,7 +600,7 @@ export function NewChatLanding() {
                       provider={modelSelection.provider}
                       model={modelSelection.model}
                       modelDisplayNames={modelDisplayNames}
-                      disabled={submitting}
+                      disabled={composerLocked}
                       onChange={(selection) => {
                         setComposerDraftModel(selection.provider, selection.model);
                       }}
@@ -593,7 +609,7 @@ export function NewChatLanding() {
                       <ComposerReasoningSelector
                         value={reasoningEffort}
                         options={reasoningConfig.availableEfforts}
-                        disabled={submitting}
+                        disabled={composerLocked}
                         onChange={setComposerDraftReasoningEffort}
                       />
                     ) : null}
@@ -601,8 +617,8 @@ export function NewChatLanding() {
                 ) : null}
               </MessageComposerTools>
               <MessageComposerSubmit
-                status={submitting ? "pending" : "ready"}
-                disabled={!canSubmitNewChat || submitting}
+                status={composerLocked ? "pending" : "ready"}
+                disabled={!canSubmitNewChat || composerLocked}
               />
             </MessageComposerFooter>
           </MessageComposerForm>

@@ -71,6 +71,8 @@ const initialState: AppStoreDataState = {
   providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
   composerDraftsByKey: {},
+  composerDraftRevisionFloorByKey: {},
+  composerAttachmentIngestionCountByKey: {},
   newChatLandingTarget: null,
   injectContext: false,
   developerMode: false,

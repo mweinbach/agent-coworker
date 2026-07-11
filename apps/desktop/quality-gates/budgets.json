@@ -15,14 +15,24 @@
     "unrelatedSidebarRowRenders": 6
   },
   "fileTree": {
-    "filesystemRequests": 2,
+    "expansionFileExplorerRowRenders": 8,
+    "expansionFilesystemRequests": 1,
+    "expansionLatencyMs": 1000,
+    "expansionReactCommits": 6,
+    "fileExplorerRowRenders": 1,
+    "filesystemRequests": 1,
     "reactCommits": 6,
-    "storePublications": 4
+    "storePublications": 0
   },
   "longTranscript": {
     "maxFeedDerivationItems": 80,
     "mountedFeedRows": 90,
     "reactCommits": 1800,
     "storePublications": 1000
+  },
+  "scrollOwnership": {
+    "anchorDriftPx": 1,
+    "appendMessagesMs": 1500,
+    "threadRoundTripMs": 1500
   }
 }

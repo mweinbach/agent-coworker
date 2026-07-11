@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { z } from "zod";
+import type { WorkspaceFileChangeEvent } from "../../../src/filesystem/workspaceFileEvents";
 import {
   type DesktopFeatureFlagOverrides,
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
 } from "../../../src/shared/featureFlags";
+import type { WorkspaceFileChangeEvent as PreviewFileChangeEvent } from "../../../src/shared/fileVersion";
 import {
   type CrashReportingEnvironment,
   resolveCrashReportingConfig,
@@ -59,6 +61,7 @@ import {
   type TrashPathInput,
   type UpdaterState,
   type UploadDiagnosticsBundleInput,
+  type WatchWorkspaceDirectoryInput,
   type WindowCloseRequest,
   type WindowCloseResponseInput,
   type WindowDragPointInput,
@@ -91,6 +94,7 @@ import {
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
   preferredFileAppInputSchema,
+  previewFileChangeEventSchema,
   previewOSFileInputSchema,
   readFileForPreviewInputSchema,
   readFileInputSchema,
@@ -112,9 +116,11 @@ import {
   trashPathInputSchema,
   updaterStateSchema,
   uploadDiagnosticsBundleInputSchema,
+  watchWorkspaceDirectoryInputSchema,
   windowCloseRequestSchema,
   windowCloseResponseInputSchema,
   windowDragPointInputSchema,
+  workspaceFileChangeEventSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
   workspaceServerStatusSchema,
@@ -191,6 +197,14 @@ function assertWindowCloseResponseInput(opts: WindowCloseResponseInput): void {
 
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
   parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
+}
+
+function assertWatchWorkspaceDirectoryInput(opts: WatchWorkspaceDirectoryInput): void {
+  parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
+}
+
+function assertPreviewFileChangeEvent(value: unknown): asserts value is PreviewFileChangeEvent {
+  parseWithSchema(previewFileChangeEventSchema, value, "preview file change event");
 }
 
 function assertReadFileInput(opts: ReadFileInput): void {
@@ -309,6 +323,10 @@ function assertWorkspaceServerExitedEvent(
   parseWithSchema(workspaceServerExitedEventSchema, value, "workspace server exited event");
 }
 
+function assertWorkspaceFileChangeEvent(value: unknown): asserts value is WorkspaceFileChangeEvent {
+  parseWithSchema(workspaceFileChangeEventSchema, value, "workspace file change event");
+}
+
 function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
   parseWithSchema(desktopMenuCommandSchema, value, "menu command");
 }
@@ -317,7 +335,7 @@ function assertMobileRelayStartInput(opts: MobileRelayStartInput): void {
   parseWithSchema(mobileRelayStartInputSchema, opts, "mobileRelay.start options");
 }
 
-function assertMobileRelayForgetTrustedPhoneInput(opts?: MobileRelayForgetTrustedPhoneInput): void {
+function assertMobileRelayForgetTrustedPhoneInput(opts: MobileRelayForgetTrustedPhoneInput): void {
   parseWithSchema(
     mobileRelayForgetTrustedPhoneInputSchema,
     opts,
@@ -496,7 +514,7 @@ const desktopApi = Object.freeze<DesktopApi>({
     return state;
   },
 
-  forgetMobileRelayTrustedPhone: async (opts?: MobileRelayForgetTrustedPhoneInput) => {
+  forgetMobileRelayTrustedPhone: async (opts: MobileRelayForgetTrustedPhoneInput) => {
     assertMobileRelayForgetTrustedPhoneInput(opts);
     const state = await ipcRenderer.invoke(
       DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone,
@@ -611,6 +629,20 @@ const desktopApi = Object.freeze<DesktopApi>({
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
+  },
+
+  watchWorkspaceDirectory: async (opts: WatchWorkspaceDirectoryInput) => {
+    assertWatchWorkspaceDirectoryInput(opts);
+    const watching = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory, opts);
+    if (typeof watching !== "boolean") {
+      throw new Error("watchWorkspaceDirectory result must be a boolean");
+    }
+    return watching;
+  },
+
+  unwatchWorkspaceDirectory: (opts: WatchWorkspaceDirectoryInput) => {
+    assertWatchWorkspaceDirectoryInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
   },
 
   readFile: (opts: ReadFileInput) => {
@@ -850,6 +882,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     };
   },
 
+  onPreviewFileChanged: (listener: (event: PreviewFileChangeEvent) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onPreviewFileChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertPreviewFileChangeEvent(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.previewFileChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.previewFileChanged, wrapped);
+    };
+  },
+
   onMenuCommand: (listener: (command: DesktopMenuCommand) => void) => {
     if (typeof listener !== "function") {
       throw new Error("onMenuCommand listener must be a function");
@@ -891,6 +937,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
+    };
+  },
+
+  onWorkspaceFileChanged: (listener: (event: WorkspaceFileChangeEvent) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWorkspaceFileChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWorkspaceFileChangeEvent(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
     };
   },
 });

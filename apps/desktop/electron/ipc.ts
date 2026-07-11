@@ -26,12 +26,13 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   };
 
   registerWorkspaceIpc(context);
-  registerFilesIpc(context);
+  const unregisterFilesIpc = registerFilesIpc(context);
   registerWindowIpc(context);
   registerSystemIpc(context);
   const unregisterMobileRelayIpc = registerMobileRelayIpc(context);
 
   return () => {
+    unregisterFilesIpc();
     unregisterMobileRelayIpc();
     for (const channel of Object.values(DESKTOP_IPC_CHANNELS)) {
       ipcMain.removeHandler(channel);

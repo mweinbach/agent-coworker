@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { operationKey } from "../src/app/store.helpers/operations";
+import { shouldShowReconnectBanner } from "../src/ui/chat/chatLogic";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
@@ -476,6 +478,35 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     ).toBe("active");
   });
 
+  test("reconnectThreadWithFeedback reports a confirmed connection without changing drafts", async () => {
+    const { threadId } = seedStore();
+    const draftKey = `thread:${threadId}`;
+    useAppStore.setState((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [draftKey]: {
+          revision: 1,
+          generation: 0,
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          text: "Keep this draft through reconnect.",
+          attachments: [],
+          references: [],
+        },
+      },
+    }));
+
+    const result = await useAppStore.getState().reconnectThreadWithFeedback(threadId);
+    await flushAsyncWork();
+
+    expect(result.ok).toBe(true);
+    expect(
+      useAppStore.getState().operationsByKey[operationKey("thread-reconnect", threadId)]?.status,
+    ).toBe("success");
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]?.text).toBe(
+      "Keep this draft through reconnect.",
+    );
+  });
+
   test("cached session snapshots hydrate the thread model before reconnect", async () => {
     const { threadId } = seedStore();
     const snapshot = {
@@ -816,6 +847,24 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(
       useAppStore.getState().threads.find((thread) => thread.id === disconnectedThreadId)?.status,
     ).toBe("disconnected");
+    const disconnectedState = useAppStore.getState();
+    const disconnectedThread = disconnectedState.threads.find(
+      (thread) => thread.id === disconnectedThreadId,
+    );
+    const disconnectedRuntime = disconnectedState.threadRuntimeById[disconnectedThreadId];
+    expect(
+      shouldShowReconnectBanner({
+        conversationVisible: true,
+        threadId: disconnectedThreadId,
+        threadStatus: disconnectedThread?.status ?? null,
+        transcriptOnly: disconnectedRuntime?.transcriptOnly === true,
+        connected: disconnectedRuntime?.connected === true,
+        sessionId: disconnectedRuntime?.sessionId ?? null,
+        hydrating: disconnectedRuntime?.hydrating === true,
+        workspaceStarting: false,
+        terminalTaskConversation: false,
+      }),
+    ).toBe(true);
 
     socket.reopen();
     await flushAsyncWork();
@@ -826,6 +875,22 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(
       useAppStore.getState().threads.find((thread) => thread.id === resumedThreadId)?.status,
     ).toBe("active");
+    const resumedState = useAppStore.getState();
+    const resumedThread = resumedState.threads.find((thread) => thread.id === resumedThreadId);
+    const resumedRuntime = resumedState.threadRuntimeById[resumedThreadId];
+    expect(
+      shouldShowReconnectBanner({
+        conversationVisible: true,
+        threadId: resumedThreadId,
+        threadStatus: resumedThread?.status ?? null,
+        transcriptOnly: resumedRuntime?.transcriptOnly === true,
+        connected: resumedRuntime?.connected === true,
+        sessionId: resumedRuntime?.sessionId ?? null,
+        hydrating: resumedRuntime?.hydrating === true,
+        workspaceStarting: false,
+        terminalTaskConversation: false,
+      }),
+    ).toBe(false);
   });
 
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {

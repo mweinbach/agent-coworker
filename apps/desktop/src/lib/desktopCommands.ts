@@ -1,9 +1,15 @@
+import {
+  DirectoryListingCoordinator,
+  isStaleDirectoryRequestError,
+} from "../../../../src/filesystem/directoryListingCoordinator";
+import type { WorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
 import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
+import type { WorkspaceFileChangeEvent as PreviewFileChangeEvent } from "../../../../src/shared/fileVersion";
 import type {
   HydratedTranscriptSnapshot,
   PersistedPrivacyTelemetrySettings,
@@ -56,6 +62,28 @@ function requireDesktopApi(): DesktopApi {
 }
 
 function noopUnsubscribe(): void {}
+
+function explorerEntriesEqual(left: ExplorerEntry, right: ExplorerEntry): boolean {
+  return (
+    left.name === right.name &&
+    left.path === right.path &&
+    left.isDirectory === right.isDirectory &&
+    left.isHidden === right.isHidden &&
+    left.sizeBytes === right.sizeBytes &&
+    left.modifiedAtMs === right.modifiedAtMs
+  );
+}
+
+const directoryListingCoordinator = new DirectoryListingCoordinator<ExplorerEntry>({
+  isEntryEqual: explorerEntriesEqual,
+  readDirectory: async (input) => {
+    const api = getDesktopApi();
+    if (!api || typeof api.listDirectory !== "function") {
+      return [];
+    }
+    return await api.listDirectory(input);
+  },
+});
 
 function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
   return resolveFeatureFlags({ isPackaged: false });
@@ -230,18 +258,79 @@ export async function showQuickChatWindow(opts?: ShowQuickChatWindowInput): Prom
 }
 
 export async function listDirectory(opts: {
+  workspaceId: string;
   path: string;
   includeHidden?: boolean;
 }): Promise<ExplorerEntry[]> {
-  if (typeof window === "undefined") {
-    return [];
+  return await directoryListingCoordinator.read({
+    workspaceId: opts.workspaceId,
+    path: opts.path,
+    includeHidden: opts.includeHidden ?? false,
+  });
+}
+
+export function invalidateDirectoryListing(input: {
+  workspaceId: string;
+  path: string;
+  recursive?: boolean;
+}): void {
+  directoryListingCoordinator.invalidate(input);
+}
+
+export function clearDirectoryListingScope(input: {
+  workspaceId: string;
+  path: string;
+  recursive?: boolean;
+}): void {
+  directoryListingCoordinator.clearScope(input);
+}
+
+export function invalidateWorkspaceFileChange(event: WorkspaceFileChangeEvent): void {
+  for (const path of event.affectedDirectoryPaths) {
+    directoryListingCoordinator.invalidate({
+      workspaceId: event.workspaceId,
+      path,
+    });
   }
-  const api = window.cowork;
-  if (!api || typeof api.listDirectory !== "function") {
-    console.warn("listDirectory not implemented in desktop bridge");
-    return [];
+  for (const path of event.invalidatedSubtreePaths) {
+    directoryListingCoordinator.invalidate({
+      workspaceId: event.workspaceId,
+      path,
+      recursive: true,
+    });
   }
-  return await api.listDirectory(opts);
+}
+
+export function isStaleDirectoryListingError(error: unknown): boolean {
+  return isStaleDirectoryRequestError(error);
+}
+
+export async function watchWorkspaceDirectory(opts: {
+  workspaceId: string;
+  rootPath: string;
+}): Promise<boolean> {
+  const api = getDesktopApi();
+  return api ? await api.watchWorkspaceDirectory(opts) : false;
+}
+
+export async function unwatchWorkspaceDirectory(opts: {
+  workspaceId: string;
+  rootPath: string;
+}): Promise<void> {
+  await getDesktopApi()?.unwatchWorkspaceDirectory(opts);
+}
+
+export function onWorkspaceFileChanged(
+  listener: (event: WorkspaceFileChangeEvent) => void,
+): () => void {
+  const api = getDesktopApi();
+  if (!api) {
+    return noopUnsubscribe;
+  }
+  return api.onWorkspaceFileChanged((event) => {
+    invalidateWorkspaceFileChange(event);
+    listener(event);
+  });
 }
 
 export async function readFile(opts: { path: string }): Promise<string> {
@@ -398,7 +487,7 @@ export async function rotateMobileRelaySession(): Promise<
 }
 
 export async function forgetMobileRelayTrustedPhone(
-  opts?: import("./desktopApi").MobileRelayForgetTrustedPhoneInput,
+  opts: import("./desktopApi").MobileRelayForgetTrustedPhoneInput,
 ): Promise<import("./desktopApi").MobileRelayBridgeState> {
   return await requireDesktopApi().forgetMobileRelayTrustedPhone(opts);
 }
@@ -413,6 +502,12 @@ export function onSystemAppearanceChanged(
   listener: (appearance: SystemAppearance) => void,
 ): () => void {
   return getDesktopApi()?.onSystemAppearanceChanged(listener) ?? noopUnsubscribe;
+}
+
+export function onPreviewFileChanged(
+  listener: (event: PreviewFileChangeEvent) => void,
+): () => void {
+  return getDesktopApi()?.onPreviewFileChanged?.(listener) ?? noopUnsubscribe;
 }
 
 export function onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void {

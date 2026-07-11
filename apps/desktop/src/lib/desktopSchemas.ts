@@ -1,5 +1,9 @@
 import { z } from "zod";
-
+import type { WorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
+import type {
+  FileChangeVersion,
+  WorkspaceFileChangeEvent as PreviewFileChangeEvent,
+} from "../../../../src/shared/fileVersion";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
@@ -69,6 +73,7 @@ import type {
   UpdaterReleaseInfo,
   UpdaterState,
   UploadDiagnosticsBundleInput,
+  WatchWorkspaceDirectoryInput,
   WindowCloseRequest,
   WindowCloseResponseInput,
   WindowDragPointInput,
@@ -462,9 +467,28 @@ export const showQuickChatWindowInputSchema: z.ZodType<ShowQuickChatWindowInput>
 });
 
 export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object({
+  workspaceId: safeIdSchema,
   path: nonEmptyStringSchema,
   includeHidden: z.boolean().optional(),
 });
+
+export const watchWorkspaceDirectoryInputSchema: z.ZodType<WatchWorkspaceDirectoryInput> = z
+  .object({
+    workspaceId: safeIdSchema,
+    rootPath: nonEmptyStringSchema,
+  })
+  .strict();
+
+export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent> = z
+  .object({
+    workspaceId: safeIdSchema,
+    rootPath: nonEmptyStringSchema,
+    kind: z.enum(["add", "remove", "rename", "modify"]),
+    changedPaths: z.array(nonEmptyStringSchema),
+    affectedDirectoryPaths: z.array(nonEmptyStringSchema),
+    invalidatedSubtreePaths: z.array(nonEmptyStringSchema),
+  })
+  .strict();
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
 export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.object({
@@ -505,6 +529,35 @@ export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> =
     .max(50 * 1024 * 1024)
     .optional(),
 });
+
+const fileChangeVersionSchema: z.ZodType<FileChangeVersion> = z
+  .object({
+    modifiedAtMs: z.number().nonnegative(),
+    changeTimeMs: z.number().nonnegative(),
+    size: z.number().int().nonnegative(),
+    fingerprint: nonEmptyStringSchema,
+  })
+  .strict();
+
+export const previewFileChangeEventSchema: z.ZodType<PreviewFileChangeEvent> = z.discriminatedUnion(
+  "kind",
+  [
+    z
+      .object({
+        kind: z.literal("changed"),
+        path: nonEmptyStringSchema,
+        version: fileChangeVersionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("deleted"),
+        path: nonEmptyStringSchema,
+        version: z.null(),
+      })
+      .strict(),
+  ],
+);
 
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
@@ -886,12 +939,24 @@ const mobileRelayTrustedPhoneDeviceSchema = z.object({
 });
 
 export const mobileRelayForgetTrustedPhoneInputSchema: z.ZodType<MobileRelayForgetTrustedPhoneInput> =
-  z
-    .object({
-      deviceId: optionalNonEmptyStringSchema,
-    })
-    .optional()
-    .default({});
+  z.discriminatedUnion("scope", [
+    z.object({
+      workspaceId: safeIdSchema,
+      scope: z.literal("device"),
+      deviceId: nonEmptyStringSchema,
+    }),
+    z.object({
+      workspaceId: safeIdSchema,
+      scope: z.literal("all"),
+      expectedDeviceIds: z
+        .array(nonEmptyStringSchema)
+        .min(1)
+        .max(1_000)
+        .refine((deviceIds) => new Set(deviceIds).size === deviceIds.length, {
+          message: "must not contain duplicate device ids",
+        }),
+    }),
+  ]);
 
 const mobileRelayTrustedDevicePermissionsPatchSchema = z
   .object(
@@ -909,6 +974,7 @@ const mobileRelayTrustedDevicePermissionsPatchSchema = z
 
 export const mobileRelayUpdateTrustedPhonePermissionsInputSchema: z.ZodType<MobileRelayUpdateTrustedPhonePermissionsInput> =
   z.object({
+    workspaceId: safeIdSchema,
     deviceId: nonEmptyStringSchema,
     permissions: mobileRelayTrustedDevicePermissionsPatchSchema,
   });

@@ -8,6 +8,7 @@ import {
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
 import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
+import type { PersistedState } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
@@ -306,6 +307,7 @@ let loadStateError: Error | null = null;
 let loadStateCallCount = 0;
 let getUpdateStateCallCount = 0;
 let loadStateImplementation: () => Promise<unknown> = async () => loadedState;
+const savedStates: PersistedState[] = [];
 let taskListResponse: TaskSummary[] = [];
 let taskReadResponse: TaskRecord | null = null;
 const socketRequests: string[] = [];
@@ -350,7 +352,9 @@ mock.module("../src/lib/desktopCommands", () =>
     },
     pickWorkspaceDirectory: async () => null,
     readTranscript: async () => [],
-    saveState: async () => {},
+    saveState: async (state) => {
+      savedStates.push(state);
+    },
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     showContextMenu: async () => null,
@@ -611,6 +615,7 @@ describe("desktop bootstrap cache", () => {
     loadStateCallCount = 0;
     getUpdateStateCallCount = 0;
     loadStateImplementation = async () => loadedState;
+    savedStates.length = 0;
     taskListResponse = [];
     taskReadResponse = null;
     socketRequests.length = 0;
@@ -1420,11 +1425,13 @@ describe("desktop bootstrap cache", () => {
     });
 
     await waitForCondition(
-      () => useAppStore.getState().bootstrapPhase === "ready" && paintCallbacks.length === 1,
+      () =>
+        useAppStore.getState().bootstrapStage === "reconnecting-sessions" &&
+        paintCallbacks.length === 1,
     );
-    await first;
 
-    expect(firstSettled).toBe(true);
+    expect(firstSettled).toBe(false);
+    expect(useAppStore.getState().bootstrapPhase).toBe("loading");
     expect(useAppStore.getState().init()).toBe(first);
     expect(loadStateCallCount).toBe(1);
 
@@ -1439,8 +1446,11 @@ describe("desktop bootstrap cache", () => {
     expect(useAppStore.getState().init()).toBe(first);
 
     selection.resolve();
-    await useAppStore.getState().drainBootstrap();
+    await first;
 
+    expect(firstSettled).toBe(true);
+    expect(useAppStore.getState().bootstrapPhase).toBe("ready");
+    expect(useAppStore.getState().bootstrapStage).toBeNull();
     const second = useAppStore.getState().init();
     expect(second).not.toBe(first);
     expect(loadStateCallCount).toBe(2);
@@ -1487,6 +1497,111 @@ describe("desktop bootstrap cache", () => {
     expect(getUpdateStateCallCount).toBe(1);
     expect(useAppStore.getState().startupError).toBeNull();
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-live");
+  });
+
+  test("Retry flushes and preserves newer revision-owned drafts while disk reloads", async () => {
+    const threadKey = composerDraftKeyForThread("thread-cached");
+    const staleResearchDraft = {
+      ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+      revision: 1,
+      generation: 1,
+      text: "stale research from disk",
+    };
+    const staleTaskDraft = {
+      ...createEmptyTaskCreationDraft(1, "ws-cached"),
+      updatedAt: "2099-07-11T16:00:00.000Z",
+      title: "Stale task from disk",
+    };
+    const staleState = {
+      ...cachedState.persistedState,
+      composerDrafts: {
+        [threadKey]: {
+          ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+          revision: 1,
+          generation: 1,
+          text: "stale composer from disk",
+        },
+      },
+      creationDrafts: {
+        research: staleResearchDraft,
+        task: staleTaskDraft,
+      },
+    };
+    const retryLoad = createDeferred<unknown>();
+    let attempt = 0;
+    loadStateImplementation = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("first bootstrap failed");
+      }
+      return await retryLoad.promise;
+    };
+    const realError = console.error;
+    console.error = mock(() => {});
+
+    try {
+      await useAppStore.getState().init();
+    } finally {
+      console.error = realError;
+    }
+
+    useAppStore.setState({
+      composerDraftsByKey: {
+        [threadKey]: {
+          ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+          revision: 4,
+          generation: 1,
+          text: "draft present before Retry",
+        },
+      },
+      researchCreationDraft: {
+        ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+        revision: 4,
+        generation: 1,
+        text: "research present before Retry",
+      },
+      taskCreationDraft: {
+        ...createEmptyTaskCreationDraft(4, "ws-cached"),
+        updatedAt: "2099-07-11T16:01:00.000Z",
+        title: "Task present before Retry",
+      },
+    });
+
+    const retry = useAppStore.getState().init();
+    await waitForCondition(() => savedStates.length === 1 && loadStateCallCount === 2);
+    expect(savedStates[0]?.composerDrafts?.[threadKey]?.text).toBe("draft present before Retry");
+    expect(savedStates[0]?.creationDrafts?.research?.text).toBe("research present before Retry");
+    expect(savedStates[0]?.creationDrafts?.task?.title).toBe("Task present before Retry");
+
+    useAppStore.setState({
+      composerDraftsByKey: {
+        [threadKey]: {
+          ...createEmptyComposerDraft("2099-07-11T16:02:00.000Z"),
+          revision: 5,
+          generation: 1,
+          text: "draft edited while Retry loads",
+        },
+      },
+      researchCreationDraft: {
+        ...createEmptyComposerDraft("2099-07-11T16:02:00.000Z"),
+        revision: 5,
+        generation: 1,
+        text: "research edited while Retry loads",
+      },
+      taskCreationDraft: {
+        ...createEmptyTaskCreationDraft(5, "ws-cached"),
+        updatedAt: "2099-07-11T16:02:00.000Z",
+        title: "Task edited while Retry loads",
+      },
+    });
+    retryLoad.resolve(staleState);
+    await retry;
+
+    const state = useAppStore.getState();
+    expect(state.composerDraftsByKey[threadKey]?.text).toBe("draft edited while Retry loads");
+    expect(state.researchCreationDraft.text).toBe("research edited while Retry loads");
+    expect(state.taskCreationDraft.title).toBe("Task edited while Retry loads");
+    expect(state.bootstrapPhase).toBe("ready");
   });
 
   test("keeps deferred task refresh and selection inside the bootstrap generation", async () => {
@@ -1540,18 +1655,23 @@ describe("desktop bootstrap cache", () => {
     });
 
     await waitForCondition(() => refreshCalls === 1);
-    await initPromise;
-    expect(settled).toBe(true);
+    expect(settled).toBe(false);
+    expect(useAppStore.getState().bootstrapPhase).toBe("loading");
+    expect(useAppStore.getState().bootstrapStage).toBe("reconnecting-sessions");
     expect(useAppStore.getState().init()).toBe(initPromise);
 
     refresh.resolve();
     await waitForCondition(() => selectionCalls === 1);
+    expect(settled).toBe(false);
+    expect(useAppStore.getState().bootstrapStage).toBe("reconnecting-sessions");
     expect(useAppStore.getState().init()).toBe(initPromise);
 
     selection.resolve();
-    await useAppStore.getState().drainBootstrap();
+    await initPromise;
 
     expect(settled).toBe(true);
+    expect(useAppStore.getState().bootstrapPhase).toBe("ready");
+    expect(useAppStore.getState().bootstrapStage).toBeNull();
     expect(refreshCalls).toBe(1);
     expect(selectionCalls).toBe(1);
   });
@@ -1754,10 +1874,12 @@ describe("desktop bootstrap cache", () => {
 
     const initPromise = useAppStore.getState().init();
     await waitForCondition(
-      () => useAppStore.getState().bootstrapPhase === "ready" && paintCallbacks.length === 1,
+      () =>
+        useAppStore.getState().bootstrapStage === "reconnecting-sessions" &&
+        paintCallbacks.length === 1,
     );
-    await initPromise;
 
+    expect(useAppStore.getState().bootstrapPhase).toBe("loading");
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
 
     const paint = paintCallbacks.shift();
@@ -1768,8 +1890,11 @@ describe("desktop bootstrap cache", () => {
     await waitForCondition(
       () => useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating === false,
     );
+    await initPromise;
 
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
+    expect(useAppStore.getState().bootstrapPhase).toBe("ready");
+    expect(useAppStore.getState().bootstrapStage).toBeNull();
   });
 
   test("init restores the selected startup thread when requestAnimationFrame is throttled", async () => {
@@ -1791,18 +1916,18 @@ describe("desktop bootstrap cache", () => {
     void initPromise.then(() => {
       settled = true;
     });
-    await waitForCondition(() => useAppStore.getState().bootstrapPhase === "ready");
+    await waitForCondition(() => useAppStore.getState().bootstrapStage === "reconnecting-sessions");
 
+    expect(settled).toBe(false);
+    expect(useAppStore.getState().bootstrapPhase).toBe("loading");
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
 
     await initPromise;
 
     expect(settled).toBe(true);
-    expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
-    await waitForCondition(
-      () => useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating === false,
-    );
     expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
+    expect(useAppStore.getState().bootstrapPhase).toBe("ready");
+    expect(useAppStore.getState().bootstrapStage).toBeNull();
   });
 
   test("init preserves cached state when authoritative load fails", async () => {

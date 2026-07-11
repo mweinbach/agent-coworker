@@ -32,6 +32,16 @@ import {
   workspaceId,
 } from "./workspace-settings-sync.harness";
 
+async function initWithoutStartupWorkspaceSync(): Promise<void> {
+  const selectWorkspace = useAppStore.getState().selectWorkspace;
+  useAppStore.setState({ selectWorkspace: async () => {} });
+  try {
+    await useAppStore.getState().init();
+  } finally {
+    useAppStore.setState({ selectWorkspace });
+  }
+}
+
 describe("workspace settings sync", () => {
   registerWorkspaceSettingsSyncLifecycleHooks();
 
@@ -86,7 +96,7 @@ describe("workspace settings sync", () => {
       showHiddenFiles: false,
     });
 
-    await useAppStore.getState().init();
+    await initWithoutStartupWorkspaceSync();
 
     const loaded = useAppStore.getState().workspaces[0];
     expect(loaded?.defaultModel).toBe("gpt-5.4");
@@ -229,7 +239,7 @@ describe("workspace settings sync", () => {
       },
     });
 
-    await useAppStore.getState().init();
+    await initWithoutStartupWorkspaceSync();
 
     const state = useAppStore.getState();
     expect(state.providerStatusByName["codex-cli"]?.authorized).toBe(true);

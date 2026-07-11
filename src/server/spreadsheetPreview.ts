@@ -17,6 +17,7 @@ import type {
   SpreadsheetWorkbookSnapshotResult,
   SpreadsheetWorkbookSnapshotSheet,
 } from "../shared/spreadsheetPreview";
+import { fileChangeVersionFromStat as genericFileChangeVersionFromStat } from "../utils/filePreviewRead";
 import { readOoxmlColor, readXlsxSheetObjects, type XlsxSheetObjects } from "./spreadsheetOoxml";
 
 type Worksheet = XLSX.WorkSheet;
@@ -162,14 +163,7 @@ function isOutsideWorkspaceError(error: unknown): boolean {
 }
 
 export function spreadsheetFileVersionFromStat(stat: Stats): SpreadsheetFileVersion {
-  const modifiedAtMs = Math.round(stat.mtimeMs);
-  const changeTimeMs = Math.round(stat.ctimeMs);
-  return {
-    modifiedAtMs,
-    changeTimeMs,
-    size: stat.size,
-    fingerprint: `${modifiedAtMs}:${changeTimeMs}:${stat.size}`,
-  };
+  return genericFileChangeVersionFromStat(stat);
 }
 
 function isFileNotFoundError(error: unknown): boolean {

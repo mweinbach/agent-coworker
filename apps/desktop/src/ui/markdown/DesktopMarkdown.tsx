@@ -36,6 +36,7 @@ import {
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
+import { useDocumentIsDark } from "../../lib/documentThemeStore";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
 import {
   decodeDesktopMediaUrl,
@@ -1399,30 +1400,6 @@ export type DesktopMarkdownProps = StreamdownProps & {
   /** Absolute workspace path used to resolve bare filename hrefs in markdown links. */
   desktopBasePath?: string | null;
 };
-
-/**
- * Tracks whether the app is currently rendering in dark mode by observing the
- * `dark` class that App.tsx toggles on `<html>` when system appearance changes.
- */
-function useDocumentIsDark(): boolean {
-  const [isDark, setIsDark] = useState(
-    () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-
-  useEffect(() => {
-    if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
-      return;
-    }
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => {
-      setIsDark(root.classList.contains("dark"));
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-
-  return isDark;
-}
 
 /**
  * Wraps rendered `<pre>` (code) blocks with a hover-revealed Copy button.

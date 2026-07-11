@@ -9,10 +9,27 @@ type PreviewResult = Awaited<
   ReturnType<typeof import("../src/lib/desktopCommands").readFileForPreview>
 >;
 
+const PREVIEW_VERSION = {
+  modifiedAtMs: 1,
+  changeTimeMs: 1,
+  size: 0,
+  fingerprint: "1:1:0",
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 let previewResult: PreviewResult = {
+  path: "/preview",
   bytes: new Uint8Array(),
   byteLength: 0,
   truncated: false,
+  version: PREVIEW_VERSION,
 };
 
 const readFileForPreviewMock = mock(async () => previewResult);
@@ -63,6 +80,9 @@ const { reactivateWorkspaceJsonRpcSocketState } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
+const { __internalFilePreviewResources, workspaceFileChangeEvents } = await import(
+  "../src/lib/filePreviewResource"
+);
 const { FilePreviewModal, __internalFilePreviewModal } = await import("../src/ui/FilePreviewModal");
 
 function setupPreviewJsdom() {
@@ -135,13 +155,17 @@ afterAll(() => {
 describe("file preview modal", () => {
   beforeEach(() => {
     previewResult = {
+      path: "/preview",
       bytes: new Uint8Array(),
       byteLength: 0,
       truncated: false,
+      version: PREVIEW_VERSION,
     };
     readFileForPreviewMock.mockClear();
+    readFileForPreviewMock.mockImplementation(async () => previewResult);
     getPreferredFileAppMock.mockClear();
     loadDocxPreviewLayoutMock.mockClear();
+    __internalFilePreviewResources.clear();
     resetAppStore();
   });
 
@@ -152,11 +176,13 @@ describe("file preview modal", () => {
       const path =
         "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.md";
       previewResult = {
+        path,
         bytes: new TextEncoder().encode(
           "# Preview latency review\n\nThis markdown body should render in a narrower reading column.",
         ),
         byteLength: 84,
         truncated: false,
+        version: { ...PREVIEW_VERSION, size: 84, fingerprint: "1:1:84" },
       };
 
       useAppStore.setState({ filePreview: { path } });
@@ -197,9 +223,11 @@ describe("file preview modal", () => {
       const path =
         "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
       previewResult = {
+        path,
         bytes: new Uint8Array([1, 2, 3, 4]),
         byteLength: 4,
         truncated: false,
+        version: { ...PREVIEW_VERSION, size: 4, fingerprint: "1:1:4" },
       };
 
       useAppStore.setState({ filePreview: { path } });
@@ -241,9 +269,11 @@ describe("file preview modal", () => {
       const path =
         "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
       previewResult = {
+        path,
         bytes: new Uint8Array([1, 2, 3, 4]),
         byteLength: 4,
         truncated: false,
+        version: { ...PREVIEW_VERSION, size: 4, fingerprint: "1:1:4" },
       };
 
       useAppStore.setState({ filePreview: { path } });
@@ -310,6 +340,160 @@ describe("file preview modal", () => {
       await waitForUi(() => doc.querySelector("[data-cowork-univer-canvas='true']") !== null);
       expect(readFileForPreviewMock).not.toHaveBeenCalled();
       expect(doc.body.textContent).toContain(path);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("never renders a stale A response under the selected B title", async () => {
+    const harness = setupPreviewJsdom();
+
+    try {
+      const pathA = "/Users/mweinbach/Projects/preview-workspace/a.md";
+      const pathB = "/Users/mweinbach/Projects/preview-workspace/b.md";
+      const loadA = deferred<PreviewResult>();
+      const loadB = deferred<PreviewResult>();
+      readFileForPreviewMock.mockImplementation(async ({ path }) => {
+        return await (path === pathA ? loadA.promise : loadB.promise);
+      });
+
+      useAppStore.setState({ filePreview: { path: pathA } });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+      });
+      await waitForUi(() => readFileForPreviewMock.mock.calls.length === 1);
+      await act(async () => {
+        useAppStore.setState({ filePreview: { path: pathB } });
+        await flushUi();
+      });
+      await waitForUi(() => readFileForPreviewMock.mock.calls.length === 2);
+
+      await act(async () => {
+        loadB.resolve({
+          path: pathB,
+          bytes: new TextEncoder().encode("# B content"),
+          byteLength: 11,
+          truncated: false,
+          version: { ...PREVIEW_VERSION, size: 11, fingerprint: "b:11" },
+        });
+        await flushUi();
+      });
+      await waitForUi(
+        () => harness.dom.window.document.body.textContent?.includes("B content") === true,
+      );
+
+      expect(harness.dom.window.document.body.textContent).toContain("b.md");
+      expect(harness.dom.window.document.body.textContent).toContain("B content");
+
+      await act(async () => {
+        loadA.resolve({
+          path: pathA,
+          bytes: new TextEncoder().encode("# A stale content"),
+          byteLength: 17,
+          truncated: false,
+          version: { ...PREVIEW_VERSION, size: 17, fingerprint: "a:17" },
+        });
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.body.textContent).toContain("b.md");
+      expect(harness.dom.window.document.body.textContent).toContain("B content");
+      expect(harness.dom.window.document.body.textContent).not.toContain("A stale content");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("rerenders a mounted alias when its canonical file changes", async () => {
+    const harness = setupPreviewJsdom();
+
+    try {
+      const requestedPath = "/Users/mweinbach/Projects/preview-workspace/REPORT.md";
+      const canonicalPath = "/Users/mweinbach/Projects/preview-workspace/report.md";
+      let content = "# Old canonical content";
+      let version = { ...PREVIEW_VERSION, size: content.length, fingerprint: "old" };
+      readFileForPreviewMock.mockImplementation(async () => ({
+        path: canonicalPath,
+        bytes: new TextEncoder().encode(content),
+        byteLength: content.length,
+        truncated: false,
+        version,
+      }));
+      useAppStore.setState({ filePreview: { path: requestedPath } });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+      });
+      await waitForUi(
+        () =>
+          harness.dom.window.document.body.textContent?.includes("Old canonical content") === true,
+      );
+      const initialReadCount = readFileForPreviewMock.mock.calls.length;
+
+      content = "# New canonical content";
+      version = { ...PREVIEW_VERSION, modifiedAtMs: 2, size: content.length, fingerprint: "new" };
+      await act(async () => {
+        workspaceFileChangeEvents.publish({
+          kind: "changed",
+          path: canonicalPath,
+          version,
+        });
+        await flushUi();
+      });
+      expect(workspaceFileChangeEvents.getRevision(requestedPath)).toBe(1);
+      await waitForUi(() => readFileForPreviewMock.mock.calls.length === initialReadCount + 1);
+      await waitForUi(
+        () =>
+          harness.dom.window.document.body.textContent?.includes("New canonical content") === true,
+      );
+
+      expect(readFileForPreviewMock).toHaveBeenCalledTimes(2);
+      expect(harness.dom.window.document.body.textContent).not.toContain("Old canonical content");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("does not load a hidden modal preview when Canvas owns the path", async () => {
+    const harness = setupPreviewJsdom();
+
+    try {
+      useAppStore.setState((state) => ({
+        desktopFeatureFlags: { ...state.desktopFeatureFlags, canvas: true },
+        filePreview: { path: "/Users/mweinbach/Projects/preview-workspace/canvas.md" },
+      }));
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+      });
+
+      expect(readFileForPreviewMock).not.toHaveBeenCalled();
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
 
       await act(async () => {
         root.unmount();

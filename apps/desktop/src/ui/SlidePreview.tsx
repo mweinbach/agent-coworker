@@ -1,7 +1,12 @@
 import { AlertTriangleIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
+import {
+  loadPresentationPreviewResource,
+  workspaceFileChangeEvents,
+} from "../lib/filePreviewResource";
+import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
 
 type SlidePreviewProps = {
@@ -23,38 +28,75 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const previousRefreshTrigger = useRef(refreshTrigger);
+  const fileChangeRevision = useFileChangeRevision(path);
 
   const fileName = useMemo(() => path.replace(/\\/g, "/").split("/").pop() || path, [path]);
 
-  const loadSlide = useCallback(async () => {
+  useEffect(() => {
     if (!selectedWorkspaceId || !hasActiveWorkspace) {
       setError("No active workspace found.");
       setLoading(false);
+      setLoadedPath(path);
       return;
     }
 
+    const controller = new AbortController();
+    const loadRevision = fileChangeRevision;
     setLoading(true);
     setError(null);
-    if (refreshKey > 0) {
-      setSlide(null);
-    }
-    try {
-      const response = await loadPresentationPreview(path);
-
-      if (response?.ok && response.slides && response.slides.length > 0) {
-        setSlide(response.slides[0]);
-      } else if (response && !response.ok && response.error) {
-        setError(response.error.message || "Failed to render slide.");
-      } else {
-        setError("Invalid response received from rendering engine.");
+    setSlide(null);
+    setLoadedPath(null);
+    void (async () => {
+      try {
+        const resource = await loadPresentationPreviewResource({
+          path,
+          workspaceId: selectedWorkspaceId,
+          force: refreshKey > 0,
+          signal: controller.signal,
+          loader: loadPresentationPreview,
+        });
+        if (
+          controller.signal.aborted ||
+          workspaceFileChangeEvents.getRevision(path) !== loadRevision
+        ) {
+          return;
+        }
+        const response = resource.value;
+        if (response.ok && response.slides.length > 0) {
+          setSlide(response.slides[0] ?? null);
+        } else if (!response.ok) {
+          setError(response.error.message || "Failed to render slide.");
+        } else {
+          setError("Invalid response received from rendering engine.");
+        }
+        setLoadedPath(path);
+        setLoading(false);
+      } catch (err) {
+        if (
+          controller.signal.aborted ||
+          workspaceFileChangeEvents.getRevision(path) !== loadRevision
+        ) {
+          return;
+        }
+        setError(err instanceof Error ? err.message : String(err));
+        setLoadedPath(path);
+        setLoading(false);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [hasActiveWorkspace, path, refreshKey, loadPresentationPreview, selectedWorkspaceId]);
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    fileChangeRevision,
+    hasActiveWorkspace,
+    loadPresentationPreview,
+    path,
+    refreshKey,
+    selectedWorkspaceId,
+  ]);
 
   useEffect(() => {
     if (Object.is(previousRefreshTrigger.current, refreshTrigger)) return;
@@ -62,9 +104,10 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     setRefreshKey((k) => k + 1);
   }, [refreshTrigger]);
 
-  useEffect(() => {
-    loadSlide();
-  }, [loadSlide]);
+  const loadedCurrentPath = loadedPath === path;
+  const visibleLoading = !loadedCurrentPath || loading;
+  const visibleError = loadedCurrentPath ? error : null;
+  const visibleSlide = loadedCurrentPath ? slide : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground">
@@ -79,31 +122,31 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           variant="outline"
           size="sm"
           onClick={() => setRefreshKey((k) => k + 1)}
-          disabled={loading}
+          disabled={visibleLoading}
           className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
         >
-          <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} />
+          <RefreshCwIcon className={cn("size-3.5", visibleLoading && "animate-spin")} />
           Refresh
         </Button>
       </div>
 
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border border-border/50 bg-muted/15 p-3">
-        {loading ? (
+        {visibleLoading ? (
           <div className="flex flex-col items-center gap-2">
             <Loader2Icon className="size-6 text-muted-foreground animate-spin" />
             <p className="text-xs text-muted-foreground">Rendering slide…</p>
           </div>
-        ) : error ? (
+        ) : visibleError ? (
           <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
             <AlertTriangleIcon className="size-6 text-destructive" />
             <h3 className="text-sm font-medium text-foreground">Couldn’t render slide</h3>
             <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-[11px] leading-relaxed text-foreground">
-              {error}
+              {visibleError}
             </pre>
           </div>
-        ) : slide ? (
+        ) : visibleSlide ? (
           <img
-            src={slide.pngBase64}
+            src={visibleSlide.pngBase64}
             alt="Slide preview"
             className="max-h-full max-w-full select-none object-contain"
           />

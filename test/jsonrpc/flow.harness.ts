@@ -13,6 +13,7 @@ import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness
 
 export type JsonRpcConnection = {
   ws: WebSocket;
+  initializeResult: unknown;
   sendRequest: (method: string, params?: unknown, timeoutMs?: number) => Promise<any>;
   sendResponse: (id: string | number, result: unknown) => void;
   waitFor: (predicate: (message: any) => boolean, timeoutMs?: number) => Promise<any>;
@@ -27,6 +28,7 @@ export async function connectJsonRpc(
   url: string,
   opts?: {
     optOutNotificationMethods?: string[];
+    toolRetryLineage?: boolean;
   },
 ): Promise<JsonRpcConnection> {
   const ws = new WebSocket(url, "cowork.jsonrpc.v1");
@@ -107,10 +109,13 @@ export async function connectJsonRpc(
       name: "test-jsonrpc-client",
       version: "1.0.0",
     },
-    ...(opts?.optOutNotificationMethods?.length
+    ...(opts?.optOutNotificationMethods?.length || opts?.toolRetryLineage
       ? {
           capabilities: {
-            optOutNotificationMethods: opts.optOutNotificationMethods,
+            ...(opts.optOutNotificationMethods?.length
+              ? { optOutNotificationMethods: opts.optOutNotificationMethods }
+              : {}),
+            ...(opts.toolRetryLineage ? { toolRetryLineage: true } : {}),
           },
         }
       : {}),
@@ -120,6 +125,7 @@ export async function connectJsonRpc(
 
   return {
     ws,
+    initializeResult: initializeResponse.result,
     sendRequest,
     sendResponse,
     waitFor,

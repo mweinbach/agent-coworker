@@ -101,6 +101,7 @@ export function dispatchJsonRpcMessage({
     rpc.clientInfo = parsed.params.clientInfo;
     rpc.capabilities = {
       experimentalApi: parsed.params.capabilities?.experimentalApi === true,
+      toolRetryLineage: parsed.params.capabilities?.toolRetryLineage === true,
       optOutNotificationMethods: [...(parsed.params.capabilities?.optOutNotificationMethods ?? [])],
     };
     sendJsonRpc(
@@ -113,6 +114,7 @@ export function dispatchJsonRpcMessage({
         },
         capabilities: {
           experimentalApi: true,
+          ...(rpc.capabilities.toolRetryLineage ? { toolRetryLineage: true } : {}),
         },
         transport: {
           type: transportType,

@@ -19,6 +19,7 @@ import {
   DESKTOP_IPC_CHANNELS,
   type ListDirectoryInput,
   type OpenPathInput,
+  type PickCanvasSavePathInput,
   type PickDirectoryInput,
   type PreferredFileAppInput,
   type PreviewOSFileInput,
@@ -38,6 +39,7 @@ import {
   createDirectoryInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
+  pickCanvasSavePathInputSchema,
   pickDirectoryInputSchema,
   preferredFileAppInputSchema,
   previewOSFileInputSchema,
@@ -344,6 +346,40 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
 
       await fs.copyFile(safeSourcePath, result.filePath);
       return result.filePath;
+    },
+  );
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.pickCanvasSavePath,
+    async (event, args: PickCanvasSavePathInput) => {
+      const input = parseWithSchema(
+        pickCanvasSavePathInputSchema,
+        args,
+        "pickCanvasSavePath options",
+      );
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const roots = workspaceRoots.getApprovedWorkspaceRoots();
+      const sourcePath = resolveAllowedPath(roots, input.sourcePath);
+      const extension = path.extname(sourcePath);
+      const baseName = path.basename(sourcePath, extension);
+      const defaultPath = path.join(path.dirname(sourcePath), `${baseName} copy${extension}`);
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ??
+        BrowserWindow.getFocusedWindow() ??
+        undefined;
+      const result = ownerWindow
+        ? await dialog.showSaveDialog(ownerWindow, {
+            title: "Save Canvas document as",
+            defaultPath,
+          })
+        : await dialog.showSaveDialog({
+            title: "Save Canvas document as",
+            defaultPath,
+          });
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+      return resolveAllowedPath(roots, result.filePath);
     },
   );
 

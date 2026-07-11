@@ -5,12 +5,14 @@ import {
   type PlatformChromeInfo,
   type ShowContextMenuInput,
   type ShowQuickChatWindowInput,
+  type WindowCloseResponseInput,
   type WindowDragPointInput,
 } from "../../src/lib/desktopApi";
 import {
   showCanvasWindowInputSchema,
   showContextMenuInputSchema,
   showQuickChatWindowInputSchema,
+  windowCloseResponseInputSchema,
   windowDragPointInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { getPlatformChrome } from "../services/windowChrome/platformChrome";
@@ -117,6 +119,14 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
     win.close();
   });
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest,
+    (event, args: WindowCloseResponseInput) => {
+      const input = parseWithSchema(windowCloseResponseInputSchema, args, "window close response");
+      deps.resolveWindowCloseRequest(event.sender, input);
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowDragStart, (event, args: WindowDragPointInput) => {
     const input = parseWithSchema(windowDragPointInputSchema, args, "window drag options");

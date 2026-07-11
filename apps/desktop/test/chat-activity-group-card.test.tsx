@@ -385,6 +385,33 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("missing file");
   });
 
+  test("explains when exact retry is unavailable without rendering a retry action", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        retryUnavailableReason: "Exact retry isn’t available with this server.",
+        items: [
+          {
+            id: "t-failed",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            name: "read",
+            state: "output-error",
+            result: { error: "missing file" },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const retryButtons = Array.from(doc.querySelectorAll("button")).filter(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+
+    expect(doc.querySelector('[data-slot="activity-retry-unavailable"]')?.textContent).toBe(
+      "Exact retry isn’t available with this server.",
+    );
+    expect(retryButtons).toHaveLength(0);
+  });
+
   test("retry action invokes the continuation callback", async () => {
     const harness = setupJsdom();
     const onRetry = mock(async () => true);

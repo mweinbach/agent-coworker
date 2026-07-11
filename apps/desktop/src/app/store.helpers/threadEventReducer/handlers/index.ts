@@ -1,7 +1,7 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import { unhandledEventSystemLine } from "../../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../../store.helpers";
-import { getModelStreamRuntime } from "../../runtimeState";
+import { getEffectiveThreadLastEventSeq, getModelStreamRuntime } from "../../runtimeState";
 import type { ThreadEventReducerContext } from "../context";
 import type { FeedProjectionModule } from "../feedProjection";
 import type { MessagingModule } from "../messaging";
@@ -27,6 +27,8 @@ export function createHandlersModule(
     pushFeedItem: feed.pushFeedItem,
     insertFeedItemBefore: feed.insertFeedItemBefore,
     applyModelStreamUpdateToThreadFeed: feed.applyModelStreamUpdateToThreadFeed,
+    flushPendingContentForThread: feed.flushPendingContentForThread,
+    recordPendingThreadEvent: feed.recordPendingThreadEvent,
     sendUserMessageToThread: messaging.sendUserMessageToThread,
     flushOneQueuedThreadMessage: messaging.flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
@@ -50,14 +52,31 @@ export function createHandlersModule(
     }
 
     ctx.deps.appendThreadTranscript(threadId, "server", evt);
-    set((s) => ({
-      threads: s.threads.map((thread) =>
-        thread.id === threadId
-          ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
-          : thread,
-      ),
-    }));
-    void ctx.deps.persist(get);
+    const batchedContentEvent =
+      evt.type === "model_stream_chunk" || evt.type === "model_stream_raw";
+    if (batchedContentEvent) {
+      moduleContext.recordPendingThreadEvent(get, set, threadId);
+    } else {
+      moduleContext.flushPendingContentForThread(set, threadId);
+      set((s) => {
+        const nextLastEventSeq = getEffectiveThreadLastEventSeq(s, threadId) + 1;
+        const runtime = s.threadRuntimeById[threadId];
+        return {
+          threads: s.threads.map((thread) =>
+            thread.id === threadId ? { ...thread, lastEventSeq: nextLastEventSeq } : thread,
+          ),
+          ...(runtime
+            ? {
+                threadRuntimeById: {
+                  ...s.threadRuntimeById,
+                  [threadId]: { ...runtime, lastEventSeq: nextLastEventSeq },
+                },
+              }
+            : {}),
+        };
+      });
+      void ctx.deps.persist(get);
+    }
 
     const dispatch = { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued };
     if (handleLifecycleThreadEvent(moduleContext, dispatch, evt)) {

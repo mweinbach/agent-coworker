@@ -1,9 +1,12 @@
+import { SESSION_FEED_ITEM_LIMIT } from "../../../../../src/shared/feedRetention";
 import type { StoreGet } from "../store.helpers";
 import type { Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
 
-export const MAX_FEED_ITEMS = 2000;
+export const MAX_FEED_ITEMS = SESSION_FEED_ITEM_LIMIT;
 
 export const JSONRPC_THREAD_EVENT_METHODS = new Set([
+  "model_stream_chunk",
+  "model_stream_raw",
   "cowork/session/settings",
   "cowork/session/info",
   "cowork/session/configUpdated",

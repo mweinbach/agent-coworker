@@ -34,6 +34,7 @@ import {
   type MobileRelayUpdateTrustedPhonePermissionsInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
+  type PickCanvasSavePathInput,
   type PickDirectoryInput,
   type PlatformChromeInfo,
   type PreferredFileAppInput,
@@ -58,6 +59,8 @@ import {
   type TrashPathInput,
   type UpdaterState,
   type UploadDiagnosticsBundleInput,
+  type WindowCloseRequest,
+  type WindowCloseResponseInput,
   type WindowDragPointInput,
   type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
@@ -84,6 +87,7 @@ import {
   openExternalUrlInputSchema,
   openPathInputSchema,
   persistedStateInputSchema,
+  pickCanvasSavePathInputSchema,
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
   preferredFileAppInputSchema,
@@ -108,6 +112,8 @@ import {
   trashPathInputSchema,
   updaterStateSchema,
   uploadDiagnosticsBundleInputSchema,
+  windowCloseRequestSchema,
+  windowCloseResponseInputSchema,
   windowDragPointInputSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
@@ -175,6 +181,14 @@ function assertWindowDragPointInput(opts: WindowDragPointInput): void {
   parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
 }
 
+function assertWindowCloseRequest(value: unknown): asserts value is WindowCloseRequest {
+  parseWithSchema(windowCloseRequestSchema, value, "window close request");
+}
+
+function assertWindowCloseResponseInput(opts: WindowCloseResponseInput): void {
+  parseWithSchema(windowCloseResponseInputSchema, opts, "window close response");
+}
+
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
   parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
 }
@@ -201,6 +215,10 @@ function assertOpenPathInput(opts: OpenPathInput): void {
 
 function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
   parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
+}
+
+function assertPickCanvasSavePathInput(opts: PickCanvasSavePathInput): void {
+  parseWithSchema(pickCanvasSavePathInputSchema, opts, "pickCanvasSavePath options");
 }
 
 function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
@@ -557,6 +575,11 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
 
+  resolveWindowCloseRequest: (opts: WindowCloseResponseInput) => {
+    assertWindowCloseResponseInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.resolveWindowCloseRequest, opts);
+  },
+
   windowDragStart: (opts: WindowDragPointInput) => {
     assertWindowDragPointInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragStart, opts);
@@ -623,6 +646,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   saveExportedFile: (opts: SaveExportedFileInput) => {
     assertSaveExportedFileInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
+  },
+
+  pickCanvasSavePath: (opts: PickCanvasSavePathInput) => {
+    assertPickCanvasSavePathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.pickCanvasSavePath, opts);
   },
 
   openExternalUrl: (opts: OpenExternalUrlInput) => {
@@ -805,6 +833,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceServerExited, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceServerExited, wrapped);
+    };
+  },
+
+  onWindowCloseRequested: (listener: (request: WindowCloseRequest) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWindowCloseRequested listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWindowCloseRequest(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.windowCloseRequested, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.windowCloseRequested, wrapped);
     };
   },
 

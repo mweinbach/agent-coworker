@@ -60,6 +60,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
           .strict(),
       ),
       clientMessageId: nonEmptyStringSchema.optional(),
+      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .passthrough(),
   z
@@ -86,6 +87,7 @@ const projectedItemSchema = z.discriminatedUnion("type", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,
@@ -145,6 +147,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       role: z.enum(["user", "assistant"]),
       ts: z.string(),
       text: z.string(),
+      clientMessageId: nonEmptyStringSchema.optional(),
       annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .passthrough(),
@@ -166,6 +169,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       state: projectedToolStateSchema,
       args: z.unknown().optional(),
       result: z.unknown().optional(),
+      retryOf: nonEmptyStringSchema.optional(),
       approval: z
         .object({
           approvalId: nonEmptyStringSchema,

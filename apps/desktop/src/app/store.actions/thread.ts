@@ -7,6 +7,19 @@ import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../attachmentInputs";
 import {
+  type ComposerDraft,
+  type ComposerDraftAttachment,
+  type ComposerDraftRevision,
+  clearComposerDraftRevision,
+  composerDraftKeyForThread,
+  createComposerDraftAttachment,
+  createEmptyComposerDraft,
+  getComposerDraftAttachmentValidationMessage,
+  pruneComposerDrafts as pruneComposerDraftEntries,
+  resolveActiveComposerDraftKey,
+  revokeComposerDraftAttachmentPreviews,
+} from "../composerDrafts";
+import {
   googleProviderOptionsForReasoningEffort,
   isGoogleReasoningEffortValue,
   isOpenAiReasoningEffortValue,
@@ -32,6 +45,7 @@ import {
   ensureThreadSocket,
   ensureWorkspaceRuntime,
   extractUsageStateFromTranscript,
+  getEffectiveThreadLastEventSeq,
   isCurrentThreadSelectionRequest,
   makeId,
   nowIso,
@@ -52,6 +66,7 @@ import type { FileAttachmentInput } from "../store.helpers/jsonRpcSocket";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
+import { persist } from "../store.helpers/persistence";
 import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
@@ -72,6 +87,18 @@ type HydrateThreadSelectionOptions = {
   skipWorkspaceSelectOnReconnect?: boolean;
 } & AbortableActionOptions;
 
+function createEmptyComposerDraftForState(state: AppStoreState, key: string): ComposerDraft {
+  const draft = createEmptyComposerDraft(nowIso());
+  const revisionFloor = state.composerDraftRevisionFloorByKey[key];
+  return revisionFloor
+    ? {
+        ...draft,
+        revision: revisionFloor.revision,
+        generation: revisionFloor.generation,
+      }
+    : draft;
+}
+
 /**
  * Queue the first message of a brand-new chat AND render its user bubble
  * immediately, before the workspace socket/thread session exist. The
@@ -85,13 +112,21 @@ function queueOptimisticFirstThreadMessage(
   text: string,
   attachments?: FileAttachmentInput[],
   references?: import("../../lib/wsProtocol").TurnReference[],
+  draftSubmission?: ComposerDraftRevision,
 ): void {
   const trimmed = text.trim();
   const hasAttachments = (attachments?.length ?? 0) > 0;
   if (!trimmed && !hasAttachments) return;
 
   const clientMessageId = makeId();
-  queuePendingThreadMessage(threadId, trimmed, attachments, references, clientMessageId);
+  queuePendingThreadMessage(
+    threadId,
+    trimmed,
+    attachments,
+    references,
+    clientMessageId,
+    draftSubmission,
+  );
 
   const optimisticSeen = RUNTIME.optimisticUserMessageIds.get(threadId) ?? new Set<string>();
   optimisticSeen.add(clientMessageId);
@@ -159,50 +194,6 @@ function findLatestSandboxApprovalPrompt(
   return latest;
 }
 
-/** Draft map key for New Chat landing (`selectedThreadId === null`). */
-const LANDING_COMPOSER_DRAFT_KEY = "__landing__";
-
-function composerDraftKey(threadId: string | null | undefined): string {
-  return threadId ?? LANDING_COMPOSER_DRAFT_KEY;
-}
-
-/** Save active composer draft for fromThreadId and restore toThreadId's draft. */
-function swapComposerDraft(
-  state: { composerText: string; composerTextByThreadId?: Record<string, string> },
-  fromThreadId: string | null | undefined,
-  toThreadId: string | null | undefined,
-): { composerText: string; composerTextByThreadId: Record<string, string> } {
-  const nextById = { ...(state.composerTextByThreadId ?? {}) };
-  const fromKey = composerDraftKey(fromThreadId);
-  const toKey = composerDraftKey(toThreadId);
-  if (fromKey !== toKey) {
-    const trimmed = state.composerText ?? "";
-    if (trimmed.length > 0) nextById[fromKey] = trimmed;
-    else delete nextById[fromKey];
-  }
-  const restored = typeof nextById[toKey] === "string" ? nextById[toKey] : "";
-  return { composerText: restored, composerTextByThreadId: nextById };
-}
-
-function clearComposerDraftForThread(
-  state: {
-    composerText: string;
-    composerTextByThreadId?: Record<string, string>;
-    selectedThreadId?: string | null;
-  },
-  threadId: string | null | undefined,
-): { composerText: string; composerTextByThreadId: Record<string, string> } {
-  const base = state.composerTextByThreadId ?? {};
-  if (!threadId) return { composerText: "", composerTextByThreadId: base };
-  const nextById = { ...base };
-  delete nextById[threadId];
-  // Only blank the live composer when it still belongs to the sent thread.
-  // If the user switched chats while send awaited network work, keep the new
-  // thread's draft in `composerText` and only drop the sender's stored draft.
-  const composerText = state.selectedThreadId === threadId ? "" : (state.composerText ?? "");
-  return { composerText, composerTextByThreadId: nextById };
-}
-
 export async function hydrateThreadSelection(
   get: StoreGet,
   set: StoreSet,
@@ -249,7 +240,7 @@ export async function hydrateThreadSelection(
   const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
     updatedAt: candidate.lastMessageAt,
     messageCount: candidate.messageCount,
-    lastEventSeq: candidate.lastEventSeq,
+    lastEventSeq: getEffectiveThreadLastEventSeq(get(), candidate.id),
   });
 
   const fingerprintMatches = (
@@ -314,6 +305,7 @@ export async function hydrateThreadSelection(
           [selectedThreadId]: {
             ...currentRuntime,
             sessionId,
+            lastEventSeq: snapshot.lastEventSeq,
             sessionKind: snapshot.sessionKind,
             parentSessionId: snapshot.parentSessionId,
             role: snapshot.role,
@@ -400,14 +392,11 @@ export async function hydrateThreadSelection(
     if (!isOperationCurrent()) return;
     const selectedTaskId = selectedTaskIdForThread(thread);
     set((state) => {
-      const draft = swapComposerDraft(state, state.selectedThreadId, threadId);
       return {
         selectedThreadId: threadId,
         selectedWorkspaceId: thread.workspaceId,
         selectedTaskId,
         view: options.preserveView ? state.view : "chat",
-        composerText: draft.composerText,
-        composerTextByThreadId: draft.composerTextByThreadId,
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -483,7 +472,9 @@ export async function hydrateThreadSelection(
   const shouldFetchHarnessSnapshot =
     Boolean(sessionId) &&
     !skipHarnessSnapshotFetch &&
-    (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
+    (thread.messageCount > 0 ||
+      getEffectiveThreadLastEventSeq(get(), thread.id) > 0 ||
+      Boolean(thread.legacyTranscriptId));
 
   if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);
@@ -491,14 +482,11 @@ export async function hydrateThreadSelection(
   if (!isOperationCurrent()) return;
   set((state) => {
     if (!isOperationCurrent()) return {};
-    const draft = swapComposerDraft(state, state.selectedThreadId, threadId);
     return {
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
       view: options.preserveView ? state.view : "chat",
-      composerText: draft.composerText,
-      composerTextByThreadId: draft.composerTextByThreadId,
       threadRuntimeById: {
         ...state.threadRuntimeById,
         [threadId]: {
@@ -673,6 +661,13 @@ export function createThreadActions(
   | "setThreadModel"
   | "setThreadReasoningEffort"
   | "setComposerText"
+  | "addComposerAttachments"
+  | "removeComposerAttachment"
+  | "setComposerDraftModel"
+  | "setComposerDraftReasoningEffort"
+  | "clearComposerDraft"
+  | "discardComposerDraft"
+  | "pruneComposerDrafts"
   | "setInjectContext"
   | "answerAsk"
   | "answerApproval"
@@ -784,6 +779,7 @@ export function createThreadActions(
 
     removeThread: async (threadId: string) => {
       const thread = get().threads.find((t) => t.id === threadId);
+      get().discardComposerDraft(composerDraftKeyForThread(threadId));
       const runtimeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? null;
       const sessionSnapshotIds = thread
         ? sessionSnapshotIdsForThread(thread, runtimeSessionId)
@@ -1049,18 +1045,29 @@ export function createThreadActions(
         draft: !createSessionImmediately,
       };
 
+      let queuedDraftSubmission = opts?.draftSubmission;
       set((s) => {
-        const draft = swapComposerDraft(s, s.selectedThreadId, threadId);
+        let composerDraftsByKey = s.composerDraftsByKey;
+        if (queuedDraftSubmission) {
+          const submittedDraft = composerDraftsByKey[queuedDraftSubmission.key];
+          if (submittedDraft?.revision === queuedDraftSubmission.revision) {
+            const nextKey = composerDraftKeyForThread(threadId);
+            const nextDrafts = { ...composerDraftsByKey };
+            delete nextDrafts[queuedDraftSubmission.key];
+            nextDrafts[nextKey] = submittedDraft;
+            composerDraftsByKey = nextDrafts;
+            queuedDraftSubmission = {
+              key: nextKey,
+              revision: queuedDraftSubmission.revision,
+            };
+          }
+        }
         return {
           threads: [thread, ...s.threads],
           selectedThreadId: threadId,
           selectedTaskId: null,
           view: "chat",
-          composerText: "",
-          composerTextByThreadId: {
-            ...draft.composerTextByThreadId,
-            // New thread starts empty even if draft map had a stale id collision.
-          },
+          composerDraftsByKey,
           newChatLandingTarget: null,
         };
       });
@@ -1110,6 +1117,7 @@ export function createThreadActions(
           firstMessage,
           resolvedAttachments,
           opts?.references,
+          queuedDraftSubmission,
         );
       }
       ensureThreadSocket(
@@ -1134,16 +1142,11 @@ export function createThreadActions(
         (opts?.defaultTargetKind === "oneOff"
           ? { kind: "oneOff" }
           : resolveDefaultNewChatTarget(state.workspaces, state.selectedWorkspaceId));
-      set((s) => {
-        const draft = swapComposerDraft(s, s.selectedThreadId, null);
-        return {
-          selectedThreadId: null,
-          selectedTaskId: null,
-          view: "chat",
-          composerText: draft.composerText,
-          composerTextByThreadId: draft.composerTextByThreadId,
-          newChatLandingTarget: landingTarget,
-        };
+      set({
+        selectedThreadId: null,
+        selectedTaskId: null,
+        view: "chat",
+        newChatLandingTarget: landingTarget,
       });
       syncDesktopStateCache(get);
       await persistNow(get);
@@ -1175,6 +1178,7 @@ export function createThreadActions(
         references?: import("../../lib/wsProtocol").TurnReference[];
         refreshSnapshot?: boolean;
         signal?: AbortSignal;
+        draftSubmission?: ComposerDraftRevision;
       },
     ) => {
       const isReconnectCurrent = () =>
@@ -1226,6 +1230,8 @@ export function createThreadActions(
           firstMessage ?? "",
           opts?.attachments,
           opts?.references,
+          undefined,
+          opts?.draftSubmission,
         );
       }
       if (!isReconnectCurrent()) return false;
@@ -1247,12 +1253,24 @@ export function createThreadActions(
       busyPolicy: ThreadBusyPolicy = "reject",
       attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[],
       references?: import("../../lib/wsProtocol").TurnReference[],
+      options?: {
+        targetThreadId?: string;
+        draftSubmission?: ComposerDraftRevision;
+        retryToolItemIds?: string[];
+      },
     ): Promise<boolean> => {
-      const activeThreadId = get().selectedThreadId;
+      const activeThreadId = options?.targetThreadId ?? get().selectedThreadId;
       if (!activeThreadId) return false;
 
       const thread = get().threads.find((t) => t.id === activeThreadId);
       if (!thread) return false;
+      const threadDraftKey = composerDraftKeyForThread(activeThreadId);
+      const currentDraft = get().composerDraftsByKey[threadDraftKey];
+      const draftSubmission =
+        options?.draftSubmission ??
+        (currentDraft && currentDraft.text.trim() === text.trim()
+          ? { key: threadDraftKey, revision: currentDraft.revision }
+          : undefined);
 
       if (!(thread.workspaceId in get().taskSummariesByWorkspaceId)) {
         // Warm task summaries without blocking the send; the server enforces
@@ -1276,7 +1294,7 @@ export function createThreadActions(
             arguments: taskCommand[1]?.trim() ?? "",
             clientMessageId: makeId(),
           });
-          set((state) => clearComposerDraftForThread(state, activeThreadId));
+          if (draftSubmission) get().clearComposerDraft(draftSubmission);
           return true;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1304,9 +1322,9 @@ export function createThreadActions(
           firstMessage,
           attachments,
           references,
+          draftSubmission,
         });
         if (!started) return false;
-        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1316,9 +1334,9 @@ export function createThreadActions(
         const reconnected = await get().reconnectThread(activeThreadId, firstMessage, {
           attachments,
           references,
+          draftSubmission,
         });
         if (!reconnected) return false;
-        set((state) => clearComposerDraftForThread(state, activeThreadId));
         return true;
       }
 
@@ -1330,11 +1348,11 @@ export function createThreadActions(
         busyPolicy,
         attachments,
         references,
+        undefined,
+        draftSubmission,
+        options?.retryToolItemIds,
       );
       if (!accepted) return false;
-      if (busyPolicy === "steer" && rt?.busy) return true;
-
-      set((state) => clearComposerDraftForThread(state, activeThreadId));
       return true;
     },
 
@@ -1496,14 +1514,263 @@ export function createThreadActions(
       }
     },
 
-    setComposerText: (text) =>
+    setComposerText: (text, references = []) => {
       set((state) => {
-        const draftKey = composerDraftKey(state.selectedThreadId);
-        const nextById = { ...(state.composerTextByThreadId ?? {}) };
-        if (text.length > 0) nextById[draftKey] = text;
-        else delete nextById[draftKey];
-        return { composerText: text, composerTextByThreadId: nextById };
-      }),
+        const key = resolveActiveComposerDraftKey(state);
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [key]: {
+              ...current,
+              revision: current.revision + 1,
+              updatedAt: nowIso(),
+              text,
+              references: references.map((reference) => ({ ...reference })),
+            },
+          },
+        };
+      });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      persist(get);
+    },
+
+    addComposerAttachments: async (files) => {
+      if (files.length === 0) return;
+      const ownerKey = resolveActiveComposerDraftKey(get());
+      let ownerGeneration = 1;
+      set((state) => {
+        const existing = state.composerDraftsByKey[ownerKey];
+        const current = existing ?? createEmptyComposerDraftForState(state, ownerKey);
+        ownerGeneration = Math.max(1, current.generation);
+        const pendingCount = (state.composerAttachmentIngestionCountByKey[ownerKey] ?? 0) + 1;
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [ownerKey]: {
+              ...current,
+              generation: ownerGeneration,
+            },
+          },
+          composerAttachmentIngestionCountByKey: {
+            ...state.composerAttachmentIngestionCountByKey,
+            [ownerKey]: pendingCount,
+          },
+        };
+      });
+      const previousIngestion = RUNTIME.composerAttachmentIngestionTail ?? Promise.resolve();
+      const ingestion = previousIngestion
+        .catch(() => undefined)
+        .then(async () => {
+          const current = get().composerDraftsByKey[ownerKey];
+          if (current?.generation !== ownerGeneration) return;
+          const validationMessage = getComposerDraftAttachmentValidationMessage(
+            get().composerDraftsByKey,
+            ownerKey,
+            files,
+          );
+          if (validationMessage) {
+            throw new Error(validationMessage);
+          }
+
+          const attachments: ComposerDraftAttachment[] = [];
+          try {
+            for (const file of files) {
+              attachments.push(await createComposerDraftAttachment(file));
+            }
+          } catch (error) {
+            revokeComposerDraftAttachmentPreviews(attachments);
+            throw error;
+          }
+
+          let accepted = false;
+          set((state) => {
+            const draft = state.composerDraftsByKey[ownerKey];
+            if (draft?.generation !== ownerGeneration) return {};
+            accepted = true;
+            return {
+              composerDraftsByKey: {
+                ...state.composerDraftsByKey,
+                [ownerKey]: {
+                  ...draft,
+                  revision: draft.revision + 1,
+                  updatedAt: nowIso(),
+                  attachments: [...draft.attachments, ...attachments],
+                },
+              },
+            };
+          });
+          if (!accepted) {
+            revokeComposerDraftAttachmentPreviews(attachments);
+            return;
+          }
+          persist(get);
+        });
+      let trackedIngestion: Promise<void>;
+      trackedIngestion = ingestion.finally(() => {
+        set((state) => {
+          const pendingCount = (state.composerAttachmentIngestionCountByKey[ownerKey] ?? 1) - 1;
+          const nextPendingCounts = {
+            ...state.composerAttachmentIngestionCountByKey,
+          };
+          if (pendingCount > 0) nextPendingCounts[ownerKey] = pendingCount;
+          else delete nextPendingCounts[ownerKey];
+          return { composerAttachmentIngestionCountByKey: nextPendingCounts };
+        });
+        if (RUNTIME.composerAttachmentIngestionTail === trackedIngestion) {
+          RUNTIME.composerAttachmentIngestionTail = null;
+        }
+        get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      });
+      RUNTIME.composerAttachmentIngestionTail = trackedIngestion;
+      await trackedIngestion;
+    },
+
+    removeComposerAttachment: (index) => {
+      let removed: ComposerDraftAttachment[] = [];
+      set((state) => {
+        const key = resolveActiveComposerDraftKey(state);
+        const current = state.composerDraftsByKey[key];
+        if (!current?.attachments[index]) return {};
+        removed = [current.attachments[index]];
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [key]: {
+              ...current,
+              revision: current.revision + 1,
+              updatedAt: nowIso(),
+              attachments: current.attachments.filter(
+                (_attachment, currentIndex) => currentIndex !== index,
+              ),
+            },
+          },
+        };
+      });
+      revokeComposerDraftAttachmentPreviews(removed);
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      persist(get);
+    },
+
+    setComposerDraftModel: (provider, model) => {
+      const normalizedModel = model.trim();
+      if (!normalizedModel) return;
+      set((state) => {
+        const key = resolveActiveComposerDraftKey(state);
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
+        if (current.provider === provider && current.model === normalizedModel) return {};
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [key]: {
+              ...current,
+              revision: current.revision + 1,
+              updatedAt: nowIso(),
+              provider,
+              model: normalizedModel,
+              reasoningEffort: null,
+            },
+          },
+        };
+      });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      persist(get);
+    },
+
+    setComposerDraftReasoningEffort: (effort) => {
+      set((state) => {
+        const key = resolveActiveComposerDraftKey(state);
+        const current =
+          state.composerDraftsByKey[key] ?? createEmptyComposerDraftForState(state, key);
+        if (current.reasoningEffort === effort) return {};
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [key]: {
+              ...current,
+              revision: current.revision + 1,
+              updatedAt: nowIso(),
+              reasoningEffort: effort,
+            },
+          },
+        };
+      });
+      get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+      persist(get);
+    },
+
+    clearComposerDraft: (owner) => {
+      let cleared = false;
+      let removedAttachments: ReturnType<typeof clearComposerDraftRevision>["removedAttachments"] =
+        [];
+      set((state) => {
+        const result = clearComposerDraftRevision(state.composerDraftsByKey, owner);
+        cleared = result.cleared;
+        removedAttachments = result.removedAttachments;
+        return result.cleared ? { composerDraftsByKey: result.drafts } : {};
+      });
+      if (cleared) {
+        revokeComposerDraftAttachmentPreviews(removedAttachments);
+        get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
+        persist(get);
+      }
+      return cleared;
+    },
+
+    discardComposerDraft: (key) => {
+      const ownerKey = key ?? resolveActiveComposerDraftKey(get());
+      const current = get().composerDraftsByKey[ownerKey];
+      if (!current) return false;
+      const owner = { key: ownerKey, revision: current.revision };
+      return get().clearComposerDraft(owner);
+    },
+
+    pruneComposerDrafts: (nowMs, maxAgeMs) => {
+      let removedAttachments: ReturnType<typeof pruneComposerDraftEntries>["removedAttachments"] =
+        [];
+      let changed = false;
+      set((state) => {
+        const result = pruneComposerDraftEntries(state.composerDraftsByKey, {
+          nowMs,
+          validThreadIds: new Set(state.threads.map((thread) => thread.id)),
+          validProjectWorkspaceIds: new Set(
+            state.workspaces
+              .filter((workspace) => !isOneOffChatWorkspace(workspace))
+              .map((workspace) => workspace.id),
+          ),
+          activeKey: resolveActiveComposerDraftKey(state),
+          maxAgeMs,
+          protectedKeys: new Set(
+            Object.entries(state.composerAttachmentIngestionCountByKey)
+              .filter(([, count]) => count > 0)
+              .map(([key]) => key),
+          ),
+        });
+        removedAttachments = result.removedAttachments;
+        changed = result.removedKeys.length > 0;
+        if (result.removedKeys.length === 0) return {};
+        const composerDraftRevisionFloorByKey = {
+          ...state.composerDraftRevisionFloorByKey,
+        };
+        for (const key of result.removedKeys) {
+          const removedDraft = state.composerDraftsByKey[key];
+          if (!removedDraft) continue;
+          const currentFloor = composerDraftRevisionFloorByKey[key];
+          composerDraftRevisionFloorByKey[key] = {
+            revision: Math.max(currentFloor?.revision ?? 0, removedDraft.revision),
+            generation: Math.max(currentFloor?.generation ?? 0, removedDraft.generation),
+          };
+        }
+        return {
+          composerDraftsByKey: result.drafts,
+          composerDraftRevisionFloorByKey,
+        };
+      });
+      revokeComposerDraftAttachmentPreviews(removedAttachments);
+      if (changed) persist(get);
+    },
 
     setInjectContext: (v) => set({ injectContext: v }),
 

@@ -126,6 +126,93 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
+  test("saveState round-trips complete composer drafts and drops malformed attachments", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-drafts");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_drafts",
+          name: "Draft workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread_drafts",
+          workspaceId: "ws_drafts",
+          title: "Draft thread",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "session_drafts",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+      composerDrafts: {
+        "thread:thread_drafts": {
+          revision: 4,
+          generation: 1,
+          updatedAt: TS,
+          text: "persist me",
+          attachments: [
+            {
+              filename: "notes.txt",
+              mimeType: "text/plain",
+              size: 5,
+              lastModified: 7,
+              signature: "notes",
+              contentBase64: "bm90ZXM=",
+            },
+            {
+              filename: "broken.txt",
+              mimeType: "text/plain",
+              size: 50,
+              lastModified: 8,
+              signature: "broken",
+              contentBase64: "dG9vIHNob3J0",
+            },
+          ],
+          references: [{ kind: "skill", name: "documents" }],
+          provider: "openai",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.composerDrafts?.["thread:thread_drafts"]).toEqual({
+      revision: 4,
+      generation: 1,
+      updatedAt: TS,
+      text: "persist me",
+      attachments: [
+        {
+          filename: "notes.txt",
+          mimeType: "text/plain",
+          size: 5,
+          lastModified: 7,
+          signature: "notes",
+          contentBase64: "bm90ZXM=",
+        },
+      ],
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+  });
+
   test("saveState preserves task-owned thread metadata and drops malformed ownership", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");

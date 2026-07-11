@@ -125,9 +125,15 @@ export function handleLifecycleThreadEvent(
   const { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued = false } = dispatch;
 
   if (evt.type === "server_hello") {
-    resetLiveModelStreamRuntime(threadId);
     const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
     const prevRt = get().threadRuntimeById[threadId];
+    const resumedSameLiveTurn =
+      resumedBusy &&
+      prevRt?.busy === true &&
+      (!evt.turnId || !prevRt.activeTurnId || evt.turnId === prevRt.activeTurnId);
+    if (!resumedSameLiveTurn) {
+      resetLiveModelStreamRuntime(threadId);
+    }
     const draftModelSelection =
       prevRt?.draftComposerProvider != null &&
       typeof prevRt.draftComposerModel === "string" &&
@@ -315,19 +321,6 @@ export function handleLifecycleThreadEvent(
             },
           },
         };
-      });
-    }
-    const activeThreadId = get().selectedThreadId;
-    const composerText = get().composerText.trim();
-    if (
-      activeThreadId === threadId &&
-      composerText.length > 0 &&
-      composerText === evt.text.trim()
-    ) {
-      set((state) => {
-        const nextById = { ...state.composerTextByThreadId };
-        if (state.selectedThreadId) delete nextById[state.selectedThreadId];
-        return { composerText: "", composerTextByThreadId: nextById };
       });
     }
     return true;

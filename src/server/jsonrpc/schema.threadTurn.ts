@@ -7,6 +7,7 @@ import {
 } from "../../shared/attachments";
 import { projectedItemSchema } from "../../shared/projectedItems";
 import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
+import { MAX_TOOL_RETRY_TARGETS } from "../../shared/toolRetry";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 
 export const jsonRpcThreadSchema = z
@@ -106,6 +107,11 @@ const turnReferenceSchema = z
   .strict();
 // Bound history inflation: each skill reference injects a full SKILL.md body.
 const turnReferencesSchema = z.array(turnReferenceSchema).max(32);
+const toolRetrySchema = z
+  .object({
+    toolItemIds: z.array(nonEmptyTrimmedStringSchema).min(1).max(MAX_TOOL_RETRY_TARGETS),
+  })
+  .strict();
 
 const replayHealthSchema = z
   .object({
@@ -164,6 +170,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
       clientMessageId: nonEmptyTrimmedStringSchema.optional(),
       input: turnInputSchema,
       references: turnReferencesSchema.optional(),
+      retry: toolRetrySchema.optional(),
     })
     .strict(),
   "turn/steer": z
@@ -356,6 +363,7 @@ export const jsonRpcThreadTurnResultSchemas = {
           items: z.array(z.unknown()),
         })
         .strict(),
+      replayed: z.boolean().optional(),
     })
     .strict(),
   "turn/steer": z

@@ -268,6 +268,7 @@ export function createWorkspaceActions(
           newTaskWorkspaceId: s.newTaskWorkspaceId === workspaceId ? null : s.newTaskWorkspaceId,
         };
       });
+      get().pruneComposerDrafts();
       clearWorkspaceStartState(workspaceId);
       await persistNow(get);
       captureProductEvent("workspace_removed", {

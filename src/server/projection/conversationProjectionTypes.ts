@@ -1,4 +1,5 @@
 import type { ProjectedItem, ProjectedToolState } from "../../shared/projectedItems";
+import type { ToolInputDigest } from "../../shared/toolInputDigest";
 import type { ProjectedReasoningMode } from "./shared";
 
 export type BufferedReasoningState = {
@@ -22,6 +23,8 @@ export type BufferedToolState = {
   started: boolean;
   state: ProjectedToolState;
   result?: unknown;
+  retryOf?: string;
+  inputDigest?: ToolInputDigest;
   approval?: {
     approvalId: string;
     reason?: unknown;

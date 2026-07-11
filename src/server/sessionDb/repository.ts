@@ -4,6 +4,10 @@ import { z } from "zod";
 import type { PersistedExternalConversationImport } from "../../import/conversations/types";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
+import {
+  encodeToolRetrySnapshotMetadata,
+  hydrateToolRetrySnapshotMetadata,
+} from "../../shared/toolRetrySnapshot";
 import type { ModelMessage } from "../../types";
 import { isProviderName } from "../../types";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
@@ -328,7 +332,7 @@ export class SessionDbRepository {
         snapshotRecord.profile = null;
       }
     }
-    return sessionSnapshotSchema.parse(rawSnapshot);
+    return hydrateToolRetrySnapshotMetadata(sessionSnapshotSchema.parse(rawSnapshot));
   }
 
   persistSessionMutation(opts: PersistedSessionMutation): number {
@@ -625,6 +629,7 @@ export class SessionDbRepository {
   }
 
   persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
+    const rollbackSafeSnapshot = encodeToolRetrySnapshotMetadata(snapshot);
     this.db
       .query(
         sql([
@@ -635,7 +640,7 @@ export class SessionDbRepository {
           "           snapshot_json = excluded.snapshot_json",
         ]),
       )
-      .run(sessionId, snapshot.updatedAt, toJsonString(snapshot));
+      .run(sessionId, snapshot.updatedAt, toJsonString(rollbackSafeSnapshot));
   }
 
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {

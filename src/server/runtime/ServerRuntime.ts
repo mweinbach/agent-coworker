@@ -39,6 +39,7 @@ import {
 import type { JsonRpcThread } from "../jsonrpc/routes/types";
 import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
+import { projectToolRetryCompatibility } from "../jsonrpc/toolRetryCompatibility";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
 import { ResearchService } from "../research/ResearchService";
 import { ServerFileLog, shouldEnableServerFileLog } from "../serverFileLog";
@@ -254,6 +255,12 @@ export async function createAgentServerRuntime(
     ? new ServerFileLog({ logsDir: aiCoworkerPaths.logsDir })
     : null;
   const sendQueue = new SocketSendQueue();
+  const sendJsonRpc = (ws: StartServerSocket, payload: unknown): void => {
+    const compatiblePayload = projectToolRetryCompatibility(ws, payload);
+    if (compatiblePayload !== null) {
+      sendQueue.send(ws, compatiblePayload);
+    }
+  };
   const taskSubscribers = new WorkspaceJsonRpcSubscribers(sendQueue);
   const jsonRpcConnections = new Set<StartServerSocket>();
   const threadSubscribers = new Map<string, Map<string, StartServerSocket>>();
@@ -310,7 +317,7 @@ export async function createAgentServerRuntime(
       if (!connection.data.rpc || !sendQueue.shouldSendNotification(connection, method)) {
         continue;
       }
-      sendQueue.send(connection, { method, params });
+      sendJsonRpc(connection, { method, params });
     }
   };
   const broadcastWorkspaceListChanged = () => {
@@ -324,7 +331,7 @@ export async function createAgentServerRuntime(
     workspacePath: config.workingDirectory,
     sessionDb,
     getConfig: () => config,
-    sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
+    sendJsonRpc,
   });
   let registry!: SessionRegistry;
   const tasks = new TaskCoordinator({
@@ -656,7 +663,7 @@ export async function createAgentServerRuntime(
     listThreadJournalEvents: (threadId, journalOpts) => threadJournal.list(threadId, journalOpts),
     enqueueThreadJournalEvent: async (event) => await threadJournal.enqueue(event),
     shouldSendNotification: (ws, method) => sendQueue.shouldSendNotification(ws, method),
-    sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
+    sendJsonRpc,
     extractTextInput: extractJsonRpcTextInput,
   });
   const disposeDesktopStateWatcher =
@@ -830,9 +837,9 @@ export async function createAgentServerRuntime(
     },
     lmstudioLocal: createLmStudioLocalService({ env }),
     jsonrpc: {
-      send: (ws, payload) => sendQueue.send(ws, payload),
-      sendResult: (ws, id, result) => sendQueue.send(ws, buildJsonRpcResultResponse(id, result)),
-      sendError: (ws, id, error) => sendQueue.send(ws, buildJsonRpcErrorResponse(id, error)),
+      send: sendJsonRpc,
+      sendResult: (ws, id, result) => sendJsonRpc(ws, buildJsonRpcResultResponse(id, result)),
+      sendError: (ws, id, error) => sendJsonRpc(ws, buildJsonRpcErrorResponse(id, error)),
     },
     utils: {
       resolveWorkspacePath: (params, method) =>
@@ -882,7 +889,7 @@ export async function createAgentServerRuntime(
     },
     env,
     jsonRpcMaxPendingRequests,
-    sendJsonRpc: (ws, payload) => sendQueue.send(ws, payload),
+    sendJsonRpc,
     openConnection: (ws) => {
       jsonRpcConnections.add(ws);
       jsonRpcTransport.openConnection(ws);
@@ -899,7 +906,7 @@ export async function createAgentServerRuntime(
     handleMessage: (ws, raw) => {
       const decoded = decodeJsonRpcMessage(raw);
       if (!decoded.ok) {
-        sendQueue.send(ws, decoded.response);
+        sendJsonRpc(ws, decoded.response);
         return;
       }
       jsonRpcTransport.handleMessage(ws, decoded.message, routeJsonRpcRequest);

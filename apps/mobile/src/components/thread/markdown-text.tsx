@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
+import {
+  areMarkdownRevisionPropsEqual,
+  type MarkdownRevisionProps,
+} from "@/components/thread/markdown-memo";
 import { parseRichBlocks, type RichBlock } from "@/components/thread/markdownParser";
 import { SourcesCarousel } from "@/components/thread/sources-carousel";
 import {
@@ -12,11 +16,7 @@ import { useAppTheme } from "@/theme/use-app-theme";
 export type { RichBlock } from "@/components/thread/markdownParser";
 export { parseRichBlocks } from "@/components/thread/markdownParser";
 
-type MarkdownTextProps = {
-  text: string;
-  color?: string;
-  variant?: "default" | "reasoning";
-};
+export type MarkdownTextProps = MarkdownRevisionProps;
 
 function InlineText({
   text,
@@ -30,7 +30,7 @@ function InlineText({
   const theme = useAppTheme();
   const fontSize = variant === "reasoning" ? 13 : 16;
   const lineHeight = variant === "reasoning" ? 20 : 26;
-  const runs = parseInlineMarkdown(text);
+  const runs = useMemo(() => parseInlineMarkdown(text), [text]);
 
   async function openLink(href: string) {
     const normalized = normalizeInlineLinkHref(href);
@@ -276,9 +276,9 @@ function RichBlockView({
   }
 }
 
-export function MarkdownText({ text, color, variant = "default" }: MarkdownTextProps) {
+function MarkdownTextComponent({ text, color, variant = "default" }: MarkdownTextProps) {
   const theme = useAppTheme();
-  const blocks = parseRichBlocks(text);
+  const blocks = useMemo(() => parseRichBlocks(text), [text]);
   const textColor = color ?? theme.text;
 
   if (blocks.length === 1 && blocks[0].type === "paragraph") {
@@ -298,3 +298,5 @@ export function MarkdownText({ text, color, variant = "default" }: MarkdownTextP
     </View>
   );
 }
+
+export const MarkdownText = memo(MarkdownTextComponent, areMarkdownRevisionPropsEqual);

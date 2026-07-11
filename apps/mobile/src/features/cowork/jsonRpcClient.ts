@@ -22,6 +22,7 @@ import {
 } from "./protocolTypes";
 
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
+const JSONRPC_INVALID_PARAMS_ERROR_CODE = -32602;
 const JSONRPC_NOT_INITIALIZED_ERROR_CODE = -32002;
 const JSONRPC_ALREADY_INITIALIZED_ERROR_CODE = -32003;
 
@@ -311,6 +312,7 @@ export class CoworkJsonRpcClient {
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
   private initializePromise: Promise<void> | null = null;
   private transportGeneration = 0;
+  private serverSupportsToolRetryLineage = false;
 
   constructor(options: JsonRpcClientOptions) {
     this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 15_000);
@@ -324,7 +326,12 @@ export class CoworkJsonRpcClient {
     this.transportGeneration += 1;
     this.initialized = false;
     this.initializePromise = null;
+    this.serverSupportsToolRetryLineage = false;
     this.rejectAllPending(reason);
+  }
+
+  get supportsToolRetryLineage(): boolean {
+    return this.serverSupportsToolRetryLineage;
   }
 
   async initialize(): Promise<void> {
@@ -337,12 +344,35 @@ export class CoworkJsonRpcClient {
     const generation = this.transportGeneration;
     const initializePromise = (async () => {
       try {
-        await this.request("initialize", {
-          clientInfo: this.clientInfo,
-          capabilities: {
-            experimentalApi: false,
-          },
-        });
+        let initializeResult: unknown;
+        try {
+          initializeResult = await this.request("initialize", {
+            clientInfo: this.clientInfo,
+            capabilities: {
+              experimentalApi: true,
+              toolRetryLineage: true,
+            },
+          });
+        } catch (error) {
+          if (readErrorCode(error) !== JSONRPC_INVALID_PARAMS_ERROR_CODE) {
+            throw error;
+          }
+          this.serverSupportsToolRetryLineage = false;
+          initializeResult = await this.request("initialize", {
+            clientInfo: this.clientInfo,
+            capabilities: {
+              experimentalApi: true,
+            },
+          });
+        }
+        if (initializeResult && typeof initializeResult === "object") {
+          const result = initializeResult as Record<string, unknown>;
+          const capabilities =
+            result.capabilities && typeof result.capabilities === "object"
+              ? (result.capabilities as Record<string, unknown>)
+              : null;
+          this.serverSupportsToolRetryLineage = capabilities?.toolRetryLineage === true;
+        }
       } catch (error) {
         if (
           !matchesJsonRpcError(error, JSONRPC_ALREADY_INITIALIZED_ERROR_CODE, "Already initialized")
@@ -388,10 +418,16 @@ export class CoworkJsonRpcClient {
     return coworkThreadListResultSchema.parse(result);
   }
 
-  async readThread(threadId: string): Promise<CoworkThreadReadResult> {
+  async readThread(
+    threadId: string,
+    options?: { includeTurns?: boolean },
+  ): Promise<CoworkThreadReadResult> {
     const initializing = this.ensureInitialized();
     if (initializing) await initializing;
-    const result = await this.request("thread/read", { threadId });
+    const result = await this.request("thread/read", {
+      threadId,
+      ...(options?.includeTurns ? { includeTurns: true } : {}),
+    });
     return coworkThreadReadResultSchema.parse(result);
   }
 
@@ -406,11 +442,18 @@ export class CoworkJsonRpcClient {
     threadId: string,
     input: string | CoworkTurnInputPart[],
     clientMessageId?: string,
+    retryToolItemIds?: string[],
   ): Promise<void> {
+    if (retryToolItemIds && retryToolItemIds.length > 0 && !this.serverSupportsToolRetryLineage) {
+      throw new Error("This server does not support exact tool retries.");
+    }
     await this.request("turn/start", {
       threadId,
       input: typeof input === "string" ? [{ type: "text", text: input }] : input,
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(retryToolItemIds && retryToolItemIds.length > 0
+        ? { retry: { toolItemIds: retryToolItemIds } }
+        : {}),
     });
   }
 

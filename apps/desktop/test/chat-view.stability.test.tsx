@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { buildAttachmentSignature } from "../src/app/attachmentInputs";
+import {
+  composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
+  createEmptyComposerDraft,
+} from "../src/app/composerDrafts";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import {
   clearJsonRpcSocketOverride,
@@ -29,6 +34,16 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+
+function composerDraftsWithText(key: string, text: string) {
+  return {
+    [key]: {
+      ...createEmptyComposerDraft("2026-03-12T00:00:00.000Z"),
+      revision: 1,
+      text,
+    },
+  };
+}
 
 class MockMutationObserver {
   observe() {}
@@ -110,11 +125,14 @@ function setupChatViewJsdom() {
 }
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
+const { setDesktopRenderMetricObserver } = await import("../src/ui/renderDiagnostics");
 
 describe("desktop chat view stability", () => {
   beforeEach(async () => {
     await useAppStore.getState().drainBootstrap();
+    RUNTIME.jsonRpcSockets.clear();
     Object.assign(globalThis, { [DESKTOP_API_OVERRIDE_KEY]: desktopApiMock });
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({
@@ -124,10 +142,15 @@ describe("desktop chat view stability", () => {
       selectedTaskId: null,
       tasksById: {},
       taskSummariesByWorkspaceId: {},
+      composerDraftsByKey: {},
+      composerDraftRevisionFloorByKey: {},
+      composerAttachmentIngestionCountByKey: {},
+      newChatLandingTarget: null,
     });
   });
 
   afterEach(() => {
+    RUNTIME.jsonRpcSockets.clear();
     clearJsonRpcSocketOverride();
     Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
@@ -176,7 +199,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -221,7 +244,10 @@ describe("desktop chat view stability", () => {
       threads: [],
       workspaceRuntimeById: {},
       threadRuntimeById: {},
-      composerText: "Draft a release note",
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "oneOff" }),
+        "Draft a release note",
+      ),
       providerDefaultModelByProvider: {},
     });
 
@@ -296,7 +322,10 @@ describe("desktop chat view stability", () => {
       threads: [],
       workspaceRuntimeById: {},
       threadRuntimeById: {},
-      composerText: "Plan the onboarding flow",
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "project", workspaceId: "ws-1" }),
+        "Plan the onboarding flow",
+      ),
     });
 
     const harness = setupChatViewJsdom();
@@ -395,7 +424,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -491,7 +520,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -578,7 +607,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 144,
       developerMode: true,
     });
@@ -683,7 +712,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
     });
 
@@ -804,7 +833,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("does not repin a completed thread after a user scrolls upward", async () => {
+  test("composer edits neither repin nor rerender a completed transcript", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -857,7 +886,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
     });
 
@@ -902,12 +931,28 @@ describe("desktop chat view stability", () => {
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
       });
 
-      await act(async () => {
-        useAppStore.setState({ composerText: "draft after reading" });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      const transcriptRenderMetrics: string[] = [];
+      const stopRenderMetrics = setDesktopRenderMetricObserver((event) => {
+        if (
+          event.metric === "chat-feed" ||
+          event.metric === "feed-row" ||
+          event.metric === "desktop-markdown" ||
+          event.metric === "streaming-markdown"
+        ) {
+          transcriptRenderMetrics.push(event.metric);
+        }
       });
+      try {
+        await act(async () => {
+          useAppStore.getState().setComposerText("draft after reading");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        });
+      } finally {
+        stopRenderMetrics();
+      }
 
       expect(feed.scrollTop).toBe(500);
+      expect(transcriptRenderMetrics).toEqual([]);
     } finally {
       if (root) {
         await act(async () => {
@@ -991,7 +1036,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1125,7 +1170,7 @@ describe("desktop chat view stability", () => {
         },
       ],
       providerConnected: ["openai"],
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1217,7 +1262,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1239,6 +1284,133 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("explains unavailable exact retry without sending against a legacy server", async () => {
+    const originalSendMessage = useAppStore.getState().sendMessage;
+    const sendMessage = mock(async () => true);
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      supportsToolRetryLineage: false,
+    } as never);
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      bootstrapPhase: "ready",
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:12.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 2,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: "ws://legacy",
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "failed-tool",
+              kind: "tool",
+              ts: "2026-03-12T00:00:00.000Z",
+              completedAt: "2026-03-12T00:00:12.000Z",
+              name: "read",
+              state: "output-error",
+              args: { filePath: "/tmp/missing" },
+              result: { error: "missing file" },
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+      sendMessage,
+    } as never);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.querySelector('[data-slot="activity-retry-unavailable"]')?.textContent).toBe(
+        "Exact retry isn’t available with this server.",
+      );
+      const retryButtons = Array.from(container.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(retryButtons).toHaveLength(0);
+      expect(container.textContent).not.toContain("Disconnected");
+      expect(container.textContent).not.toContain("Reconnect");
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      await act(async () => {
+        RUNTIME.jsonRpcSockets.set("ws-1", {
+          supportsToolRetryLineage: true,
+        } as never);
+        useAppStore.getState().setComposerText("Keep this draft");
+      });
+      const retryButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(retryButton).toBeDefined();
+
+      RUNTIME.jsonRpcSockets.set("ws-1", {
+        supportsToolRetryLineage: false,
+      } as never);
+      await act(async () => {
+        retryButton?.click();
+        await Promise.resolve();
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(
+        useAppStore.getState().composerDraftsByKey[composerDraftKeyForThread("thread-1")]?.text,
+      ).toBe("Keep this draft");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState({ sendMessage: originalSendMessage });
       harness.restore();
     }
   });
@@ -1327,7 +1499,7 @@ describe("desktop chat view stability", () => {
           transcriptOnly: false,
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     } as any);
 
     const harness = setupChatViewJsdom();
@@ -1408,7 +1580,7 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     });
 
     const harness = setupChatViewJsdom();
@@ -1433,7 +1605,7 @@ describe("desktop chat view stability", () => {
       expect(statusRow?.textContent).toContain("Type guidance to add, or stop to cancel.");
 
       await act(async () => {
-        useAppStore.setState({ composerText: "tighten scope" });
+        useAppStore.getState().setComposerText("tighten scope");
       });
 
       // Stop remains available while typing a steer (audit P0).
@@ -1545,7 +1717,7 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       messageBarHeight: 120,
       developerMode: true,
     });
@@ -1602,9 +1774,168 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("keeps attachment-only steers pending until acceptance, then clears them", async () => {
+  test("blocks an immediate submit until selected attachment ingestion completes", async () => {
+    const originalState = useAppStore.getState();
+    let releaseRead: ((buffer: ArrayBuffer) => void) | undefined;
+    const readGate = new Promise<ArrayBuffer>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readFile = mock(() => readGate);
+    const sendMessage = mock(
+      async (
+        text: string,
+        _busyPolicy?: "reject" | "steer",
+        attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>,
+      ) => {
+        expect(text).toBe("send with attachment");
+        expect(attachments).toEqual([
+          {
+            filename: "slow.txt",
+            contentBase64: "AQID",
+            mimeType: "text/plain",
+          },
+        ]);
+        return true;
+      },
+    );
+    const draftKey = composerDraftKeyForThread("thread-1");
+
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: { provider: "openai", model: "gpt-5.4" },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [],
+          pendingSteer: null,
+          pendingTurnStart: null,
+          transcriptOnly: false,
+          activeTurnId: null,
+        },
+      },
+      composerDraftsByKey: composerDraftsWithText(draftKey, "send with attachment"),
+      composerAttachmentIngestionCountByKey: {},
+      sendMessage,
+    } as never);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      const form = container.querySelector("form");
+      if (!fileInput || !form) throw new Error("missing composer controls");
+      const slowFile = {
+        name: "slow.txt",
+        type: "text/plain",
+        size: 3,
+        lastModified: 1,
+        arrayBuffer: readFile,
+      } as File;
+      Object.defineProperty(fileInput, "files", {
+        configurable: true,
+        value: [slowFile],
+      });
+
+      await act(async () => {
+        fileInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        form.dispatchEvent(
+          new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composerAttachmentIngestionCountByKey[draftKey]).toBe(1);
+      expect(
+        (container.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null)
+          ?.disabled,
+      ).toBe(true);
+
+      await act(async () => {
+        releaseRead?.(new Uint8Array([1, 2, 3]).buffer);
+        await readGate;
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(
+        useAppStore.getState().composerAttachmentIngestionCountByKey[draftKey],
+      ).toBeUndefined();
+      expect(useAppStore.getState().composerDraftsByKey[draftKey]?.attachments).toHaveLength(1);
+
+      await act(async () => {
+        form.dispatchEvent(
+          new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseRead?.(new Uint8Array([1, 2, 3]).buffer);
+      await readGate;
+      await Promise.resolve();
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(originalState, true);
+      harness.restore();
+    }
+  });
+
+  test("keeps attachment-only steers until the captured submission succeeds", async () => {
     const originalState = useAppStore.getState();
     let submittedAttachmentSignature = "";
+    let resolveSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    });
 
     useAppStore.setState({
       ready: true,
@@ -1657,18 +1988,24 @@ describe("desktop chat view stability", () => {
           activeTurnId: "turn-1",
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
       sendMessage: async (
         text: string,
         busyPolicy?: "reject" | "steer",
         attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>,
+        _references?: unknown,
+        options?: { draftSubmission?: { key: string; revision: number } },
       ) => {
         expect(text).toBe("");
         expect(busyPolicy).toBe("steer");
         submittedAttachmentSignature = buildAttachmentSignature(attachments);
+        await sendGate;
+        if (options?.draftSubmission) {
+          useAppStore.getState().clearComposerDraft(options.draftSubmission);
+        }
         return true;
       },
-    } as any);
+    } as never);
 
     const harness = setupChatViewJsdom();
 
@@ -1742,18 +2079,8 @@ describe("desktop chat view stability", () => {
       );
 
       await act(async () => {
-        useAppStore.setState((state) => ({
-          threadRuntimeById: {
-            ...state.threadRuntimeById,
-            "thread-1": {
-              ...state.threadRuntimeById["thread-1"]!,
-              pendingSteer: {
-                ...state.threadRuntimeById["thread-1"]!.pendingSteer!,
-                status: "accepted",
-              },
-            },
-          },
-        }));
+        resolveSend?.();
+        await sendGate;
         await Promise.resolve();
       });
 

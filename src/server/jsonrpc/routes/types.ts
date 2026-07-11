@@ -3,6 +3,7 @@ import type { ConversationImportService } from "../../../import/conversations";
 import type { LmStudioLocalService } from "../../../providers/lmstudio/local";
 import type { SkillImprovementService } from "../../../skillImprovement";
 import type { AgentConfig } from "../../../types";
+import type { CanvasDocumentPersistenceService } from "../../canvasDocumentPersistence";
 import type { SessionEvent } from "../../protocol";
 import type { ResearchService } from "../../research/ResearchService";
 import type { ThreadJournalHealth } from "../../runtime/ThreadJournal";
@@ -63,6 +64,7 @@ export type JsonRpcRequestHandlerMap = Record<string, JsonRpcRequestHandler>;
 
 export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
+  canvasDocuments?: CanvasDocumentPersistenceService;
   homedir?: string;
   research: ResearchService;
   skillImprovement: SkillImprovementService;

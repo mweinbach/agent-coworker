@@ -1,5 +1,6 @@
 import type { AgentExecutionState } from "../../../shared/agents";
 import { supportsProviderManagedContinuationProvider } from "../../../shared/providerContinuation";
+import { type ToolRetryIntent, toolRetryTurnAnnotation } from "../../../shared/toolRetry";
 import { captureProductEvent } from "../../../telemetry/productAnalytics";
 import type { ApproveCommandOptions, TurnReference } from "../../../types";
 import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
@@ -58,6 +59,7 @@ export type UserMessageTurnRunnerDeps = {
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   waitForLiveSteerSettlement?: () => Promise<void>;
+  onUserMessageAccepted?: (clientMessageId: string | undefined, turnId: string) => void;
 };
 
 export type UserMessageTurnRunner = {
@@ -68,8 +70,14 @@ export type UserMessageTurnRunner = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: UserMessageTurnOptions,
   ) => Promise<void>;
+};
+
+export type UserMessageTurnOptions = {
+  allowThreadManagementTools?: boolean;
+  idempotencyFingerprint?: string;
+  toolRetryIntent?: ToolRetryIntent;
 };
 
 export type UserMessageTurnFinalizerCheckpoint = {
@@ -109,6 +117,7 @@ export function createUserMessageTurnRunner(
     validateUploadedFileAttachments,
     onAdvancedMemoryChanged,
     waitForLiveSteerSettlement,
+    onUserMessageAccepted,
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
@@ -186,7 +195,7 @@ export function createUserMessageTurnRunner(
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: UserMessageTurnOptions,
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -265,6 +274,7 @@ export function createUserMessageTurnRunner(
       includeRawChunks,
       onAdvancedMemoryChanged,
       allowThreadManagementTools: opts?.allowThreadManagementTools,
+      toolRetryIntent: opts?.toolRetryIntent,
       setAcceptingSteers: (accepting) => {
         context.state.acceptingSteers = accepting;
       },
@@ -323,7 +333,15 @@ export function createUserMessageTurnRunner(
         sessionId: context.id,
         text: visibleText,
         clientMessageId,
+        turnId,
+        ...(opts?.idempotencyFingerprint
+          ? { idempotencyFingerprint: opts.idempotencyFingerprint }
+          : {}),
+        ...(opts?.toolRetryIntent
+          ? { annotations: [toolRetryTurnAnnotation(opts.toolRetryIntent)] }
+          : {}),
       });
+      onUserMessageAccepted?.(clientMessageId, turnId);
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
       context.emit({

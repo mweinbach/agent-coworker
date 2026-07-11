@@ -745,9 +745,7 @@ export async function openJsonRpcWorkspaceDocument(
     maxBytes?: number;
   },
 ): Promise<CanvasDocumentOpenResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/open", {
-    cwd: workspace?.path,
     ...input,
   })) as CanvasDocumentOpenResult;
 }
@@ -758,9 +756,7 @@ export async function revisionJsonRpcWorkspaceDocument(
   workspaceId: string,
   input: { documentId: string; generation: number },
 ): Promise<CanvasDocumentRevisionResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/revision", {
-    cwd: workspace?.path,
     ...input,
   })) as CanvasDocumentRevisionResult;
 }
@@ -776,9 +772,7 @@ export async function saveJsonRpcWorkspaceDocument(
     content: string;
   },
 ): Promise<CanvasDocumentSaveResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/save", {
-    cwd: workspace?.path,
     ...input,
   })) as CanvasDocumentSaveResult;
 }
@@ -795,9 +789,7 @@ export async function saveAsJsonRpcWorkspaceDocument(
     path: string;
   },
 ): Promise<CanvasDocumentSaveResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/saveAs", {
-    cwd: workspace?.path,
     ...input,
   })) as CanvasDocumentSaveResult;
 }
@@ -808,9 +800,7 @@ export async function closeJsonRpcWorkspaceDocument(
   workspaceId: string,
   input: { documentId: string; generation: number },
 ): Promise<CanvasDocumentCloseResult> {
-  const workspace = getWorkspaceById(get, workspaceId);
   return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/close", {
-    cwd: workspace?.path,
     ...input,
   })) as CanvasDocumentCloseResult;
 }

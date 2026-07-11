@@ -184,7 +184,9 @@ async function invokeWorkspaceDocument(
   handlers: JsonRpcRequestHandlerMap,
   method:
     | "cowork/workspace/document/open"
+    | "cowork/workspace/document/revision"
     | "cowork/workspace/document/save"
+    | "cowork/workspace/document/saveAs"
     | "cowork/workspace/document/close",
   params: unknown,
 ): Promise<void> {
@@ -294,10 +296,10 @@ describe("workspace JSON-RPC route", () => {
       await fs.writeFile(filePath, "original", "utf8");
       const harness = createWorkspaceRouteHarness();
       harness.context.canvasDocuments = new CanvasDocumentPersistenceService();
+      harness.context.getConfig = () => ({ workingDirectory: dir }) as never;
       const handlers = createWorkspaceRouteHandlers(harness.context);
 
       await invokeWorkspaceDocument(handlers, "cowork/workspace/document/open", {
-        cwd: dir,
         path: filePath,
         documentId: "canvas-route-test",
         generation: 1,
@@ -312,7 +314,6 @@ describe("workspace JSON-RPC route", () => {
       }
 
       await invokeWorkspaceDocument(handlers, "cowork/workspace/document/save", {
-        cwd: dir,
         documentId: "canvas-route-test",
         generation: 1,
         editRevision: 1,
@@ -325,7 +326,6 @@ describe("workspace JSON-RPC route", () => {
       expect(await fs.readFile(filePath, "utf8")).toBe("saved through JSON-RPC");
 
       await invokeWorkspaceDocument(handlers, "cowork/workspace/document/close", {
-        cwd: dir,
         documentId: "canvas-route-test",
         generation: 1,
       });
@@ -341,6 +341,75 @@ describe("workspace JSON-RPC route", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("Canvas document methods reject caller-controlled cwd before persistence", async () => {
+    const harness = createWorkspaceRouteHarness();
+    const calls: string[] = [];
+    harness.context.canvasDocuments = {
+      open: async () => {
+        calls.push("open");
+        return {};
+      },
+      revision: async () => {
+        calls.push("revision");
+        return {};
+      },
+      save: async () => {
+        calls.push("save");
+        return {};
+      },
+      saveAs: async () => {
+        calls.push("saveAs");
+        return {};
+      },
+      close: async () => {
+        calls.push("close");
+        return {};
+      },
+    } as never;
+    harness.context.getConfig = () => ({ workingDirectory: "/workspace/project" }) as never;
+    const handlers = createWorkspaceRouteHandlers(harness.context);
+    const arbitraryCwd = "/tmp/caller-controlled";
+
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/open", {
+      cwd: arbitraryCwd,
+      path: "/tmp/caller-controlled/notes.md",
+      documentId: "canvas-route-test",
+      generation: 1,
+    });
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/revision", {
+      cwd: arbitraryCwd,
+      documentId: "canvas-route-test",
+      generation: 1,
+    });
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/save", {
+      cwd: arbitraryCwd,
+      documentId: "canvas-route-test",
+      generation: 1,
+      editRevision: 1,
+      content: "untrusted",
+    });
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/saveAs", {
+      cwd: arbitraryCwd,
+      documentId: "canvas-route-test",
+      generation: 1,
+      editRevision: 1,
+      content: "untrusted",
+      path: "/tmp/caller-controlled/copy.md",
+    });
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/close", {
+      cwd: arbitraryCwd,
+      documentId: "canvas-route-test",
+      generation: 1,
+    });
+
+    expect(calls).toEqual([]);
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toHaveLength(5);
+    expect(
+      harness.errors.every(({ error }) => error.code === JSONRPC_ERROR_CODES.invalidParams),
+    ).toBe(true);
   });
 
   test("spreadsheet/patch writes a cell and returns ok", async () => {

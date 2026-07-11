@@ -149,7 +149,7 @@ const canvasDocumentSaveResultSchema = z.discriminatedUnion("ok", [
       currentRevision: canvasDocumentRevisionSchema.optional(),
       error: z
         .object({
-          kind: z.enum(["session_not_found", "conflict", "write_error"]),
+          kind: z.enum(["session_not_found", "outside_workspace", "conflict", "write_error"]),
           message: z.string(),
         })
         .strict(),
@@ -404,7 +404,6 @@ export const jsonRpcWorkspaceRequestSchemas = {
     .strict(),
   "cowork/workspace/document/open": z
     .object({
-      cwd: nonEmptyTrimmedStringSchema.optional(),
       path: nonEmptyTrimmedStringSchema,
       documentId: nonEmptyTrimmedStringSchema,
       generation: z.number().int().nonnegative(),
@@ -413,14 +412,12 @@ export const jsonRpcWorkspaceRequestSchemas = {
     .strict(),
   "cowork/workspace/document/revision": z
     .object({
-      cwd: nonEmptyTrimmedStringSchema.optional(),
       documentId: nonEmptyTrimmedStringSchema,
       generation: z.number().int().nonnegative(),
     })
     .strict(),
   "cowork/workspace/document/save": z
     .object({
-      cwd: nonEmptyTrimmedStringSchema.optional(),
       documentId: nonEmptyTrimmedStringSchema,
       generation: z.number().int().nonnegative(),
       editRevision: z.number().int().nonnegative(),
@@ -429,7 +426,6 @@ export const jsonRpcWorkspaceRequestSchemas = {
     .strict(),
   "cowork/workspace/document/saveAs": z
     .object({
-      cwd: nonEmptyTrimmedStringSchema.optional(),
       documentId: nonEmptyTrimmedStringSchema,
       generation: z.number().int().nonnegative(),
       editRevision: z.number().int().nonnegative(),
@@ -437,11 +433,7 @@ export const jsonRpcWorkspaceRequestSchemas = {
       path: nonEmptyTrimmedStringSchema,
     })
     .strict(),
-  "cowork/workspace/document/close": canvasDocumentSessionRefSchema
-    .extend({
-      cwd: nonEmptyTrimmedStringSchema.optional(),
-    })
-    .strict(),
+  "cowork/workspace/document/close": canvasDocumentSessionRefSchema,
   "cowork/workspace/spreadsheet/workbook": z
     .object({
       cwd: nonEmptyTrimmedStringSchema.optional(),

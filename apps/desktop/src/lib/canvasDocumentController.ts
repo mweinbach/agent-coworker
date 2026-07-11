@@ -376,6 +376,10 @@ export class CanvasDocumentController {
     return await this.open(active.workspaceId, active.snapshot.path);
   }
 
+  reportPersistenceFailure(message: string): void {
+    this.setSaveProblem(message);
+  }
+
   async prepareForTransition(nextPath: string | null): Promise<boolean> {
     const saved = await this.flush();
     if (!saved) return false;

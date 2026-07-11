@@ -9,6 +9,7 @@ import {
   canonicalize,
   canonicalizeSync,
   canonicalKey,
+  canonicalPathsEqual,
   coworkHome,
   coworkPaths,
   crossesProtectedMetadata,
@@ -177,6 +178,24 @@ describe("samePath", () => {
     // comparison sees the two spellings as the same existing directory.
     expect(samePath(mixed, lower, "darwin")).toBe(true);
     expect(samePath(mixed, lower, "linux")).toBe(true);
+  });
+});
+
+describe("canonicalPathsEqual", () => {
+  test("folds canonical path strings only on win32", () => {
+    expect(canonicalPathsEqual("/Workspace/File.md", "/workspace/file.md", "win32")).toBe(true);
+    expect(canonicalPathsEqual("/Workspace/File.md", "/workspace/file.md", "darwin")).toBe(false);
+    expect(canonicalPathsEqual("/Workspace/File.md", "/workspace/file.md", "linux")).toBe(false);
+  });
+
+  test("does not resolve either path again", () => {
+    const lexicalPath = path.join(realTmp, "link");
+    const canonicalPath = path.join(realTmp, "target");
+    fs.mkdirSync(canonicalPath);
+    symlinkOrJunction(canonicalPath, lexicalPath);
+
+    expect(samePath(lexicalPath, canonicalPath)).toBe(true);
+    expect(canonicalPathsEqual(lexicalPath, canonicalPath)).toBe(false);
   });
 });
 

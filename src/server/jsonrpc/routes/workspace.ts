@@ -14,6 +14,13 @@ export function createWorkspaceRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
   const canvasDocuments = context.canvasDocuments ?? canvasDocumentPersistence;
+  const canvasWorkspaceRoot = (method: string): string => {
+    const workspaceRoot = context.getConfig().workingDirectory?.trim();
+    if (!workspaceRoot) {
+      throw new Error(`${method} requires a server-owned workspace root`);
+    }
+    return workspaceRoot;
+  };
   return {
     "workspace/list": async (ws, message) => {
       const parsed = jsonRpcWorkspaceRequestSchemas["workspace/list"].safeParse(
@@ -119,8 +126,7 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-        const result = await canvasDocuments.open({ ...parsed.data, cwd });
+        const result = await canvasDocuments.open(canvasWorkspaceRoot(message.method), parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -143,8 +149,10 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-        const result = await canvasDocuments.revision({ ...parsed.data, cwd });
+        const result = await canvasDocuments.revision(
+          canvasWorkspaceRoot(message.method),
+          parsed.data,
+        );
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -167,8 +175,7 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-        const result = await canvasDocuments.save({ ...parsed.data, cwd });
+        const result = await canvasDocuments.save(canvasWorkspaceRoot(message.method), parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -191,8 +198,10 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-        const result = await canvasDocuments.saveAs({ ...parsed.data, cwd });
+        const result = await canvasDocuments.saveAs(
+          canvasWorkspaceRoot(message.method),
+          parsed.data,
+        );
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -215,8 +224,10 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const cwd = context.utils.resolveWorkspacePath(parsed.data, message.method);
-        const result = await canvasDocuments.close({ ...parsed.data, cwd });
+        const result = await canvasDocuments.close(
+          canvasWorkspaceRoot(message.method),
+          parsed.data,
+        );
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {

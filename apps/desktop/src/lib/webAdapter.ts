@@ -683,6 +683,7 @@ export function createWebAdapter(): DesktopApi {
     async windowMinimize(): Promise<void> {},
     async windowMaximize(): Promise<void> {},
     async windowClose(): Promise<void> {},
+    async resolveWindowCloseRequest(): Promise<void> {},
     async windowDragStart(): Promise<void> {},
     async windowDragMove(): Promise<void> {},
     async windowDragEnd(): Promise<void> {},
@@ -844,6 +845,10 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onWorkspaceServerExited(): () => void {
+      return () => {};
+    },
+
+    onWindowCloseRequested(): () => void {
       return () => {};
     },
 

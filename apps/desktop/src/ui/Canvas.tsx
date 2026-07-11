@@ -34,6 +34,7 @@ import { CanvasDocumentController } from "../lib/canvasDocumentController";
 import { registerCanvasDocumentTransitionHandler } from "../lib/canvasDocumentLifecycle";
 import { applyMarkdownFormat, type MarkdownFormatKind } from "../lib/canvasMarkdownFormat";
 import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
+import { runCanvasSaveAs } from "../lib/canvasSaveAs";
 import { confirmAction, openPath, pickCanvasSavePath, revealPath } from "../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
@@ -262,14 +263,14 @@ export function Canvas({ path }: { path: string }) {
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (saveStatus === "saved") return;
+      if (controller.getState().saveStatus === "saved") return;
       void controller.flush();
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [controller, saveStatus]);
+  }, [controller]);
 
   useEffect(() => {
     if (activeTab === "preview") {
@@ -336,9 +337,12 @@ export function Canvas({ path }: { path: string }) {
 
   const handleSaveAs = async () => {
     const sourcePath = canvasState.document?.path ?? path;
-    const targetPath = await pickCanvasSavePath({ sourcePath });
-    if (!targetPath) return;
-    const savedPath = await controller.saveAs(targetPath);
+    const savedPath = await runCanvasSaveAs({
+      sourcePath,
+      pickPath: pickCanvasSavePath,
+      saveAs: async (targetPath) => await controller.saveAs(targetPath),
+      reportFailure: (message) => controller.reportPersistenceFailure(message),
+    });
     if (savedPath) {
       await useAppStore.getState().openFilePreview({ path: savedPath });
     }

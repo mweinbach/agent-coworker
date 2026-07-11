@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalKey, canonicalPathsEqual, coworkPaths } from "../platform/paths";
 import {
   CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
   CANVAS_DOCUMENT_MAX_BYTES,
@@ -17,6 +18,7 @@ import {
   type CanvasDocumentSaveRequest,
   type CanvasDocumentSaveResult,
 } from "../shared/canvasDocument";
+import { withFileLock } from "../utils/fileLock";
 
 const OUTSIDE_WORKSPACE_MESSAGE = "Path is outside the workspace root.";
 const SESSION_NOT_FOUND_MESSAGE = "The Canvas document session is no longer available.";
@@ -36,15 +38,27 @@ type StableFileRead = {
 };
 
 export type CanvasDocumentPersistenceHooks = {
+  beforeTempCreate?: (input: { path: string }) => Promise<void> | void;
   beforeAtomicCommit?: (input: {
     path: string;
     content: string;
     expectedRevision: CanvasDocumentRevision | null;
   }) => Promise<void> | void;
+  afterAtomicCommit?: (input: {
+    path: string;
+    content: string;
+    revision: CanvasDocumentRevision;
+  }) => Promise<void> | void;
 };
 
 function sessionKey(input: { documentId: string; generation: number }): string {
   return `${input.documentId}:${input.generation}`;
+}
+
+function transactionLockTarget(filePath: string): string {
+  const lockKey = canonicalKey(filePath);
+  const pathDigest = createHash("sha256").update(lockKey).digest("hex");
+  return path.join(coworkPaths().root, "locks", "canvas", pathDigest);
 }
 
 function isFileNotFoundError(error: unknown): boolean {
@@ -88,6 +102,10 @@ function revisionFromStatAndDigest(
     size: stat.size,
     fingerprint: `sha256:${digest}`,
   };
+}
+
+function digestContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 async function digestFileHandle(handle: FileHandle): Promise<string> {
@@ -137,21 +155,25 @@ async function resolveWorkspaceRoot(cwd: string): Promise<string> {
   return await fs.realpath(cwd);
 }
 
+function sameCanonicalPath(left: string, right: string): boolean {
+  return canonicalPathsEqual(left, right);
+}
+
 function assertInsideWorkspace(workspaceRoot: string, candidate: string): void {
   const relative = path.relative(workspaceRoot, candidate);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
 }
 
 async function resolveExistingWorkspaceFile(
-  cwd: string,
+  workspaceRootInput: string,
   filePath: string,
 ): Promise<{
   workspaceRoot: string;
   path: string;
 }> {
-  const workspaceRoot = await resolveWorkspaceRoot(cwd);
+  const workspaceRoot = await resolveWorkspaceRoot(workspaceRootInput);
   const candidate = path.isAbsolute(filePath)
     ? path.resolve(filePath)
     : path.resolve(workspaceRoot, filePath);
@@ -161,13 +183,13 @@ async function resolveExistingWorkspaceFile(
 }
 
 async function resolveNewWorkspaceFile(
-  cwd: string,
+  workspaceRootInput: string,
   filePath: string,
 ): Promise<{
   workspaceRoot: string;
   path: string;
 }> {
-  const workspaceRoot = await resolveWorkspaceRoot(cwd);
+  const workspaceRoot = await resolveWorkspaceRoot(workspaceRootInput);
   const candidate = path.isAbsolute(filePath)
     ? path.resolve(filePath)
     : path.resolve(workspaceRoot, filePath);
@@ -175,6 +197,89 @@ async function resolveNewWorkspaceFile(
   const resolvedPath = path.join(parent, path.basename(candidate));
   assertInsideWorkspace(workspaceRoot, resolvedPath);
   return { workspaceRoot, path: resolvedPath };
+}
+
+async function revalidateCanonicalWorkspaceRoot(workspaceRoot: string): Promise<void> {
+  let currentRoot: string;
+  try {
+    currentRoot = await fs.realpath(workspaceRoot);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  if (!sameCanonicalPath(currentRoot, workspaceRoot)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateCanonicalParent(workspaceRoot: string, filePath: string): Promise<string> {
+  await revalidateCanonicalWorkspaceRoot(workspaceRoot);
+  const expectedParent = path.dirname(filePath);
+  let currentParent: string;
+  try {
+    currentParent = await fs.realpath(expectedParent);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentParent);
+  if (!sameCanonicalPath(currentParent, expectedParent)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  return currentParent;
+}
+
+async function revalidateExistingWorkspaceFile(
+  workspaceRoot: string,
+  filePath: string,
+): Promise<void> {
+  await revalidateCanonicalParent(workspaceRoot, filePath);
+  let currentPath: string;
+  try {
+    currentPath = await fs.realpath(filePath);
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      throw error;
+    }
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentPath);
+  if (!sameCanonicalPath(currentPath, filePath)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateNewWorkspaceFile(
+  workspaceRoot: string,
+  requestedPath: string,
+  expectedPath: string,
+): Promise<void> {
+  const current = await resolveNewWorkspaceFile(workspaceRoot, requestedPath);
+  if (
+    !sameCanonicalPath(current.workspaceRoot, workspaceRoot) ||
+    !sameCanonicalPath(current.path, expectedPath)
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+}
+
+async function revalidateTemporaryWorkspaceFile(
+  workspaceRoot: string,
+  tempPath: string,
+): Promise<void> {
+  await revalidateCanonicalParent(workspaceRoot, tempPath);
+  let currentPath: string;
+  try {
+    currentPath = await fs.realpath(tempPath);
+  } catch {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  assertInsideWorkspace(workspaceRoot, currentPath);
+  if (!sameCanonicalPath(currentPath, tempPath)) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  const stat = await fs.lstat(tempPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
 }
 
 async function syncDirectory(directoryPath: string): Promise<void> {
@@ -208,13 +313,16 @@ export class CanvasDocumentPersistenceService {
 
   constructor(private readonly hooks: CanvasDocumentPersistenceHooks = {}) {}
 
-  async open(request: CanvasDocumentOpenRequest): Promise<CanvasDocumentOpenResult> {
+  async open(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentOpenRequest,
+  ): Promise<CanvasDocumentOpenResult> {
     const maxBytes = Math.min(
       request.maxBytes ?? CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
       CANVAS_DOCUMENT_MAX_BYTES,
     );
     try {
-      const resolved = await resolveExistingWorkspaceFile(request.cwd, request.path);
+      const resolved = await resolveExistingWorkspaceFile(serverWorkspaceRoot, request.path);
       const snapshot = await readStableFile(resolved.path, maxBytes);
       this.sessions.set(sessionKey(request), {
         workspaceRoot: resolved.workspaceRoot,
@@ -257,7 +365,10 @@ export class CanvasDocumentPersistenceService {
     }
   }
 
-  async revision(request: CanvasDocumentRevisionRequest): Promise<CanvasDocumentRevisionResult> {
+  async revision(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentRevisionRequest,
+  ): Promise<CanvasDocumentRevisionResult> {
     const session = this.sessions.get(sessionKey(request));
     if (!session) {
       return {
@@ -268,7 +379,8 @@ export class CanvasDocumentPersistenceService {
       };
     }
     try {
-      await this.assertSessionWorkspace(request.cwd, session);
+      await this.assertSessionWorkspace(serverWorkspaceRoot, session);
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, session.path);
       return {
         ok: true,
         documentId: request.documentId,
@@ -289,7 +401,10 @@ export class CanvasDocumentPersistenceService {
     }
   }
 
-  save(request: CanvasDocumentSaveRequest): Promise<CanvasDocumentSaveResult> {
+  save(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentSaveRequest,
+  ): Promise<CanvasDocumentSaveResult> {
     const key = sessionKey(request);
     const session = this.sessions.get(key);
     if (!session) {
@@ -304,7 +419,7 @@ export class CanvasDocumentPersistenceService {
       if (!currentSession) {
         return this.sessionNotFoundSaveResult(request);
       }
-      await this.assertSessionWorkspace(request.cwd, currentSession);
+      await this.assertSessionWorkspace(serverWorkspaceRoot, currentSession);
       if (request.editRevision < currentSession.highestRequestedEditRevision) {
         return {
           ok: true,
@@ -318,10 +433,14 @@ export class CanvasDocumentPersistenceService {
       }
       return await this.withOperationLock(`path:${currentSession.path}`, async () => {
         try {
-          const revision = await this.replaceFileAtomically(
-            currentSession.path,
-            request.content,
-            currentSession.baseRevision,
+          const revision = await withFileLock(
+            transactionLockTarget(currentSession.path),
+            async () =>
+              await this.replaceFileAtomically(
+                currentSession,
+                request.content,
+                currentSession.baseRevision,
+              ),
           );
           currentSession.baseRevision = revision;
           return {
@@ -340,7 +459,10 @@ export class CanvasDocumentPersistenceService {
     });
   }
 
-  saveAs(request: CanvasDocumentSaveAsRequest): Promise<CanvasDocumentSaveResult> {
+  saveAs(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentSaveAsRequest,
+  ): Promise<CanvasDocumentSaveResult> {
     const key = sessionKey(request);
     const session = this.sessions.get(key);
     if (!session) {
@@ -355,7 +477,7 @@ export class CanvasDocumentPersistenceService {
       if (!currentSession) {
         return this.sessionNotFoundSaveResult(request);
       }
-      await this.assertSessionWorkspace(request.cwd, currentSession);
+      await this.assertSessionWorkspace(serverWorkspaceRoot, currentSession);
       if (request.editRevision < currentSession.highestRequestedEditRevision) {
         return {
           ok: true,
@@ -370,7 +492,7 @@ export class CanvasDocumentPersistenceService {
 
       let target: Awaited<ReturnType<typeof resolveNewWorkspaceFile>>;
       try {
-        target = await resolveNewWorkspaceFile(request.cwd, request.path);
+        target = await resolveNewWorkspaceFile(currentSession.workspaceRoot, request.path);
       } catch (error) {
         return {
           ok: false,
@@ -379,7 +501,7 @@ export class CanvasDocumentPersistenceService {
           editRevision: request.editRevision,
           path: request.path,
           error: {
-            kind: "write_error",
+            kind: isOutsideWorkspaceError(error) ? "outside_workspace" : "write_error",
             message: error instanceof Error ? error.message : String(error),
           },
         };
@@ -387,7 +509,16 @@ export class CanvasDocumentPersistenceService {
 
       return await this.withOperationLock(`path:${target.path}`, async () => {
         try {
-          const revision = await this.createFileAtomically(target.path, request.content);
+          const revision = await withFileLock(
+            transactionLockTarget(target.path),
+            async () =>
+              await this.createFileAtomically(
+                currentSession.workspaceRoot,
+                request.path,
+                target.path,
+                request.content,
+              ),
+          );
           currentSession.path = target.path;
           currentSession.baseRevision = revision;
           return {
@@ -406,12 +537,15 @@ export class CanvasDocumentPersistenceService {
     });
   }
 
-  close(request: CanvasDocumentCloseRequest): Promise<CanvasDocumentCloseResult> {
+  close(
+    serverWorkspaceRoot: string,
+    request: CanvasDocumentCloseRequest,
+  ): Promise<CanvasDocumentCloseResult> {
     const key = sessionKey(request);
     return this.withOperationLock(`session:${key}`, async () => {
       const session = this.sessions.get(key);
       if (session) {
-        await this.assertSessionWorkspace(request.cwd, session);
+        await this.assertSessionWorkspace(serverWorkspaceRoot, session);
         this.sessions.delete(key);
       }
       return {
@@ -422,9 +556,12 @@ export class CanvasDocumentPersistenceService {
     });
   }
 
-  private async assertSessionWorkspace(cwd: string, session: CanvasDocumentSession): Promise<void> {
-    const workspaceRoot = await resolveWorkspaceRoot(cwd);
-    if (workspaceRoot !== session.workspaceRoot) {
+  private async assertSessionWorkspace(
+    serverWorkspaceRoot: string,
+    session: CanvasDocumentSession,
+  ): Promise<void> {
+    const workspaceRoot = await resolveWorkspaceRoot(serverWorkspaceRoot);
+    if (!sameCanonicalPath(workspaceRoot, session.workspaceRoot)) {
       throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
     }
   }
@@ -456,6 +593,16 @@ export class CanvasDocumentPersistenceService {
         error: { kind: "conflict", message: CONFLICT_MESSAGE },
       };
     }
+    if (isOutsideWorkspaceError(error)) {
+      return {
+        ok: false,
+        documentId: request.documentId,
+        generation: request.generation,
+        editRevision: request.editRevision,
+        path: filePath,
+        error: { kind: "outside_workspace", message: OUTSIDE_WORKSPACE_MESSAGE },
+      };
+    }
     return {
       ok: false,
       documentId: request.documentId,
@@ -470,10 +617,12 @@ export class CanvasDocumentPersistenceService {
   }
 
   private async replaceFileAtomically(
-    filePath: string,
+    session: CanvasDocumentSession,
     content: string,
     expectedRevision: CanvasDocumentRevision,
   ): Promise<CanvasDocumentRevision> {
+    const filePath = session.path;
+    await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
     const currentRevision = await readFileRevision(filePath);
     if (currentRevision.fingerprint !== expectedRevision.fingerprint) {
       throw new CanvasDocumentConflictError();
@@ -482,30 +631,35 @@ export class CanvasDocumentPersistenceService {
     const directory = path.dirname(filePath);
     const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
     let tempExists = false;
+    let handle: FileHandle | undefined;
     try {
+      await this.hooks.beforeTempCreate?.({ path: filePath });
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
       const originalStat = await fs.stat(filePath);
-      const handle = await fs.open(tempPath, "wx", originalStat.mode);
+      handle = await fs.open(tempPath, "wx", originalStat.mode);
       tempExists = true;
-      try {
-        await handle.writeFile(content, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+      const digest = digestContent(content);
       await this.hooks.beforeAtomicCommit?.({
         path: filePath,
         content,
         expectedRevision,
       });
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
+      await revalidateTemporaryWorkspaceFile(session.workspaceRoot, tempPath);
       const revisionBeforeCommit = await readFileRevision(filePath);
       if (revisionBeforeCommit.fingerprint !== expectedRevision.fingerprint) {
         throw new CanvasDocumentConflictError();
       }
       await fs.rename(tempPath, filePath);
       tempExists = false;
+      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
       await syncDirectory(directory);
-      return await readFileRevision(filePath);
+      return revision;
     } finally {
+      await handle?.close();
       if (tempExists) {
         await fs.rm(tempPath, { force: true }).catch(() => {});
       }
@@ -513,32 +667,39 @@ export class CanvasDocumentPersistenceService {
   }
 
   private async createFileAtomically(
+    workspaceRoot: string,
+    requestedPath: string,
     filePath: string,
     content: string,
   ): Promise<CanvasDocumentRevision> {
     const directory = path.dirname(filePath);
     const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
     let tempExists = false;
+    let handle: FileHandle | undefined;
     try {
-      const handle = await fs.open(tempPath, "wx", 0o600);
+      await this.hooks.beforeTempCreate?.({ path: filePath });
+      await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
+      handle = await fs.open(tempPath, "wx", 0o600);
       tempExists = true;
-      try {
-        await handle.writeFile(content, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+      const digest = digestContent(content);
       await this.hooks.beforeAtomicCommit?.({
         path: filePath,
         content,
         expectedRevision: null,
       });
+      await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
+      await revalidateTemporaryWorkspaceFile(workspaceRoot, tempPath);
       await fs.link(tempPath, filePath);
       await fs.rm(tempPath, { force: true });
       tempExists = false;
+      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
       await syncDirectory(directory);
-      return await readFileRevision(filePath);
+      return revision;
     } finally {
+      await handle?.close();
       if (tempExists) {
         await fs.rm(tempPath, { force: true }).catch(() => {});
       }

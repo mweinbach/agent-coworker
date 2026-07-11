@@ -69,6 +69,8 @@ import type {
   UpdaterReleaseInfo,
   UpdaterState,
   UploadDiagnosticsBundleInput,
+  WindowCloseRequest,
+  WindowCloseResponseInput,
   WindowDragPointInput,
   WorkspaceServerExitedEvent,
   WorkspaceServerStartupProgress,
@@ -439,6 +441,15 @@ export const pickDirectoryInputSchema: z.ZodType<PickDirectoryInput> = z.object(
 export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({
   screenX: z.number().finite(),
   screenY: z.number().finite(),
+});
+
+export const windowCloseRequestSchema: z.ZodType<WindowCloseRequest> = z.object({
+  requestId: safeIdSchema,
+});
+
+export const windowCloseResponseInputSchema: z.ZodType<WindowCloseResponseInput> = z.object({
+  requestId: safeIdSchema,
+  canClose: z.boolean(),
 });
 
 export const showCanvasWindowInputSchema: z.ZodType<ShowCanvasWindowInput> = z.object({

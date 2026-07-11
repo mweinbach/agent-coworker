@@ -51,6 +51,10 @@ import { DesktopUpdaterService } from "./services/updater";
 import { applyElectronUserDataDirOverride } from "./services/userDataOverride";
 import { revealAndActivateWindow } from "./services/windowActivation";
 import {
+  type NativeCloseWindow,
+  NativeWindowCloseCoordinator,
+} from "./services/windowCloseCoordinator";
+import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
@@ -132,6 +136,7 @@ const diagnostics = new DiagnosticsService({
   updater,
   serverDiagnostics: () => serverManager.getDiagnostics(),
 });
+const windowCloseCoordinator = new NativeWindowCloseCoordinator();
 let unregisterAppearanceListener = () => {};
 let mainWindow: Electron.BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
@@ -473,6 +478,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     win.maximize();
   }
   mainWindow = win;
+  windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   // Persist bounds on resize/move so the next launch restores them.
   const stopTrackingBounds = trackMainWindowBounds(app, win);
   applyPlatformWindowCreated(win, process.platform);
@@ -640,6 +646,7 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     },
   });
 
+  windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   applyPlatformWindowCreated(win, process.platform);
   applyWindowSecurity(win);
   syncWindowAppearance(win, {
@@ -788,6 +795,9 @@ if (!gotSingleInstanceLock) {
           quickChatController?.showQuickChatWindow(opts),
         showCanvasWindow: (opts: ShowCanvasWindowInput) => {
           void createCanvasWindow(opts);
+        },
+        resolveWindowCloseRequest: (sender, response) => {
+          windowCloseCoordinator.resolve(sender, response);
         },
         shouldKeepPopupWindowsAlive: () =>
           quickChatController?.shouldKeepPopupWindowsAlive() === true,

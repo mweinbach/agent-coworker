@@ -14,7 +14,6 @@ export type CanvasDocumentSessionRef = {
 };
 
 export type CanvasDocumentOpenRequest = CanvasDocumentSessionRef & {
-  cwd: string;
   path: string;
   maxBytes?: number;
 };
@@ -42,9 +41,7 @@ export type CanvasDocumentOpenResult =
       };
     };
 
-export type CanvasDocumentRevisionRequest = CanvasDocumentSessionRef & {
-  cwd: string;
-};
+export type CanvasDocumentRevisionRequest = CanvasDocumentSessionRef;
 
 export type CanvasDocumentRevisionResult =
   | {
@@ -65,7 +62,6 @@ export type CanvasDocumentRevisionResult =
     };
 
 export type CanvasDocumentSaveRequest = CanvasDocumentSessionRef & {
-  cwd: string;
   editRevision: number;
   content: string;
 };
@@ -88,7 +84,7 @@ export type CanvasDocumentSaveFailure = {
   path?: string;
   currentRevision?: CanvasDocumentRevision;
   error: {
-    kind: "session_not_found" | "conflict" | "write_error";
+    kind: "session_not_found" | "outside_workspace" | "conflict" | "write_error";
     message: string;
   };
 };
@@ -99,9 +95,7 @@ export type CanvasDocumentSaveAsRequest = CanvasDocumentSaveRequest & {
   path: string;
 };
 
-export type CanvasDocumentCloseRequest = CanvasDocumentSessionRef & {
-  cwd: string;
-};
+export type CanvasDocumentCloseRequest = CanvasDocumentSessionRef;
 
 export type CanvasDocumentCloseResult = {
   ok: true;

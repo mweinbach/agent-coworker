@@ -2,7 +2,6 @@ import type { CSSProperties } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
-import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
@@ -11,7 +10,6 @@ import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
 import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
-  confirmAction,
   getPlatformChrome,
   getSystemAppearance,
   onMenuCommand,
@@ -33,7 +31,6 @@ import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./lib/themeBootstrap";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
-import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
@@ -48,6 +45,7 @@ import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
+import { isEditableEscapeTarget, OverlayStackProvider, useOverlayStack } from "./ui/OverlayStack";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
@@ -131,6 +129,10 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
 
 function runJsonRpcShutdownDisposal() {
   disposeAllJsonRpcState();
+}
+
+export function isStopTurnShortcut(event: KeyboardEvent): boolean {
+  return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key === ".";
 }
 
 const ChatShell = memo(function ChatShell({
@@ -443,11 +445,12 @@ const ChatShell = memo(function ChatShell({
   );
 });
 
-export default function App() {
+function AppContent() {
   const windowMode = getDesktopWindowMode();
   const canvasWindowPath =
     windowMode === "canvas" ? new URLSearchParams(window.location.search).get("path") || "" : "";
   const canvasSurfaceKind = getCanvasSurfaceKind(canvasWindowPath);
+  const { hasOpenOverlay } = useOverlayStack();
   const ready = useAppStore((s) => s.ready);
   const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const startupError = useAppStore((s) => s.startupError);
@@ -556,95 +559,30 @@ export default function App() {
     const windowTarget = window;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (event.defaultPrevented || event.isComposing || hasOpenOverlay()) return;
+        if (isEditableEscapeTarget(event.target)) return;
         const state = useAppStore.getState();
-        if (state.onboardingVisible) {
-          // Onboarding owns Escape; do not also cancel a busy turn.
-          event.preventDefault();
-          // Incomplete first-run setup: do not fully dismiss without confirmation.
-          const hasConnectedProvider =
-            state.providerConnected.length > 0 ||
-            Object.values(state.providerStatusByName).some(
-              (status) => status?.authorized === true || status?.verified === true,
-            );
-          const incompleteSetup = state.workspaces.length === 0 || !hasConnectedProvider;
-          if (incompleteSetup) {
-            void confirmAction({
-              title: "Skip setup?",
-              message: "You have not finished connecting a provider or adding a workspace yet.",
-              detail:
-                "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
-              confirmLabel: "Skip for now",
-              cancelLabel: "Continue setup",
-              kind: "warning",
-              defaultAction: "cancel",
-            }).then((confirmed) => {
-              if (confirmed) {
-                state.dismissOnboarding();
-              }
-            });
-            return;
-          }
-          state.dismissOnboarding();
-          return;
-        }
-        if (state.promptModal) {
-          if (state.promptModal.kind === "ask") {
-            state.answerAsk(
-              state.promptModal.threadId,
-              state.promptModal.prompt.requestId,
-              ASK_SKIP_TOKEN,
-            );
-          } else {
-            state.dismissPrompt();
-          }
-          return;
-        }
-        const hasPendingSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
-          ([threadId, pending]) =>
-            pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
-        );
-        if (hasPendingSandboxApproval) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          state.dismissPrompt();
-          return;
-        }
         if (state.view === "settings") {
-          // An open modal surface (Dialog/Sheet/menu) owns Escape: Radix marks
-          // the event consumed when it dismisses a layer, and the DOM check
-          // covers overlays that don't. Mirrors the SettingsShell guard.
-          if (event.defaultPrevented) return;
-          if (document.querySelector('[role="dialog"][data-state="open"]')) return;
-          state.closeSettings();
-          return;
-        }
-        // Layers own Escape before turn cancel (popover/dialog/menu/palette).
-        if (event.defaultPrevented) return;
-        if (
-          document.querySelector(
-            '[role="dialog"][data-state="open"], [data-radix-menu-content], [data-slot="command-dialog"][data-state="open"]',
-          )
-        ) {
-          return;
-        }
-        if (commandPaletteOpen) {
-          setCommandPaletteOpen(false);
           event.preventDefault();
+          state.closeSettings();
+        }
+        return;
+      }
+
+      if (isStopTurnShortcut(event)) {
+        if (event.defaultPrevented || event.isComposing || hasOpenOverlay()) return;
+        const state = useAppStore.getState();
+        if (!state.selectedThreadId || !state.threadRuntimeById[state.selectedThreadId]?.busy) {
           return;
         }
-        if (state.selectedThreadId) {
-          const runtime = state.threadRuntimeById[state.selectedThreadId];
-          if (runtime?.busy) {
-            event.preventDefault();
-            state.cancelThread(state.selectedThreadId);
-          }
-        }
+        event.preventDefault();
+        state.cancelThread(state.selectedThreadId);
       }
     }
 
     windowTarget.addEventListener("keydown", handleKeyDown);
     return () => windowTarget.removeEventListener("keydown", handleKeyDown);
-  }, [commandPaletteOpen]);
+  }, [hasOpenOverlay]);
 
   // Cmd/Ctrl+K opens the command palette. Scoped to the main window so the
   // popout quick-chat / menu-bar / canvas windows keep their minimal shells.
@@ -805,5 +743,13 @@ export default function App() {
       {windowMode === "main" ? <TranscriptDeliveryRecovery /> : null}
       {windowMode === "main" ? <InAppToasts /> : null}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <OverlayStackProvider>
+      <AppContent />
+    </OverlayStackProvider>
   );
 }

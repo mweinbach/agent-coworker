@@ -321,6 +321,8 @@ export function MessageComposerSubmit({
         disabled={disabled || !onStop}
         onClick={onStop}
         aria-label="Stop generating response"
+        aria-keyshortcuts="Meta+. Control+."
+        title="Stop generating response (⌘. / Ctrl+.)"
         {...props}
       >
         <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />

@@ -44,6 +44,7 @@ import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { DesktopMarkdown } from "./markdown";
+import { useOverlayOwner } from "./OverlayStack";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 
@@ -486,6 +487,12 @@ export function Canvas({ path }: { path: string }) {
     clearSelectionState();
     window.getSelection()?.removeAllRanges();
   }, [clearSelectionState]);
+  const selectionEditorOwner = useOverlayOwner({
+    active: floatingCoords !== null,
+    label: "Canvas selection editor",
+    onDismiss: clearSelection,
+    restoreFocus: () => sourceTextareaRef.current,
+  });
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
@@ -1053,12 +1060,14 @@ export function Canvas({ path }: { path: string }) {
         createPortal(
           <div
             ref={floatingRef}
+            role="dialog"
+            aria-label="Edit selected canvas text"
             className="fixed bg-popover text-popover-foreground border border-border shadow-lg rounded-xl p-1.5 flex flex-col gap-1.5 min-w-[320px] max-w-[420px] animate-in fade-in zoom-in-95 duration-100 select-none"
             style={{
               left: `${floatingCoords.x}px`,
               top: `${floatingCoords.y}px`,
               transform: "translate(-50%, -100%) translateY(-10px)",
-              zIndex: 100,
+              zIndex: selectionEditorOwner?.zIndex ?? 100,
             }}
           >
             {showFormattingBar && isMarkdown && activeTab === "edit" && (
@@ -1134,11 +1143,12 @@ export function Canvas({ path }: { path: string }) {
                   e.stopPropagation();
                 }}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void handleSendPrompt(floatingPromptText);
                   } else if (e.key === "Escape") {
-                    clearSelection();
+                    selectionEditorOwner?.handleEscape(e);
                   }
                 }}
                 placeholder="How should the model edit this selection?"

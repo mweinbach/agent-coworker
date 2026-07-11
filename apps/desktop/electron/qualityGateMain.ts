@@ -8,6 +8,10 @@ import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
 import type { ResearchRecord } from "../../../src/server/research/types";
+import type {
+  CanvasDocumentRevision,
+  CanvasDocumentSnapshot,
+} from "../../../src/shared/canvasDocument";
 import {
   createQualityTaskArtifactDetail,
   createQualityTaskFixture,
@@ -144,6 +148,7 @@ let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 const researchRecords = new Map<string, ResearchRecord>();
+const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
 const pendingDeltaBursts = new Map<
   string,
@@ -996,6 +1001,19 @@ function qualityResearchRecord(
   };
 }
 
+function canvasDocumentSessionKey(documentId: string, generation: number): string {
+  return `${documentId}:${generation}`;
+}
+
+function qualityCanvasRevision(content: string): CanvasDocumentRevision {
+  return {
+    modifiedAtMs: Date.parse(FIXED_NOW),
+    changeTimeMs: Date.parse(FIXED_NOW),
+    size: new TextEncoder().encode(content).byteLength,
+    fingerprint: `quality:${content.length}`,
+  };
+}
+
 function jsonRpcResult(method: string, rawParams: unknown): unknown {
   const params = asRecord(rawParams);
   switch (method) {
@@ -1073,46 +1091,90 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       const content = isMarkdown
         ? "# Electron Canvas\n\nSemantic surfaces stay readable while the system theme changes."
         : "Electron Canvas\n\nTheme-aware plain text editor";
-      return {
-        ok: true,
-        document: {
-          documentId:
-            typeof params.documentId === "string" ? params.documentId : "quality-document",
-          generation: typeof params.generation === "number" ? params.generation : 1,
-          path: filePath,
-          content,
-          truncated: false,
-          revision: {
-            modifiedAtMs: Date.parse(FIXED_NOW),
-            changeTimeMs: Date.parse(FIXED_NOW),
-            size: content.length,
-            fingerprint: `sha256:${path.basename(filePath)}`,
-          },
-        },
-      };
-    }
-    case "cowork/workspace/document/revision": {
-      const filePath =
-        typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
-      return {
-        ok: true,
-        documentId: typeof params.documentId === "string" ? params.documentId : "quality-document",
-        generation: typeof params.generation === "number" ? params.generation : 1,
+      const documentId =
+        typeof params.documentId === "string" ? params.documentId : "quality-document";
+      const generation = typeof params.generation === "number" ? params.generation : 1;
+      const document: CanvasDocumentSnapshot = {
+        documentId,
+        generation,
         path: filePath,
+        content,
+        truncated: false,
         revision: {
           modifiedAtMs: Date.parse(FIXED_NOW),
           changeTimeMs: Date.parse(FIXED_NOW),
-          size: 80,
+          size: content.length,
           fingerprint: `sha256:${path.basename(filePath)}`,
         },
       };
+      canvasDocumentSessions.set(canvasDocumentSessionKey(documentId, generation), document);
+      return { ok: true, document };
     }
-    case "cowork/workspace/document/close":
+    case "cowork/workspace/document/revision": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      const document = canvasDocumentSessions.get(canvasDocumentSessionKey(documentId, generation));
+      return document
+        ? {
+            ok: true,
+            documentId,
+            generation,
+            path: document.path,
+            revision: document.revision,
+          }
+        : {
+            ok: false,
+            documentId,
+            generation,
+            error: {
+              kind: "session_not_found",
+              message: "Quality-gate Canvas session was not found.",
+            },
+          };
+    }
+    case "cowork/workspace/document/save":
+    case "cowork/workspace/document/saveAs": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      const key = canvasDocumentSessionKey(documentId, generation);
+      const current = canvasDocumentSessions.get(key);
+      const content = typeof params.content === "string" ? params.content : "";
+      const editRevision = typeof params.editRevision === "number" ? params.editRevision : 0;
+      if (!current) {
+        return {
+          ok: false,
+          documentId,
+          generation,
+          editRevision,
+          error: {
+            kind: "session_not_found",
+            message: "Quality-gate Canvas session was not found.",
+          },
+        };
+      }
+      const next = {
+        ...current,
+        path: typeof params.path === "string" ? params.path : current.path,
+        content,
+        revision: qualityCanvasRevision(content),
+      };
+      canvasDocumentSessions.set(key, next);
       return {
         ok: true,
-        documentId: typeof params.documentId === "string" ? params.documentId : "quality-document",
-        generation: typeof params.generation === "number" ? params.generation : 1,
+        documentId,
+        generation,
+        editRevision,
+        path: next.path,
+        revision: next.revision,
+        status: "saved",
       };
+    }
+    case "cowork/workspace/document/close": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      canvasDocumentSessions.delete(canvasDocumentSessionKey(documentId, generation));
+      return { ok: true, documentId, generation };
+    }
     case "cowork/workspace/spreadsheet/workbook": {
       const filePath =
         typeof params.path === "string" ? params.path : "/quality/project/report.csv";
@@ -1480,7 +1542,11 @@ async function createWindow(
   return win;
 }
 
-async function handleIpc(channel: string, input: unknown): Promise<unknown> {
+async function handleIpc(
+  channel: string,
+  input: unknown,
+  sourceWindow: Electron.BrowserWindow | null,
+): Promise<unknown> {
   switch (channel) {
     case DESKTOP_IPC_CHANNELS.loadState:
       if (!bootstrapReleased) {
@@ -1613,6 +1679,7 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
       mainWindow?.minimize();
       return undefined;
     case DESKTOP_IPC_CHANNELS.windowClose:
+      sourceWindow?.close();
       return undefined;
     default:
       return undefined;
@@ -1620,7 +1687,11 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
 }
 
 for (const channel of Object.values(DESKTOP_IPC_CHANNELS)) {
-  ipcMain.handle(channel, async (_event, input: unknown) => await handleIpc(channel, input));
+  ipcMain.handle(
+    channel,
+    async (event, input: unknown) =>
+      await handleIpc(channel, input, BrowserWindow.fromWebContents(event.sender)),
+  );
 }
 
 process.on("uncaughtException", (error) => {

@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import type {
+  CanvasDocumentCloseRequest,
+  CanvasDocumentOpenRequest,
+  CanvasDocumentRevisionRequest,
+  CanvasDocumentSaveAsRequest,
+  CanvasDocumentSaveRequest,
+} from "../../../src/shared/canvasDocument";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -16,6 +23,80 @@ let previewResult = makePreviewResult("# Heading\n\n1. one\n2. two\n");
 // re-render with a new path exercises the editor render path without real IPC.
 const readFileForPreviewMock = mock(async () => previewResult);
 const writeFileMock = mock(async () => {});
+const openCanvasDocumentMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentOpenRequest, "cwd">) => {
+    const content = new TextDecoder().decode(previewResult.bytes);
+    return {
+      ok: true as const,
+      document: {
+        documentId: input.documentId,
+        generation: input.generation,
+        path: input.path,
+        content,
+        truncated: previewResult.truncated,
+        revision: {
+          modifiedAtMs: 1,
+          changeTimeMs: 1,
+          size: previewResult.byteLength,
+          fingerprint: `sha256:${content}`,
+        },
+      },
+    };
+  },
+);
+const readCanvasDocumentRevisionMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentRevisionRequest, "cwd">) => ({
+    ok: true as const,
+    documentId: input.documentId,
+    generation: input.generation,
+    path: "/Users/mweinbach/Projects/preview-workspace/notes.md",
+    revision: {
+      modifiedAtMs: 1,
+      changeTimeMs: 1,
+      size: previewResult.byteLength,
+      fingerprint: `sha256:${new TextDecoder().decode(previewResult.bytes)}`,
+    },
+  }),
+);
+const saveCanvasDocumentMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentSaveRequest, "cwd">) => ({
+    ok: true as const,
+    documentId: input.documentId,
+    generation: input.generation,
+    editRevision: input.editRevision,
+    path: "/Users/mweinbach/Projects/preview-workspace/notes.md",
+    revision: {
+      modifiedAtMs: 2,
+      changeTimeMs: 2,
+      size: input.content.length,
+      fingerprint: `sha256:${input.content}`,
+    },
+    status: "saved" as const,
+  }),
+);
+const saveCanvasDocumentAsMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentSaveAsRequest, "cwd">) => ({
+    ok: true as const,
+    documentId: input.documentId,
+    generation: input.generation,
+    editRevision: input.editRevision,
+    path: input.path,
+    revision: {
+      modifiedAtMs: 2,
+      changeTimeMs: 2,
+      size: input.content.length,
+      fingerprint: `sha256:${input.content}`,
+    },
+    status: "saved" as const,
+  }),
+);
+const closeCanvasDocumentMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentCloseRequest, "cwd">) => ({
+    ok: true as const,
+    documentId: input.documentId,
+    generation: input.generation,
+  }),
+);
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -64,6 +145,11 @@ function resetAppStore() {
     canvasActiveTab: "preview",
     filePreview: null,
     sendMessage: originalSendMessage,
+    openCanvasDocument: openCanvasDocumentMock,
+    readCanvasDocumentRevision: readCanvasDocumentRevisionMock,
+    saveCanvasDocument: saveCanvasDocumentMock,
+    saveCanvasDocumentAs: saveCanvasDocumentAsMock,
+    closeCanvasDocument: closeCanvasDocumentMock,
   } as Partial<AppStoreState>);
 }
 
@@ -116,6 +202,11 @@ describe("Canvas hooks stability across file-type switches", () => {
     previewResult = makePreviewResult("# Heading\n\n1. one\n2. two\n");
     readFileForPreviewMock.mockClear();
     writeFileMock.mockClear();
+    openCanvasDocumentMock.mockClear();
+    readCanvasDocumentRevisionMock.mockClear();
+    saveCanvasDocumentMock.mockClear();
+    saveCanvasDocumentAsMock.mockClear();
+    closeCanvasDocumentMock.mockClear();
     resetAppStore();
   });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
@@ -290,6 +291,72 @@ describe("files IPC", () => {
         },
       ),
     ).rejects.toThrow("outside allowed workspace roots");
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("pickCanvasSavePath suggests a copy and rejects destinations outside workspace roots", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-canvas-save-as-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-canvas-save-as-outside-"));
+    const sourcePath = path.join(tempWorkspace, "notes.md");
+    const destinationPath = path.join(tempWorkspace, "notes recovered.md");
+    await fs.writeFile(sourcePath, "unsaved content", "utf8");
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.pickCanvasSavePath);
+    expect(handler).toBeDefined();
+    showSaveDialogMock.mockImplementationOnce(async () => ({
+      canceled: false,
+      filePath: destinationPath,
+    }));
+    await expect(handler?.({ sender: {} }, { sourcePath })).resolves.toBe(destinationPath);
+    const [firstCallArgs] = showSaveDialogMock.mock.calls.slice(-1);
+    expect((firstCallArgs?.[0] as { defaultPath?: string } | undefined)?.defaultPath).toBe(
+      path.join(tempWorkspace, "notes copy.md"),
+    );
+
+    showSaveDialogMock.mockImplementationOnce(async () => ({
+      canceled: false,
+      filePath: path.join(outsideDir, "stolen.md"),
+    }));
+    await expect(handler?.({ sender: {} }, { sourcePath })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });

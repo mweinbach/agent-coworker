@@ -2,12 +2,31 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { CanvasDocumentOpenRequest } from "../../../src/shared/canvasDocument";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
 let canvasMounts = 0;
 let canvasUnmounts = 0;
 const showCanvasWindowMock = mock(async (_opts: { path: string }) => {});
+const openCanvasDocumentMock = mock(
+  async (_workspaceId: string, input: Omit<CanvasDocumentOpenRequest, "cwd">) => ({
+    ok: true as const,
+    document: {
+      documentId: input.documentId,
+      generation: input.generation,
+      path: input.path,
+      content: "# Notes",
+      truncated: false,
+      revision: {
+        modifiedAtMs: 1,
+        changeTimeMs: 1,
+        size: 7,
+        fingerprint: "sha256:notes",
+      },
+    },
+  }),
+);
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -82,6 +101,8 @@ function resetAppStore() {
     filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
     contextSidebarCollapsed: false,
     isCanvasMaximized: false,
+    openCanvasDocument: openCanvasDocumentMock,
+    closeCanvasDocument: async (_workspaceId, input) => ({ ok: true, ...input }),
   } as Partial<AppStoreState>);
 }
 
@@ -96,6 +117,7 @@ describe("canvas window lifecycle", () => {
     canvasMounts = 0;
     canvasUnmounts = 0;
     showCanvasWindowMock.mockClear();
+    openCanvasDocumentMock.mockClear();
     resetAppStore();
   });
 

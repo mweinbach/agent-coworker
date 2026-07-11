@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+import type {
+  CanvasDocumentCloseResult,
+  CanvasDocumentOpenResult,
+  CanvasDocumentRevisionResult,
+  CanvasDocumentSaveResult,
+} from "../../../../../src/shared/canvasDocument";
 import type { SessionSnapshot } from "../../../../../src/shared/sessionSnapshot";
 import type {
   SpreadsheetBatchPatchOperation,
@@ -539,6 +545,8 @@ function getJsonRpcRequestRetryOptions(
     method === "cowork/provider/authMethods/read" ||
     method === "cowork/provider/status/refresh" ||
     method === "cowork/runtime/libreoffice/check" ||
+    method === "cowork/workspace/document/open" ||
+    method === "cowork/workspace/document/revision" ||
     method === "cowork/workspace/spreadsheet/workbook" ||
     method === "cowork/workspace/spreadsheet/version"
   ) {
@@ -724,6 +732,77 @@ export async function uploadJsonRpcWorkspaceFile(
     filename: typeof event?.filename === "string" ? event.filename : filename,
     path: typeof event?.path === "string" ? event.path : "",
   };
+}
+
+export async function openJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    path: string;
+    documentId: string;
+    generation: number;
+    maxBytes?: number;
+  },
+): Promise<CanvasDocumentOpenResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/open", {
+    ...input,
+  })) as CanvasDocumentOpenResult;
+}
+
+export async function revisionJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: { documentId: string; generation: number },
+): Promise<CanvasDocumentRevisionResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/revision", {
+    ...input,
+  })) as CanvasDocumentRevisionResult;
+}
+
+export async function saveJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    documentId: string;
+    generation: number;
+    editRevision: number;
+    content: string;
+  },
+): Promise<CanvasDocumentSaveResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/save", {
+    ...input,
+  })) as CanvasDocumentSaveResult;
+}
+
+export async function saveAsJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: {
+    documentId: string;
+    generation: number;
+    editRevision: number;
+    content: string;
+    path: string;
+  },
+): Promise<CanvasDocumentSaveResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/saveAs", {
+    ...input,
+  })) as CanvasDocumentSaveResult;
+}
+
+export async function closeJsonRpcWorkspaceDocument(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  input: { documentId: string; generation: number },
+): Promise<CanvasDocumentCloseResult> {
+  return (await requestJsonRpc(get, set, workspaceId, "cowork/workspace/document/close", {
+    ...input,
+  })) as CanvasDocumentCloseResult;
 }
 
 export async function previewJsonRpcWorkspaceSpreadsheetWorkbook(

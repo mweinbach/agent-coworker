@@ -1133,6 +1133,7 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
     case DESKTOP_IPC_CHANNELS.pickDirectory:
     case DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory:
     case DESKTOP_IPC_CHANNELS.saveExportedFile:
+    case DESKTOP_IPC_CHANNELS.pickCanvasSavePath:
       return null;
     case DESKTOP_IPC_CHANNELS.showContextMenu:
       return null;

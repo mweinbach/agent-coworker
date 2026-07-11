@@ -6,6 +6,7 @@ import type {
   DesktopMenuCommand,
   ShowCanvasWindowInput,
   ShowQuickChatWindowInput,
+  WindowCloseResponseInput,
 } from "../../src/lib/desktopApi";
 import type { DiagnosticsService } from "../services/diagnostics";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
@@ -13,6 +14,7 @@ import type { PersistenceService } from "../services/persistence";
 import type { DesktopProductAnalyticsService } from "../services/productAnalytics";
 import type { ServerManager } from "../services/serverManager";
 import type { DesktopUpdaterService } from "../services/updater";
+import type { NativeCloseWebContents } from "../services/windowCloseCoordinator";
 
 export type DesktopIpcDeps = {
   mobileRelayBridge: MobileRelayBridge;
@@ -29,6 +31,10 @@ export type DesktopIpcDeps = {
   consumePendingMenuCommands: () => DesktopMenuCommand[];
   showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<void> | void;
   showCanvasWindow: (opts: ShowCanvasWindowInput) => Promise<void> | void;
+  resolveWindowCloseRequest: (
+    sender: NativeCloseWebContents,
+    input: WindowCloseResponseInput,
+  ) => void;
 
   shouldKeepPopupWindowsAlive?: () => boolean;
   applyPersistedState?: (state: PersistedState) => void;

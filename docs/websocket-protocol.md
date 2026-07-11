@@ -126,8 +126,9 @@ usage state, runs local skill-file edits, and can restore skill backups.
 `cowork/plugins/install/preview` and `cowork/skills/install/preview` also require the
 workspace-settings permission, because they materialize an attacker-selectable local or GitHub
 source (only the passive plugin/skill catalog/list/detail reads stay always-allowed). The workspace
-document surface `cowork/workspace/presentation/preview` (which runs a workspace slide module on
-the host) and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
+document surfaces `cowork/workspace/document/*` (which read and atomically mutate Canvas files
+under the server-owned workspace root), `cowork/workspace/presentation/preview` (which runs a workspace slide module on the
+host), and `cowork/workspace/spreadsheet/*` (which read bounded CSV/XLSX content from a
 caller-selected `cwd` that is not confined to the active workspace) require the workspace-settings
 permission. `cowork/session/state/read` (workspace/session config, provider options,
 userName/userProfile) also requires the workspace-settings permission, and
@@ -221,6 +222,11 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `task/artifact/version/preview`
 - `task/artifact/revision/start`
 - `cowork/workspace/bootstrap`
+- `cowork/workspace/document/open`
+- `cowork/workspace/document/revision`
+- `cowork/workspace/document/save`
+- `cowork/workspace/document/saveAs`
+- `cowork/workspace/document/close`
 - `cowork/workspace/spreadsheet/workbook`
 - `cowork/workspace/spreadsheet/version`
 - `cowork/workspace/spreadsheet/patch`
@@ -564,6 +570,12 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 `cowork/session/delete` is workspace-scoped. The control session may delete sessions in the active workspace, but attempts to delete a live or persisted session from another workspace fail with a JSON-RPC error.
 
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a `file_uploaded` session event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
+
+`cowork/workspace/document/open` starts a Canvas persistence session for `{ path, documentId, generation, maxBytes? }`. Canvas methods do not accept `cwd`; the server binds the session to its own canonical workspace root, resolves the path inside that root, returns bounded UTF-8 content plus `{ modifiedAtMs, changeTimeMs, size, fingerprint }`, and permanently binds that `documentId`/`generation` pair to the resolved path. Clients must ignore a response whose generation is no longer current and should close stale successful sessions.
+
+`cowork/workspace/document/revision` reads the current on-disk revision for an open `{ documentId, generation }` session. `cowork/workspace/document/save` accepts `{ documentId, generation, editRevision, content }` without a mutable path: saves are serialized by session and resolved path, stale lower edit revisions return `status: "superseded"`, and commits run under a cross-process conditional transaction lock with canonical containment and fingerprint checks immediately before temporary-file creation and atomic replacement. A changed on-disk fingerprint returns `{ ok: false, error: { kind: "conflict", ... }, currentRevision? }` without overwriting either version. Successful writes return the revision fingerprint derived from the exact temporary-file inode committed, not a later pathname read.
+
+`cowork/workspace/document/saveAs` adds a destination `path`, revalidates its canonical parent before staging and commit, creates the new file atomically without replacing an existing destination, and rebinds the session to the returned path only after success. `cowork/workspace/document/close` waits behind pending session operations before retiring the session. Read, containment, write, and conflict failures are structured results so clients can preserve local content and offer Retry, Save As, or reload-from-disk recovery.
 
 `cowork/workspace/spreadsheet/workbook` reads a CSV or `.xlsx` file from the active workspace and returns a full workbook snapshot for spreadsheet editors such as the desktop Univer canvas. The result includes all sheets, sparse cells, formulas, styles, merged ranges, column widths, table metadata, chart metadata, the active sheet, and warnings. This is a read-only harness boundary: clients receive editor-ready data without parsing spreadsheet bytes, and `.xlsx` objects that the OSS editor cannot render fully (for example native Excel charts) remain preserved in the original file.
 

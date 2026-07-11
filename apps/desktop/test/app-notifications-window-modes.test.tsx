@@ -34,6 +34,10 @@ function seedReadyState() {
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
+    filePreview: null,
+    lmStudioStartModal: null,
+    onboardingVisible: false,
+    promptModal: null,
     workspaces: [],
     threads: [],
     notifications: [

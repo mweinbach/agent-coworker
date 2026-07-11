@@ -247,7 +247,9 @@ describe("desktop overlay ownership", () => {
     const harness = setupJsdom();
 
     try {
-      const { OverlayStackProvider, useOverlayOwner } = await import("../src/ui/OverlayStack");
+      const { isEditableEscapeTarget, OverlayStackProvider, useOverlayOwner } = await import(
+        "../src/ui/OverlayStack"
+      );
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
@@ -287,6 +289,7 @@ describe("desktop overlay ownership", () => {
         throw new Error("missing rename input");
       }
       input.focus();
+      expect(isEditableEscapeTarget(harness.dom.window)).toBe(true);
       await act(async () => {
         input.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", {
@@ -300,6 +303,7 @@ describe("desktop overlay ownership", () => {
       expect(container.querySelector('[data-testid="editable-surface"]')).not.toBeNull();
       expect(container.textContent).toContain("cancelled");
 
+      input.blur();
       await dispatchEscape(harness.dom.window);
       expect(container.querySelector('[data-testid="editable-surface"]')).toBeNull();
 
@@ -439,6 +443,7 @@ describe("desktop overlay ownership", () => {
         harness.dom.window.document.querySelector('[data-testid="competing-portal"]'),
       ).not.toBeNull();
 
+      input.blur();
       await dispatchEscape(harness.dom.window);
       expect(
         harness.dom.window.document.querySelector('[data-testid="competing-portal"]'),

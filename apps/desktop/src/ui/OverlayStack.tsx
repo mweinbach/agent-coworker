@@ -4,7 +4,6 @@ import {
   type RefObject,
   useCallback,
   useContext,
-  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -52,6 +51,12 @@ type OverlayRootState = {
 const OverlayStackContext = createContext<OverlayStack | null>(null);
 const stackReservedEditableEscapes = new WeakSet<object>();
 const OVERLAY_Z_INDEX_BASE = 1_000;
+const EDITABLE_ESCAPE_SELECTOR =
+  "input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only'], [role='textbox']";
+
+type ClosestEventTarget = EventTarget & {
+  closest: (selectors: string) => Element | null;
+};
 
 function nativeEscapeEvent(event: OverlayEscapeEvent): object {
   return event.nativeEvent ?? event;
@@ -84,13 +89,18 @@ function scheduleFocusRestore(owner: OverlayOwner, getOwners: () => OverlayOwner
   });
 }
 
+function supportsClosest(target: EventTarget | null): target is ClosestEventTarget {
+  return target !== null && typeof (target as Partial<ClosestEventTarget>).closest === "function";
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  return supportsClosest(target) && target.closest(EDITABLE_ESCAPE_SELECTOR) !== null;
+}
+
 export function isEditableEscapeTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    target.closest(
-      "input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only'], [role='textbox']",
-    ) !== null
-  );
+  if (isEditableElement(target)) return true;
+  const focused = typeof document === "undefined" ? null : document.activeElement;
+  return focused !== target && isEditableElement(focused);
 }
 
 export function isReservedEditableEscape(event: OverlayEscapeEvent): boolean {
@@ -148,7 +158,7 @@ export function OverlayStackProvider({ children }: { children: ReactNode }) {
     [claimSequence, dismissOwner, dismissTop, register],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || !topOwner(ownersRef.current)) return;
       if (event.isComposing || isEditableEscapeTarget(event.target)) {

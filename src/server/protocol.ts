@@ -18,6 +18,7 @@ import type {
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { OpenAiNativeConnectorsEvent } from "../shared/openaiNativeConnectors";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
+import type { ToolInputDigest } from "../shared/toolInputDigest";
 import type { SkillImprovementStatusEvent } from "../skillImprovement";
 import type {
   AgentConfig,
@@ -60,7 +61,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.45";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.46";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -313,6 +314,7 @@ export type SessionEvent =
       clientMessageId?: string;
       turnId?: string;
       idempotencyFingerprint?: string;
+      annotations?: Array<Record<string, unknown>>;
     }
   | {
       type: "model_stream_chunk";
@@ -336,6 +338,12 @@ export type SessionEvent =
       format: ModelStreamRawFormat;
       normalizerVersion: number;
       event: Record<string, unknown>;
+      toolCallMetadata?: Array<{
+        toolKey: string;
+        toolName: string;
+        inputDigest: ToolInputDigest;
+        retryOf?: string;
+      }>;
     }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }

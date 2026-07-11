@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { type IdempotencyClaim, IdempotencyLedger } from "../../shared/idempotencyLedger";
+import type { ToolRetryIntent, ToolRetryRequest } from "../../shared/toolRetry";
 import type { TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
@@ -33,6 +34,7 @@ export type UserMessageIdempotencyClaim = IdempotencyClaim<UserMessageReceipt>;
 export type SendUserMessageOptions = {
   allowThreadManagementTools?: boolean;
   idempotencyClaim?: UserMessageIdempotencyClaim | null;
+  toolRetryIntent?: ToolRetryIntent;
 };
 
 export type UserMessageIdempotencyInput = {
@@ -42,6 +44,7 @@ export type UserMessageIdempotencyInput = {
   attachments?: FileAttachment[];
   inputParts?: OrderedInputPart[];
   references?: TurnReference[];
+  retry?: ToolRetryRequest;
 };
 
 export class TurnExecutionManager {
@@ -198,6 +201,7 @@ export class TurnExecutionManager {
       .sendUserMessage(text, clientMessageId, displayText, attachments, inputParts, references, {
         allowThreadManagementTools: opts?.allowThreadManagementTools,
         ...(claim?.kind === "owner" ? { idempotencyFingerprint: claim.fingerprint } : {}),
+        ...(opts?.toolRetryIntent ? { toolRetryIntent: opts.toolRetryIntent } : {}),
       })
       .finally(() => {
         if (claim) {
@@ -234,10 +238,16 @@ export class TurnExecutionManager {
           attachments: input.attachments ?? [],
           inputParts: input.inputParts ?? [],
           references: input.references ?? [],
+          retry: input.retry ?? null,
         }),
       )
       .digest("hex");
     return this.userMessageLedger.claim(clientMessageId, fingerprint);
+  }
+
+  rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
+    if (claim?.kind !== "owner") return;
+    this.userMessageLedger.reject(claim.key, message);
   }
 
   private hydrateUserMessageLedger(): void {

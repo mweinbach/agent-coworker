@@ -1256,6 +1256,7 @@ export function createThreadActions(
       options?: {
         targetThreadId?: string;
         draftSubmission?: ComposerDraftRevision;
+        retryToolItemIds?: string[];
       },
     ): Promise<boolean> => {
       const activeThreadId = options?.targetThreadId ?? get().selectedThreadId;
@@ -1349,6 +1350,7 @@ export function createThreadActions(
         references,
         undefined,
         draftSubmission,
+        options?.retryToolItemIds,
       );
       if (!accepted) return false;
       return true;

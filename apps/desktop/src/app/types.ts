@@ -670,6 +670,7 @@ export type LmStudioStartModalState = {
     attachments?: FileAttachmentInput[];
     references?: TurnReference[];
     draftSubmission?: ComposerDraftRevision;
+    retryToolItemIds?: string[];
   } | null;
 };
 

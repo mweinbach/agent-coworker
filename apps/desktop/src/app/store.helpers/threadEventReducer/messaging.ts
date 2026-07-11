@@ -253,6 +253,7 @@ export function createMessagingModule(
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
     draftSubmission?: ComposerDraftRevision,
+    retryToolItemIds?: string[],
   ) {
     void startJsonRpcTurn(
       get,
@@ -263,6 +264,7 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
+      retryToolItemIds,
     )
       .then(() => {
         if (draftSubmission) get().clearComposerDraft(draftSubmission);
@@ -294,7 +296,14 @@ export function createMessagingModule(
                 installed: lmStudio.installed,
                 canAutoStart: lmStudio.canAutoStart,
                 phase: "prompt",
-                retry: { text, clientMessageId, attachments, references, draftSubmission },
+                retry: {
+                  text,
+                  clientMessageId,
+                  attachments,
+                  references,
+                  draftSubmission,
+                  retryToolItemIds,
+                },
               },
             };
           });
@@ -350,6 +359,7 @@ export function createMessagingModule(
     references?: TurnReference[],
     presetClientMessageId?: string,
     draftSubmission?: ComposerDraftRevision,
+    retryToolItemIds?: string[],
   ): boolean {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
@@ -481,6 +491,17 @@ export function createMessagingModule(
         role: "user",
         ts: ctx.deps.nowIso(),
         text: displayText,
+        ...(retryToolItemIds && retryToolItemIds.length > 0
+          ? {
+              annotations: [
+                {
+                  type: "cowork.toolRetryTurn",
+                  version: 1,
+                  targetItemIds: [...retryToolItemIds],
+                },
+              ],
+            }
+          : {}),
       });
     }
 
@@ -502,6 +523,7 @@ export function createMessagingModule(
       attachments,
       references,
       draftSubmission,
+      retryToolItemIds,
     );
     return true;
   }

@@ -1,4 +1,5 @@
 import { IdempotencyConflictError } from "../../../shared/idempotencyLedger";
+import { resolveToolRetryIntent, type ToolRetryIntent } from "../../../shared/toolRetry";
 import type { SessionEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
@@ -64,7 +65,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
 
-      const { threadId, input, clientMessageId, references } = parsed.data;
+      const { threadId, input, clientMessageId, references, retry } = parsed.data;
       const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const hasInput = text || attachments.length > 0;
       if (!threadId || !hasInput) {
@@ -87,6 +88,13 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         return;
       }
       const runtime = binding.runtime;
+      if (retry && ws.data.rpc?.capabilities.toolRetryLineage !== true) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "turn/start retry requires the toolRetryLineage client capability.",
+        });
+        return;
+      }
       let idempotencyClaim: ReturnType<typeof runtime.turns.claimUserMessage>;
       try {
         idempotencyClaim = runtime.turns.claimUserMessage({
@@ -95,6 +103,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
           attachments: attachments.length > 0 ? attachments : undefined,
           inputParts: orderedParts,
           references,
+          retry,
         });
       } catch (error) {
         if (!(error instanceof IdempotencyConflictError)) throw error;
@@ -124,6 +133,20 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
+      let toolRetryIntent: ToolRetryIntent | undefined;
+      try {
+        toolRetryIntent = retry
+          ? resolveToolRetryIntent(runtime.snapshot.peek().feed, retry)
+          : undefined;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Invalid tool retry target.";
+        runtime.turns.rejectUserMessageClaim(idempotencyClaim, detail);
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail,
+        });
+        return;
+      }
       const outcome = await captureBindingOutcome(
         context,
         binding,
@@ -138,6 +161,7 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             {
               allowThreadManagementTools: ws.data?.taskReadAllowed !== false,
               idempotencyClaim,
+              ...(toolRetryIntent ? { toolRetryIntent } : {}),
             },
           );
         },

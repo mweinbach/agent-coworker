@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.45`
+- Current protocol version: `7.46`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -193,7 +193,14 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 `initialize.params.capabilities` currently supports:
 
 - `experimentalApi: boolean` (reserved compatibility field; server currently returns `true` regardless of this input)
+- `toolRetryLineage: boolean` (opt in to exact tool retry requests and `retryOf` fields; the server echoes this capability only when the client requested it)
 - `optOutNotificationMethods: string[]`
+
+Clients that do not request `toolRetryLineage` receive the legacy strict response shape: the
+capability, retry metadata, and semantic retry-turn messages are omitted from notifications, thread
+reads, and hydration snapshots. New clients should retry `initialize` once without
+`toolRetryLineage` when an older strict server rejects that capability with `-32602`; exact retry UI
+must remain disabled after that fallback.
 
 ### Core JSON-RPC methods currently available
 
@@ -233,6 +240,25 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `cowork/workspace/presentation/preview`
 
 `thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, or references is rejected. Clients must retain the same key, text, attachments, and references until the first request is accepted.
+
+After negotiating `toolRetryLineage`, `turn/start` also accepts
+`retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server
+resolves each ID against the current bounded session snapshot, requires the target to remain failed
+or denied, and uses its persisted SHA-256 digest and canonical byte count. The digest is derived from
+the complete raw tool name and arguments before normalization; raw arguments are never persisted in
+retry metadata. A replacement invocation receives `retryOf` only when both digest fields exactly
+match one targeted occurrence.
+Same-name calls with different arguments, unrelated tools, and turns without structured retry
+metadata do not recover a failure. Projected tool IDs are scoped by turn, provider call key, and
+occurrence, so provider call-ID reuse across turns cannot create lineage collisions.
+
+Confirmed lineage is additive: both the failed tool item and its replacement remain in
+`item/started`, `item/completed`, `thread/read`, and `thread/hydrate` data. The replacement tool has
+`retryOf: "<failed projected item id>"`. Completed lineage survives snapshot persistence and server
+restart through a bounded, versioned message-annotation sidecar that older strict snapshot parsers
+already tolerate. Failed retry attempts remain in the same explicit chain and remain retryable; only
+a successful exact descendant recovers the chain. Snapshots remain bounded by the existing
+session-feed limit.
 
 `thread/fork` takes `{ threadId, environment?, title?, prompt?, model?, thinking? }` and returns `{ sourceThreadId, thread, forked, queued, environment }`. The optional environment is `{ type: "local" }` or `{ type: "worktree", ref?, branchName?, startingState? }`; managed worktrees are created under `~/.cowork/worktrees` from `HEAD` unless a safe explicit ref is supplied. `prompt`, when present, is queued as the first follow-up turn in the forked thread. `thread/pinned/set` takes `{ threadId, pinned }` and returns `{ thread }` with `pinned` / `pinnedAt` metadata. `thread/archived/set` takes `{ threadId, archived }` and returns `{ thread }` with `archived` / `archivedAt` metadata. These flags are persisted server-side and mirrored into desktop state when available.
 
@@ -963,6 +989,12 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.46`:
+- Added negotiated `toolRetryLineage` support. Opted-in clients may send exact failed projected
+  tool item IDs in `turn/start.retry`; confirmed replacements carry additive `retryOf` lineage
+  through live notifications and persisted snapshots. Legacy clients retain the prior strict wire
+  shape.
 
 Changes in `7.45`:
 - Added `thread/fork` for creating seeded thread forks, optionally in managed git worktrees under `~/.cowork/worktrees`. Forking requires both the `turns` and `conversations` permissions on the mobile H3 transport.

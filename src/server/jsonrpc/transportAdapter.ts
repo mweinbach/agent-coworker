@@ -398,6 +398,7 @@ export function createJsonRpcTransportAdapter({
       maxPendingRequests,
       capabilities: {
         experimentalApi: false,
+        toolRetryLineage: false,
         optOutNotificationMethods: [],
       },
       pendingServerRequests: new Map(),

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createJsonRpcNotificationProjector } from "../../../src/server/jsonrpc/notificationProjector";
 import { createThreadJournalNotificationProjector } from "../../../src/server/jsonrpc/threadJournalNotificationProjector";
+import { digestToolInput } from "../../../src/shared/toolInputDigestHasher";
 import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
@@ -134,5 +135,144 @@ describe("JSON-RPC projectors", () => {
       { query: "second" },
     ]);
     expect(new Set(toolOutputAvailable.map((event) => event.payload?.item?.id)).size).toBe(2);
+  });
+
+  test("projectors preserve confirmed retry lineage through authoritative completion", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(
+      streamChunk("tool_call", {
+        toolCallId: "replacement",
+        toolName: "bash",
+        input: { command: "bun test" },
+        retryOf: "toolCall:earlier-turn:failed",
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "replacement",
+        toolName: "bash",
+        output: { exitCode: 0 },
+      }),
+    );
+
+    const completed = outbound
+      .filter((message) => message.method === "item/completed")
+      .map((message) => message.params?.item)
+      .find((item) => item?.state === "output-available");
+    expect(completed).toMatchObject({
+      id: `toolCall:${turnId}:replacement`,
+      retryOf: "toolCall:earlier-turn:failed",
+      result: { exitCode: 0 },
+    });
+  });
+
+  test("raw-backed projection reads lineage from the canonical raw event", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+    const args = { command: "bun test" };
+    const inputDigest = digestToolInput("bash", args);
+    if (!inputDigest) throw new Error("expected input digest");
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle({
+      type: "model_stream_raw",
+      sessionId,
+      turnId,
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: "item_1",
+          call_id: "call_1",
+          name: "bash",
+          arguments: "",
+        },
+      },
+    });
+    projector.handle({
+      type: "model_stream_raw",
+      sessionId,
+      turnId,
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.function_call_arguments.done",
+        item_id: "item_1",
+        arguments: JSON.stringify(args),
+      },
+      toolCallMetadata: [
+        {
+          toolKey: "call_1|item_1",
+          toolName: "bash",
+          inputDigest,
+          retryOf: "toolCall:earlier-turn:failed",
+        },
+      ],
+    });
+    projector.handle({
+      type: "model_stream_raw",
+      sessionId,
+      turnId,
+      index: 2,
+      provider: "openai",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.done",
+        item: {
+          type: "function_call",
+          id: "item_1",
+          call_id: "call_1",
+          name: "bash",
+          arguments: JSON.stringify(args),
+        },
+      },
+    });
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "call_1|item_1",
+        toolName: "bash",
+        output: { exitCode: 0 },
+      }),
+    );
+
+    const completed = outbound
+      .filter((message) => message.method === "item/completed")
+      .map((message) => message.params?.item)
+      .find((item) => item?.state === "output-available");
+    expect(completed).toMatchObject({
+      id: `toolCall:${turnId}:call_1|item_1`,
+      inputDigest,
+      retryOf: "toolCall:earlier-turn:failed",
+      result: { exitCode: 0 },
+    });
   });
 });

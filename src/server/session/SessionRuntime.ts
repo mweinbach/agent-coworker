@@ -164,6 +164,10 @@ export class SessionTurnService {
     return this.session.claimUserMessage(input);
   }
 
+  rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
+    this.session.rejectUserMessageClaim(claim, message);
+  }
+
   async sendSteerMessage(
     text: string,
     expectedTurnId: string,

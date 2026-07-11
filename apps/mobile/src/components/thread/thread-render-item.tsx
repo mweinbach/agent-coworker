@@ -10,6 +10,8 @@ type ThreadRenderItemProps = {
   live?: boolean;
   liveStartedAt?: string | null;
   revision: string;
+  onRetryToolCalls?: (toolItemIds: string[]) => Promise<void>;
+  retryDisabled?: boolean;
 };
 
 function ThreadRenderItemComponent({
@@ -17,9 +19,20 @@ function ThreadRenderItemComponent({
   showDebugMessages,
   live,
   liveStartedAt,
+  onRetryToolCalls,
+  retryDisabled,
 }: ThreadRenderItemProps) {
   if (renderItem.kind === "activity-group") {
-    return <ActivityGroupCard items={renderItem.items} live={live} liveStartedAt={liveStartedAt} />;
+    return (
+      <ActivityGroupCard
+        items={renderItem.items}
+        recoveredToolIds={renderItem.recoveredToolIds}
+        live={live}
+        liveStartedAt={liveStartedAt}
+        onRetry={onRetryToolCalls}
+        retryDisabled={retryDisabled}
+      />
+    );
   }
 
   return <ThreadFeedItem item={renderItem.item} showDebugMessages={showDebugMessages} />;
@@ -31,5 +44,7 @@ export const ThreadRenderItem = memo(
     previous.revision === next.revision &&
     previous.showDebugMessages === next.showDebugMessages &&
     previous.live === next.live &&
-    previous.liveStartedAt === next.liveStartedAt,
+    previous.liveStartedAt === next.liveStartedAt &&
+    previous.onRetryToolCalls === next.onRetryToolCalls &&
+    previous.retryDisabled === next.retryDisabled,
 );

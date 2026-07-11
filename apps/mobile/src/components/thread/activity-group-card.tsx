@@ -12,6 +12,7 @@ import {
   formatActivityElapsedMs,
   parseReasoningSections,
   summarizeActivityGroup,
+  unresolvedToolFailureIds,
 } from "@/features/cowork/activityGroups";
 import { formatToolCard } from "@/features/cowork/toolCardFormatting";
 import type { ToolFeedState } from "@/features/cowork/toolFeedState";
@@ -21,8 +22,11 @@ import { MarkdownText } from "./markdown-text";
 
 type ActivityGroupCardProps = {
   items: ActivityFeedItem[];
+  recoveredToolIds?: string[];
   live?: boolean;
   liveStartedAt?: string | null;
+  onRetry?: (toolItemIds: string[]) => Promise<void>;
+  retryDisabled?: boolean;
 };
 
 function toolIconName(title: string): string {
@@ -205,11 +209,13 @@ function ActivityTimelineEntryView({
   isLast,
   lastReasoningEntryId,
   live,
+  recoveredToolIds,
 }: {
   entry: ActivityTimelineEntry;
   isLast: boolean;
   lastReasoningEntryId: string | null;
   live?: boolean;
+  recoveredToolIds: ReadonlySet<string>;
 }) {
   const theme = useAppTheme();
 
@@ -246,7 +252,16 @@ function ActivityTimelineEntryView({
           >
             {formatting.title}
           </Text>
-          <ToolStateIndicator state={entry.item.state} />
+          {recoveredToolIds.has(entry.item.id) ? (
+            <Text
+              style={{ color: theme.textTertiary, fontSize: 10, fontWeight: "700" }}
+              accessibilityLabel="Recovered after retry"
+            >
+              Recovered
+            </Text>
+          ) : (
+            <ToolStateIndicator state={entry.item.state} />
+          )}
         </View>
         {formatting.subtitle ? (
           <Text
@@ -260,6 +275,18 @@ function ActivityTimelineEntryView({
             {formatting.subtitle}
           </Text>
         ) : null}
+        {entry.item.retryOf ? (
+          <Text
+            style={{
+              color: theme.textTertiary,
+              fontSize: 10,
+              fontWeight: "600",
+              lineHeight: 14,
+            }}
+          >
+            Retry of failed call
+          </Text>
+        ) : null}
       </View>
     </TimelineNode>
   );
@@ -271,6 +298,10 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const page = useMemo(
     () => buildActivityEntryPage(summary.entries, requestedStartIndex),
     [requestedStartIndex, summary.entries],
+  );
+  const recoveredToolIds = useMemo(
+    () => new Set(summary.recoveredToolIds),
+    [summary.recoveredToolIds],
   );
 
   const lastReasoningEntryId = useMemo(() => {
@@ -345,16 +376,27 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           isLast={index === page.entries.length - 1}
           lastReasoningEntryId={lastReasoningEntryId}
           live={live}
+          recoveredToolIds={recoveredToolIds}
         />
       ))}
     </View>
   );
 }
 
-export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupCardProps) {
+export function ActivityGroupCard({
+  items,
+  recoveredToolIds,
+  live,
+  liveStartedAt,
+  onRetry,
+  retryDisabled,
+}: ActivityGroupCardProps) {
   const theme = useAppTheme();
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const summary = useMemo(() => summarizeActivityGroup(items), [items]);
+  const summary = useMemo(
+    () => summarizeActivityGroup(items, recoveredToolIds),
+    [items, recoveredToolIds],
+  );
   const displayStatus = live && summary.status === "done" ? "running" : summary.status;
   const isComplete = displayStatus === "done";
   const liveStartedAtMs =
@@ -371,6 +413,16 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
   const shouldAutoExpand =
     displayStatus === "approval" || displayStatus === "issue" || displayStatus === "running";
   const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    if (!onRetry || retryDisabled || retrying) return;
+    setRetrying(true);
+    try {
+      await onRetry(unresolvedToolFailureIds(items, recoveredToolIds));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   useEffect(() => {
     if (!live) return;
@@ -513,6 +565,28 @@ export function ActivityGroupCard({ items, live, liveStartedAt }: ActivityGroupC
           />
         </View>
       </Pressable>
+      {displayStatus === "issue" && onRetry ? (
+        <Pressable
+          onPress={() => void handleRetry()}
+          disabled={retryDisabled || retrying}
+          accessibilityRole="button"
+          accessibilityLabel="Retry failed tool calls"
+          style={{
+            alignSelf: "flex-end",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 5,
+            marginHorizontal: 12,
+            marginBottom: 8,
+            opacity: retryDisabled ? 0.5 : 1,
+          }}
+        >
+          <SFSymbol name="arrow.clockwise" size={12} color={theme.textSecondary} />
+          <Text style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "600" }}>
+            {retrying ? "Retrying" : "Retry"}
+          </Text>
+        </Pressable>
+      ) : null}
       {expanded ? (
         <View
           style={{

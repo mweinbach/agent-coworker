@@ -1915,6 +1915,10 @@ export class AgentSession {
     return this.getTurnExecutionManager().claimUserMessage(input);
   }
 
+  rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
+    this.getTurnExecutionManager().rejectUserMessageClaim(claim, message);
+  }
+
   async sendSteerMessage(
     text: string,
     expectedTurnId: string,

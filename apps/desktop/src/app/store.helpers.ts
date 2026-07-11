@@ -372,6 +372,7 @@ export type AppStoreState = {
     options?: {
       targetThreadId?: string;
       draftSubmission?: ComposerDraftRevision;
+      retryToolItemIds?: string[];
     },
   ) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;

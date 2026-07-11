@@ -51,6 +51,7 @@ describe("mobile cowork jsonrpc client", () => {
     const initializePayload = JSON.parse(sent[0]!);
     expect(initializePayload.method).toBe("initialize");
     expect(initializePayload.params.clientInfo.name).toBe("cowork-mobile");
+    expect(initializePayload.params.capabilities.toolRetryLineage).toBe(true);
 
     await client.handleIncoming(
       JSON.stringify({
@@ -129,6 +130,77 @@ describe("mobile cowork jsonrpc client", () => {
         revision: 1,
       },
     });
+  });
+
+  test("falls back once when an old strict server rejects toolRetryLineage", async () => {
+    const sent: string[] = [];
+    let client: CoworkJsonRpcClient | null = null;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+        const message = JSON.parse(text) as Record<string, unknown>;
+        if (message.method !== "initialize" || typeof message.id !== "number") return;
+        const params =
+          typeof message.params === "object" && message.params !== null
+            ? (message.params as Record<string, unknown>)
+            : {};
+        const capabilities =
+          typeof params.capabilities === "object" && params.capabilities !== null
+            ? (params.capabilities as Record<string, unknown>)
+            : {};
+        const response =
+          "toolRetryLineage" in capabilities
+            ? {
+                id: message.id,
+                error: {
+                  code: -32602,
+                  message: "Unknown capability: toolRetryLineage",
+                },
+              }
+            : {
+                id: message.id,
+                result: {
+                  protocolVersion: "0.1",
+                  capabilities: {
+                    experimentalApi: true,
+                  },
+                },
+              };
+        queueMicrotask(() => {
+          void client?.handleIncoming(JSON.stringify(response));
+        });
+      },
+    });
+
+    const initializePromise = client.initialize();
+    const first = JSON.parse(sent[0]!) as {
+      id: number;
+      params: { capabilities: Record<string, unknown> };
+    };
+    expect(first.params.capabilities.toolRetryLineage).toBe(true);
+    await initializePromise;
+
+    const fallback = JSON.parse(sent[1]!) as {
+      id: number;
+      params: { capabilities: Record<string, unknown> };
+    };
+    expect(fallback.params.capabilities).toEqual({
+      experimentalApi: true,
+    });
+
+    expect(sent.map((entry) => JSON.parse(entry).method)).toEqual([
+      "initialize",
+      "initialize",
+      "initialized",
+    ]);
+    expect(client.supportsToolRetryLineage).toBe(false);
+    await expect(
+      client.startTurn("thread", "Continue.", "message", ["failed-tool"]),
+    ).rejects.toThrow("does not support exact tool retries");
   });
 
   test("routes server requests and responses", async () => {
@@ -765,6 +837,67 @@ describe("mobile cowork jsonrpc client", () => {
 
     await client.handleIncoming(JSON.stringify({ id: payload.id, result: { turn: {} } }));
     await expect(startPromise).resolves.toBeUndefined();
+  });
+
+  test("sends exact retry targets only after capability negotiation", async () => {
+    const sent: string[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+      },
+    });
+
+    await expect(
+      client.startTurn("thread-1", "retry", "client-msg-old", ["failed-tool"]),
+    ).rejects.toThrow("does not support exact tool retries");
+
+    const handshakePromise = client.initialize();
+    const initializePayload = JSON.parse(sent[0]!);
+    await client.handleIncoming(
+      JSON.stringify({
+        id: initializePayload.id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-server",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: true,
+            toolRetryLineage: true,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
+        },
+      }),
+    );
+    await handshakePromise;
+
+    const retryPromise = client.startTurn("thread-1", "retry", "client-msg-new", ["failed-tool"]);
+    const retryPayload = JSON.parse(sent.at(-1)!);
+    expect(retryPayload).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        clientMessageId: "client-msg-new",
+        retry: {
+          toolItemIds: ["failed-tool"],
+        },
+      },
+    });
+    await client.handleIncoming(
+      JSON.stringify({
+        id: retryPayload.id,
+        result: { turn: {} },
+      }),
+    );
+    await expect(retryPromise).resolves.toBeUndefined();
   });
 
   test("drops retired ui surface notifications", async () => {

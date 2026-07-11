@@ -93,6 +93,7 @@ export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
   __coworkReconnectPending?: boolean;
   __coworkUrl?: string;
   __coworkGeneration?: number;
+  readonly supportsToolRetryLineage?: boolean;
 };
 type JsonRpcSocketConstructor = new (options: Record<string, unknown>) => WorkspaceJsonRpcSocket;
 type JsonRpcSocketMessage = {
@@ -106,6 +107,11 @@ type JsonRpcRequestRetryOptions = {
   retryable?: boolean;
   retryOnDisconnect?: boolean;
 };
+
+export function workspaceSupportsToolRetryLineage(workspaceId: string): boolean {
+  const socket = RUNTIME.jsonRpcSockets.get(workspaceId) as WorkspaceJsonRpcSocket | undefined;
+  return socket?.supportsToolRetryLineage === true;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -403,6 +409,7 @@ export function ensureWorkspaceJsonRpcSocket(
       title: "Cowork Desktop",
       version: "0.1.0",
     },
+    toolRetryLineage: true,
     autoReconnect: true,
     openTimeoutMs: DESKTOP_JSONRPC_OPEN_TIMEOUT_MS,
     handshakeTimeoutMs: DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS,
@@ -630,6 +637,7 @@ export async function startJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
   references?: TurnReference[],
+  retryToolItemIds?: string[],
 ): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
@@ -654,11 +662,21 @@ export async function startJsonRpcTurn(
       }
     }
   }
+  const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
+  if (!socket) {
+    throw new Error("JSON-RPC workspace socket is unavailable");
+  }
+  if (retryToolItemIds && retryToolItemIds.length > 0 && !socket.supportsToolRetryLineage) {
+    throw new Error("This server does not support exact tool retries.");
+  }
   return await requestJsonRpc(get, set, workspaceId, "turn/start", {
     threadId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(references && references.length > 0 ? { references } : {}),
+    ...(retryToolItemIds && retryToolItemIds.length > 0
+      ? { retry: { toolItemIds: retryToolItemIds } }
+      : {}),
   });
 }
 

@@ -25,7 +25,11 @@ import {
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { ActivityGroupCard } from "./ActivityGroupCard";
-import { type ChatRenderItem, summarizeActivityGroup } from "./activityGroups";
+import {
+  type ChatRenderItem,
+  latestRetryableActivityGroupId,
+  unresolvedToolFailureIds,
+} from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { SandboxApprovalCard } from "./SandboxApprovalCard";
 
@@ -50,18 +54,6 @@ function lastVisibleUserTurnId(renderItems: ChatRenderItem[]): string | null {
     if (item && isVisibleUserTurn(item)) {
       return item.kind === "feed-item" ? item.item.id : null;
     }
-  }
-  return null;
-}
-
-function latestRetryableActivityGroupId(renderItems: ChatRenderItem[]): string | null {
-  for (let index = renderItems.length - 1; index >= 0; index -= 1) {
-    const item = renderItems[index];
-    if (!item) continue;
-    if (item.kind === "activity-group") {
-      return summarizeActivityGroup(item.items).status === "issue" ? item.id : null;
-    }
-    if (item.item.kind === "message") return null;
   }
   return null;
 }
@@ -257,8 +249,9 @@ export const ChatFeed = memo(function ChatFeed(props: {
   selectedThreadId?: string | null;
   threadTitleById?: ReadonlyMap<string, string>;
   onSelectThread?: (threadId: string) => void;
-  onRetryFailedTurn?: () => Promise<boolean>;
+  onRetryFailedTurn?: (toolItemIds: string[]) => Promise<boolean>;
   retryFailedTurnDisabled?: boolean;
+  retryUnavailableReason?: string;
   hiddenFeedItemCount?: number;
   onExpandOlderFeed?: () => void;
   onShowAllOlderFeed?: () => void;
@@ -284,6 +277,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     onSelectThread,
     onRetryFailedTurn,
     retryFailedTurnDisabled,
+    retryUnavailableReason,
     hiddenFeedItemCount = 0,
     onExpandOlderFeed = () => {},
     onShowAllOlderFeed = () => {},
@@ -414,12 +408,23 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         <InlineErrorBoundary label="This activity couldn't be rendered.">
                           <ActivityGroupCard
                             items={item.items}
+                            recoveredToolIds={item.recoveredToolIds}
                             live={item.id === liveActivityGroupId}
                             liveStartedAt={liveStartedAt}
                             onRetry={
-                              item.id === retryableActivityGroupId ? onRetryFailedTurn : undefined
+                              item.id === retryableActivityGroupId && onRetryFailedTurn
+                                ? () =>
+                                    onRetryFailedTurn(
+                                      unresolvedToolFailureIds(item.items, item.recoveredToolIds),
+                                    )
+                                : undefined
                             }
                             retryDisabled={retryFailedTurnDisabled}
+                            retryUnavailableReason={
+                              item.id === retryableActivityGroupId
+                                ? retryUnavailableReason
+                                : undefined
+                            }
                           />
                         </InlineErrorBoundary>
                       ) : (

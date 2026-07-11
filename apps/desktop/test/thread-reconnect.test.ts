@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { operationKey } from "../src/app/store.helpers/operations";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
@@ -474,6 +475,35 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(
       useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status,
     ).toBe("active");
+  });
+
+  test("reconnectThreadWithFeedback reports a confirmed connection without changing drafts", async () => {
+    const { threadId } = seedStore();
+    const draftKey = `thread:${threadId}`;
+    useAppStore.setState((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [draftKey]: {
+          revision: 1,
+          generation: 0,
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          text: "Keep this draft through reconnect.",
+          attachments: [],
+          references: [],
+        },
+      },
+    }));
+
+    const result = await useAppStore.getState().reconnectThreadWithFeedback(threadId);
+    await flushAsyncWork();
+
+    expect(result.ok).toBe(true);
+    expect(
+      useAppStore.getState().operationsByKey[operationKey("thread-reconnect", threadId)]?.status,
+    ).toBe("success");
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]?.text).toBe(
+      "Keep this draft through reconnect.",
+    );
   });
 
   test("cached session snapshots hydrate the thread model before reconnect", async () => {

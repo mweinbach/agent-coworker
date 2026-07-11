@@ -119,4 +119,27 @@ describe("MenuBarUtilityShell", () => {
     expect(container.textContent).toContain("Existing chat");
     expect(container.textContent).not.toContain("Task draft");
   });
+
+  test("shows truthful recovery actions when startup fails before readiness", () => {
+    resetAppStore({
+      ready: false,
+      bootstrapPhase: "error",
+      startupError: "The saved desktop state could not be loaded.",
+    });
+
+    act(() => {
+      root.render(
+        createElement(MenuBarUtilityShell, {
+          init: async () => {},
+          ready: false,
+          startupError: "The saved desktop state could not be loaded.",
+        }),
+      );
+    });
+
+    expect(container.textContent).toContain("Cowork couldn't start");
+    expect(container.textContent).toContain("The saved desktop state could not be loaded.");
+    expect(container.textContent).toContain("Copy diagnostics");
+    expect(container.textContent).not.toContain("Recovered");
+  });
 });

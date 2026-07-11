@@ -3,6 +3,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { captureRendererError } from "../lib/crashReporting";
+import { RecoveryDiagnosticsActions } from "./recovery/RecoveryDiagnosticsActions";
 
 type CrashReportingErrorBoundaryProps = {
   children: ReactNode;
@@ -11,16 +12,17 @@ type CrashReportingErrorBoundaryProps = {
 
 type CrashReportingErrorBoundaryState = {
   hasError: boolean;
+  errorDetail: string | null;
 };
 
 export class CrashReportingErrorBoundary extends Component<
   CrashReportingErrorBoundaryProps,
   CrashReportingErrorBoundaryState
 > {
-  state: CrashReportingErrorBoundaryState = { hasError: false };
+  state: CrashReportingErrorBoundaryState = { hasError: false, errorDetail: null };
 
-  static getDerivedStateFromError(): CrashReportingErrorBoundaryState {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): CrashReportingErrorBoundaryState {
+    return { hasError: true, errorDetail: error.message.trim() || null };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -38,12 +40,27 @@ export class CrashReportingErrorBoundary extends Component<
 
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
-        <div className="flex max-w-sm flex-col items-start gap-3">
-          <div className="text-base font-semibold">Something went wrong.</div>
-          <p className="text-sm text-muted-foreground">Restart Cowork to recover this window.</p>
-          <Button type="button" variant="outline" onClick={() => window.location.reload()}>
-            Reload
-          </Button>
+        <div className="flex w-full max-w-lg flex-col items-start gap-4 rounded-xl border border-destructive/30 bg-background p-6 shadow-sm">
+          <div>
+            <div className="text-xl font-semibold">Cowork hit an unexpected error</div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Reload this window to recover. Your saved chats and drafts remain on this device.
+            </p>
+          </div>
+          {this.state.errorDetail ? (
+            <div
+              data-selectable="text"
+              className="w-full rounded-md border border-border/60 bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground"
+            >
+              {this.state.errorDetail}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={() => window.location.reload()}>
+              Reload Cowork
+            </Button>
+            <RecoveryDiagnosticsActions />
+          </div>
         </div>
       </div>
     );

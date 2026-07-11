@@ -43,11 +43,9 @@ import {
   type AppStoreDataState,
   defaultThreadRuntime,
   isProviderName,
-  makeId,
   normalizeThreadTitleSource,
   nowIso,
   persistNow,
-  pushNotification,
   RUNTIME,
   type StoreGet,
   type StoreSet,
@@ -765,6 +763,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     return {
       ready: true,
       bootstrapPhase: "idle",
+      bootstrapStage: null,
       startupError: null,
       workspaces: state.workspaces,
       threads: state.threads,
@@ -961,12 +960,17 @@ export function createBootstrapActions(
 
     init: () =>
       bootstrapCoordinator.run(async ({ isCurrent, signal, waitUntil }) => {
-        set({ startupError: null, bootstrapPhase: "loading" });
+        set({
+          startupError: null,
+          bootstrapPhase: "loading",
+          bootstrapStage: "restoring-workspace",
+        });
         try {
           const state = hydratePersistedDesktopState(await loadState());
           if (!isCurrent()) {
             return;
           }
+          set({ bootstrapStage: "checking-services" });
           const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
           let updateState = get().updateState;
           try {
@@ -1057,6 +1061,7 @@ export function createBootstrapActions(
           if (!isCurrent()) {
             return;
           }
+          set({ bootstrapStage: "reconnecting-sessions" });
           const restoredComposerDrafts = buildRestoredComposerDrafts(
             state.composerDrafts,
             state.workspaces,
@@ -1102,6 +1107,7 @@ export function createBootstrapActions(
             updateState,
             ready: true,
             bootstrapPhase: "ready",
+            bootstrapStage: null,
             startupError: null,
             onboardingState: resolvedOnboarding,
             onboardingVisible: autoOpen,
@@ -1136,20 +1142,14 @@ export function createBootstrapActions(
           const detail = error instanceof Error ? error.message : String(error);
           console.error("Desktop init failed:", error);
           if (get().ready) {
-            set((s) => ({
+            set({
               bootstrapPhase: "error",
+              bootstrapStage: null,
               startupError: detail,
-              notifications: pushNotification(s.notifications, {
-                id: makeId(),
-                ts: nowIso(),
-                kind: "error",
-                title: "Startup recovery mode",
-                detail,
-              }),
-            }));
+            });
             return;
           }
-          set((s) => ({
+          set({
             workspaces: [],
             threads: [],
             selectedWorkspaceId: null,
@@ -1163,19 +1163,13 @@ export function createBootstrapActions(
             providerLastAuthChallenge: null,
             providerLastAuthResult: null,
             providerUiState: normalizePersistedProviderUiState(undefined),
-            ready: true,
+            ready: false,
             bootstrapPhase: "error",
+            bootstrapStage: null,
             startupError: detail,
             onboardingVisible: false,
             onboardingStep: "welcome" as const,
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Startup recovery mode",
-              detail,
-            }),
-          }));
+          });
           return;
         }
       }),

@@ -4,11 +4,14 @@ import { type CSSProperties, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../app/store";
 import { isStandardChatThread } from "../../app/threadFilters";
 import { Button } from "../../components/ui/button";
+import { Spinner } from "../../components/ui/spinner";
 import { showMainWindow, windowClose } from "../../lib/desktopCommands";
 import { getDesktopWindowThreadId, shouldStartNewQuickChatThread } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { isEditableEscapeTarget, useOverlayStack } from "../OverlayStack";
+import { StartupRecovery } from "../recovery/StartupRecovery";
+import { startupStagePresentation } from "../recovery/startupPresentation";
 
 type QuickChatShellProps = {
   init: () => Promise<void>;
@@ -18,6 +21,8 @@ type QuickChatShellProps = {
 
 export function QuickChatShell({ init, ready, startupError }: QuickChatShellProps) {
   const { hasOpenOverlay } = useOverlayStack();
+  const bootstrapLoading = useAppStore((s) => s.bootstrapPhase === "loading");
+  const bootstrapStage = useAppStore((s) => s.bootstrapStage);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -26,6 +31,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   const requestedThreadId = getDesktopWindowThreadId();
   const requestedNewThread = shouldStartNewQuickChatThread();
   const startedRequestedNewThreadRef = useRef(false);
+  const startupPresentation = startupStagePresentation(bootstrapStage);
 
   const activeThread = useMemo(
     () =>
@@ -172,18 +178,24 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
         </div>
         <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2">
           <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border border-border/45 bg-panel/75">
-            {!ready ? (
-              <div className="flex h-full items-center justify-center">
-                <div className="text-sm font-medium text-muted-foreground">
-                  Starting quick chat…
+            {startupError ? (
+              <StartupRecovery
+                detail={startupError}
+                init={init}
+                retrying={bootstrapLoading}
+                presentation="page"
+              />
+            ) : !ready ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
+              >
+                <Spinner className="size-4" aria-hidden="true" />
+                <div className="text-sm font-medium text-foreground">
+                  {startupPresentation.title}
                 </div>
-              </div>
-            ) : startupError ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                <div className="max-w-md text-sm text-muted-foreground">{startupError}</div>
-                <Button type="button" variant="outline" onClick={() => void init()}>
-                  Retry
-                </Button>
+                <div className="text-xs text-muted-foreground">{startupPresentation.detail}</div>
               </div>
             ) : (
               <InlineErrorBoundary label="This chat couldn't be rendered.">

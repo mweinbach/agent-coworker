@@ -4,6 +4,7 @@ import { hostPlatform } from "../../../../src/platform/host";
 import type {
   SetWindowAppearanceInput,
   SystemAppearance,
+  ThemeSource,
   WindowsBackgroundMaterial,
 } from "../../src/lib/desktopApi";
 import type { CaptionSymbolTone } from "../../src/styles/tokens/native";
@@ -21,6 +22,11 @@ export function getSystemAppearanceSnapshot(): SystemAppearance {
     prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     inForcedColorsMode: nativeTheme.inForcedColorsMode,
   };
+}
+
+export function applyThemeSourcePreference(themeSource: ThemeSource): SystemAppearance {
+  nativeTheme.themeSource = themeSource;
+  return getSystemAppearanceSnapshot();
 }
 
 type ResolvedWindowAppearance = {

@@ -31,7 +31,10 @@ describe("crash reporting error boundary", () => {
         );
       });
 
-      expect(container.textContent).toContain("Something went wrong.");
+      expect(container.textContent).toContain("Cowork hit an unexpected error");
+      expect(container.textContent).toContain("render blew up");
+      expect(container.textContent).toContain("Copy diagnostics");
+      expect(container.textContent).toContain("Open diagnostics");
       expect(captureError).toHaveBeenCalledTimes(1);
       expect(captureError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
       expect(captureError.mock.calls[0]?.[1]).toMatchObject({

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   desktopShellBackgroundColor,
   resolveWindowChromePaint,
@@ -19,6 +21,15 @@ describe("desktopShellBackgroundColor", () => {
   test("tracks light vs dark shell presets", () => {
     expect(desktopShellBackgroundColor(false)).toBe(NATIVE_THEME_TOKENS.shellSurface.light);
     expect(desktopShellBackgroundColor(true)).toBe(NATIVE_THEME_TOKENS.shellSurface.dark);
+  });
+
+  test("matches the renderer window surface in both themes", () => {
+    const rendererTokens = readFileSync(
+      resolve(import.meta.dir, "../src/styles/tokens/base.css"),
+      "utf8",
+    );
+    expect(rendererTokens).toContain(`--app-bg: ${NATIVE_THEME_TOKENS.shellSurface.light}`);
+    expect(rendererTokens).toContain(`--app-bg: ${NATIVE_THEME_TOKENS.shellSurface.dark}`);
   });
 });
 

@@ -23,6 +23,7 @@ const initialCreationDrafts = createEmptyCreationDrafts();
 const initialState: AppStoreDataState = {
   ready: false,
   bootstrapPhase: "idle",
+  bootstrapStage: null,
   startupError: null,
   view: "chat",
 

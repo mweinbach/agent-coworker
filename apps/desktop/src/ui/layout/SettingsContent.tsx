@@ -1,7 +1,7 @@
-import { AlertTriangleIcon } from "lucide-react";
-
-import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
+import { useAppStore } from "../../app/store";
+import { Spinner } from "../../components/ui/spinner";
+import { StartupRecovery } from "../recovery/StartupRecovery";
+import { startupStagePresentation } from "../recovery/startupPresentation";
 import { SettingsShell } from "../settings/SettingsShell";
 
 interface SettingsContentProps {
@@ -11,31 +11,59 @@ interface SettingsContentProps {
 }
 
 export function SettingsContent({ init, ready, startupError }: SettingsContentProps) {
+  const bootstrapLoading = useAppStore((state) => state.bootstrapPhase === "loading");
+  const bootstrapStage = useAppStore((state) => state.bootstrapStage);
+  const startupPresentation = startupStagePresentation(bootstrapStage);
+
+  if (startupError && !ready) {
+    return (
+      <StartupRecovery
+        detail={startupError}
+        init={init}
+        retrying={bootstrapLoading}
+        presentation="page"
+      />
+    );
+  }
+
   if (!ready) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-        <div className="text-lg font-semibold text-foreground">Starting Cowork…</div>
-        <p className="text-sm text-muted-foreground">Loading settings and workspace state.</p>
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
+      >
+        <Spinner className="mb-1 size-5" aria-hidden="true" />
+        <div className="text-lg font-semibold text-foreground">{startupPresentation.title}</div>
+        <p className="text-sm text-muted-foreground">{startupPresentation.detail}</p>
       </div>
     );
   }
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       {startupError ? (
-        <Card className="mx-5 mt-4 border-destructive/40 bg-destructive/10">
-          <CardContent className="flex items-center justify-between gap-3 p-3">
-            <div className="flex items-center gap-2 text-sm">
-              <AlertTriangleIcon className="h-4 w-4 text-destructive" />
-              <span>Running with fresh state due to an error.</span>
-            </div>
-            <Button variant="outline" size="sm" type="button" onClick={() => void init()}>
-              Retry
-            </Button>
-          </CardContent>
-        </Card>
+        <StartupRecovery
+          detail={startupError}
+          init={init}
+          retrying={bootstrapLoading}
+          presentation="banner"
+        />
+      ) : bootstrapLoading ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/85 px-4 py-2 text-xs text-muted-foreground"
+        >
+          <Spinner className="size-3.5" aria-hidden="true" />
+          <span>
+            {startupPresentation.title}. {startupPresentation.detail}
+          </span>
+        </div>
       ) : null}
-      <SettingsShell />
-    </>
+      <div className="min-h-0 flex-1">
+        <SettingsShell />
+      </div>
+    </div>
   );
 }

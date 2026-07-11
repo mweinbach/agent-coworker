@@ -211,6 +211,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<
     Map<string, CitationSource[]>
   >(() => new Map());
+  const overflowCitationUrlsRef = useRef(overflowCitationUrlsByMessageId);
+  const overflowCitationSourcesRef = useRef(overflowCitationSourcesByMessageId);
+  overflowCitationUrlsRef.current = overflowCitationUrlsByMessageId;
+  overflowCitationSourcesRef.current = overflowCitationSourcesByMessageId;
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
@@ -566,10 +570,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
-      setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
-      setOverflowCitationSourcesByMessageId((current) =>
-        current.size === 0 ? current : new Map(),
-      );
+      if (overflowCitationUrlsRef.current.size > 0) {
+        setOverflowCitationUrlsByMessageId(new Map());
+      }
+      if (overflowCitationSourcesRef.current.size > 0) {
+        setOverflowCitationSourcesByMessageId(new Map());
+      }
       return;
     }
 

@@ -82,6 +82,8 @@ export function createToolProjection(state: ConversationProjectionState) {
     state: toolState.state,
     ...(toolState.args !== undefined ? { args: toolState.args } : {}),
     ...(toolState.result !== undefined ? { result: toolState.result } : {}),
+    ...(toolState.retryOf !== undefined ? { retryOf: toolState.retryOf } : {}),
+    ...(toolState.inputDigest !== undefined ? { inputDigest: toolState.inputDigest } : {}),
     ...(toolState.approval ? { approval: toolState.approval } : {}),
   });
 

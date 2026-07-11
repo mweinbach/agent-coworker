@@ -69,6 +69,22 @@ const reactNativeMockFactory = () => {
       const { createElement } = require("react");
       return createElement(tag, props, children);
     };
+  const Pressable = ({
+    children,
+    style,
+    ...props
+  }: Record<string, unknown> & {
+    children?: unknown;
+  }) => {
+    const { createElement } = require("react");
+    const resolvedStyle =
+      typeof style === "function"
+        ? style({
+            pressed: false,
+          })
+        : style;
+    return createElement("pressable", { ...props, style: resolvedStyle }, children);
+  };
 
   return {
     TurboModuleRegistry: { get: () => null },
@@ -105,7 +121,7 @@ const reactNativeMockFactory = () => {
         setValue() {}
       },
     },
-    Pressable: stubComponent("pressable"),
+    Pressable,
     Modal: stubComponent("modal"),
     KeyboardAvoidingView: stubComponent("keyboardavoidingview"),
   };

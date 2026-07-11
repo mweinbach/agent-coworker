@@ -307,7 +307,7 @@ describe("workspace startup flow", () => {
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
       ...defaultProviderActions,
-      composerText: "",
+      composerDraftsByKey: {},
       injectContext: false,
       developerMode: false,
       showHiddenFiles: false,

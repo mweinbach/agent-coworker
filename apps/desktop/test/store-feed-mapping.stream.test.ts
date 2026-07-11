@@ -864,6 +864,99 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
+  test("coalesces multiple tool-input deltas and applies the authoritative final error", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-tool",
+          index: 0,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_input_start",
+          part: { id: "tool-call", toolName: "bash" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-tool",
+          index: 1,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_input_delta",
+          part: { id: "tool-call", delta: '{"command":"bun ' },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-tool",
+          index: 2,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_input_delta",
+          part: { id: "tool-call", delta: 'test"}' },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-tool",
+          index: 3,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_result",
+          part: { toolCallId: "tool-call", toolName: "bash", output: { exitCode: 0 } },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-tool",
+          index: 4,
+          provider: "openai",
+          model: "gpt-5.4",
+          partType: "tool_error",
+          part: {
+            toolCallId: "tool-call",
+            toolName: "bash",
+            error: "provider rejected final output",
+          },
+        },
+      },
+    ];
+
+    expect(mapTranscriptToFeed(transcript).filter((item) => item.kind === "tool")).toEqual([
+      expect.objectContaining({
+        name: "bash",
+        state: "output-error",
+        args: expect.objectContaining({ command: "bun test" }),
+        result: { error: "provider rejected final output" },
+      }),
+    ]);
+  });
+
   test("replays raw google interactions reasoning and tool traces from persisted sessions", () => {
     const transcript: TranscriptEvent[] = [
       {

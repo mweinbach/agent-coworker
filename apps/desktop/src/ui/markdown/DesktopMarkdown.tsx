@@ -43,6 +43,7 @@ import {
   isAbsoluteDesktopPath,
 } from "../../lib/mediaProtocol";
 import { cn } from "../../lib/utils";
+import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
@@ -1535,6 +1536,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   mermaid: mermaidOptions,
   ...props
 }: DesktopMarkdownProps) {
+  recordDesktopRenderMetric("desktop-markdown");
   const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
   const isDark = useDocumentIsDark();
   const desktopFileLinksPlugin = useMemo<

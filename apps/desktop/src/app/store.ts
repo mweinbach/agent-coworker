@@ -70,8 +70,9 @@ const initialState: AppStoreDataState = {
   providerLastAuthResult: null,
   providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
-  composerText: "",
-  composerTextByThreadId: {},
+  composerDraftsByKey: {},
+  composerDraftRevisionFloorByKey: {},
+  composerAttachmentIngestionCountByKey: {},
   newChatLandingTarget: null,
   injectContext: false,
   developerMode: false,

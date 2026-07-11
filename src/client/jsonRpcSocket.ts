@@ -68,6 +68,7 @@ const DEFAULT_MAX_QUEUED_MESSAGES = 128;
 const DEFAULT_OPEN_TIMEOUT_MS = 5_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
 const DEFAULT_JSONRPC_SUBPROTOCOL = "cowork.jsonrpc.v1";
+const JSONRPC_INVALID_PARAMS_ERROR_CODE = -32602;
 
 function isBlobLike(value: unknown): value is Blob {
   return typeof Blob !== "undefined" && value instanceof Blob;
@@ -134,6 +135,7 @@ export type JsonRpcSocketOpts = {
     version?: string;
   };
   experimentalApi?: boolean;
+  toolRetryLineage?: boolean;
   optOutNotificationMethods?: string[];
   protocols?: string | string[];
   WebSocketImpl?: WebSocketConstructorLike;
@@ -171,6 +173,7 @@ export class JsonRpcSocket {
   private readonly url: string;
   private readonly clientInfo: JsonRpcSocketOpts["clientInfo"];
   private readonly experimentalApi: boolean;
+  private readonly toolRetryLineage: boolean;
   private readonly optOutNotificationMethods: string[];
   private readonly connectionTarget: JsonRpcConnectionTarget;
   private readonly WebSocketImpl: WebSocketConstructorLike;
@@ -198,6 +201,7 @@ export class JsonRpcSocket {
   private intentionalClose = false;
   private reconnectExhausted = false;
   private pendingInitializationFailure: Error | null = null;
+  private serverSupportsToolRetryLineage = false;
   private nextId = 0;
   private pendingRequests = new Map<
     string | number,
@@ -215,6 +219,7 @@ export class JsonRpcSocket {
     this.url = opts.url;
     this.clientInfo = opts.clientInfo;
     this.experimentalApi = opts.experimentalApi === true;
+    this.toolRetryLineage = opts.toolRetryLineage === true;
     this.optOutNotificationMethods = [...(opts.optOutNotificationMethods ?? [])];
     this.connectionTarget = buildConnectionTarget(
       opts.url,
@@ -249,6 +254,10 @@ export class JsonRpcSocket {
     return this.ready.promise;
   }
 
+  get supportsToolRetryLineage(): boolean {
+    return this.serverSupportsToolRetryLineage;
+  }
+
   private resetReadyPromise() {
     this.ready = Promise.withResolvers<void>();
     void this.ready.promise.catch(() => {
@@ -271,6 +280,7 @@ export class JsonRpcSocket {
     this.cancelReconnect();
     this.clearConnectionTimeouts();
     this.initialized = false;
+    this.serverSupportsToolRetryLineage = false;
     this.pendingInitializationFailure = null;
     const closedError = new Error("socket closed");
     this.rejectQueuedRequests(closedError);
@@ -457,15 +467,45 @@ export class JsonRpcSocket {
   }
 
   private async performHandshake(): Promise<void> {
-    await this.sendRequestNow("initialize", {
+    const initializeParams = (includeToolRetryLineage: boolean) => ({
       clientInfo: this.clientInfo,
       capabilities: {
         experimentalApi: this.experimentalApi,
+        ...(includeToolRetryLineage ? { toolRetryLineage: true } : {}),
         ...(this.optOutNotificationMethods.length > 0
           ? { optOutNotificationMethods: this.optOutNotificationMethods }
           : {}),
       },
     });
+    let initializeResult: unknown;
+    try {
+      initializeResult = await this.sendRequestNow(
+        "initialize",
+        initializeParams(this.toolRetryLineage),
+      );
+    } catch (error) {
+      const requestError = error as JsonRpcRequestError;
+      if (
+        !this.toolRetryLineage ||
+        requestError.jsonRpcCode !== JSONRPC_INVALID_PARAMS_ERROR_CODE
+      ) {
+        throw error;
+      }
+      this.serverSupportsToolRetryLineage = false;
+      initializeResult = await this.sendRequestNow("initialize", initializeParams(false));
+    }
+    const capabilities =
+      initializeResult &&
+      typeof initializeResult === "object" &&
+      "capabilities" in initializeResult &&
+      initializeResult.capabilities &&
+      typeof initializeResult.capabilities === "object"
+        ? initializeResult.capabilities
+        : null;
+    this.serverSupportsToolRetryLineage =
+      capabilities !== null &&
+      "toolRetryLineage" in capabilities &&
+      capabilities.toolRetryLineage === true;
     const ws = this.ws;
     if (!ws || ws.readyState !== this.WebSocketImpl.OPEN) {
       throw new Error("Failed to send initialized notification");

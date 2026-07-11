@@ -1,4 +1,5 @@
 import type { PersistentAgentSummary } from "../../shared/agents";
+import { SESSION_FEED_ITEM_LIMIT } from "../../shared/feedRetention";
 import {
   applyProjectedAgentMessageDelta,
   applyProjectedItemCompleted,
@@ -151,8 +152,6 @@ export function createLegacySessionSnapshot(record: PersistedSessionRecord): Ses
     hasPendingApproval: record.hasPendingApproval,
   };
 }
-
-const MAX_FEED_ITEMS = 2000;
 
 export class SessionSnapshotProjector {
   private snapshot: SessionSnapshot;
@@ -328,11 +327,11 @@ export class SessionSnapshotProjector {
 
     this.conversationProjection.handle(evt);
 
-    if (this.snapshot.feed.length > MAX_FEED_ITEMS) {
+    if (this.snapshot.feed.length > SESSION_FEED_ITEM_LIMIT) {
       // Cap feed to prevent unbounded growth. Old items are dropped;
       // if a stale delta arrives for a dropped item, the projection
       // helpers will create a new entry (benign fallback).
-      this.snapshot.feed = this.snapshot.feed.slice(-MAX_FEED_ITEMS);
+      this.snapshot.feed = this.snapshot.feed.slice(-SESSION_FEED_ITEM_LIMIT);
     }
   }
 

@@ -129,6 +129,9 @@ export function createJsonRpcTransportAdapter({
         });
         continue;
       }
+      if (event.eventType.startsWith("internal/")) {
+        continue;
+      }
       if (!shouldSendNotification(ws, event.eventType)) {
         continue;
       }
@@ -395,6 +398,7 @@ export function createJsonRpcTransportAdapter({
       maxPendingRequests,
       capabilities: {
         experimentalApi: false,
+        toolRetryLineage: false,
         optOutNotificationMethods: [],
       },
       pendingServerRequests: new Map(),

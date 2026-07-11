@@ -11,11 +11,14 @@ import {
   Loader2Icon,
   MoreVerticalIcon,
   PenIcon,
+  RefreshCwIcon,
+  SaveIcon,
   SparklesIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../app/store";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
   DropdownMenu,
@@ -27,9 +30,12 @@ import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Tabs, TabsContent } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
+import { CanvasDocumentController } from "../lib/canvasDocumentController";
+import { registerCanvasDocumentTransitionHandler } from "../lib/canvasDocumentLifecycle";
 import { applyMarkdownFormat, type MarkdownFormatKind } from "../lib/canvasMarkdownFormat";
 import { buildCanvasDocumentPrompt } from "../lib/canvasRequest";
-import { openPath, readFileForPreview, revealPath, writeFile } from "../lib/desktopCommands";
+import { runCanvasSaveAs } from "../lib/canvasSaveAs";
+import { confirmAction, openPath, pickCanvasSavePath, revealPath } from "../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
@@ -41,16 +47,38 @@ import { DesktopMarkdown } from "./markdown";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 
-function decodeUtf8(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-}
-
 function basenamePath(p: string): string {
   const parts = p.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1] ?? p;
 }
 
 const CANVAS_PREVIEW_MAX_BYTES = 256 * 1024;
+
+type CanvasSaveBadgeProps = {
+  status: "saved" | "dirty" | "saving" | "error" | "conflict";
+};
+
+function CanvasSaveBadge({ status }: CanvasSaveBadgeProps) {
+  const label =
+    status === "saved"
+      ? "Saved"
+      : status === "dirty"
+        ? "Unsaved"
+        : status === "saving"
+          ? "Saving"
+          : status === "conflict"
+            ? "Changed on disk"
+            : "Save failed";
+  return (
+    <Badge
+      data-slot="canvas-save-status"
+      variant={status === "error" || status === "conflict" ? "destructive" : "outline"}
+      className="text-[10px] uppercase tracking-wide"
+    >
+      {label}
+    </Badge>
+  );
+}
 
 function CanvasTruncationBanner({ path }: { path: string }) {
   const revealLabel =
@@ -117,12 +145,7 @@ export function Canvas({ path }: { path: string }) {
   const setActiveTab = useAppStore((s) => s.setCanvasActiveTab);
   const showFormattingBar = useAppStore((s) => s.canvasShowFormattingBar);
   const setShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
-  const [content, setContent] = useState<string>("");
-  const [contentTruncated, setContentTruncated] = useState<boolean>(false);
   const [previewRefreshTrigger, setPreviewRefreshTrigger] = useState<number>(0);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [saveStatus, setSaveStatus] = useState<"saved" | "dirty" | "saving" | "error">("saved");
   const [promptText, setPromptText] = useState<string>("");
   const [selectedText, setSelectedText] = useState<string>("");
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
@@ -131,7 +154,6 @@ export function Canvas({ path }: { path: string }) {
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
-  const lastSavedContentRef = useRef<string>("");
   const isInteractingRef = useRef<boolean>(false);
   const floatingRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -149,80 +171,106 @@ export function Canvas({ path }: { path: string }) {
     return isSlideModule(path);
   }, [path]);
 
-  const loadContent = useCallback(async () => {
-    if (isSpreadsheet || isPptx) return;
-    try {
-      setLoading(true);
-      const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
-      const fileContent = decodeUtf8(result.bytes);
-      setContent(fileContent);
-      setContentTruncated(result.truncated);
-      contentRef.current = fileContent;
-      lastSavedContentRef.current = fileContent;
-      setSaveStatus("saved");
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [path, isSpreadsheet, isPptx]);
+  const controllerRef = useRef<CanvasDocumentController | null>(null);
+  if (!controllerRef.current) {
+    controllerRef.current = new CanvasDocumentController(
+      {
+        open: async (workspaceId, input) =>
+          await useAppStore.getState().openCanvasDocument(workspaceId, input),
+        revision: async (workspaceId, input) =>
+          await useAppStore.getState().readCanvasDocumentRevision(workspaceId, input),
+        save: async (workspaceId, input) =>
+          await useAppStore.getState().saveCanvasDocument(workspaceId, input),
+        saveAs: async (workspaceId, input) =>
+          await useAppStore.getState().saveCanvasDocumentAs(workspaceId, input),
+        close: async (workspaceId, input) =>
+          await useAppStore.getState().closeCanvasDocument(workspaceId, input),
+      },
+      { maxBytes: CANVAS_PREVIEW_MAX_BYTES },
+    );
+  }
+  const controller = controllerRef.current;
+  const canvasState = useSyncExternalStore(
+    controller.subscribe,
+    controller.getState,
+    controller.getState,
+  );
+  const content = canvasState.content;
+  const contentTruncated = canvasState.document?.truncated ?? false;
+  const loading = canvasState.phase === "idle" || canvasState.phase === "loading";
+  const error =
+    canvasState.phase === "error" && canvasState.problem?.source === "load"
+      ? canvasState.problem.message
+      : null;
+  const saveStatus = canvasState.saveStatus;
 
   useEffect(() => {
-    if (isSpreadsheet || isPptx) return;
-    void loadContent();
-  }, [loadContent, isSpreadsheet, isPptx]);
+    contentRef.current = content;
+  }, [content]);
 
   useEffect(() => {
-    if (isSpreadsheet || isPptx) return;
-    let active = true;
-    const interval = setInterval(async () => {
-      if (isEditingRef.current) return;
-
-      try {
-        const result = await readFileForPreview({ path, maxBytes: CANVAS_PREVIEW_MAX_BYTES });
-        const diskContent = decodeUtf8(result.bytes);
-        if (!active) return;
-        setContentTruncated(result.truncated);
-        if (diskContent !== contentRef.current) {
-          setContent(diskContent);
-          contentRef.current = diskContent;
-          lastSavedContentRef.current = diskContent;
-          setPreviewRefreshTrigger((t) => t + 1);
-        }
-      } catch {}
-    }, 1500);
-
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
-  }, [path, isSpreadsheet, isPptx]);
-
-  useEffect(() => {
-    if (isSpreadsheet || isPptx) return;
-    if (contentTruncated) return;
-    if (content === lastSavedContentRef.current) {
-      setSaveStatus((current) => (current === "saving" ? current : "saved"));
+    if (isSpreadsheet || isPptx) {
+      void controller.prepareForTransition(null);
       return;
     }
-    setSaveStatus("dirty");
-    const timer = setTimeout(async () => {
-      setSaveStatus("saving");
-      try {
-        await writeFile({ path, content });
-        lastSavedContentRef.current = content;
-        contentRef.current = content;
-        setSaveStatus("saved");
-        setPreviewRefreshTrigger((t) => t + 1);
-      } catch (err) {
-        console.error("Failed to auto-save file:", err);
-        setSaveStatus("error");
-      }
-    }, 500);
+    const workspaceId = activeWorkspace?.id ?? selectedWorkspaceId;
+    if (!workspaceId) return;
+    void controller.open(workspaceId, path);
+  }, [activeWorkspace?.id, controller, isPptx, isSpreadsheet, path, selectedWorkspaceId]);
 
-    return () => clearTimeout(timer);
-  }, [content, contentTruncated, path, isSpreadsheet, isPptx]);
+  useEffect(() => {
+    if (isSpreadsheet || isPptx) return;
+    return registerCanvasDocumentTransitionHandler(async (nextPath) => {
+      return await controller.prepareForTransition(nextPath);
+    });
+  }, [controller, isPptx, isSpreadsheet]);
+
+  useEffect(() => {
+    return () => controller.dispose();
+  }, [controller]);
+
+  useEffect(() => {
+    if (!canvasState.document || isSpreadsheet || isPptx) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const pollAndSchedule = async () => {
+      await controller.poll();
+      if (active) {
+        timer = setTimeout(() => {
+          void pollAndSchedule();
+        }, 1500);
+      }
+    };
+    timer = setTimeout(() => {
+      void pollAndSchedule();
+    }, 1500);
+    const pollOnFocus = () => {
+      void controller.poll();
+    };
+    window.addEventListener("focus", pollOnFocus);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", pollOnFocus);
+    };
+  }, [canvasState.document, controller, isPptx, isSpreadsheet]);
+
+  useEffect(() => {
+    if (canvasState.document?.revision.fingerprint) {
+      setPreviewRefreshTrigger((trigger) => trigger + 1);
+    }
+  }, [canvasState.document?.revision.fingerprint]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (controller.getState().saveStatus === "saved") return;
+      void controller.flush();
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [controller]);
 
   useEffect(() => {
     if (activeTab === "preview") {
@@ -230,7 +278,8 @@ export function Canvas({ path }: { path: string }) {
     }
   }, [activeTab]);
 
-  const fileName = basenamePath(path);
+  const documentPath = canvasState.document?.path ?? path;
+  const fileName = basenamePath(documentPath);
   const isAgentBusy = threadRuntime?.busy === true;
 
   // NOTE: All hooks must be declared unconditionally before any early return.
@@ -273,13 +322,45 @@ export function Canvas({ path }: { path: string }) {
   };
 
   const handleContentChange = (val: string) => {
-    setContent(val);
+    controller.edit(val);
     contentRef.current = val;
     isEditingRef.current = true;
   };
 
   const handleBlur = () => {
     isEditingRef.current = false;
+  };
+
+  const handleRetryPersistence = () => {
+    void controller.retry();
+  };
+
+  const handleSaveAs = async () => {
+    const sourcePath = canvasState.document?.path ?? path;
+    const savedPath = await runCanvasSaveAs({
+      sourcePath,
+      pickPath: pickCanvasSavePath,
+      saveAs: async (targetPath) => await controller.saveAs(targetPath),
+      reportFailure: (message) => controller.reportPersistenceFailure(message),
+    });
+    if (savedPath) {
+      await useAppStore.getState().openFilePreview({ path: savedPath });
+    }
+  };
+
+  const handleReloadAfterConflict = async () => {
+    const confirmed = await confirmAction({
+      title: "Reload changed file?",
+      message: "Reload the version on disk and discard your unsaved Canvas changes?",
+      detail: "Use Save As first if you want to keep a copy of your current edits.",
+      kind: "warning",
+      confirmLabel: "Reload from disk",
+      cancelLabel: "Keep editing",
+      defaultAction: "cancel",
+    });
+    if (confirmed) {
+      await controller.discardLocalChangesAndReload();
+    }
   };
 
   const applyTempHighlight = useCallback(() => {
@@ -478,10 +559,10 @@ export function Canvas({ path }: { path: string }) {
     }
     setPromptError(null);
 
-    const filename = basenamePath(path);
+    const filename = basenamePath(documentPath);
     const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
     const promptWithContext = buildCanvasDocumentPrompt({
-      path,
+      path: documentPath,
       fileName: filename,
       kind: canvasKind,
       selection: selectedText || null,
@@ -728,13 +809,77 @@ export function Canvas({ path }: { path: string }) {
               <span>Reading file...</span>
             </div>
           ) : error ? (
-            <div className="p-4 mx-4 my-3 text-sm text-destructive bg-destructive/10 rounded-md border border-destructive/20 bg-background">
-              <div className="font-semibold mb-1">Failed to load content</div>
-              <p>{error}</p>
+            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold">Failed to load content</div>
+                <p className="mt-1 text-xs">{error}</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={handleRetryPersistence}>
+                <RefreshCwIcon data-icon="inline-start" />
+                Retry
+              </Button>
             </div>
           ) : (
             <div className="flex h-full min-h-0 flex-col">
-              {contentTruncated ? <CanvasTruncationBanner path={path} /> : null}
+              {canvasState.problem && canvasState.problem.source !== "load" ? (
+                <div
+                  role="alert"
+                  data-testid="canvas-persistence-problem"
+                  className="mx-3 mt-3 flex shrink-0 flex-wrap items-start gap-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm"
+                >
+                  <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <div className="min-w-[220px] flex-1">
+                    <div className="font-medium text-foreground">
+                      {saveStatus === "conflict"
+                        ? "Changed on disk"
+                        : canvasState.problem.source === "poll"
+                          ? "Couldn’t check for file changes"
+                          : "Save failed"}
+                    </div>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      {canvasState.problem.message}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {saveStatus === "conflict" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleReloadAfterConflict()}
+                      >
+                        <RefreshCwIcon data-icon="inline-start" />
+                        Reload from disk
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRetryPersistence}
+                      >
+                        <RefreshCwIcon data-icon="inline-start" />
+                        Retry
+                      </Button>
+                    )}
+                    {canvasState.document && !contentTruncated ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleSaveAs()}
+                      >
+                        <SaveIcon data-icon="inline-start" />
+                        Save As
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {contentTruncated ? (
+                <CanvasTruncationBanner path={canvasState.document?.path ?? path} />
+              ) : null}
               <div className="min-h-0 flex-1">
                 {isMarkdown ? (
                   <>
@@ -762,24 +907,7 @@ export function Canvas({ path }: { path: string }) {
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span className="flex items-center gap-2">
                             <span>Markdown Source</span>
-                            <span
-                              data-slot="canvas-save-status"
-                              className={cn(
-                                "rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                                saveStatus === "saved" && "border-success/30 text-success",
-                                saveStatus === "dirty" && "border-border text-muted-foreground",
-                                saveStatus === "saving" && "border-primary/30 text-primary",
-                                saveStatus === "error" && "border-destructive/40 text-destructive",
-                              )}
-                            >
-                              {saveStatus === "saved"
-                                ? "Saved"
-                                : saveStatus === "dirty"
-                                  ? "Unsaved"
-                                  : saveStatus === "saving"
-                                    ? "Saving"
-                                    : "Save failed"}
-                            </span>
+                            <CanvasSaveBadge status={saveStatus} />
                           </span>
                           <span className="tabular-nums font-mono">
                             {content.length} characters
@@ -803,7 +931,7 @@ export function Canvas({ path }: { path: string }) {
                       value="preview"
                       className="h-full m-0 p-0 outline-none data-[state=inactive]:hidden"
                     >
-                      <SlidePreview path={path} refreshTrigger={previewRefreshTrigger} />
+                      <SlidePreview path={documentPath} refreshTrigger={previewRefreshTrigger} />
                     </TabsContent>
 
                     <TabsContent
@@ -813,7 +941,10 @@ export function Canvas({ path }: { path: string }) {
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
-                          <span>Slide Source Code</span>
+                          <span className="flex items-center gap-2">
+                            <span>Slide Source Code</span>
+                            <CanvasSaveBadge status={saveStatus} />
+                          </span>
                           <span className="tabular-nums font-mono">
                             {content.length} characters
                           </span>
@@ -839,24 +970,7 @@ export function Canvas({ path }: { path: string }) {
                     >
                       <span className="flex items-center gap-2">
                         <span>Source Editor</span>
-                        <span
-                          data-slot="canvas-save-status"
-                          className={cn(
-                            "rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                            saveStatus === "saved" && "border-success/30 text-success",
-                            saveStatus === "dirty" && "border-border text-muted-foreground",
-                            saveStatus === "saving" && "border-primary/30 text-primary",
-                            saveStatus === "error" && "border-destructive/40 text-destructive",
-                          )}
-                        >
-                          {saveStatus === "saved"
-                            ? "Saved"
-                            : saveStatus === "dirty"
-                              ? "Unsaved"
-                              : saveStatus === "saving"
-                                ? "Saving"
-                                : "Save failed"}
-                        </span>
+                        <CanvasSaveBadge status={saveStatus} />
                       </span>
                       <span className="tabular-nums font-mono">{content.length} characters</span>
                     </div>

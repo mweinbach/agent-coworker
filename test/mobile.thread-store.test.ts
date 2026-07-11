@@ -19,6 +19,7 @@ describe("mobile thread store offline draft preservation", () => {
       selectedThreadId: null,
       pendingRequests: {},
       activeTurnStartedAt: {},
+      lastFeedMutationByThread: {},
       expandedWorkspaceIds: {},
     });
   });
@@ -93,6 +94,133 @@ describe("mobile thread store offline draft preservation", () => {
         .currentFeed("remote-send")
         .map((item) => item.id),
     ).not.toContain("client-message-1");
+  });
+
+  test("retains the exact failed text and attachments for retry without overwriting edits", () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-transaction",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const attachment = {
+      type: "uploadedFile" as const,
+      filename: "notes.txt",
+      path: "/workspace/User Uploads/notes.txt",
+      mimeType: "text/plain",
+    };
+    const store = useThreadStore.getState();
+    store.setComposerDraft("remote-transaction", "  exact draft\n");
+    store.setComposerAttachments("remote-transaction", [attachment]);
+
+    const submission = store.beginComposerSubmission("remote-transaction", "client-message-1");
+    expect(submission).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "  exact draft\n",
+      attachments: [attachment],
+      status: "submitting",
+    });
+
+    useThreadStore.getState().setComposerDraft("remote-transaction", "new draft");
+    useThreadStore.getState().setComposerAttachments("remote-transaction", []);
+    useThreadStore
+      .getState()
+      .failComposerSubmission("remote-transaction", "client-message-1", "transport lost");
+
+    const retry = useThreadStore.getState().retryComposerSubmission("remote-transaction");
+    expect(retry).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "  exact draft\n",
+      attachments: [attachment],
+      status: "submitting",
+    });
+
+    useThreadStore.getState().acceptComposerSubmission("remote-transaction", "client-message-1");
+    const thread = useThreadStore.getState().getThread("remote-transaction");
+    expect(thread?.composerDraft).toBe("new draft");
+    expect(thread?.composerAttachments).toEqual([]);
+    expect(thread?.composerSubmission).toBeNull();
+  });
+
+  test("does not append a second optimistic row after server reconciliation", () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-dedupe",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const store = useThreadStore.getState();
+    store.appendOptimisticUserMessage("remote-dedupe", "once", "client-message-1");
+    store.appendStarted(
+      "remote-dedupe",
+      {
+        id: "projected-user-message",
+        type: "userMessage",
+        content: [{ type: "text", text: "once" }],
+        clientMessageId: "client-message-1",
+      },
+      "2026-07-10T00:00:00.000Z",
+    );
+
+    useThreadStore
+      .getState()
+      .appendOptimisticUserMessage("remote-dedupe", "once", "client-message-1");
+
+    const userMessages = useThreadStore
+      .getState()
+      .currentFeed("remote-dedupe")
+      .filter((item) => item.kind === "message" && item.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]).toMatchObject({
+      id: "projected-user-message",
+      clientMessageId: "client-message-1",
+    });
+  });
+
+  test("records delta and completion mutations separately for follow-tail policy", () => {
+    const store = useThreadStore.getState();
+
+    store.appendAgentDelta("streaming-thread", "assistant-1", "hello", "2026-07-10T00:00:00Z");
+    expect(useThreadStore.getState().lastFeedMutationByThread["streaming-thread"]).toMatchObject({
+      kind: "delta",
+      revision: 1,
+    });
+
+    store.appendCompleted(
+      "streaming-thread",
+      {
+        type: "agentMessage",
+        id: "assistant-1",
+        text: "hello",
+      },
+      "2026-07-10T00:00:01Z",
+    );
+    expect(useThreadStore.getState().lastFeedMutationByThread["streaming-thread"]).toMatchObject({
+      kind: "completed",
+      revision: 2,
+    });
   });
 
   test("syncRemoteThreads preserves composerDraft, local drafts, and existing feeds", () => {
@@ -406,7 +534,9 @@ describe("mobile thread store offline draft preservation", () => {
 
     store.setPendingRequest({
       requestId: "req-123",
+      requestFingerprint: "req-123",
       kind: "ask",
+      method: "item/tool/requestUserInput",
       threadId: "remote-1",
       itemId: "item-1",
       question: "Continue?",

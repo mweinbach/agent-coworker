@@ -683,6 +683,7 @@ export function createWebAdapter(): DesktopApi {
     async windowMinimize(): Promise<void> {},
     async windowMaximize(): Promise<void> {},
     async windowClose(): Promise<void> {},
+    async resolveWindowCloseRequest(): Promise<void> {},
     async windowDragStart(): Promise<void> {},
     async windowDragMove(): Promise<void> {},
     async windowDragEnd(): Promise<void> {},
@@ -732,6 +733,12 @@ export function createWebAdapter(): DesktopApi {
     async saveExportedFile(opts): Promise<string | null> {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.sourcePath }));
       return opts.sourcePath;
+    },
+    async pickCanvasSavePath(opts): Promise<string | null> {
+      const extension = /(\.[^./\\]+)$/.exec(opts.sourcePath)?.[1] ?? "";
+      const basePath = extension ? opts.sourcePath.slice(0, -extension.length) : opts.sourcePath;
+      const selected = window.prompt("Save Canvas document as", `${basePath} copy${extension}`);
+      return selected?.trim() || null;
     },
     async openExternalUrl(opts): Promise<void> {
       window.open(opts.url, "_blank", "noopener");
@@ -838,6 +845,10 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onWorkspaceServerExited(): () => void {
+      return () => {};
+    },
+
+    onWindowCloseRequested(): () => void {
       return () => {};
     },
 

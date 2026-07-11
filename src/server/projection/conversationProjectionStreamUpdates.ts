@@ -123,6 +123,12 @@ export function createStreamUpdateHandler(
       if (update.args !== undefined) {
         toolState.args = update.args;
       }
+      if (update.retryOf !== undefined) {
+        toolState.retryOf = update.retryOf;
+      }
+      if (update.inputDigest !== undefined) {
+        toolState.inputDigest = update.inputDigest;
+      }
       if (toolState.state !== "approval-requested") {
         toolState.state = "input-available";
       }

@@ -9,6 +9,7 @@ import {
 import type { StoreGet, StoreSet } from "../app/store.helpers";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
+import { throwIfOperationAborted } from "../app/store.helpers/operationIntent";
 
 export type ComposerAttachmentFile = {
   filename: string;
@@ -70,6 +71,7 @@ type DesktopUploadAttempt =
 
 type ResolveComposerAttachmentOptions = {
   threadId?: string | null;
+  signal?: AbortSignal;
 };
 
 export async function resolveComposerAttachmentsForWorkspace(
@@ -84,6 +86,7 @@ export async function resolveComposerAttachmentsForWorkspace(
   const skippedNotes: string[] = [];
 
   for (const attachment of attachments) {
+    throwIfOperationAborted(options.signal);
     const uploadValidationMessage = getAttachmentUploadValidationMessage(attachment.size);
     if (uploadValidationMessage) {
       skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, uploadValidationMessage));
@@ -95,6 +98,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
     if (canInline) {
       const buffer = await attachment.file.arrayBuffer();
+      throwIfOperationAborted(options.signal);
       const base64 = encodeArrayBufferToBase64(buffer);
       inlineByteLength += attachment.size;
       resolvedAttachments.push({
@@ -111,6 +115,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       attachment,
       options.threadId ?? null,
     );
+    throwIfOperationAborted(options.signal);
     let desktopUploadError: string | null = null;
     if (desktopUpload.attempted) {
       if ("uploaded" in desktopUpload) {
@@ -126,6 +131,7 @@ export async function resolveComposerAttachmentsForWorkspace(
     }
 
     const buffer = await attachment.file.arrayBuffer();
+    throwIfOperationAborted(options.signal);
     const base64 = encodeArrayBufferToBase64(buffer);
     const uploaded = await uploadJsonRpcWorkspaceFile(
       get,
@@ -134,6 +140,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       attachment.filename,
       base64,
     );
+    throwIfOperationAborted(options.signal);
     if (!uploaded.path) {
       const reason = desktopUploadError
         ? `${desktopUploadError}; upload to the project folder failed`

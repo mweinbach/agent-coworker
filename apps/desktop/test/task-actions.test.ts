@@ -11,6 +11,10 @@ import {
   createTaskActions,
   type TaskActionDependencies,
 } from "../src/app/store.actions/tasks";
+import {
+  __internalOperationIntent,
+  invalidateNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 import type { ThreadRecord } from "../src/app/types";
 
 const NOW = "2026-06-18T12:00:00.000Z";
@@ -68,6 +72,32 @@ function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
     activity: [],
     latestCheckpoint: null,
     ...overrides,
+  };
+}
+
+function taskCreationInput() {
+  return {
+    idempotencyKey: "manual-task-1",
+    title: "Implement task mode",
+    objective: "Add explicit task mode without changing standard chat.",
+    context: "The chat flow must remain available alongside managed tasks.",
+    requirements: [
+      {
+        kind: "acceptance_criterion" as const,
+        text: "A complete task opens in the work-first task view.",
+      },
+    ],
+    workItems: [
+      {
+        key: "implement",
+        title: "Implement task mode",
+        description: "Build and verify the managed task flow.",
+        dependsOn: [],
+        expectedOutputs: ["Working task mode"],
+      },
+    ],
+    decisions: [],
+    reviewRequired: true,
   };
 }
 
@@ -263,6 +293,7 @@ describe("desktop task actions", () => {
 
   beforeEach(() => {
     __internalTaskActions.reset();
+    __internalOperationIntent.reset();
     setRendererPlatform("win32");
     notificationRouter = null;
     requestJsonRpc.mockClear();
@@ -270,6 +301,34 @@ describe("desktop task actions", () => {
 
   afterEach(() => {
     setRendererPlatform(null);
+  });
+
+  test("a delayed task is recorded without stealing newer navigation", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    const createGate = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await createGate.promise;
+      return { task: taskRecord(), thread: { id: "task-session-1" } };
+    });
+
+    const pending = actions.startTask({
+      workspaceId: "ws-1",
+      task: taskCreationInput(),
+    });
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    harness.state.selectedThreadId = "chat-1";
+    harness.state.selectedTaskId = null;
+    createGate.resolve();
+
+    await expect(pending).resolves.toMatchObject({ id: "task-1" });
+    expect(harness.state.view).toBe("settings");
+    expect(harness.state.selectedThreadId).toBe("chat-1");
+    expect(harness.state.selectedTaskId).toBeNull();
+    expect(harness.state.tasksById["task-1"]?.title).toBe("Implement task mode");
+    expect(harness.reconnectThread).not.toHaveBeenCalled();
   });
 
   test("creates an explicit task thread without replacing standard chat", async () => {

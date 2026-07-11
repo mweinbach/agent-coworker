@@ -3,6 +3,10 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { type TaskCreationInput, taskCreationInputSchema } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import {
+  beginCreationOperationIntent,
+  type CreationOperationPhase,
+} from "../../app/store.helpers/operationIntent";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -36,6 +40,25 @@ type DraftWorkItem = {
   dependencies: string;
   expectedOutputs: string;
 };
+
+function taskCreationPhaseLabel(phase: CreationOperationPhase | null): string {
+  switch (phase) {
+    case "preparing":
+      return "Preparing task...";
+    case "starting-server":
+      return "Starting the project server...";
+    case "creating":
+      return "Creating task...";
+    case "processing-attachments":
+      return "Processing attachments...";
+    case null:
+      return "Create and start task";
+    default: {
+      const exhaustive: never = phase;
+      return exhaustive;
+    }
+  }
+}
 
 function lines(value: string): string[] {
   return value
@@ -100,6 +123,8 @@ export function NewTaskLanding() {
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
+  const submissionControllerRef = useRef<AbortController | null>(null);
   const previousNewTaskWorkspaceId = useRef(newTaskWorkspaceId);
   const previousNewTaskWorkspaceRequestId = useRef(newTaskWorkspaceRequestId);
 
@@ -207,10 +232,31 @@ export function NewTaskLanding() {
       return;
     }
     setValidationError(null);
+    const operationIntent = beginCreationOperationIntent();
+    const controller = new AbortController();
+    submissionControllerRef.current = controller;
+    setCreationPhase("preparing");
     setSubmitting(true);
     try {
-      await startTask({ workspaceId, task: parsed.data });
+      const created = await startTask({
+        workspaceId,
+        task: parsed.data,
+        intent: operationIntent,
+        signal: controller.signal,
+        onPhase: setCreationPhase,
+      });
+      if (controller.signal.aborted) {
+        setValidationError(
+          created
+            ? "Task started in the background before cancellation completed. Your brief was preserved."
+            : "Task creation cancelled. Your brief was preserved.",
+        );
+      }
     } finally {
+      if (submissionControllerRef.current === controller) {
+        submissionControllerRef.current = null;
+      }
+      setCreationPhase(null);
       setSubmitting(false);
     }
   };
@@ -527,10 +573,21 @@ export function NewTaskLanding() {
                   {validationError || taskError ? (
                     <FieldError>{validationError ?? taskError}</FieldError>
                   ) : null}
-                  <Button type="submit" className="w-full" disabled={!canSubmit}>
-                    Create and start task
-                    <ArrowRightIcon data-icon="inline-end" />
-                  </Button>
+                  <div className="flex gap-2">
+                    {submitting ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => submissionControllerRef.current?.abort()}
+                      >
+                        Cancel
+                      </Button>
+                    ) : null}
+                    <Button type="submit" className="flex-1" disabled={!canSubmit}>
+                      {taskCreationPhaseLabel(creationPhase)}
+                      {!submitting ? <ArrowRightIcon data-icon="inline-end" /> : null}
+                    </Button>
+                  </div>
                 </FieldGroup>
               </CardContent>
             </Card>

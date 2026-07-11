@@ -57,6 +57,7 @@ import {
   type BootstrapRunContext,
   createBootstrapCoordinator,
 } from "../store.helpers/bootstrapCoordinator";
+import { invalidateNavigationIntent } from "../store.helpers/operationIntent";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionContext, getThreadSelectionIntent } from "../threadSelectionContext";
@@ -1170,6 +1171,7 @@ export function createBootstrapActions(
       }),
 
     openSettings: (page) => {
+      invalidateNavigationIntent();
       set((s) => ({
         view: "settings",
         settingsPage: normalizeSettingsPageId(
@@ -1183,6 +1185,7 @@ export function createBootstrapActions(
     },
 
     closeSettings: () => {
+      invalidateNavigationIntent();
       set((s) => ({
         view: s.lastNonSettingsView === "settings" ? "chat" : s.lastNonSettingsView,
       }));

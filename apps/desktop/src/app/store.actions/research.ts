@@ -25,6 +25,14 @@ import {
   registerWorkspaceJsonRpcRouter,
   requestJsonRpc,
 } from "../store.helpers/jsonRpcSocket";
+import {
+  beginCreationOperationIntent,
+  type CreationOperationControl,
+  invalidateNavigationIntent,
+  isCreationNavigationIntentCurrent,
+  isOperationAbortError,
+  throwIfOperationAborted,
+} from "../store.helpers/operationIntent";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -537,7 +545,11 @@ export function createResearchActions(
     }
   };
 
-  const ensureResearchTransportWorkspace = async (): Promise<string | null> => {
+  const ensureResearchTransportWorkspace = async (
+    options: CreationOperationControl = {},
+  ): Promise<string | null> => {
+    const canNavigate = () => !options.intent || isCreationNavigationIntentCurrent(options.intent);
+    throwIfOperationAborted(options.signal);
     let state = get();
     let workspaceId = state.researchTransportWorkspaceId;
     if (!workspaceId || !state.workspaces.some((workspace) => workspace.id === workspaceId)) {
@@ -553,7 +565,8 @@ export function createResearchActions(
         );
         return null;
       }
-      await get().addWorkspace();
+      await get().addWorkspace({ intent: options.intent });
+      throwIfOperationAborted(options.signal);
       state = get();
       workspaceId = state.selectedWorkspaceId ?? state.workspaces[0]?.id ?? null;
       if (!workspaceId) {
@@ -565,15 +578,17 @@ export function createResearchActions(
     bindResearchWorkspace(workspaceId);
     deps.ensureWorkspaceRuntime(get, set, workspaceId);
     await deps.ensureServerRunning(get, set, workspaceId);
+    throwIfOperationAborted(options.signal);
     deps.ensureControlSocket(get, set, workspaceId);
     const ready = await deps.waitForControlSession(get, set, workspaceId);
+    throwIfOperationAborted(options.signal);
     if (!ready) {
       throw new Error("Unable to connect to the research transport workspace.");
     }
 
     set((s) => ({
       researchTransportWorkspaceId: workspaceId,
-      selectedWorkspaceId: s.selectedWorkspaceId ?? workspaceId,
+      ...(canNavigate() ? { selectedWorkspaceId: s.selectedWorkspaceId ?? workspaceId } : {}),
     }));
     return workspaceId;
   };
@@ -600,14 +615,21 @@ export function createResearchActions(
       return {
         researchById,
         researchOrder,
-        selectedResearchId: opts?.select
-          ? research.id
-          : normalizeSelectedResearchId(s.selectedResearchId, researchOrder),
+        selectedResearchId:
+          opts?.select === true
+            ? research.id
+            : opts?.select === false
+              ? s.selectedResearchId
+              : normalizeSelectedResearchId(s.selectedResearchId, researchOrder),
       };
     });
   };
 
-  const ensureResearchSubscription = async (workspaceId: string, research: ResearchRecord) => {
+  const ensureResearchSubscription = async (
+    workspaceId: string,
+    research: ResearchRecord,
+    canSelect?: () => boolean,
+  ) => {
     if (
       get().researchSubscribedIds.includes(research.id) ||
       isResearchTerminalStatus(research.status)
@@ -620,7 +642,7 @@ export function createResearchActions(
     });
     const subscribedResearch = result.research ?? research;
     if (result.research) {
-      applyResearchRecord(result.research);
+      applyResearchRecord(result.research, canSelect ? { select: canSelect() } : undefined);
     }
     if (isResearchTerminalStatus(subscribedResearch.status)) {
       return;
@@ -632,11 +654,17 @@ export function createResearchActions(
     }));
   };
 
-  const uploadFiles = async (workspaceId: string, files: File[] | undefined): Promise<string[]> => {
+  const uploadFiles = async (
+    workspaceId: string,
+    files: File[] | undefined,
+    signal?: AbortSignal,
+  ): Promise<string[]> => {
     const fileIds: string[] = [];
     try {
       for (const file of files ?? []) {
+        throwIfOperationAborted(signal);
         const payload = await serializeFile(file);
+        throwIfOperationAborted(signal);
         const result = await requestResearchResult(
           deps,
           get,
@@ -646,6 +674,7 @@ export function createResearchActions(
           payload,
         );
         fileIds.push(result.file.fileId);
+        throwIfOperationAborted(signal);
       }
       return fileIds;
     } catch (error) {
@@ -741,6 +770,7 @@ export function createResearchActions(
         set({ researchListLoading: false, researchListError: null });
         return;
       }
+      invalidateNavigationIntent();
       set({
         view: "research",
         lastNonSettingsView: "research",
@@ -801,6 +831,7 @@ export function createResearchActions(
     },
 
     selectResearch: async (researchId) => {
+      invalidateNavigationIntent();
       set({ selectedResearchId: researchId });
       if (!researchId) {
         return;
@@ -826,26 +857,40 @@ export function createResearchActions(
       }
     },
 
-    startResearch: async ({ input, title, files, settings }) => {
+    startResearch: async ({ input, title, files, settings, intent, signal, onPhase }) => {
       if (!hasGoogleResearchAccess()) {
         notifyMissingGoogleApiKey();
         return null;
       }
+      const operationIntent = intent ?? beginCreationOperationIntent();
+      const canNavigate = () => isCreationNavigationIntentCurrent(operationIntent);
+      const reportPhase = onPhase ?? (() => {});
       let workspaceId: string | null = null;
       let attachedFileIds: string[] = [];
       let startRequested = false;
       try {
-        workspaceId = await ensureResearchTransportWorkspace();
+        reportPhase("starting-server");
+        workspaceId = await ensureResearchTransportWorkspace({
+          intent: operationIntent,
+          signal,
+        });
         if (!workspaceId) {
           return null;
         }
         set(() => ({
-          view: "research",
-          lastNonSettingsView: "research",
           researchTransportWorkspaceId: workspaceId,
+          ...(canNavigate()
+            ? {
+                view: "research" as const,
+                lastNonSettingsView: "research" as const,
+              }
+            : {}),
         }));
-        deps.syncDesktopStateCache(get);
-        attachedFileIds = await uploadFiles(workspaceId, files);
+        if (canNavigate()) deps.syncDesktopStateCache(get);
+        reportPhase(files && files.length > 0 ? "processing-attachments" : "creating");
+        attachedFileIds = await uploadFiles(workspaceId, files, signal);
+        throwIfOperationAborted(signal);
+        reportPhase("creating");
         startRequested = true;
         const result = await requestResearchResult(deps, get, set, workspaceId, "research/start", {
           input,
@@ -856,10 +901,22 @@ export function createResearchActions(
           },
           ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
         });
-        applyResearchRecord(result.research, { select: true });
-        await ensureResearchSubscription(workspaceId, result.research);
+        applyResearchRecord(result.research, { select: canNavigate() && signal?.aborted !== true });
+        await ensureResearchSubscription(
+          workspaceId,
+          result.research,
+          () => canNavigate() && signal?.aborted !== true,
+        );
         return result.research;
       } catch (error) {
+        if (
+          isOperationAbortError(error) &&
+          workspaceId &&
+          !startRequested &&
+          attachedFileIds.length > 0
+        ) {
+          await discardUploadedFiles(workspaceId, attachedFileIds);
+        }
         if (
           workspaceId &&
           startRequested &&
@@ -868,6 +925,7 @@ export function createResearchActions(
         ) {
           await discardUploadedFiles(workspaceId, attachedFileIds);
         }
+        if (isOperationAbortError(error)) return null;
         notify(
           "error",
           "Unable to start research",

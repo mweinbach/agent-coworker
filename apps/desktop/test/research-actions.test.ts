@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { MAX_RESEARCH_UPLOAD_BYTES } from "../../../src/server/research/types";
+import {
+  __internalOperationIntent,
+  invalidateNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 
 const { createResearchActions, __internalResearchActionBindings } = await import(
   "../src/app/store.actions/research"
@@ -47,6 +51,26 @@ function researchUploadFile(fileId: string) {
     mimeType: "text/plain",
     path: `/tmp/${fileId}.txt`,
     uploadedAt: "2026-04-21T00:00:00.000Z",
+  };
+}
+
+function completedResearch(id: string, title: string) {
+  return {
+    id,
+    title,
+    status: "completed" as const,
+    outputsMarkdown: "Done",
+    lastEventId: null,
+    updatedAt: "2026-04-21T00:00:00.000Z",
+    parentResearchId: null,
+    prompt: title,
+    interactionId: `interaction-${id}`,
+    inputs: { files: [] },
+    settings: { planApproval: false },
+    thoughtSummaries: [],
+    sources: [],
+    createdAt: "2026-04-21T00:00:00.000Z",
+    error: null,
   };
 }
 
@@ -118,6 +142,7 @@ describe("research actions", () => {
 
   beforeEach(() => {
     __internalResearchActionBindings.reset();
+    __internalOperationIntent.reset();
     requestJsonRpcMock.mockReset();
     requestJsonRpcMock.mockImplementation(async () => ({
       path: "/tmp/report.pdf",
@@ -125,6 +150,63 @@ describe("research actions", () => {
     }));
     saveExportedFileMock.mockReset();
     saveExportedFileMock.mockImplementation(async () => "/Users/test/Downloads/report.pdf");
+  });
+
+  test("a delayed research result is recorded without stealing newer navigation", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const startGate = Promise.withResolvers<ReturnType<typeof completedResearch>>();
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/start") {
+        return { research: await startGate.promise };
+      }
+      return {};
+    });
+
+    const pending = actions.startResearch({ input: "Investigate intent ownership." });
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    harness.state.selectedResearchId = "research-1";
+    startGate.resolve(completedResearch("research-2", "Background result"));
+
+    await expect(pending).resolves.toMatchObject({ id: "research-2" });
+    expect(harness.state.view).toBe("settings");
+    expect(harness.state.selectedResearchId).toBe("research-1");
+    expect(harness.state.researchById["research-2"]?.title).toBe("Background result");
+  });
+
+  test("a delayed research subscription refresh preserves newer navigation", async () => {
+    const harness = createHarness();
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const subscriptionStarted = Promise.withResolvers<void>();
+    const subscriptionGate = Promise.withResolvers<ReturnType<typeof completedResearch>>();
+    const runningResearch = {
+      ...completedResearch("research-2", "Background result"),
+      status: "running" as const,
+      outputsMarkdown: "",
+    };
+    requestJsonRpcMock.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "research/start") {
+        return { research: runningResearch };
+      }
+      if (method === "research/subscribe") {
+        subscriptionStarted.resolve();
+        return { research: await subscriptionGate.promise };
+      }
+      return {};
+    });
+
+    const pending = actions.startResearch({ input: "Investigate subscription ownership." });
+    await subscriptionStarted.promise;
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    harness.state.selectedResearchId = "research-1";
+    subscriptionGate.resolve(completedResearch("research-2", "Refreshed background result"));
+
+    await expect(pending).resolves.toMatchObject({ id: "research-2" });
+    expect(harness.state.view).toBe("settings");
+    expect(harness.state.selectedResearchId).toBe("research-1");
+    expect(harness.state.researchById["research-2"]?.title).toBe("Refreshed background result");
   });
 
   test("exportResearch saves with a sanitized title-derived filename and clears pending state", async () => {

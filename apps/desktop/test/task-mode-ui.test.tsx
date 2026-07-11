@@ -552,19 +552,21 @@ describe("desktop task mode UI", () => {
           await Promise.resolve();
         });
 
-        expect(startTask).toHaveBeenCalledWith({
-          workspaceId: "ws-2",
-          task: expect.objectContaining({
-            title: "Ship dashboard hardening",
-            workItems: [
-              expect.objectContaining({
-                key: "step-1",
-                title: "Implement the invariant",
-                expectedOutputs: ["Passing regression tests"],
-              }),
-            ],
+        expect(startTask).toHaveBeenCalledWith(
+          expect.objectContaining({
+            workspaceId: "ws-2",
+            task: expect.objectContaining({
+              title: "Ship dashboard hardening",
+              workItems: [
+                expect.objectContaining({
+                  key: "step-1",
+                  title: "Implement the invariant",
+                  expectedOutputs: ["Passing regression tests"],
+                }),
+              ],
+            }),
           }),
-        });
+        );
 
         await act(async () => root.unmount());
       } finally {
@@ -657,15 +659,17 @@ describe("desktop task mode UI", () => {
           submitForm(harness, container.querySelector("form"));
           await Promise.resolve();
         });
-        expect(startTask).toHaveBeenCalledWith({
-          workspaceId: "ws-1",
-          task: expect.objectContaining({
-            workItems: [
-              expect.objectContaining({ key: "step-1", dependsOn: [] }),
-              expect.objectContaining({ key: "step-3", dependsOn: ["step-1"] }),
-            ],
+        expect(startTask).toHaveBeenCalledWith(
+          expect.objectContaining({
+            workspaceId: "ws-1",
+            task: expect.objectContaining({
+              workItems: [
+                expect.objectContaining({ key: "step-1", dependsOn: [] }),
+                expect.objectContaining({ key: "step-3", dependsOn: ["step-1"] }),
+              ],
+            }),
           }),
-        });
+        );
 
         await act(async () => root.unmount());
       } finally {

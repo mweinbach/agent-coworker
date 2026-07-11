@@ -68,6 +68,10 @@ import {
   disposeWorkspaceJsonRpcSocketState,
   reactivateWorkspaceJsonRpcSocketState,
 } from "./store.helpers/jsonRpcSocket";
+import type {
+  CreationOperationControl,
+  CreationOperationIntent,
+} from "./store.helpers/operationIntent";
 import {
   persist,
   persistNow,
@@ -319,26 +323,31 @@ export type AppStoreState = {
   closeSettings: () => void;
   setSettingsPage: (page: SettingsPageId) => void;
 
-  addWorkspace: () => Promise<void>;
+  addWorkspace: (options?: { intent?: CreationOperationIntent }) => Promise<void>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
-  selectWorkspace: (workspaceId: string, options?: AbortableActionOptions) => Promise<void>;
+  selectWorkspace: (
+    workspaceId: string,
+    options?: AbortableActionOptions & { intent?: CreationOperationIntent },
+  ) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
   setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
-  newThread: (opts?: {
-    workspaceId?: string;
-    scope?: "oneOff" | "project";
-    titleHint?: string;
-    firstMessage?: string;
-    references?: import("../lib/wsProtocol").TurnReference[];
-    mode?: "draft" | "session";
-    attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
-    attachmentFiles?: File[];
-    provider?: ProviderName;
-    model?: string;
-    reasoningEffort?: ReasoningEffortValue;
-    draftSubmission?: ComposerDraftRevision;
-  }) => Promise<boolean>;
+  newThread: (
+    opts?: {
+      workspaceId?: string;
+      scope?: "oneOff" | "project";
+      titleHint?: string;
+      firstMessage?: string;
+      references?: import("../lib/wsProtocol").TurnReference[];
+      mode?: "draft" | "session";
+      attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+      attachmentFiles?: File[];
+      provider?: ProviderName;
+      model?: string;
+      reasoningEffort?: ReasoningEffortValue;
+      draftSubmission?: ComposerDraftRevision;
+    } & CreationOperationControl,
+  ) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
     target?: NewChatLandingTarget;
@@ -465,13 +474,20 @@ export type AppStoreState = {
   }>;
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string, options?: AbortableActionOptions) => Promise<void>;
-  startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
+  startTask: (
+    opts: { workspaceId: string; task: TaskCreationInput } & CreationOperationControl,
+  ) => Promise<TaskRecord | null>;
   selectTask: (
     taskId: string,
     options?: AbortableActionOptions & { preserveView?: boolean },
   ) => Promise<void>;
   selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
-  createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
+  createTaskThread: (
+    taskId: string,
+    title: string,
+    workItemId?: string,
+    options?: CreationOperationControl,
+  ) => Promise<void>;
   updateTaskBrief: (
     taskId: string,
     patch: { title?: string; objective?: string },
@@ -567,12 +583,14 @@ export type AppStoreState = {
 
   refreshResearchList: () => Promise<void>;
   selectResearch: (researchId: string | null) => Promise<void>;
-  startResearch: (opts: {
-    input: string;
-    title?: string;
-    files?: File[];
-    settings?: Partial<ResearchSettingsState>;
-  }) => Promise<ResearchCard | null>;
+  startResearch: (
+    opts: {
+      input: string;
+      title?: string;
+      files?: File[];
+      settings?: Partial<ResearchSettingsState>;
+    } & CreationOperationControl,
+  ) => Promise<ResearchCard | null>;
   cancelResearch: (researchId: string) => Promise<void>;
   renameResearch: (researchId: string, title: string) => Promise<void>;
   deleteResearch: (researchId: string) => Promise<boolean>;

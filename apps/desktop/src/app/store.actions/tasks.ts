@@ -32,6 +32,13 @@ import {
   syncDesktopStateCache,
 } from "../store.helpers";
 import { registerWorkspaceJsonRpcRouter, requestJsonRpc } from "../store.helpers/jsonRpcSocket";
+import {
+  beginCreationOperationIntent,
+  invalidateNavigationIntent,
+  isCreationNavigationIntentCurrent,
+  isOperationAbortError,
+  throwIfOperationAborted,
+} from "../store.helpers/operationIntent";
 import { isOneOffChatWorkspace, type ThreadRecord } from "../types";
 
 const taskRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -290,6 +297,7 @@ function ensureTaskRouter(
       upsertTask(set, get, task, deps);
       const mainThread = task.threads[0];
       const workspaceId = workspaceIdForTask(get, task);
+      invalidateNavigationIntent();
       set({
         selectedWorkspaceId: workspaceId ?? get().selectedWorkspaceId,
         selectedTaskId: task.id,
@@ -514,6 +522,7 @@ export function createTaskActions(
   return {
     openNewTask: async (workspaceId) => {
       if (get().desktopFeatureFlags.tasks !== true) return;
+      invalidateNavigationIntent();
       const project =
         (workspaceId
           ? get().workspaces.find((item) => item.id === workspaceId)
@@ -590,13 +599,20 @@ export function createTaskActions(
       }
     },
 
-    startTask: async ({ workspaceId, task: rawTask }) => {
+    startTask: async ({ workspaceId, task: rawTask, intent, signal, onPhase }) => {
       if (get().desktopFeatureFlags.tasks !== true) return null;
       const workspace = get().workspaces.find((item) => item.id === workspaceId);
       if (!workspace || isOneOffChatWorkspace(workspace)) return null;
+      const operationIntent = intent ?? beginCreationOperationIntent();
+      const canNavigate = () =>
+        isCreationNavigationIntentCurrent(operationIntent) && signal?.aborted !== true;
+      const reportPhase = onPhase ?? (() => {});
       const task: TaskCreationInput = rawTask;
       try {
+        reportPhase("starting-server");
         await ensureTaskTransport(get, set, workspaceId, deps);
+        throwIfOperationAborted(signal);
+        reportPhase("creating");
         const result = await deps.requestJsonRpc(get, set, workspaceId, "task/create", {
           cwd: workspace.path,
           ...task,
@@ -605,15 +621,19 @@ export function createTaskActions(
         if (!parsed.success) throw new Error("Invalid task/create response");
         upsertTask(set, get, parsed.data, deps, result?.thread);
         const mainThread = parsed.data.threads[0];
-        set({
-          selectedWorkspaceId: workspaceId,
-          selectedTaskId: parsed.data.id,
-          selectedThreadId: mainThread?.sessionId ?? null,
-          newTaskWorkspaceId: null,
-          view: "task",
-          taskError: null,
-        });
-        if (mainThread) {
+        set(
+          canNavigate()
+            ? {
+                selectedWorkspaceId: workspaceId,
+                selectedTaskId: parsed.data.id,
+                selectedThreadId: mainThread?.sessionId ?? null,
+                newTaskWorkspaceId: null,
+                view: "task",
+                taskError: null,
+              }
+            : { taskError: null },
+        );
+        if (mainThread && canNavigate()) {
           await get().reconnectThread(mainThread.sessionId, undefined, {
             skipWorkspaceSelect: true,
             refreshSnapshot: true,
@@ -622,6 +642,7 @@ export function createTaskActions(
         deps.syncDesktopStateCache(get);
         return parsed.data;
       } catch (error) {
+        if (isOperationAbortError(error)) return null;
         notifyError(set, "Unable to create task", error);
         return null;
       }
@@ -630,6 +651,7 @@ export function createTaskActions(
     selectTask: async (taskId, options = {}) => {
       const isCurrent = () => options.signal?.aborted !== true;
       if (!isCurrent()) return;
+      invalidateNavigationIntent();
       if (get().desktopFeatureFlags.tasks !== true) return;
       const summaryEntry = Object.entries(get().taskSummariesByWorkspaceId).find(([, tasks]) =>
         tasks.some((task) => task.id === taskId),
@@ -683,6 +705,7 @@ export function createTaskActions(
       const task = get().tasksById[taskId];
       const thread = task?.threads.find((item) => item.id === taskThreadId);
       if (!task || !thread) return;
+      invalidateNavigationIntent();
       set({ selectedTaskId: taskId, selectedThreadId: thread.sessionId, view: "task" });
       await get().reconnectThread(thread.sessionId, undefined, {
         skipWorkspaceSelect: true,
@@ -690,8 +713,11 @@ export function createTaskActions(
       });
     },
 
-    createTaskThread: async (taskId, title, workItemId) => {
+    createTaskThread: async (taskId, title, workItemId, options = {}) => {
       if (get().desktopFeatureFlags.tasks !== true) return;
+      const operationIntent = options.intent ?? beginCreationOperationIntent();
+      const canNavigate = () =>
+        isCreationNavigationIntentCurrent(operationIntent) && options.signal?.aborted !== true;
       const task = get().tasksById[taskId];
       if (!task) return;
       const workspaceId = workspaceIdForTask(get, task);
@@ -700,7 +726,10 @@ export function createTaskActions(
         : null;
       if (!workspaceId || !workspace) return;
       try {
+        options.onPhase?.("starting-server");
         await ensureTaskTransport(get, set, workspaceId, deps);
+        throwIfOperationAborted(options.signal);
+        options.onPhase?.("creating");
         const result = await deps.requestJsonRpc(get, set, workspaceId, "task/thread/create", {
           cwd: workspace.path,
           taskId,
@@ -713,11 +742,12 @@ export function createTaskActions(
         upsertTask(set, get, parsed.data, deps, result?.thread);
         const previousIds = new Set(task.threads.map((item) => item.id));
         const created = parsed.data.threads.find((item) => !previousIds.has(item.id));
-        if (created) {
+        if (created && canNavigate()) {
           set({ selectedThreadId: created.sessionId, selectedTaskId: taskId, view: "task" });
           await get().reconnectThread(created.sessionId, undefined, { skipWorkspaceSelect: true });
         }
       } catch (error) {
+        if (isOperationAbortError(error)) return;
         notifyError(set, "Unable to create task thread", error);
       }
     },

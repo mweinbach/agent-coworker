@@ -46,6 +46,7 @@ import type {
   TurnReference,
 } from "../lib/wsProtocol";
 import type { ComposerDraftRevision, PersistedComposerDrafts } from "./composerDrafts";
+import type { PersistedCreationDrafts } from "./creationDrafts";
 import type {
   ReasoningEffortValue,
   WorkspaceProviderOptions,
@@ -394,6 +395,7 @@ export type PersistedState = {
   providerUiState?: PersistedProviderUiState;
   onboarding?: PersistedOnboardingState;
   composerDrafts?: PersistedComposerDrafts;
+  creationDrafts?: PersistedCreationDrafts;
 };
 
 type TranscriptDirection = "server" | "client";

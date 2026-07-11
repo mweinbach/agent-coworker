@@ -20,7 +20,6 @@ import {
   MessageComposerTools,
 } from "../composer/MessageComposer";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
-import { useResearchAttachments } from "./useResearchAttachments";
 
 function researchPhaseLabel(phase: CreationOperationPhase | null): string | null {
   switch (phase) {
@@ -43,31 +42,44 @@ function researchPhaseLabel(phase: CreationOperationPhase | null): string | null
 
 export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void }) {
   const startResearch = useAppStore((s) => s.startResearch);
-  const [input, setInput] = useState("");
+  const draft = useAppStore((s) => s.researchCreationDraft);
+  const creationError = useAppStore((s) =>
+    s.researchCreationError?.revision === s.researchCreationDraft.revision
+      ? s.researchCreationError.message
+      : null,
+  );
+  const setResearchCreationInput = useAppStore((s) => s.setResearchCreationInput);
+  const addResearchCreationAttachments = useAppStore((s) => s.addResearchCreationAttachments);
+  const removeResearchCreationAttachment = useAppStore((s) => s.removeResearchCreationAttachment);
+  const setResearchCreationError = useAppStore((s) => s.setResearchCreationError);
   const [submitting, setSubmitting] = useState(false);
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
-  const [creationError, setCreationError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const submissionControllerRef = useRef<AbortController | null>(null);
-  const { attachments, attachmentPreviews, addFiles, removeAttachment, clearAttachments } =
-    useResearchAttachments();
+  const attachmentPreviews = draft.attachments.map((attachment) => ({
+    filename: attachment.filename,
+    mimeType: attachment.mimeType,
+    previewUrl: attachment.previewUrl,
+  }));
 
   const submit = async () => {
-    const trimmed = input.trim();
+    const trimmed = draft.text.trim();
     if (!trimmed || submitting) {
       return;
     }
+    const draftRevision = draft.revision;
     const operationIntent = beginCreationOperationIntent();
     const controller = new AbortController();
     submissionControllerRef.current = controller;
-    setCreationError(null);
+    setResearchCreationError(draftRevision, null);
     setCreationPhase("preparing");
     setSubmitting(true);
     try {
       const created = await startResearch({
         input: trimmed,
-        files: attachments.map((attachment) => attachment.file),
+        files: draft.attachments.map((attachment) => attachment.file),
+        draftRevision,
         intent: operationIntent,
         signal: controller.signal,
         onPhase: setCreationPhase,
@@ -77,18 +89,8 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         !controller.signal.aborted &&
         isCreationNavigationIntentCurrent(operationIntent)
       ) {
-        setInput("");
-        clearAttachments();
         setSettingsOpen(false);
         onSubmitted?.();
-      } else if (!created || controller.signal.aborted) {
-        setCreationError(
-          controller.signal.aborted
-            ? created
-              ? "Research started in the background before cancellation completed. Your draft was preserved."
-              : "Research creation cancelled. Your draft was preserved."
-            : "Unable to start research. Your draft was preserved.",
-        );
       }
     } finally {
       if (submissionControllerRef.current === controller) {
@@ -112,7 +114,14 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         fileDrop={{
           disabled: submitting,
           onFiles: async (files) => {
-            addFiles(files);
+            try {
+              await addResearchCreationAttachments(files);
+            } catch (error) {
+              setResearchCreationError(
+                draft.revision,
+                error instanceof Error ? error.message : String(error),
+              );
+            }
           },
         }}
       >
@@ -124,7 +133,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         >
           <MessageComposerAttachments
             attachments={attachmentPreviews}
-            onRemove={submitting ? () => {} : removeAttachment}
+            onRemove={submitting ? () => {} : removeResearchCreationAttachment}
           />
 
           <MessageComposerStatus>
@@ -140,10 +149,9 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
               </div>
             ) : null}
             <MessageComposerTextarea
-              value={input}
+              value={draft.text}
               onChange={(event) => {
-                setCreationError(null);
-                setInput(event.target.value);
+                setResearchCreationInput(event.target.value);
               }}
               placeholder="Investigate a market, compare vendors, summarize a benchmark run, or draft a cited brief."
               rows={4}
@@ -188,7 +196,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
             ) : null}
             <MessageComposerSubmit
               status={submitting ? "pending" : "ready"}
-              disabled={!input.trim()}
+              disabled={!draft.text.trim()}
             />
           </MessageComposerFooter>
         </MessageComposerForm>
@@ -204,7 +212,12 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         disabled={submitting}
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];
-          addFiles(files);
+          void addResearchCreationAttachments(files).catch((error: unknown) => {
+            setResearchCreationError(
+              draft.revision,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
           event.currentTarget.value = "";
         }}
       />

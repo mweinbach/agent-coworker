@@ -7,6 +7,12 @@ import {
   type ResearchRecord,
 } from "../../../../../src/server/research/types";
 import { saveExportedFile } from "../../lib/desktopCommands";
+import {
+  type ComposerDraftAttachment,
+  createComposerDraftAttachment,
+  createEmptyComposerDraft,
+  revokeComposerDraftAttachmentPreviews,
+} from "../composerDrafts";
 import { hasGoogleApiKeyForResearch } from "../researchAvailability";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
@@ -32,7 +38,9 @@ import {
   isCreationNavigationIntentCurrent,
   isOperationAbortError,
   throwIfOperationAborted,
+  waitForOperation,
 } from "../store.helpers/operationIntent";
+import { persist } from "../store.helpers/persistence";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -61,6 +69,7 @@ type ResearchActionDeps = {
   ensureWorkspaceRuntime: typeof ensureWorkspaceRuntime;
   syncDesktopStateCache: typeof syncDesktopStateCache;
   waitForControlSession: typeof waitForControlSession;
+  persist: typeof persist;
 };
 
 const defaultResearchActionDeps: ResearchActionDeps = {
@@ -73,6 +82,7 @@ const defaultResearchActionDeps: ResearchActionDeps = {
   ensureWorkspaceRuntime,
   syncDesktopStateCache,
   waitForControlSession,
+  persist,
 };
 
 type ResearchResultMethod = keyof typeof jsonRpcResearchResultSchemas;
@@ -87,8 +97,11 @@ async function requestResearchResult<M extends ResearchResultMethod>(
   workspaceId: string,
   method: M,
   params: unknown,
+  options: { signal?: AbortSignal } = {},
 ): Promise<ResearchResult<M>> {
-  const result = await deps.requestJsonRpc(get, set, workspaceId, method, params);
+  const result = options.signal
+    ? await deps.requestJsonRpc(get, set, workspaceId, method, params, options)
+    : await deps.requestJsonRpc(get, set, workspaceId, method, params);
   return parseJsonRpcResult(
     method,
     jsonRpcResearchResultSchemas[method],
@@ -208,7 +221,10 @@ function buildResearchExportFileName(
   return `${baseName}.${extension}`;
 }
 
-async function serializeFile(file: File): Promise<{
+async function serializeFile(
+  file: File,
+  signal?: AbortSignal,
+): Promise<{
   filename: string;
   mimeType: string;
   contentBase64: string;
@@ -216,7 +232,8 @@ async function serializeFile(file: File): Promise<{
   if (file.size > MAX_RESEARCH_UPLOAD_BYTES) {
     throw new Error(`Research uploads are limited to ${MAX_RESEARCH_UPLOAD_BYTES} bytes.`);
   }
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await waitForOperation(file.arrayBuffer(), signal);
+  throwIfOperationAborted(signal);
   return {
     filename: file.name || "upload.bin",
     mimeType: file.type || "application/octet-stream",
@@ -239,6 +256,11 @@ export function createResearchActions(
   | "deleteResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
+  | "setResearchCreationInput"
+  | "addResearchCreationAttachments"
+  | "removeResearchCreationAttachment"
+  | "setResearchCreationError"
+  | "clearResearchCreationDraft"
   | "exportResearch"
   | "approveResearchPlan"
   | "refineResearchPlan"
@@ -268,6 +290,40 @@ export function createResearchActions(
       "Google API key required",
       "Add a Google API key in Settings -> Providers to use Deep Research.",
     );
+  };
+  const setResearchCreationError = (revision: number, message: string | null): boolean => {
+    let applied = false;
+    set((state) => {
+      if (state.researchCreationDraft.revision !== revision) return {};
+      applied = true;
+      return {
+        researchCreationError: message ? { revision, message } : null,
+      };
+    });
+    if (applied) deps.persist(get);
+    return applied;
+  };
+  const clearResearchCreationDraft = (revision: number): boolean => {
+    let cleared = false;
+    let removedAttachments = get().researchCreationDraft.attachments;
+    set((state) => {
+      if (state.researchCreationDraft.revision !== revision) return {};
+      cleared = true;
+      removedAttachments = state.researchCreationDraft.attachments;
+      return {
+        researchCreationDraft: {
+          ...createEmptyComposerDraft(nowIso()),
+          revision: revision + 1,
+          generation: state.researchCreationDraft.generation + 1,
+        },
+        researchCreationError: null,
+      };
+    });
+    if (cleared) {
+      revokeComposerDraftAttachmentPreviews(removedAttachments);
+      deps.persist(get);
+    }
+    return cleared;
   };
 
   const bindResearchWorkspace = (workspaceId: string) => {
@@ -548,7 +604,9 @@ export function createResearchActions(
   const ensureResearchTransportWorkspace = async (
     options: CreationOperationControl = {},
   ): Promise<string | null> => {
-    const canNavigate = () => !options.intent || isCreationNavigationIntentCurrent(options.intent);
+    const canNavigate = () =>
+      options.signal?.aborted !== true &&
+      (!options.intent || isCreationNavigationIntentCurrent(options.intent));
     throwIfOperationAborted(options.signal);
     let state = get();
     let workspaceId = state.researchTransportWorkspaceId;
@@ -577,10 +635,12 @@ export function createResearchActions(
 
     bindResearchWorkspace(workspaceId);
     deps.ensureWorkspaceRuntime(get, set, workspaceId);
-    await deps.ensureServerRunning(get, set, workspaceId);
+    await deps.ensureServerRunning(get, set, workspaceId, { signal: options.signal });
     throwIfOperationAborted(options.signal);
     deps.ensureControlSocket(get, set, workspaceId);
-    const ready = await deps.waitForControlSession(get, set, workspaceId);
+    const ready = await deps.waitForControlSession(get, set, workspaceId, 3_000, {
+      signal: options.signal,
+    });
     throwIfOperationAborted(options.signal);
     if (!ready) {
       throw new Error("Unable to connect to the research transport workspace.");
@@ -629,6 +689,7 @@ export function createResearchActions(
     workspaceId: string,
     research: ResearchRecord,
     canSelect?: () => boolean,
+    signal?: AbortSignal,
   ) => {
     if (
       get().researchSubscribedIds.includes(research.id) ||
@@ -636,10 +697,18 @@ export function createResearchActions(
     ) {
       return;
     }
-    const result = await requestResearchResult(deps, get, set, workspaceId, "research/subscribe", {
-      researchId: research.id,
-      ...(research.lastEventId ? { afterEventId: research.lastEventId } : {}),
-    });
+    const result = await requestResearchResult(
+      deps,
+      get,
+      set,
+      workspaceId,
+      "research/subscribe",
+      {
+        researchId: research.id,
+        ...(research.lastEventId ? { afterEventId: research.lastEventId } : {}),
+      },
+      { signal },
+    );
     const subscribedResearch = result.research ?? research;
     if (result.research) {
       applyResearchRecord(result.research, canSelect ? { select: canSelect() } : undefined);
@@ -663,8 +732,7 @@ export function createResearchActions(
     try {
       for (const file of files ?? []) {
         throwIfOperationAborted(signal);
-        const payload = await serializeFile(file);
-        throwIfOperationAborted(signal);
+        const payload = await serializeFile(file, signal);
         const result = await requestResearchResult(
           deps,
           get,
@@ -672,6 +740,7 @@ export function createResearchActions(
           workspaceId,
           "research/uploadFile",
           payload,
+          { signal },
         );
         fileIds.push(result.file.fileId);
         throwIfOperationAborted(signal);
@@ -699,6 +768,81 @@ export function createResearchActions(
   };
 
   return {
+    setResearchCreationInput: (input) => {
+      set((state) => ({
+        researchCreationDraft: {
+          ...state.researchCreationDraft,
+          revision: state.researchCreationDraft.revision + 1,
+          updatedAt: nowIso(),
+          text: input,
+        },
+        researchCreationError: null,
+      }));
+      deps.persist(get);
+    },
+
+    addResearchCreationAttachments: async (files) => {
+      if (files.length === 0) return;
+      const generation = get().researchCreationDraft.generation;
+      const attachments: ComposerDraftAttachment[] = [];
+      try {
+        for (const file of files) {
+          if (file.size > MAX_RESEARCH_UPLOAD_BYTES) {
+            throw new Error(`Research uploads are limited to ${MAX_RESEARCH_UPLOAD_BYTES} bytes.`);
+          }
+          attachments.push(await createComposerDraftAttachment(file));
+        }
+      } catch (error) {
+        revokeComposerDraftAttachmentPreviews(attachments);
+        throw error;
+      }
+      let accepted = false;
+      set((state) => {
+        if (state.researchCreationDraft.generation !== generation) return {};
+        accepted = true;
+        return {
+          researchCreationDraft: {
+            ...state.researchCreationDraft,
+            revision: state.researchCreationDraft.revision + 1,
+            updatedAt: nowIso(),
+            attachments: [...state.researchCreationDraft.attachments, ...attachments],
+          },
+          researchCreationError: null,
+        };
+      });
+      if (!accepted) {
+        revokeComposerDraftAttachmentPreviews(attachments);
+        return;
+      }
+      deps.persist(get);
+    },
+
+    removeResearchCreationAttachment: (index) => {
+      let removed: ComposerDraftAttachment[] = [];
+      set((state) => {
+        const attachment = state.researchCreationDraft.attachments[index];
+        if (!attachment) return {};
+        removed = [attachment];
+        return {
+          researchCreationDraft: {
+            ...state.researchCreationDraft,
+            revision: state.researchCreationDraft.revision + 1,
+            updatedAt: nowIso(),
+            attachments: state.researchCreationDraft.attachments.filter(
+              (_candidate, candidateIndex) => candidateIndex !== index,
+            ),
+          },
+          researchCreationError: null,
+        };
+      });
+      if (removed.length === 0) return;
+      revokeComposerDraftAttachmentPreviews(removed);
+      deps.persist(get);
+    },
+
+    setResearchCreationError,
+    clearResearchCreationDraft,
+
     approveResearchPlan: async (researchId: string) => {
       try {
         const workspaceId = await ensureResearchTransportWorkspace();
@@ -857,17 +1001,30 @@ export function createResearchActions(
       }
     },
 
-    startResearch: async ({ input, title, files, settings, intent, signal, onPhase }) => {
+    startResearch: async ({
+      input,
+      title,
+      files,
+      settings,
+      draftRevision,
+      intent,
+      signal,
+      onPhase,
+    }) => {
       if (!hasGoogleResearchAccess()) {
         notifyMissingGoogleApiKey();
         return null;
       }
       const operationIntent = intent ?? beginCreationOperationIntent();
-      const canNavigate = () => isCreationNavigationIntentCurrent(operationIntent);
+      const canNavigate = () =>
+        isCreationNavigationIntentCurrent(operationIntent) && signal?.aborted !== true;
       const reportPhase = onPhase ?? (() => {});
       let workspaceId: string | null = null;
       let attachedFileIds: string[] = [];
       let startRequested = false;
+      if (draftRevision !== undefined) {
+        setResearchCreationError(draftRevision, null);
+      }
       try {
         reportPhase("starting-server");
         workspaceId = await ensureResearchTransportWorkspace({
@@ -892,21 +1049,28 @@ export function createResearchActions(
         throwIfOperationAborted(signal);
         reportPhase("creating");
         startRequested = true;
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/start", {
-          input,
-          ...(title ? { title } : {}),
-          settings: {
-            ...get().researchDraftSettings,
-            ...(settings ?? {}),
-          },
-          ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
-        });
-        applyResearchRecord(result.research, { select: canNavigate() && signal?.aborted !== true });
-        await ensureResearchSubscription(
+        const result = await requestResearchResult(
+          deps,
+          get,
+          set,
           workspaceId,
-          result.research,
-          () => canNavigate() && signal?.aborted !== true,
+          "research/start",
+          {
+            input,
+            ...(title ? { title } : {}),
+            settings: {
+              ...get().researchDraftSettings,
+              ...(settings ?? {}),
+            },
+            ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
+          },
+          { signal },
         );
+        applyResearchRecord(result.research, { select: canNavigate() });
+        await ensureResearchSubscription(workspaceId, result.research, canNavigate, signal);
+        if (draftRevision !== undefined && canNavigate()) {
+          clearResearchCreationDraft(draftRevision);
+        }
         return result.research;
       } catch (error) {
         if (
@@ -915,7 +1079,7 @@ export function createResearchActions(
           !startRequested &&
           attachedFileIds.length > 0
         ) {
-          await discardUploadedFiles(workspaceId, attachedFileIds);
+          void discardUploadedFiles(workspaceId, attachedFileIds);
         }
         if (
           workspaceId &&
@@ -925,7 +1089,21 @@ export function createResearchActions(
         ) {
           await discardUploadedFiles(workspaceId, attachedFileIds);
         }
-        if (isOperationAbortError(error)) return null;
+        if (isOperationAbortError(error)) {
+          if (draftRevision !== undefined) {
+            setResearchCreationError(
+              draftRevision,
+              "Research creation cancelled. Your draft was preserved.",
+            );
+          }
+          return null;
+        }
+        if (draftRevision !== undefined) {
+          setResearchCreationError(
+            draftRevision,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         notify(
           "error",
           "Unable to start research",

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { onTranscriptDeliveryFailure } from "../lib/desktopCommands";
+import { createEmptyCreationDrafts } from "./creationDrafts";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createAppActions } from "./store.actions";
@@ -17,6 +18,7 @@ import {
   normalizePrivacyTelemetrySettings,
 } from "./types";
 
+const initialCreationDrafts = createEmptyCreationDrafts();
 const initialState: AppStoreDataState = {
   ready: false,
   bootstrapPhase: "idle",
@@ -74,6 +76,7 @@ const initialState: AppStoreDataState = {
   composerDraftRevisionFloorByKey: {},
   composerAttachmentIngestionCountByKey: {},
   newChatLandingTarget: null,
+  ...initialCreationDrafts,
   injectContext: false,
   developerMode: false,
   showHiddenFiles: false,

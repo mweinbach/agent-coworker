@@ -2243,12 +2243,16 @@ describe("workspace startup flow", () => {
     });
     await waitForCondition(() => startCalls.length === 1);
     controller.abort();
-    startDeferreds[0]?.resolve({ url: "ws://cancelled" });
 
-    await expect(creation).resolves.toBe(false);
-    const state = useAppStore.getState();
-    expect(state.threads).toEqual([]);
-    expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
+    const outcome = await Promise.race([creation, Bun.sleep(100).then(() => "timed-out" as const)]);
+    expect(outcome).toBe(false);
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+
+    startDeferreds[0]?.resolve({ url: "ws://cancelled" });
+    await flushAsyncWork();
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
   });
 
   test("cancelling attachment processing preserves the exact submitted draft", async () => {
@@ -2302,12 +2306,16 @@ describe("workspace startup flow", () => {
     });
     await waitForCondition(() => attachmentReadStarted);
     controller.abort();
-    attachmentRead.resolve(new ArrayBuffer(5));
 
-    await expect(creation).resolves.toBe(false);
-    const state = useAppStore.getState();
-    expect(state.threads).toEqual([]);
-    expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
+    const outcome = await Promise.race([creation, Bun.sleep(100).then(() => "timed-out" as const)]);
+    expect(outcome).toBe(false);
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+
+    attachmentRead.resolve(new ArrayBuffer(5));
+    await flushAsyncWork();
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
   });
 
   test("startup failure preserves the exact submitted draft", async () => {

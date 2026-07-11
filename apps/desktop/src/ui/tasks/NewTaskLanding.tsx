@@ -2,10 +2,12 @@ import { ArrowRightIcon, ClipboardListIcon, PlusIcon, Trash2Icon } from "lucide-
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { type TaskCreationInput, taskCreationInputSchema } from "../../../../../src/shared/tasks";
+import type { TaskCreationDraftWorkItem } from "../../app/creationDrafts";
 import { useAppStore } from "../../app/store";
 import {
   beginCreationOperationIntent,
   type CreationOperationPhase,
+  isCreationNavigationIntentCurrent,
 } from "../../app/store.helpers/operationIntent";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
@@ -31,15 +33,6 @@ import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 import { formatTaskStatus, taskStatusBadgeClassName } from "./taskPresentation";
-
-type DraftWorkItem = {
-  id: string;
-  key: string;
-  title: string;
-  description: string;
-  dependencies: string;
-  expectedOutputs: string;
-};
 
 function taskCreationPhaseLabel(phase: CreationOperationPhase | null): string {
   switch (phase) {
@@ -67,7 +60,7 @@ function lines(value: string): string[] {
     .filter(Boolean);
 }
 
-function newWorkItem(key: string): DraftWorkItem {
+function newWorkItem(key: string): TaskCreationDraftWorkItem {
   return {
     id: crypto.randomUUID(),
     key,
@@ -94,6 +87,14 @@ export function NewTaskLanding() {
   const taskSummariesByWorkspaceId = useAppStore((state) => state.taskSummariesByWorkspaceId);
   const taskListLoadingByWorkspaceId = useAppStore((state) => state.taskListLoadingByWorkspaceId);
   const taskError = useAppStore((state) => state.taskError);
+  const taskCreationDraft = useAppStore((state) => state.taskCreationDraft);
+  const validationError = useAppStore((state) =>
+    state.taskCreationError?.revision === state.taskCreationDraft.revision
+      ? state.taskCreationError.message
+      : null,
+  );
+  const setTaskCreationDraft = useAppStore((state) => state.setTaskCreationDraft);
+  const setTaskCreationError = useAppStore((state) => state.setTaskCreationError);
   const startTask = useAppStore((state) => state.startTask);
   const selectTask = useAppStore((state) => state.selectTask);
   const refreshTasks = useAppStore((state) => state.refreshTasks);
@@ -107,21 +108,21 @@ export function NewTaskLanding() {
       ? selectedWorkspaceId
       : projects[0]?.id) ??
     "";
-  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId);
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const [title, setTitle] = useState("");
-  const [objective, setObjective] = useState("");
-  const [context, setContext] = useState("");
-  const [requirements, setRequirements] = useState("");
-  const [constraints, setConstraints] = useState("");
-  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
-  const [decisions, setDecisions] = useState("");
-  const [reviewRequired, setReviewRequired] = useState(true);
-  const [workItems, setWorkItems] = useState<DraftWorkItem[]>([newWorkItem("step-1")]);
-  const [workGraphCustomized, setWorkGraphCustomized] = useState(false);
-  const [showAdvancedWorkGraph, setShowAdvancedWorkGraph] = useState(false);
-  const nextWorkItemNumber = useRef(2);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const {
+    workspaceId,
+    idempotencyKey,
+    title,
+    objective,
+    context,
+    requirements,
+    constraints,
+    acceptanceCriteria,
+    decisions,
+    reviewRequired,
+    workItems,
+    workGraphCustomized,
+    showAdvancedWorkGraph,
+  } = taskCreationDraft;
   const [submitting, setSubmitting] = useState(false);
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
   const submissionControllerRef = useRef<AbortController | null>(null);
@@ -134,13 +135,20 @@ export function NewTaskLanding() {
       newTaskWorkspaceId !== previousNewTaskWorkspaceId.current ||
       newTaskWorkspaceRequestId !== previousNewTaskWorkspaceRequestId.current;
     if (newTaskWorkspaceId && targetChanged && projectIds.has(newTaskWorkspaceId)) {
-      setWorkspaceId(newTaskWorkspaceId);
+      setTaskCreationDraft({ workspaceId: newTaskWorkspaceId });
     } else if (defaultWorkspaceId && !projectIds.has(workspaceId)) {
-      setWorkspaceId(defaultWorkspaceId);
+      setTaskCreationDraft({ workspaceId: defaultWorkspaceId });
     }
     previousNewTaskWorkspaceId.current = newTaskWorkspaceId;
     previousNewTaskWorkspaceRequestId.current = newTaskWorkspaceRequestId;
-  }, [defaultWorkspaceId, newTaskWorkspaceId, newTaskWorkspaceRequestId, projects, workspaceId]);
+  }, [
+    defaultWorkspaceId,
+    newTaskWorkspaceId,
+    newTaskWorkspaceRequestId,
+    projects,
+    setTaskCreationDraft,
+    workspaceId,
+  ]);
 
   useEffect(() => {
     if (workspaceId) void refreshTasks(workspaceId);
@@ -182,11 +190,12 @@ export function NewTaskLanding() {
     hasExpectedOutput &&
     !submitting;
 
-  const updateWorkItem = (id: string, patch: Partial<DraftWorkItem>) => {
-    setWorkGraphCustomized(true);
-    setWorkItems((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-    );
+  const updateWorkItem = (id: string, patch: Partial<TaskCreationDraftWorkItem>) => {
+    const currentWorkItems = useAppStore.getState().taskCreationDraft.workItems;
+    setTaskCreationDraft({
+      workGraphCustomized: true,
+      workItems: currentWorkItems.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    });
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -228,10 +237,14 @@ export function NewTaskLanding() {
     };
     const parsed = taskCreationInputSchema.safeParse(task);
     if (!parsed.success) {
-      setValidationError(parsed.error.issues[0]?.message ?? "The task plan is incomplete.");
+      setTaskCreationError(
+        taskCreationDraft.revision,
+        parsed.error.issues[0]?.message ?? "The task plan is incomplete.",
+      );
       return;
     }
-    setValidationError(null);
+    const draftRevision = taskCreationDraft.revision;
+    setTaskCreationError(draftRevision, null);
     const operationIntent = beginCreationOperationIntent();
     const controller = new AbortController();
     submissionControllerRef.current = controller;
@@ -241,15 +254,19 @@ export function NewTaskLanding() {
       const created = await startTask({
         workspaceId,
         task: parsed.data,
+        draftRevision,
         intent: operationIntent,
         signal: controller.signal,
         onPhase: setCreationPhase,
       });
-      if (controller.signal.aborted) {
-        setValidationError(
-          created
-            ? "Task started in the background before cancellation completed. Your brief was preserved."
-            : "Task creation cancelled. Your brief was preserved.",
+      if (
+        created &&
+        !controller.signal.aborted &&
+        !isCreationNavigationIntentCurrent(operationIntent)
+      ) {
+        setTaskCreationError(
+          draftRevision,
+          "Task started in the background. Your brief was preserved.",
         );
       }
     } finally {
@@ -315,7 +332,10 @@ export function NewTaskLanding() {
                       id="new-task-project"
                       className="w-full"
                       value={workspaceId}
-                      onChange={(event) => setWorkspaceId(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) =>
+                        setTaskCreationDraft({ workspaceId: event.target.value })
+                      }
                     >
                       {projects.map((workspace) => (
                         <NativeSelectOption key={workspace.id} value={workspace.id}>
@@ -335,7 +355,8 @@ export function NewTaskLanding() {
                       maxLength={160}
                       placeholder="Ship task mode alongside standard chat"
                       value={title}
-                      onChange={(event) => setTitle(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) => setTaskCreationDraft({ title: event.target.value })}
                     />
                   </Field>
                   <Field>
@@ -345,7 +366,8 @@ export function NewTaskLanding() {
                       className="min-h-28 resize-y"
                       placeholder="State the concrete outcome to deliver."
                       value={objective}
-                      onChange={(event) => setObjective(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) => setTaskCreationDraft({ objective: event.target.value })}
                     />
                   </Field>
                   <Field>
@@ -358,7 +380,8 @@ export function NewTaskLanding() {
                       className="min-h-32 resize-y"
                       placeholder="Include relevant background, current state, audience, and boundaries."
                       value={context}
-                      onChange={(event) => setContext(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) => setTaskCreationDraft({ context: event.target.value })}
                     />
                     <FieldDescription>
                       Leave blank to start with a minimal handoff.
@@ -383,7 +406,10 @@ export function NewTaskLanding() {
                     variant="outline"
                     size="sm"
                     aria-expanded={showAdvancedWorkGraph}
-                    onClick={() => setShowAdvancedWorkGraph((open) => !open)}
+                    disabled={submitting}
+                    onClick={() =>
+                      setTaskCreationDraft({ showAdvancedWorkGraph: !showAdvancedWorkGraph })
+                    }
                   >
                     {showAdvancedWorkGraph ? "Hide advanced" : "Show advanced"}
                   </Button>
@@ -404,16 +430,19 @@ export function NewTaskLanding() {
                             size="icon-sm"
                             variant="ghost"
                             aria-label={`Remove step ${index + 1}`}
+                            disabled={submitting}
                             onClick={() => {
-                              setWorkGraphCustomized(true);
-                              setWorkItems((current) =>
-                                current
+                              const currentWorkItems =
+                                useAppStore.getState().taskCreationDraft.workItems;
+                              setTaskCreationDraft({
+                                workGraphCustomized: true,
+                                workItems: currentWorkItems
                                   .filter((entry) => entry.id !== item.id)
                                   .map((entry) => ({
                                     ...entry,
                                     dependencies: removeDependency(entry.dependencies, item.key),
                                   })),
-                              );
+                              });
                             }}
                           >
                             <Trash2Icon />
@@ -427,6 +456,7 @@ export function NewTaskLanding() {
                             id={`work-item-title-${item.id}`}
                             placeholder="Implement the coordinator"
                             value={item.title}
+                            disabled={submitting}
                             onChange={(event) =>
                               updateWorkItem(item.id, { title: event.target.value })
                             }
@@ -440,6 +470,7 @@ export function NewTaskLanding() {
                             id={`work-item-description-${item.id}`}
                             className="min-h-20 resize-y"
                             value={item.description}
+                            disabled={submitting}
                             onChange={(event) =>
                               updateWorkItem(item.id, { description: event.target.value })
                             }
@@ -454,6 +485,7 @@ export function NewTaskLanding() {
                               id={`work-item-dependencies-${item.id}`}
                               placeholder="step-1, step-2"
                               value={item.dependencies}
+                              disabled={submitting}
                               onChange={(event) =>
                                 updateWorkItem(item.id, { dependencies: event.target.value })
                               }
@@ -468,6 +500,7 @@ export function NewTaskLanding() {
                               className="min-h-20 resize-y"
                               placeholder="One output per line"
                               value={item.expectedOutputs}
+                              disabled={submitting}
                               onChange={(event) =>
                                 updateWorkItem(item.id, { expectedOutputs: event.target.value })
                               }
@@ -481,11 +514,18 @@ export function NewTaskLanding() {
                     type="button"
                     variant="outline"
                     className="self-start"
+                    disabled={submitting}
                     onClick={() => {
-                      const key = `step-${nextWorkItemNumber.current}`;
-                      nextWorkItemNumber.current += 1;
-                      setWorkGraphCustomized(true);
-                      setWorkItems((current) => [...current, newWorkItem(key)]);
+                      const currentWorkItems = useAppStore.getState().taskCreationDraft.workItems;
+                      const nextNumber =
+                        currentWorkItems.reduce((highest, item) => {
+                          const parsed = /^step-(\d+)$/.exec(item.key);
+                          return Math.max(highest, Number(parsed?.[1] ?? 0));
+                        }, 0) + 1;
+                      setTaskCreationDraft({
+                        workGraphCustomized: true,
+                        workItems: [...currentWorkItems, newWorkItem(`step-${nextNumber}`)],
+                      });
                     }}
                   >
                     <PlusIcon data-icon="inline-start" />
@@ -519,7 +559,10 @@ export function NewTaskLanding() {
                       className="min-h-24 resize-y"
                       placeholder="Required behavior or deliverable"
                       value={requirements}
-                      onChange={(event) => setRequirements(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) =>
+                        setTaskCreationDraft({ requirements: event.target.value })
+                      }
                     />
                   </Field>
                   <Field>
@@ -529,7 +572,10 @@ export function NewTaskLanding() {
                       className="min-h-24 resize-y"
                       placeholder="Compatibility, policy, timing, or scope boundary"
                       value={constraints}
-                      onChange={(event) => setConstraints(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) =>
+                        setTaskCreationDraft({ constraints: event.target.value })
+                      }
                     />
                   </Field>
                   <Field>
@@ -542,7 +588,10 @@ export function NewTaskLanding() {
                       className="min-h-28 resize-y"
                       placeholder="Observable evidence that the task is complete"
                       value={acceptanceCriteria}
-                      onChange={(event) => setAcceptanceCriteria(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) =>
+                        setTaskCreationDraft({ acceptanceCriteria: event.target.value })
+                      }
                     />
                     <FieldDescription>Defaults to the objective when empty.</FieldDescription>
                   </Field>
@@ -553,7 +602,8 @@ export function NewTaskLanding() {
                       className="min-h-24 resize-y"
                       placeholder="One accepted assumption or decision per line"
                       value={decisions}
-                      onChange={(event) => setDecisions(event.target.value)}
+                      disabled={submitting}
+                      onChange={(event) => setTaskCreationDraft({ decisions: event.target.value })}
                     />
                   </Field>
                   <Separator />
@@ -567,7 +617,10 @@ export function NewTaskLanding() {
                     <Switch
                       id="new-task-review"
                       checked={reviewRequired}
-                      onCheckedChange={setReviewRequired}
+                      disabled={submitting}
+                      onCheckedChange={(checked) =>
+                        setTaskCreationDraft({ reviewRequired: checked })
+                      }
                     />
                   </Field>
                   {validationError || taskError ? (

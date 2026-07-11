@@ -3,6 +3,7 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
+import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { createTaskActions, type TaskActionDependencies } from "../src/app/store.actions/tasks";
 import type { SandboxApprovalPrompt } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
@@ -429,6 +430,67 @@ describe("desktop task mode UI", () => {
       expect(container.querySelector("#new-task-objective")).not.toBeNull();
       expect(container.querySelector("#new-task-context")).not.toBeNull();
 
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("Cancel immediately unlocks a task composer waiting on startup", async () => {
+    const harness = setupJsdom();
+    const startTask = mock(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<null>((resolve) => {
+          if (signal?.aborted) {
+            resolve(null);
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(null), { once: true });
+        }),
+    );
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+      const root = createRoot(container);
+      resetStore(null);
+      useAppStore.setState({
+        taskCreationDraft: {
+          ...createEmptyTaskCreationDraft(3, "ws-1"),
+          title: "Keep this task brief",
+          objective: "Cancel startup without losing the form.",
+        },
+        taskCreationError: null,
+        startTask,
+      } as never);
+
+      await act(async () => root.render(createElement(NewTaskLanding)));
+      await act(async () => {
+        submitForm(harness, container.querySelector("form"));
+        await Promise.resolve();
+      });
+
+      const cancelButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Cancel",
+      );
+      expect(cancelButton).toBeDefined();
+      expect(container.querySelector("#new-task-title")?.hasAttribute("disabled")).toBe(true);
+
+      await act(async () => {
+        cancelButton?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(
+        Array.from(container.querySelectorAll("button")).some(
+          (button) => button.textContent?.trim() === "Cancel",
+        ),
+      ).toBe(false);
+      expect(container.querySelector("#new-task-title")?.hasAttribute("disabled")).toBe(false);
+      expect((container.querySelector("#new-task-title") as HTMLInputElement | null)?.value).toBe(
+        "Keep this task brief",
+      );
       await act(async () => root.unmount());
     } finally {
       harness.restore();

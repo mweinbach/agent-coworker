@@ -56,10 +56,12 @@ import type {
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
+  ComposerDraft,
   ComposerDraftRevision,
   ComposerDraftRevisionFloor,
   ComposerDraftsByKey,
 } from "./composerDrafts";
+import type { CreationDraftError, TaskCreationDraft } from "./creationDrafts";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -72,6 +74,7 @@ import type {
   CreationOperationControl,
   CreationOperationIntent,
 } from "./store.helpers/operationIntent";
+import { throwIfOperationAborted, waitForOperation } from "./store.helpers/operationIntent";
 import {
   persist,
   persistNow,
@@ -284,6 +287,10 @@ export type AppStoreState = {
   composerDraftRevisionFloorByKey: Record<string, ComposerDraftRevisionFloor>;
   composerAttachmentIngestionCountByKey: Record<string, number>;
   newChatLandingTarget: NewChatLandingTarget | null;
+  researchCreationDraft: ComposerDraft;
+  researchCreationError: CreationDraftError | null;
+  taskCreationDraft: TaskCreationDraft;
+  taskCreationError: CreationDraftError | null;
   injectContext: boolean;
   developerMode: boolean;
   showHiddenFiles: boolean;
@@ -475,8 +482,17 @@ export type AppStoreState = {
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string, options?: AbortableActionOptions) => Promise<void>;
   startTask: (
-    opts: { workspaceId: string; task: TaskCreationInput } & CreationOperationControl,
+    opts: {
+      workspaceId: string;
+      task: TaskCreationInput;
+      draftRevision?: number;
+    } & CreationOperationControl,
   ) => Promise<TaskRecord | null>;
+  setTaskCreationDraft: (
+    patch: Partial<Omit<TaskCreationDraft, "revision" | "updatedAt" | "idempotencyKey">>,
+  ) => void;
+  setTaskCreationError: (revision: number, message: string | null) => boolean;
+  clearTaskCreationDraft: (revision: number) => boolean;
   selectTask: (
     taskId: string,
     options?: AbortableActionOptions & { preserveView?: boolean },
@@ -589,8 +605,14 @@ export type AppStoreState = {
       title?: string;
       files?: File[];
       settings?: Partial<ResearchSettingsState>;
+      draftRevision?: number;
     } & CreationOperationControl,
   ) => Promise<ResearchCard | null>;
+  setResearchCreationInput: (input: string) => void;
+  addResearchCreationAttachments: (files: File[]) => Promise<void>;
+  removeResearchCreationAttachment: (index: number) => void;
+  setResearchCreationError: (revision: number, message: string | null) => boolean;
+  clearResearchCreationDraft: (revision: number) => boolean;
   cancelResearch: (researchId: string) => Promise<void>;
   renameResearch: (researchId: string, title: string) => Promise<void>;
   deleteResearch: (researchId: string) => Promise<boolean>;
@@ -1130,8 +1152,8 @@ async function ensureServerRunning(
   options: AbortableActionOptions = {},
 ) {
   const lifecycleGeneration = jsonRpcLifecycleGeneration;
-  const isCurrent = () =>
-    options.signal?.aborted !== true && jsonRpcLifecycleGeneration === lifecycleGeneration;
+  const isCurrent = () => jsonRpcLifecycleGeneration === lifecycleGeneration;
+  throwIfOperationAborted(options.signal);
   if (!isCurrent()) return;
   const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
   if (!ws) return;
@@ -1144,13 +1166,16 @@ async function ensureServerRunning(
   let forceRestart = false;
   if (rt.serverUrl && !rt.error) {
     if (!isCurrent()) return;
-    const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
-      workspaceId,
-      running: false as const,
-      url: rt.serverUrl,
-      reason: "health_failed" as const,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    const status = await waitForOperation(
+      getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
+        workspaceId,
+        running: false as const,
+        url: rt.serverUrl,
+        reason: "health_failed" as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      options.signal,
+    );
     if (!isCurrent()) return;
     if (status.running) {
       syncWorkspaceServerRunningUrl(get, set, workspaceId, status.url);
@@ -1170,14 +1195,15 @@ async function ensureServerRunning(
     if (status.reason === "health_failed") {
       if (!isCurrent()) return;
       try {
-        await stopWorkspaceServer({ workspaceId });
+        await waitForOperation(stopWorkspaceServer({ workspaceId }), options.signal);
       } catch {
+        throwIfOperationAborted(options.signal);
         // ignore; startup below will surface persistent failures
       }
       if (!isCurrent()) return;
     }
     if (!isCurrent()) return;
-    await waitForWorkspaceServerRestartBackoff(workspaceId);
+    await waitForOperation(waitForWorkspaceServerRestartBackoff(workspaceId), options.signal);
     if (!isCurrent()) return;
     reactivateWorkspaceJsonRpcState(workspaceId);
     forceRestart = status.reason === "health_failed";
@@ -1187,7 +1213,7 @@ async function ensureServerRunning(
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
   const generation = getWorkspaceStartGeneration(workspaceId);
   if (inFlight && inFlight.generation === generation) {
-    await inFlight.promise;
+    await waitForOperation(inFlight.promise, options.signal);
     return;
   }
 
@@ -1259,19 +1285,15 @@ async function ensureServerRunning(
     }
   })();
 
-  if (!isCurrent()) {
-    await startPromise;
-    return;
-  }
   RUNTIME.workspaceStartPromises.set(workspaceId, { generation, promise: startPromise });
-  try {
-    await startPromise;
-  } finally {
+  const clearStartPromise = () => {
     const active = RUNTIME.workspaceStartPromises.get(workspaceId);
     if (active?.generation === generation && active.promise === startPromise) {
       RUNTIME.workspaceStartPromises.delete(workspaceId);
     }
-  }
+  };
+  void startPromise.then(clearStartPromise, clearStartPromise);
+  await waitForOperation(startPromise, options.signal);
 }
 
 export {

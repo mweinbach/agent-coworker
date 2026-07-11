@@ -9,7 +9,7 @@ import {
 import type { StoreGet, StoreSet } from "../app/store.helpers";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
-import { throwIfOperationAborted } from "../app/store.helpers/operationIntent";
+import { throwIfOperationAborted, waitForOperation } from "../app/store.helpers/operationIntent";
 
 export type ComposerAttachmentFile = {
   filename: string;
@@ -97,7 +97,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE &&
       inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
     if (canInline) {
-      const buffer = await attachment.file.arrayBuffer();
+      const buffer = await waitForOperation(attachment.file.arrayBuffer(), options.signal);
       throwIfOperationAborted(options.signal);
       const base64 = encodeArrayBufferToBase64(buffer);
       inlineByteLength += attachment.size;
@@ -114,6 +114,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       workspaceId,
       attachment,
       options.threadId ?? null,
+      options.signal,
     );
     throwIfOperationAborted(options.signal);
     let desktopUploadError: string | null = null;
@@ -130,7 +131,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       }
     }
 
-    const buffer = await attachment.file.arrayBuffer();
+    const buffer = await waitForOperation(attachment.file.arrayBuffer(), options.signal);
     throwIfOperationAborted(options.signal);
     const base64 = encodeArrayBufferToBase64(buffer);
     const uploaded = await uploadJsonRpcWorkspaceFile(
@@ -139,6 +140,7 @@ export async function resolveComposerAttachmentsForWorkspace(
       workspaceId,
       attachment.filename,
       base64,
+      { signal: options.signal },
     );
     throwIfOperationAborted(options.signal);
     if (!uploaded.path) {
@@ -163,6 +165,7 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
   workspaceId: string,
   attachment: ComposerAttachmentFile,
   threadId: string | null,
+  signal?: AbortSignal,
 ): Promise<DesktopUploadAttempt> {
   const desktopApi = typeof window === "undefined" ? undefined : window.cowork;
   if (!desktopApi?.getPathForFile || !desktopApi.copyFileToWorkspaceUploads) {
@@ -174,19 +177,28 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
     return { attempted: false };
   }
 
-  const sourcePath = await desktopApi.getPathForFile(attachment.file);
+  const sourcePath = await waitForOperation(
+    Promise.resolve(desktopApi.getPathForFile(attachment.file)),
+    signal,
+  );
+  throwIfOperationAborted(signal);
   if (!sourcePath) {
     return { attempted: false };
   }
 
   try {
     const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId, threadId);
-    const uploaded = await desktopApi.copyFileToWorkspaceUploads({
-      workspacePath: workspace.path,
-      sourcePath,
-      filename: attachment.filename,
-      ...(uploadsDirectory ? { uploadsDirectory } : {}),
-    });
+    throwIfOperationAborted(signal);
+    const uploaded = await waitForOperation(
+      desktopApi.copyFileToWorkspaceUploads({
+        workspacePath: workspace.path,
+        sourcePath,
+        filename: attachment.filename,
+        ...(uploadsDirectory ? { uploadsDirectory } : {}),
+      }),
+      signal,
+    );
+    throwIfOperationAborted(signal);
     return { attempted: true, uploaded };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

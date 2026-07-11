@@ -70,6 +70,8 @@ import {
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
   isOperationAbortError,
+  recordThreadNavigationIntent,
+  waitForOperation,
 } from "../store.helpers/operationIntent";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { persist } from "../store.helpers/persistence";
@@ -940,11 +942,10 @@ export function createThreadActions(
       let workspaceId: string | null = null;
       if (scope === "oneOff") {
         try {
-          const oneOffWorkspace = await createOneOffWorkspaceRecord(
-            get,
-            opts?.titleHint ?? opts?.firstMessage,
+          const oneOffWorkspace = await waitForOperation(
+            createOneOffWorkspaceRecord(get, opts?.titleHint ?? opts?.firstMessage),
+            opts?.signal,
           );
-          if (opts?.signal?.aborted) return false;
           workspaceId = oneOffWorkspace.id;
           set((s) => {
             const next = {
@@ -954,6 +955,7 @@ export function createThreadActions(
           });
           ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
         } catch (error) {
+          if (isOperationAbortError(error)) return false;
           set((s) => ({
             notifications: pushNotification(s.notifications, {
               id: makeId(),
@@ -1025,8 +1027,12 @@ export function createThreadActions(
       let url: string | null = null;
       if (createSessionImmediately) {
         reportPhase("starting-server");
-        await ensureServerRunning(get, set, workspaceId);
-        if (opts?.signal?.aborted) return false;
+        try {
+          await ensureServerRunning(get, set, workspaceId, { signal: opts?.signal });
+        } catch (error) {
+          if (isOperationAbortError(error)) return false;
+          throw error;
+        }
         ensureControlSocket(get, set, workspaceId);
 
         const wsRt = get().workspaceRuntimeById[workspaceId];
@@ -1150,6 +1156,7 @@ export function createThreadActions(
           opts?.references,
           queuedDraftSubmission,
         );
+        recordThreadNavigationIntent(threadId, operationIntent);
       }
       ensureThreadSocket(
         get,
@@ -1320,6 +1327,7 @@ export function createThreadActions(
       const taskCommand = !hasAttachments ? trimmed.match(/^\/task(?:\s+([\s\S]*))?$/i) : null;
       if (taskCommand) {
         try {
+          recordThreadNavigationIntent(activeThreadId);
           await ensureServerRunning(get, set, thread.workspaceId);
           ensureControlSocket(get, set, thread.workspaceId);
           await requestJsonRpc(get, set, thread.workspaceId, "command/execute", {
@@ -1371,6 +1379,7 @@ export function createThreadActions(
           draftSubmission,
         });
         if (!reconnected) return false;
+        recordThreadNavigationIntent(activeThreadId);
         return true;
       }
 
@@ -1387,6 +1396,7 @@ export function createThreadActions(
         options?.retryToolItemIds,
       );
       if (!accepted) return false;
+      recordThreadNavigationIntent(activeThreadId);
       return true;
     },
 

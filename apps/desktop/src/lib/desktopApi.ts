@@ -1,4 +1,5 @@
 import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
+import type { WorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
 import type {
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
@@ -233,8 +234,14 @@ export type ShowQuickChatWindowInput = {
 };
 
 export type ListDirectoryInput = {
+  workspaceId: string;
   path: string;
   includeHidden?: boolean;
+};
+
+export type WatchWorkspaceDirectoryInput = {
+  workspaceId: string;
+  rootPath: string;
 };
 
 export type OpenPathInput = {
@@ -604,6 +611,8 @@ export interface DesktopApi {
   showCanvasWindow(opts: ShowCanvasWindowInput): Promise<void>;
 
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
+  watchWorkspaceDirectory(opts: WatchWorkspaceDirectoryInput): Promise<boolean>;
+  unwatchWorkspaceDirectory(opts: WatchWorkspaceDirectoryInput): Promise<void>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   writeFile(opts: WriteFileInput): Promise<void>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
@@ -648,6 +657,7 @@ export interface DesktopApi {
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
   onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
+  onWorkspaceFileChanged(listener: (event: WorkspaceFileChangeEvent) => void): () => void;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
@@ -687,6 +697,8 @@ export const DESKTOP_IPC_CHANNELS = {
   showCanvasWindow: "desktop:showCanvasWindow",
 
   listDirectory: "desktop:listDirectory",
+  watchWorkspaceDirectory: "desktop:watchWorkspaceDirectory",
+  unwatchWorkspaceDirectory: "desktop:unwatchWorkspaceDirectory",
   readFile: "desktop:readFile",
   writeFile: "desktop:writeFile",
   readFileForPreview: "desktop:readFileForPreview",
@@ -728,4 +740,5 @@ export const DESKTOP_EVENT_CHANNELS = {
   windowCloseRequested: "desktop:event:windowCloseRequested",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
   mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
+  workspaceFileChanged: "desktop:event:workspaceFileChanged",
 } as const;

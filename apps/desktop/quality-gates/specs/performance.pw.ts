@@ -235,18 +235,19 @@ test("1,000-file tree stays inside filesystem, publication, and render budgets",
   quality,
 }, testInfo) => {
   const { electronApp, page } = quality;
+  const fileRows = page.locator('[role="treeitem"]');
+  const changedRow = page.locator('[data-file-row-key="/quality/project/fixture-0002.ts"]');
+  await expect(fileRows).toHaveCount(1_000);
   const samples = [];
   for (let runId = 1; runId <= 3; runId += 1) {
+    await settleQualityPage(page);
     await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
     await page.evaluate(() => {
       window.__coworkQualityGate?.resetMetrics();
     });
-    await page.evaluate(async () => {
-      await window.__coworkQualityGate?.refreshFileTree();
-    });
-    await expect
-      .poll(async () => await page.evaluate(() => window.__coworkQualityGate?.getFileCount()))
-      .toBe(1_000);
+    await quality.emitFileChange(runId);
+    await expect(changedRow).toContainText(`${513 + runId} B`);
+    await expect(fileRows).toHaveCount(1_000);
     await settleQualityPage(page);
     const rendererMetrics = await page.evaluate(() => {
       if (!window.__coworkQualityGate) {
@@ -261,7 +262,21 @@ test("1,000-file tree stays inside filesystem, publication, and render budgets",
       "The file-tree scenario must cross the production filesystem bridge",
     ).toBeGreaterThan(0);
     expect(mainMetrics.filesystemRequests).toBeLessThanOrEqual(budgets.fileTree.filesystemRequests);
-    assertPositiveRendererMetrics(rendererMetrics, budgets.fileTree);
+    expect(rendererMetrics.reactCommits).toBeGreaterThan(0);
+    expect(rendererMetrics.reactCommits).toBeLessThanOrEqual(budgets.fileTree.reactCommits);
+    expect(rendererMetrics.storePublications).toBeLessThanOrEqual(
+      budgets.fileTree.storePublications,
+    );
+    expect(rendererMetrics.fileExplorerRowRenders).toBeGreaterThan(0);
+    expect(rendererMetrics.fileExplorerRowRenders).toBeLessThanOrEqual(
+      budgets.fileTree.fileExplorerRowRenders,
+    );
+    expect(
+      rendererMetrics.fileExplorerRowRendersById["/quality/project/fixture-0002.ts"] ?? 0,
+    ).toBe(1);
+    expect(
+      rendererMetrics.fileExplorerRowRendersById["/quality/project/quality-gate-report.md"] ?? 0,
+    ).toBe(0);
   }
   await testInfo.attach("performance-file-tree", {
     body: Buffer.from(`${JSON.stringify({ budgets: budgets.fileTree, samples }, null, 2)}\n`),

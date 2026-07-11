@@ -8,14 +8,24 @@ import {
   FolderOpenIcon,
   MoreVerticalIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { publishForegroundNotification, useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
-import { confirmAction, listDirectory, showContextMenu } from "../../lib/desktopCommands";
+import {
+  confirmAction,
+  invalidateDirectoryListing,
+  isStaleDirectoryListingError,
+  listDirectory,
+  onWorkspaceFileChanged,
+  showContextMenu,
+  unwatchWorkspaceDirectory,
+  watchWorkspaceDirectory,
+} from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
+import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
 export type WorkspaceFileExplorerProps = {
   workspaceId: string;
@@ -31,13 +41,15 @@ const FOLDER_DOUBLE_CLICK_MS = 320;
 const fileExplorerTreeAnimate: AutoAnimationPlugin = (el, action, coordA, coordB) => {
   const moveMs = 300;
 
-  /**
-   * Enter motion is handled in CSS (`.file-explorer-row-enter`) keyed off row-key diffs.
-   * AutoAnimate's `add` often does not run meaningfully here: sibling layouts mostly take the
-   * `remain` path, and `isOffscreen` skips entries inside nested scroll regions.
-   */
   if (action === "add") {
-    return new KeyframeEffect(el, [{ opacity: 1 }, { opacity: 1 }], { duration: 0 });
+    return new KeyframeEffect(
+      el,
+      [
+        { opacity: 0, transform: "translateY(-3px) scale(0.99)" },
+        { opacity: 1, transform: "translateY(0) scale(1)" },
+      ],
+      { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    );
   }
 
   if (action === "remove") {
@@ -95,17 +107,25 @@ type DirectorySnapshot = {
 
 /** In-memory listing cache per workspace root so revisiting a workspace is instant (no blank tree). */
 const explorerDirectorySessionByScope = new Map<string, Record<string, DirectorySnapshot>>();
-/** Parallel directory listings while prefetching (wave 1 + wave 2 under root). */
-const PREFETCH_CONCURRENCY = 8;
+/** Idle prefetch is intentionally bounded so expansion work cannot fan out across large trees. */
+const PREFETCH_DIRECTORY_BUDGET = 8;
+const PREFETCH_CONCURRENCY = 4;
 
 function explorerScopeKey(workspaceId: string, rootPath: string): string {
   return `${workspaceId}:${normalizeExplorerPath(rootPath)}`;
 }
 
-function cloneDirectoryByPath(
+function prepareDirectorySessionSnapshot(
   data: Record<string, DirectorySnapshot>,
 ): Record<string, DirectorySnapshot> {
-  return JSON.parse(JSON.stringify(data)) as Record<string, DirectorySnapshot>;
+  let changed = false;
+  const next = { ...data };
+  for (const [path, snapshot] of Object.entries(data)) {
+    if (!snapshot.loading) continue;
+    changed = true;
+    next[path] = { ...snapshot, loading: false };
+  }
+  return changed ? next : data;
 }
 
 async function runPool<T>(
@@ -144,13 +164,6 @@ export type ExplorerTreeRow =
 
 export function explorerRowDomKey(row: ExplorerTreeRow): string {
   return row.kind === "entry" ? row.entry.path : `${row.path}:${row.status}`;
-}
-
-function escapeRowKeyForSelector(key: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(key);
-  }
-  return key.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 export function isTreeRowControlTarget(target: EventTarget | null): boolean {
@@ -200,8 +213,29 @@ export function shouldReuseBackgroundDirectorySnapshot(
   return !!current && current.error === error && current.fingerprint === fingerprint;
 }
 
-export function shouldAutoRefreshExplorer(visibilityState: string, hasFocus: boolean): boolean {
-  return visibilityState === "visible" && hasFocus;
+export function shouldAutoRefreshExplorer(
+  visibilityState: string,
+  hasFocus: boolean,
+  sectionExpanded = true,
+): boolean {
+  return sectionExpanded && visibilityState === "visible" && hasFocus;
+}
+
+function isExplorerPathWithin(candidatePath: string, ancestorPath: string): boolean {
+  if (candidatePath === ancestorPath) {
+    return true;
+  }
+  const prefix = ancestorPath.endsWith("/") ? ancestorPath : `${ancestorPath}/`;
+  return candidatePath.startsWith(prefix);
+}
+
+function scheduleIdleWork(work: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const handle = window.requestIdleCallback(work, { timeout: 250 });
+    return () => window.cancelIdleCallback(handle);
+  }
+  const handle = window.setTimeout(work, 0);
+  return () => window.clearTimeout(handle);
 }
 
 function shouldSuppressExplorerEntry(entry: ExplorerEntry, showHiddenFiles: boolean): boolean {
@@ -320,6 +354,232 @@ function defaultDirectorySnapshot(): DirectorySnapshot {
   };
 }
 
+type ExplorerTreeRowViewProps = {
+  row: ExplorerTreeRow;
+  selected: boolean;
+  onContextMenu(event: React.MouseEvent, entry: ExplorerEntry): void;
+  onEntryClick(entry: ExplorerEntry): void;
+  onOpenEntry(entry: ExplorerEntry): void;
+  onOpenEntryMenu(entry: ExplorerEntry): void;
+  onSelectEntry(entry: ExplorerEntry): void;
+  onToggleDirectory(path: string): void;
+};
+
+const ExplorerTreeRowView = memo(
+  function ExplorerTreeRowView({
+    row,
+    selected,
+    onContextMenu,
+    onEntryClick,
+    onOpenEntry,
+    onOpenEntryMenu,
+    onSelectEntry,
+    onToggleDirectory,
+  }: ExplorerTreeRowViewProps) {
+    recordDesktopRenderMetric("file-explorer-row", explorerRowDomKey(row));
+    if (row.kind === "status") {
+      return (
+        <div
+          data-file-row-key={explorerRowDomKey(row)}
+          className={cn(
+            "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            row.status === "error" ? "text-destructive" : "text-muted-foreground",
+          )}
+          style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
+        >
+          <span className="truncate">{row.message}</span>
+        </div>
+      );
+    }
+
+    const { entry, depth } = row;
+    const isDirectory = entry.isDirectory;
+    const entryMeta = isDirectory
+      ? `${entry.isHidden ? "Hidden folder" : "Folder"}`
+      : `${formatEntrySize(entry.sizeBytes)} • ${formatModifiedAt(entry.modifiedAtMs)}${entry.isHidden ? " • hidden" : ""}`;
+
+    return (
+      <div
+        data-file-row-key={explorerRowDomKey(row)}
+        role="treeitem"
+        tabIndex={0}
+        aria-level={depth + 1}
+        aria-selected={isDirectory ? false : selected}
+        aria-expanded={isDirectory ? row.expanded : undefined}
+        className={cn(
+          "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
+          selected
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+          entry.isHidden && "opacity-70",
+        )}
+        style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
+        onDoubleClick={(event) => {
+          if (isTreeRowControlTarget(event.target) || isDirectory) {
+            return;
+          }
+          onOpenEntry(entry);
+        }}
+        onContextMenu={(event) => {
+          onContextMenu(event, entry);
+        }}
+        onMouseDown={(event) => {
+          if (isTreeRowControlTarget(event.target)) {
+            event.stopPropagation();
+          }
+        }}
+        onClick={(event) => {
+          if (!isTreeRowControlTarget(event.target)) {
+            onEntryClick(entry);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onOpenEntry(entry);
+            return;
+          }
+          if (event.key === " " || event.key === "Spacebar") {
+            event.preventDefault();
+            if (isDirectory) {
+              onToggleDirectory(entry.path);
+            } else {
+              onSelectEntry(entry);
+            }
+            return;
+          }
+          if (isDirectory && event.key === "ArrowRight" && !row.expanded) {
+            event.preventDefault();
+            onToggleDirectory(entry.path);
+            return;
+          }
+          if (isDirectory && event.key === "ArrowLeft" && row.expanded) {
+            event.preventDefault();
+            onToggleDirectory(entry.path);
+          }
+        }}
+        title={entry.path}
+      >
+        {isDirectory ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+            className={cn(
+              "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
+              selected ? "hover:bg-accent-foreground/15" : "hover:bg-muted",
+            )}
+            data-file-explorer-control="true"
+            onClick={() => onToggleDirectory(entry.path)}
+          >
+            <ChevronRightIcon
+              strokeWidth={1.5}
+              className={cn(
+                "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                selected ? "text-link/80" : "text-inherit",
+                row.expanded && "rotate-90",
+              )}
+            />
+          </Button>
+        ) : (
+          <span className="inline-block h-[18px] w-[18px]" aria-hidden />
+        )}
+
+        {isDirectory ? (
+          row.expanded ? (
+            <FolderOpenIcon
+              strokeWidth={1.5}
+              className={cn(
+                "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                selected ? "text-link/80" : "text-link/85",
+              )}
+            />
+          ) : (
+            <FolderIcon
+              strokeWidth={1.5}
+              className={cn(
+                "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                selected ? "text-link/80" : "text-link/85",
+              )}
+            />
+          )
+        ) : (
+          <FileIcon
+            strokeWidth={1.5}
+            className={cn(
+              "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+              selected ? "text-link/80" : "text-inherit",
+            )}
+          />
+        )}
+
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{entry.name}</div>
+          <div
+            className={cn(
+              "truncate text-[9px] leading-3.5",
+              selected ? "text-accent-foreground/85" : "text-muted-foreground",
+            )}
+          >
+            {entryMeta}
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`More options for ${entry.name}`}
+          className={cn(
+            "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
+            selected
+              ? "opacity-100 hover:bg-accent-foreground/15"
+              : "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-muted",
+          )}
+          data-file-explorer-control="true"
+          onClick={() => onOpenEntryMenu(entry)}
+        >
+          <MoreVerticalIcon
+            strokeWidth={1.5}
+            className={cn("h-3.25 w-3.25", selected ? "text-link/80" : "text-inherit")}
+          />
+        </Button>
+      </div>
+    );
+  },
+  (previous, next) => {
+    if (
+      previous.selected !== next.selected ||
+      previous.onContextMenu !== next.onContextMenu ||
+      previous.onEntryClick !== next.onEntryClick ||
+      previous.onOpenEntry !== next.onOpenEntry ||
+      previous.onOpenEntryMenu !== next.onOpenEntryMenu ||
+      previous.onSelectEntry !== next.onSelectEntry ||
+      previous.onToggleDirectory !== next.onToggleDirectory ||
+      previous.row.kind !== next.row.kind
+    ) {
+      return false;
+    }
+    if (previous.row.kind === "status" && next.row.kind === "status") {
+      return (
+        previous.row.depth === next.row.depth &&
+        previous.row.path === next.row.path &&
+        previous.row.status === next.row.status &&
+        previous.row.message === next.row.message
+      );
+    }
+    if (previous.row.kind === "entry" && next.row.kind === "entry") {
+      return (
+        previous.row.depth === next.row.depth &&
+        previous.row.expanded === next.row.expanded &&
+        previous.row.entry === next.row.entry
+      );
+    }
+    return false;
+  },
+);
+
 export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   workspaceId,
   className,
@@ -330,6 +590,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const explorer = useAppStore((s) => s.workspaceExplorerById[workspaceId]);
   const refreshSignal = useAppStore((s) => s.workspaceExplorerRefreshById[workspaceId] ?? 0);
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
+  const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const refresh = useAppStore((s) => s.refreshWorkspaceFiles);
   const selectFile = useAppStore((s) => s.selectWorkspaceFile);
   const openFile = useAppStore((s) => s.openWorkspaceFile);
@@ -340,20 +601,21 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const [directoryByPath, setDirectoryByPath] = useState<Record<string, DirectorySnapshot>>({});
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [watchSupported, setWatchSupported] = useState<boolean | null>(null);
 
-  const latestRequestByPathRef = useRef<Record<string, number>>({});
-  const requestCounterRef = useRef(0);
   const syncInFlightRef = useRef(false);
   const syncQueuedRef = useRef(false);
+  const syncInvalidateQueuedRef = useRef(false);
   const scopeRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
+  const explorerActiveRef = useRef(!contextSidebarCollapsed);
+  const mountedRef = useRef(true);
   /** Latest directory snapshots (for expand: avoid toggling `loading` when cached data exists). */
   const directoryByPathRef = useRef<Record<string, DirectorySnapshot>>({});
   /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
   const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
-  /** Cancels stale prefetch waves when `directoryByPath` / scope changes. */
-  const prefetchGenRef = useRef(0);
+  explorerActiveRef.current = !contextSidebarCollapsed;
 
   const rootPath = useMemo(() => {
     const candidate = explorer?.rootPath ?? workspacePath ?? "";
@@ -372,20 +634,20 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const rootSnapshot = directoryByPath[rootPath];
   const rootLabel = formatPathLabel(rootPath);
-  const treeListDomRef = useRef<HTMLDivElement | null>(null);
   const [autoAnimateRef] = useAutoAnimate(fileExplorerTreeAnimate);
   const setTreeListEl = useCallback(
     (node: HTMLDivElement | null) => {
-      treeListDomRef.current = node;
       autoAnimateRef(node);
     },
     [autoAnimateRef],
   );
-  const [rowEnterAnimationsReady, setRowEnterAnimationsReady] = useState(false);
-  const explorerRowAnimPrevRef = useRef<{ scope: string; keys: Set<string> }>({
-    scope: "",
-    keys: new Set(),
-  });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     rootPathRef.current = rootPath;
@@ -399,80 +661,17 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     directoryByPathRef.current = directoryByPath;
   }, [directoryByPath]);
 
-  useLayoutEffect(() => {
-    setRowEnterAnimationsReady(false);
-  }, [workspaceId, rootPath]);
-
   useEffect(() => {
-    if (!rootSnapshot || rootSnapshot.loading || rootSnapshot.updatedAt == null) {
-      return undefined;
-    }
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setRowEnterAnimationsReady(true));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [rootSnapshot?.loading, rootSnapshot?.updatedAt, rootPath, workspaceId]);
-
-  useLayoutEffect(() => {
-    const scope = explorerScopeKey(workspaceId, rootPath);
-    const container = treeListDomRef.current;
-    const keys = treeRows.map(explorerRowDomKey);
-    const nextKeySet = new Set(keys);
-    const bundle = explorerRowAnimPrevRef.current;
-
-    if (bundle.scope !== scope) {
-      explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
-      return;
-    }
-
-    if (!rowEnterAnimationsReady || !container) {
-      explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
-      return;
-    }
-
-    const prev = bundle.keys;
-    const added = keys.filter((k) => !prev.has(k));
-    explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
-
-    if (added.length === 0) return;
-
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reducedMotion) return;
-
-    for (const key of added) {
-      const el = container.querySelector(`[data-file-row-key="${escapeRowKeyForSelector(key)}"]`);
-      if (!(el instanceof HTMLElement)) continue;
-      el.classList.remove("file-explorer-row-enter");
-      void el.offsetWidth;
-      el.classList.add("file-explorer-row-enter");
-      const onEnd = (e: AnimationEvent) => {
-        if (e.target !== el) return;
-        el.classList.remove("file-explorer-row-enter");
-        el.removeEventListener("animationend", onEnd);
-      };
-      el.addEventListener("animationend", onEnd);
-    }
-  }, [workspaceId, rootPath, treeRows, rowEnterAnimationsReady]);
-
-  useEffect(() => {
-    if (!explorer && workspacePath) {
+    if (!contextSidebarCollapsed && !explorer && workspacePath) {
       void refresh(workspaceId).catch(() => {});
     }
-  }, [explorer, refresh, workspaceId, workspacePath]);
+  }, [contextSidebarCollapsed, explorer, refresh, workspaceId, workspacePath]);
 
   const loadDirectory = useCallback(
-    async (path: string, opts?: { background?: boolean; silent?: boolean }): Promise<boolean> => {
+    async (path: string, opts?: { background?: boolean; silent?: boolean }): Promise<void> => {
       const targetPath = normalizeExplorerPath(path);
-      if (!targetPath) return false;
-
-      const requestId = ++requestCounterRef.current;
-      latestRequestByPathRef.current[targetPath] = requestId;
+      const requestScope = scopeRef.current;
+      if (!targetPath || !requestScope) return;
 
       setDirectoryByPath((previous) => {
         const current = previous[targetPath];
@@ -495,22 +694,31 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       });
 
       try {
-        const listed = await listDirectory({ path: targetPath, includeHidden: showHiddenFiles });
+        const listed = await listDirectory({
+          workspaceId,
+          path: targetPath,
+          includeHidden: showHiddenFiles,
+        });
+        if (!mountedRef.current || scopeRef.current !== requestScope) {
+          return;
+        }
         const entries = sortExplorerEntries(listed);
-        if (latestRequestByPathRef.current[targetPath] !== requestId) return false;
-
         const fingerprint = buildDirectoryFingerprint(entries);
-        let changed = false;
         setDirectoryByPath((previous) => {
           const current = previous[targetPath];
-          if (
-            opts?.background &&
-            shouldReuseBackgroundDirectorySnapshot(current, fingerprint, null)
-          ) {
-            return previous;
+          if (shouldReuseBackgroundDirectorySnapshot(current, fingerprint, null)) {
+            if (!current?.loading) {
+              return previous;
+            }
+            return {
+              ...previous,
+              [targetPath]: {
+                ...current,
+                loading: false,
+              },
+            };
           }
 
-          changed = true;
           return {
             ...previous,
             [targetPath]: {
@@ -522,12 +730,15 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             },
           };
         });
-        return changed;
       } catch (error) {
-        if (latestRequestByPathRef.current[targetPath] !== requestId) return false;
-
+        if (
+          !mountedRef.current ||
+          scopeRef.current !== requestScope ||
+          isStaleDirectoryListingError(error)
+        ) {
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
-        let changed = false;
         setDirectoryByPath((previous) => {
           const current = previous[targetPath];
           if (
@@ -537,7 +748,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             return previous;
           }
 
-          changed = true;
           return {
             ...previous,
             [targetPath]: {
@@ -547,38 +757,47 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             },
           };
         });
-        return changed;
       }
     },
-    [showHiddenFiles],
+    [showHiddenFiles, workspaceId],
   );
 
-  const refreshExpandedDirectories = useCallback(async () => {
-    const currentRootPath = rootPathRef.current;
-    if (!currentRootPath) return;
-    if (syncInFlightRef.current) {
-      syncQueuedRef.current = true;
-      return;
-    }
-    syncInFlightRef.current = true;
+  const refreshExpandedDirectories = useCallback(
+    async (options?: { invalidate?: boolean }) => {
+      const currentRootPath = rootPathRef.current;
+      if (!currentRootPath || !explorerActiveRef.current) return;
+      if (syncInFlightRef.current) {
+        syncQueuedRef.current = true;
+        syncInvalidateQueuedRef.current ||= options?.invalidate === true;
+        return;
+      }
+      syncInFlightRef.current = true;
+      let invalidate = options?.invalidate === true;
 
-    try {
-      do {
-        syncQueuedRef.current = false;
-        const cycleRootPath = rootPathRef.current;
-        if (!cycleRootPath) break;
-        const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
-        const updates = await Promise.all(
-          Array.from(paths).map((path) => loadDirectory(path, { background: true })),
-        );
-        if (updates.some(Boolean)) {
-          void refresh(workspaceId).catch(() => {});
-        }
-      } while (syncQueuedRef.current);
-    } finally {
-      syncInFlightRef.current = false;
-    }
-  }, [loadDirectory, refresh, workspaceId]);
+      try {
+        do {
+          syncQueuedRef.current = false;
+          invalidate ||= syncInvalidateQueuedRef.current;
+          syncInvalidateQueuedRef.current = false;
+          const cycleRootPath = rootPathRef.current;
+          if (!cycleRootPath) break;
+          const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
+          if (invalidate) {
+            for (const path of paths) {
+              invalidateDirectoryListing({ workspaceId, path });
+            }
+          }
+          invalidate = false;
+          await Promise.all(
+            Array.from(paths).map((path) => loadDirectory(path, { background: true })),
+          );
+        } while (syncQueuedRef.current);
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    },
+    [loadDirectory, workspaceId],
+  );
 
   const toggleDirectory = useCallback(
     (path: string) => {
@@ -590,7 +809,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         const next = new Set(previous);
         if (isExpanded) {
           if (targetPath !== rootPathRef.current) {
-            next.delete(targetPath);
+            for (const expandedPath of next) {
+              if (isExplorerPathWithin(expandedPath, targetPath)) {
+                next.delete(expandedPath);
+              }
+            }
           }
         } else {
           next.add(targetPath);
@@ -622,30 +845,31 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     if (prevScope) {
       explorerDirectorySessionByScope.set(
         prevScope,
-        cloneDirectoryByPath(directoryByPathRef.current),
+        prepareDirectorySessionSnapshot(directoryByPathRef.current),
       );
     }
 
     folderLastClickRef.current = null;
     scopeRef.current = scope;
 
-    latestRequestByPathRef.current = {};
     const normalizedRoot = normalizeExplorerPath(rootPath);
     const cached = explorerDirectorySessionByScope.get(scope);
-    const nextMap = cached ? cloneDirectoryByPath(cached) : {};
+    const nextMap = cached ?? {};
     setDirectoryByPath(nextMap);
     const nextExpanded = new Set<string>([normalizedRoot]);
     expandedPathsRef.current = nextExpanded;
     setExpandedPaths(nextExpanded);
     selectFile(workspaceId, null);
 
-    const hasCachedListings = cached && Object.keys(cached).length > 0;
-    if (hasCachedListings) {
-      void loadDirectory(rootPath, { background: true }).catch(() => {});
-    } else {
-      void loadDirectory(rootPath).catch(() => {});
+    if (!contextSidebarCollapsed) {
+      const hasCachedListings = cached && Object.keys(cached).length > 0;
+      if (hasCachedListings) {
+        void loadDirectory(rootPath, { background: true }).catch(() => {});
+      } else {
+        void loadDirectory(rootPath).catch(() => {});
+      }
     }
-  }, [loadDirectory, rootPath, selectFile, workspaceId]);
+  }, [contextSidebarCollapsed, loadDirectory, rootPath, selectFile, workspaceId]);
 
   useEffect(() => {
     return () => {
@@ -653,85 +877,170 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       if (scope) {
         explorerDirectorySessionByScope.set(
           scope,
-          cloneDirectoryByPath(directoryByPathRef.current),
+          prepareDirectorySessionSnapshot(directoryByPathRef.current),
         );
       }
     };
   }, []);
 
   useEffect(() => {
-    if (!rootPath) return;
-    const normalizedRoot = normalizeExplorerPath(rootPath);
-    const rootSnap = directoryByPath[normalizedRoot];
-    if (!rootSnap || rootSnap.loading || rootSnap.error) return;
-
-    const gen = ++prefetchGenRef.current;
+    if (
+      !rootPath ||
+      contextSidebarCollapsed ||
+      document.visibilityState !== "visible" ||
+      !rootSnapshot ||
+      rootSnapshot.loading ||
+      rootSnapshot.error
+    ) {
+      return;
+    }
     let cancelled = false;
-
-    void (async () => {
-      const silentLoad = async (dirPath: string) => {
-        if (cancelled || gen !== prefetchGenRef.current) return;
-        const p = normalizeExplorerPath(dirPath);
+    const childDirectories = rootSnapshot.entries
+      .filter((entry) => entry.isDirectory)
+      .slice(0, PREFETCH_DIRECTORY_BUDGET)
+      .map((entry) => normalizeExplorerPath(entry.path));
+    const cancelIdleWork = scheduleIdleWork(() => {
+      void runPool(childDirectories, PREFETCH_CONCURRENCY, async (directoryPath) => {
+        if (cancelled || !explorerActiveRef.current) return;
+        const p = normalizeExplorerPath(directoryPath);
         const snap = directoryByPathRef.current[p];
         if (snap?.updatedAt != null && !snap.error) return;
         await loadDirectory(p, { silent: true });
-      };
-
-      const childDirs = rootSnap.entries
-        .filter((e) => e.isDirectory)
-        .map((e) => normalizeExplorerPath(e.path));
-      await runPool(childDirs, PREFETCH_CONCURRENCY, silentLoad);
-
-      if (cancelled || gen !== prefetchGenRef.current) return;
-      await new Promise<void>((r) => setTimeout(r, 0));
-
-      const grand: string[] = [];
-      for (const d of childDirs) {
-        const snap = directoryByPathRef.current[d];
-        if (!snap?.entries) continue;
-        for (const e of snap.entries) {
-          if (e.isDirectory) grand.push(normalizeExplorerPath(e.path));
-        }
-      }
-      await runPool(grand, PREFETCH_CONCURRENCY, silentLoad);
-    })();
+      });
+    });
 
     return () => {
       cancelled = true;
+      cancelIdleWork();
     };
-  }, [directoryByPath, rootPath, loadDirectory]);
+  }, [
+    contextSidebarCollapsed,
+    loadDirectory,
+    rootPath,
+    rootSnapshot?.entries,
+    rootSnapshot?.error,
+    rootSnapshot?.loading,
+  ]);
 
   useEffect(() => {
     if (!rootPath) return;
-    void refreshExpandedDirectories();
-  }, [rootPath, refreshExpandedDirectories, showHiddenFiles]);
-
-  useEffect(() => {
-    if (!rootPath || refreshSignal === 0) return;
-    void refreshExpandedDirectories();
-  }, [refreshExpandedDirectories, refreshSignal, rootPath]);
-
-  useEffect(() => {
-    if (!rootPath) return;
-    const interval = window.setInterval(() => {
-      if (!shouldAutoRefreshExplorer(document.visibilityState, document.hasFocus())) {
+    let subscribed = true;
+    setWatchSupported(null);
+    const stopListening = onWorkspaceFileChanged((event) => {
+      if (
+        event.workspaceId !== workspaceId ||
+        normalizeExplorerPath(event.rootPath) !== rootPathRef.current
+      ) {
         return;
       }
-      void refreshExpandedDirectories();
+
+      if (event.invalidatedSubtreePaths.length > 0) {
+        setDirectoryByPath((previous) => {
+          let next = previous;
+          for (const cachedPath of Object.keys(previous)) {
+            if (
+              event.invalidatedSubtreePaths.some((subtreePath) =>
+                isExplorerPathWithin(cachedPath, normalizeExplorerPath(subtreePath)),
+              )
+            ) {
+              if (next === previous) {
+                next = { ...previous };
+              }
+              delete next[cachedPath];
+            }
+          }
+          return next;
+        });
+        setExpandedPaths((previous) => {
+          const next = new Set(previous);
+          for (const expandedPath of previous) {
+            if (
+              event.invalidatedSubtreePaths.some((subtreePath) =>
+                isExplorerPathWithin(expandedPath, normalizeExplorerPath(subtreePath)),
+              )
+            ) {
+              next.delete(expandedPath);
+            }
+          }
+          if (next.size === previous.size) {
+            return previous;
+          }
+          expandedPathsRef.current = next;
+          return next;
+        });
+      }
+
+      if (!explorerActiveRef.current) {
+        return;
+      }
+      const visibleAffectedPaths = event.affectedDirectoryPaths
+        .map(normalizeExplorerPath)
+        .filter(
+          (directoryPath) =>
+            directoryPath === rootPathRef.current || expandedPathsRef.current.has(directoryPath),
+        );
+      void Promise.all(
+        visibleAffectedPaths.map((directoryPath) =>
+          loadDirectory(directoryPath, { background: true }),
+        ),
+      );
+    });
+    void watchWorkspaceDirectory({ workspaceId, rootPath })
+      .then((supported) => {
+        if (subscribed) {
+          setWatchSupported(supported);
+        }
+      })
+      .catch(() => {
+        if (subscribed) {
+          setWatchSupported(false);
+        }
+      });
+
+    return () => {
+      subscribed = false;
+      stopListening();
+      void unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => {});
+    };
+  }, [loadDirectory, rootPath, workspaceId]);
+
+  useEffect(() => {
+    if (!rootPath || contextSidebarCollapsed) return;
+    void refreshExpandedDirectories();
+  }, [contextSidebarCollapsed, rootPath, refreshExpandedDirectories, showHiddenFiles]);
+
+  useEffect(() => {
+    if (!rootPath || contextSidebarCollapsed || refreshSignal === 0) return;
+    void refreshExpandedDirectories({ invalidate: true });
+  }, [contextSidebarCollapsed, refreshExpandedDirectories, refreshSignal, rootPath]);
+
+  useEffect(() => {
+    if (!rootPath || contextSidebarCollapsed || watchSupported !== false) return;
+    const interval = window.setInterval(() => {
+      if (
+        !shouldAutoRefreshExplorer(
+          document.visibilityState,
+          document.hasFocus(),
+          !contextSidebarCollapsed,
+        )
+      ) {
+        return;
+      }
+      void refreshExpandedDirectories({ invalidate: true });
     }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [refreshExpandedDirectories, rootPath]);
+  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath, watchSupported]);
 
   useEffect(() => {
-    if (!rootPath) return;
+    if (!rootPath || contextSidebarCollapsed) return;
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        void refreshExpandedDirectories();
+        void refreshExpandedDirectories({ invalidate: watchSupported === false });
       }
     };
     const onFocus = () => {
-      void refreshExpandedDirectories();
+      void refreshExpandedDirectories({ invalidate: watchSupported === false });
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -741,7 +1050,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [refreshExpandedDirectories, rootPath]);
+  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath, watchSupported]);
 
   const openEntryMenu = useCallback(
     async (entry: ExplorerEntry) => {
@@ -850,6 +1159,30 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     [openFilePreview, selectFile, workspaceId],
   );
 
+  const handleEntryClick = useCallback(
+    (entry: ExplorerEntry) => {
+      if (!entry.isDirectory) {
+        handleSelectEntry(entry);
+        return;
+      }
+      const normalizedPath = normalizeExplorerPath(entry.path);
+      const now = Date.now();
+      const previous = folderLastClickRef.current;
+      if (
+        previous &&
+        previous.path === normalizedPath &&
+        now - previous.t < FOLDER_DOUBLE_CLICK_MS
+      ) {
+        folderLastClickRef.current = null;
+        void openFile(workspaceId, entry.path, false).catch(() => {});
+        return;
+      }
+      folderLastClickRef.current = { path: normalizedPath, t: now };
+      toggleDirectory(entry.path);
+    },
+    [handleSelectEntry, openFile, toggleDirectory, workspaceId],
+  );
+
   if (!workspacePath || !rootPath) {
     return (
       <div className={cn("flex items-center justify-center p-4 text-muted-foreground", className)}>
@@ -914,202 +1247,23 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             aria-label={`Workspace files for ${rootLabel}`}
             className="space-y-0.5"
           >
-            {treeRows.map((row) => {
-              if (row.kind === "status") {
-                return (
-                  <div
-                    key={`${row.path}:${row.status}`}
-                    data-file-row-key={explorerRowDomKey(row)}
-                    className={cn(
-                      "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                      row.status === "error" ? "text-destructive" : "text-muted-foreground",
-                    )}
-                    style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
-                  >
-                    <span className="truncate">{row.message}</span>
-                  </div>
-                );
-              }
-
-              const { entry, depth } = row;
-              const normalizedPath = normalizeExplorerPath(entry.path);
-              const isSelected = !entry.isDirectory && selectedPath === normalizedPath;
-              const isDirectory = entry.isDirectory;
-              const entryMeta = isDirectory
-                ? `${entry.isHidden ? "Hidden folder" : "Folder"}`
-                : `${formatEntrySize(entry.sizeBytes)} • ${formatModifiedAt(entry.modifiedAtMs)}${entry.isHidden ? " • hidden" : ""}`;
-
-              return (
-                <div
-                  key={entry.path}
-                  data-file-row-key={explorerRowDomKey(row)}
-                  role="treeitem"
-                  tabIndex={0}
-                  aria-level={depth + 1}
-                  aria-selected={isDirectory ? false : isSelected}
-                  aria-expanded={isDirectory ? row.expanded : undefined}
-                  className={cn(
-                    "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
-                    isSelected
-                      ? "bg-accent text-accent-foreground"
-                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                    entry.isHidden && "opacity-70",
-                  )}
-                  style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
-                  onDoubleClick={(event) => {
-                    if (isTreeRowControlTarget(event.target)) {
-                      return;
-                    }
-                    if (entry.isDirectory) {
-                      return;
-                    }
-                    handleOpenEntry(entry);
-                  }}
-                  onContextMenu={(event) => {
-                    void handleContextMenu(event, entry);
-                  }}
-                  onMouseDown={(event) => {
-                    if (isTreeRowControlTarget(event.target)) {
-                      event.stopPropagation();
-                    }
-                  }}
-                  onClick={(event) => {
-                    if (isTreeRowControlTarget(event.target)) {
-                      return;
-                    }
-                    if (entry.isDirectory) {
-                      const now = Date.now();
-                      const prev = folderLastClickRef.current;
-                      if (
-                        prev &&
-                        prev.path === normalizedPath &&
-                        now - prev.t < FOLDER_DOUBLE_CLICK_MS
-                      ) {
-                        folderLastClickRef.current = null;
-                        void openFile(workspaceId, entry.path, false).catch(() => {});
-                        return;
-                      }
-                      folderLastClickRef.current = { path: normalizedPath, t: now };
-                      toggleDirectory(entry.path);
-                      return;
-                    }
-                    handleSelectEntry(entry);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      handleOpenEntry(entry);
-                      return;
-                    }
-                    if (event.key === " " || event.key === "Spacebar") {
-                      event.preventDefault();
-                      if (isDirectory) {
-                        toggleDirectory(entry.path);
-                      } else {
-                        handleSelectEntry(entry);
-                      }
-                      return;
-                    }
-                    if (isDirectory && event.key === "ArrowRight" && !row.expanded) {
-                      event.preventDefault();
-                      toggleDirectory(entry.path);
-                      return;
-                    }
-                    if (isDirectory && event.key === "ArrowLeft" && row.expanded) {
-                      event.preventDefault();
-                      toggleDirectory(entry.path);
-                    }
-                  }}
-                  title={entry.path}
-                >
-                  {isDirectory ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
-                      className={cn(
-                        "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
-                        isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted",
-                      )}
-                      data-file-explorer-control="true"
-                      onClick={() => toggleDirectory(entry.path)}
-                    >
-                      <ChevronRightIcon
-                        strokeWidth={1.5}
-                        className={cn(
-                          "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                          isSelected ? "text-link/80" : "text-inherit",
-                          row.expanded && "rotate-90",
-                        )}
-                      />
-                    </Button>
-                  ) : (
-                    <span className="inline-block h-[18px] w-[18px]" aria-hidden />
-                  )}
-
-                  {isDirectory ? (
-                    row.expanded ? (
-                      <FolderOpenIcon
-                        strokeWidth={1.5}
-                        className={cn(
-                          "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                          isSelected ? "text-link/80" : "text-link/85",
-                        )}
-                      />
-                    ) : (
-                      <FolderIcon
-                        strokeWidth={1.5}
-                        className={cn(
-                          "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                          isSelected ? "text-link/80" : "text-link/85",
-                        )}
-                      />
-                    )
-                  ) : (
-                    <FileIcon
-                      strokeWidth={1.5}
-                      className={cn(
-                        "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                        isSelected ? "text-link/80" : "text-inherit",
-                      )}
-                    />
-                  )}
-
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{entry.name}</div>
-                    <div
-                      className={cn(
-                        "truncate text-[9px] leading-3.5",
-                        isSelected ? "text-accent-foreground/85" : "text-muted-foreground",
-                      )}
-                    >
-                      {entryMeta}
-                    </div>
-                  </div>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`More options for ${entry.name}`}
-                    className={cn(
-                      "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
-                      isSelected
-                        ? "opacity-100 hover:bg-accent-foreground/15"
-                        : "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-muted",
-                    )}
-                    data-file-explorer-control="true"
-                    onClick={() => void openEntryMenu(entry)}
-                  >
-                    <MoreVerticalIcon
-                      strokeWidth={1.5}
-                      className={cn("h-3.25 w-3.25", isSelected ? "text-link/80" : "text-inherit")}
-                    />
-                  </Button>
-                </div>
-              );
-            })}
+            {treeRows.map((row) => (
+              <ExplorerTreeRowView
+                key={explorerRowDomKey(row)}
+                row={row}
+                selected={
+                  row.kind === "entry" &&
+                  !row.entry.isDirectory &&
+                  selectedPath === normalizeExplorerPath(row.entry.path)
+                }
+                onContextMenu={handleContextMenu}
+                onEntryClick={handleEntryClick}
+                onOpenEntry={handleOpenEntry}
+                onOpenEntryMenu={openEntryMenu}
+                onSelectEntry={handleSelectEntry}
+                onToggleDirectory={toggleDirectory}
+              />
+            ))}
           </div>
         )}
       </div>

@@ -99,6 +99,7 @@ type QualityMainControl = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): QualityDeltaBurstDescriptor;
+  emitFileChange(runId: number): void;
   emitInteractionQueue(): void;
   emitLongTranscript(count: number, runId: number): string;
   emitStreamingActivity(): void;
@@ -148,6 +149,7 @@ let mockServerUrl = "";
 let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
+let explorerRevision = 0;
 const researchRecords = new Map<string, ResearchRecord>();
 const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
@@ -197,6 +199,17 @@ globalThis.__coworkQualityGateMain = {
     emitCompletion();
   },
   emitDeltaBurst: (count, runId, path) => emitDeltaBurst(count, runId, path),
+  emitFileChange: (runId) => {
+    explorerRevision = runId;
+    mainWindow?.webContents.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, {
+      workspaceId: PROJECT_WORKSPACE_ID,
+      rootPath: "/quality/project",
+      kind: "modify",
+      changedPaths: ["/quality/project/fixture-0002.ts"],
+      affectedDirectoryPaths: ["/quality/project"],
+      invalidatedSubtreePaths: [],
+    });
+  },
   emitInteractionQueue: () => {
     emitInteractionQueue();
   },
@@ -430,7 +443,7 @@ function createPlatformChrome(): PlatformChromeInfo {
   };
 }
 
-function createExplorerEntries(): ExplorerEntry[] {
+function createExplorerEntries(revision = 0): ExplorerEntry[] {
   return Array.from({ length: 1_000 }, (_, index) => {
     const fileNumber = String(index + 1).padStart(4, "0");
     return {
@@ -441,13 +454,12 @@ function createExplorerEntries(): ExplorerEntry[] {
           : `/quality/project/fixture-${fileNumber}.ts`,
       isDirectory: false,
       isHidden: false,
-      sizeBytes: 512 + index,
+      sizeBytes: 512 + index + (index === 1 ? revision : 0),
       modifiedAtMs: Date.parse(FIXED_NOW),
     };
   });
 }
 
-const explorerEntries = createExplorerEntries();
 const hydratedTranscript = {
   feed: [
     {
@@ -1613,7 +1625,11 @@ async function handleIpc(
       return [];
     case DESKTOP_IPC_CHANNELS.listDirectory:
       metrics.filesystemRequests += 1;
-      return structuredClone(explorerEntries);
+      return createExplorerEntries(explorerRevision);
+    case DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory:
+      return true;
+    case DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory:
+      return undefined;
     case DESKTOP_IPC_CHANNELS.readFile:
       metrics.filesystemRequests += 1;
       return {

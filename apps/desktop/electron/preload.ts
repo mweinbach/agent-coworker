@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { z } from "zod";
+import type { WorkspaceFileChangeEvent } from "../../../src/filesystem/workspaceFileEvents";
 import {
   type DesktopFeatureFlagOverrides,
   normalizeDesktopFeatureFlagOverrides,
@@ -59,6 +60,7 @@ import {
   type TrashPathInput,
   type UpdaterState,
   type UploadDiagnosticsBundleInput,
+  type WatchWorkspaceDirectoryInput,
   type WindowCloseRequest,
   type WindowCloseResponseInput,
   type WindowDragPointInput,
@@ -112,9 +114,11 @@ import {
   trashPathInputSchema,
   updaterStateSchema,
   uploadDiagnosticsBundleInputSchema,
+  watchWorkspaceDirectoryInputSchema,
   windowCloseRequestSchema,
   windowCloseResponseInputSchema,
   windowDragPointInputSchema,
+  workspaceFileChangeEventSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
   workspaceServerStatusSchema,
@@ -191,6 +195,14 @@ function assertWindowCloseResponseInput(opts: WindowCloseResponseInput): void {
 
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
   parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
+}
+
+function assertWatchWorkspaceDirectoryInput(opts: WatchWorkspaceDirectoryInput): void {
+  parseWithSchema(watchWorkspaceDirectoryInputSchema, opts, "watchWorkspaceDirectory options");
+}
+
+function assertWorkspaceFileChangeEvent(value: unknown): asserts value is WorkspaceFileChangeEvent {
+  parseWithSchema(workspaceFileChangeEventSchema, value, "workspace file change event");
 }
 
 function assertReadFileInput(opts: ReadFileInput): void {
@@ -613,6 +625,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
   },
 
+  watchWorkspaceDirectory: async (opts: WatchWorkspaceDirectoryInput) => {
+    assertWatchWorkspaceDirectoryInput(opts);
+    const watching = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory, opts);
+    if (typeof watching !== "boolean") {
+      throw new Error("watchWorkspaceDirectory result must be a boolean");
+    }
+    return watching;
+  },
+
+  unwatchWorkspaceDirectory: (opts: WatchWorkspaceDirectoryInput) => {
+    assertWatchWorkspaceDirectoryInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory, opts);
+  },
+
   readFile: (opts: ReadFileInput) => {
     assertReadFileInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
@@ -891,6 +917,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
+    };
+  },
+
+  onWorkspaceFileChanged: (listener: (event: WorkspaceFileChangeEvent) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWorkspaceFileChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWorkspaceFileChangeEvent(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
     };
   },
 });

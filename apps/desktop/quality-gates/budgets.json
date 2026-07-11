@@ -15,9 +15,10 @@
     "unrelatedSidebarRowRenders": 6
   },
   "fileTree": {
-    "filesystemRequests": 2,
+    "fileExplorerRowRenders": 1,
+    "filesystemRequests": 1,
     "reactCommits": 6,
-    "storePublications": 4
+    "storePublications": 0
   },
   "longTranscript": {
     "maxFeedDerivationItems": 80,

@@ -62,6 +62,7 @@ export type QualityHarness = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): Promise<QualityDeltaBurstDescriptor>;
+  emitFileChange(runId: number): Promise<void>;
   emitInteractionQueue(): Promise<void>;
   emitLongTranscript(count: number, runId: number): Promise<string>;
   emitStreamingActivity(): Promise<void>;
@@ -474,6 +475,15 @@ async function launchQualityHarness(
           },
           { count, path, runId },
         ),
+      emitFileChange: async (runId) => {
+        await electronApp.evaluate((_electron, revision) => {
+          const control = globalThis.__coworkQualityGateMain;
+          if (!control) {
+            throw new Error("Quality-gate main control is unavailable");
+          }
+          control.emitFileChange(revision);
+        }, runId);
+      },
       emitInteractionQueue: async () => {
         await electronApp.evaluate(() => {
           globalThis.__coworkQualityGateMain?.emitInteractionQueue();

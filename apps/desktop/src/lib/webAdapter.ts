@@ -705,6 +705,12 @@ export function createWebAdapter(): DesktopApi {
       });
     },
 
+    async watchWorkspaceDirectory(): Promise<boolean> {
+      return false;
+    },
+
+    async unwatchWorkspaceDirectory(): Promise<void> {},
+
     async readFile(opts): Promise<{ content: string }> {
       return await readWebJson<{ content: string }>("/cowork/fs/read", { path: opts.path });
     },
@@ -913,6 +919,10 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onMobileRelayStateChanged(): () => void {
+      return () => {};
+    },
+
+    onWorkspaceFileChanged(): () => void {
       return () => {};
     },
   };

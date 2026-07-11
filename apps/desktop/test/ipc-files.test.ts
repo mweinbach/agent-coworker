@@ -1189,7 +1189,7 @@ describe("files IPC", () => {
     try {
       const entries = (await handler?.(
         { sender: {} },
-        { path: sessionDir, includeHidden: false },
+        { workspaceId: "global-chats", path: sessionDir, includeHidden: false },
       )) as Array<{ name: string; isDirectory: boolean }>;
       expect(entries.map((entry) => entry.name)).toEqual(["assets", "report.md"]);
       expect(entries[0]?.isDirectory).toBe(true);

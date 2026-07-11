@@ -14,10 +14,10 @@ import {
   getPlatformChrome,
   getSystemAppearance,
   onMenuCommand,
+  onPreviewFileChanged,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   onWindowCloseRequested,
-  onWorkspaceFileChanged,
   onWorkspaceServerExited,
   onWorkspaceServerStartupProgress,
   resolveWindowCloseRequest,
@@ -671,7 +671,7 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    return onWorkspaceFileChanged((event) => {
+    return onPreviewFileChanged((event) => {
       workspaceFileChangeEvents.publish(event);
     });
   }, []);

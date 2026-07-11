@@ -1,4 +1,4 @@
-import { workspaceFileChangeEventSchema } from "../../lib/desktopSchemas";
+import { previewFileChangeEventSchema } from "../../lib/desktopSchemas";
 import { workspaceFileChangeEvents } from "../../lib/filePreviewResource";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import {
@@ -551,7 +551,7 @@ export function createControlSocketHelpers(
           typeof message.params === "object" && message.params !== null
             ? (message.params as Record<string, unknown>)
             : {};
-        const parsed = workspaceFileChangeEventSchema.safeParse({
+        const parsed = previewFileChangeEventSchema.safeParse({
           kind: params.kind,
           path: params.path,
           version: params.version,

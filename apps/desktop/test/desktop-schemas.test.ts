@@ -12,10 +12,12 @@ import {
   persistedStateInputSchema,
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
+  previewFileChangeEventSchema,
   showQuickChatWindowInputSchema,
   startWorkspaceServerInputSchema,
   telemetryStatusInputSchema,
   updaterStateSchema,
+  workspaceFileChangeEventSchema,
   workspaceServerStartupProgressSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -306,6 +308,32 @@ describe("desktop persisted-state schema defaults", () => {
     expect(() => pickDirectoryInputSchema.parse({ title: 42 })).toThrow();
     expect(() => copyTextInputSchema.parse({ text: "not a string" })).toThrow();
     expect(() => telemetryStatusInputSchema.parse({ extra: true })).toThrow();
+  });
+
+  test("keeps preview invalidations distinct from explorer watcher events", () => {
+    const previewEvent = {
+      kind: "changed",
+      path: "/tmp/workspace/report.md",
+      version: {
+        modifiedAtMs: 1,
+        changeTimeMs: 2,
+        size: 3,
+        fingerprint: "preview-version",
+      },
+    };
+    const explorerEvent = {
+      workspaceId: "ws_1",
+      rootPath: "/tmp/workspace",
+      kind: "modify",
+      changedPaths: ["/tmp/workspace/report.md"],
+      affectedDirectoryPaths: ["/tmp/workspace"],
+      invalidatedSubtreePaths: [],
+    };
+
+    expect(previewFileChangeEventSchema.safeParse(previewEvent).success).toBe(true);
+    expect(workspaceFileChangeEventSchema.safeParse(explorerEvent).success).toBe(true);
+    expect(previewFileChangeEventSchema.safeParse(explorerEvent).success).toBe(false);
+    expect(workspaceFileChangeEventSchema.safeParse(previewEvent).success).toBe(false);
   });
 
   test("validates workspace runtime startup progress events", () => {

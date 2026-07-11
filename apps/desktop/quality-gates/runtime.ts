@@ -24,6 +24,8 @@ export type QualityGateMetrics = {
   contentPublications: number;
   desktopMarkdownRenders: number;
   feedRowRenders: number;
+  fileExplorerRowRenders: number;
+  fileExplorerRowRendersById: Record<string, number>;
   maxFeedDerivationItems: number;
   reactCommits: number;
   sidebarThreadRowRendersById: Record<string, number>;
@@ -62,6 +64,8 @@ let metrics: QualityGateMetrics = {
   contentPublications: 0,
   desktopMarkdownRenders: 0,
   feedRowRenders: 0,
+  fileExplorerRowRenders: 0,
+  fileExplorerRowRendersById: {},
   maxFeedDerivationItems: 0,
   reactCommits: 0,
   sidebarThreadRowRendersById: {},
@@ -193,6 +197,13 @@ function recordRenderMetric(event: DesktopRenderMetricEvent): void {
     case "feed-row":
       metrics.feedRowRenders += 1;
       return;
+    case "file-explorer-row":
+      metrics.fileExplorerRowRenders += 1;
+      if (event.id) {
+        metrics.fileExplorerRowRendersById[event.id] =
+          (metrics.fileExplorerRowRendersById[event.id] ?? 0) + 1;
+      }
+      return;
     case "sidebar-thread-row": {
       if (!event.id) return;
       metrics.sidebarThreadRowRendersById[event.id] =
@@ -287,6 +298,8 @@ export function installQualityGateRuntime(): void {
         contentPublications: 0,
         desktopMarkdownRenders: 0,
         feedRowRenders: 0,
+        fileExplorerRowRenders: 0,
+        fileExplorerRowRendersById: {},
         maxFeedDerivationItems: 0,
         reactCommits: 0,
         sidebarThreadRowRendersById: {},

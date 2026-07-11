@@ -1,7 +1,8 @@
 import { z } from "zod";
+import type { WorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
 import type {
   FileChangeVersion,
-  WorkspaceFileChangeEvent,
+  WorkspaceFileChangeEvent as PreviewFileChangeEvent,
 } from "../../../../src/shared/fileVersion";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
@@ -72,6 +73,7 @@ import type {
   UpdaterReleaseInfo,
   UpdaterState,
   UploadDiagnosticsBundleInput,
+  WatchWorkspaceDirectoryInput,
   WindowCloseRequest,
   WindowCloseResponseInput,
   WindowDragPointInput,
@@ -465,9 +467,28 @@ export const showQuickChatWindowInputSchema: z.ZodType<ShowQuickChatWindowInput>
 });
 
 export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object({
+  workspaceId: safeIdSchema,
   path: nonEmptyStringSchema,
   includeHidden: z.boolean().optional(),
 });
+
+export const watchWorkspaceDirectoryInputSchema: z.ZodType<WatchWorkspaceDirectoryInput> = z
+  .object({
+    workspaceId: safeIdSchema,
+    rootPath: nonEmptyStringSchema,
+  })
+  .strict();
+
+export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent> = z
+  .object({
+    workspaceId: safeIdSchema,
+    rootPath: nonEmptyStringSchema,
+    kind: z.enum(["add", "remove", "rename", "modify"]),
+    changedPaths: z.array(nonEmptyStringSchema),
+    affectedDirectoryPaths: z.array(nonEmptyStringSchema),
+    invalidatedSubtreePaths: z.array(nonEmptyStringSchema),
+  })
+  .strict();
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
 export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.object({
@@ -518,7 +539,7 @@ const fileChangeVersionSchema: z.ZodType<FileChangeVersion> = z
   })
   .strict();
 
-export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent> =
+export const previewFileChangeEventSchema: z.ZodType<PreviewFileChangeEvent> =
   z.discriminatedUnion("kind", [
     z
       .object({

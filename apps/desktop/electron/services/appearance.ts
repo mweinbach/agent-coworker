@@ -30,14 +30,24 @@ type SyncWindowAppearanceOptions = {
   platform?: NodeJS.Platform;
   useMacosNativeGlass?: boolean;
   useDarkColors?: boolean;
+  backgroundColor?: string;
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
+
+export type WindowAppearanceProfile = {
+  backgroundColor?: (useDarkColors: boolean) => string;
+  backgroundMaterial?: WindowsBackgroundMaterial;
+  useMacosNativeGlass?: boolean;
+};
+
+const windowAppearanceProfiles = new WeakMap<BrowserWindow, WindowAppearanceProfile>();
 
 function resolveWindowAppearance(
   options: {
     platform?: NodeJS.Platform;
     useMacosNativeGlass?: boolean;
     useDarkColors?: boolean;
+    backgroundColor?: string;
     backgroundMaterial?: WindowsBackgroundMaterial;
   } = {},
 ): ResolvedWindowAppearance {
@@ -53,8 +63,16 @@ function resolveWindowAppearance(
     platform,
     useDarkColors,
     useMacosNativeGlass,
+    backgroundColor: options.backgroundColor,
     backgroundMaterial: options.backgroundMaterial,
   });
+}
+
+export function registerWindowAppearanceProfile(
+  win: BrowserWindow,
+  profile: WindowAppearanceProfile,
+): void {
+  windowAppearanceProfiles.set(win, profile);
 }
 
 export function getInitialWindowAppearanceOptions(
@@ -62,6 +80,8 @@ export function getInitialWindowAppearanceOptions(
     platform?: NodeJS.Platform;
     useMacosNativeGlass?: boolean;
     useDarkColors?: boolean;
+    backgroundColor?: string;
+    backgroundMaterial?: WindowsBackgroundMaterial;
   } = {},
 ): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
   const { backgroundColor, backgroundMaterial } = resolveWindowAppearance(options);
@@ -93,9 +113,16 @@ export function syncWindowAppearance(
   options: SyncWindowAppearanceOptions = {},
 ): void {
   const platform = options.platform ?? process.platform;
+  const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
+  const profile = windowAppearanceProfiles.get(win);
+  const useMacosNativeGlass = profile?.useMacosNativeGlass ?? options.useMacosNativeGlass;
   const { backgroundColor, backgroundMaterial } = resolveWindowAppearance({
     ...options,
     platform,
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundColor: profile?.backgroundColor?.(useDarkColors) ?? options.backgroundColor,
+    backgroundMaterial: profile?.backgroundMaterial ?? options.backgroundMaterial,
   });
 
   win.setBackgroundColor(backgroundColor);
@@ -106,8 +133,9 @@ export function syncWindowAppearance(
 
   syncWindowChromeAppearance(win, {
     platform,
-    useDarkColors: options.useDarkColors,
-    useMacosNativeGlass: options.useMacosNativeGlass,
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundColor,
   });
 }
 

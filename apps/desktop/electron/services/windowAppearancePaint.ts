@@ -20,6 +20,7 @@ export type WindowChromePaintInput = {
   platform: NodeJS.Platform;
   useDarkColors: boolean;
   useMacosNativeGlass: boolean;
+  backgroundColor?: string;
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
@@ -37,9 +38,10 @@ export function resolveWindowChromePaint(input: WindowChromePaintInput): WindowC
   const backgroundMaterial =
     input.backgroundMaterial ?? windowsBackgroundMaterialForPlatform(platform);
   const backgroundColor =
-    platform === "darwin" && useMacosNativeGlass
+    input.backgroundColor ??
+    (platform === "darwin" && useMacosNativeGlass
       ? "#00000000"
-      : desktopShellBackgroundColor(useDarkColors);
+      : desktopShellBackgroundColor(useDarkColors));
 
   return {
     backgroundColor,

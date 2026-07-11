@@ -30,6 +30,7 @@ function resolveWindowChromeContext(
   options: Omit<WindowChromeOptions, "platform"> = {},
 ): WindowChromeContext {
   return {
+    ...(options.backgroundColor ? { backgroundColor: options.backgroundColor } : {}),
     useDarkColors: options.useDarkColors ?? false,
     useMacosNativeGlass: options.useMacosNativeGlass ?? shouldUseMacosNativeGlass(platform),
   };

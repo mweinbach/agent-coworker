@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type * as Electron from "electron";
 import { CloudSyncService } from "../../../src/sync/service";
 import type { PersistedState } from "../src/app/types";
+import { getCanvasNativeBackgroundColor } from "../src/lib/canvasAppearance";
 import {
   DESKTOP_EVENT_CHANNELS,
   type DesktopMenuCommand,
@@ -21,6 +22,7 @@ import {
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
+  registerWindowAppearanceProfile,
   syncWindowAppearance,
 } from "./services/appearance";
 import {
@@ -620,10 +622,15 @@ function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, s
 }
 
 async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron.BrowserWindow> {
-  const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
-    prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
-  });
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
+  const useMacosNativeGlass = false;
+  const backgroundColor = getCanvasNativeBackgroundColor(opts.path, useDarkColors);
+  const appearanceOptions = {
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundColor,
+    ...(process.platform === "win32" ? { backgroundMaterial: "none" as const } : {}),
+  };
 
   const win = new BrowserWindow({
     title: "Cowork Canvas",
@@ -631,8 +638,8 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     height: 600,
     minWidth: 400,
     minHeight: 400,
-    ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
-    ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
+    ...getInitialWindowAppearanceOptions(appearanceOptions),
+    ...getPlatformBrowserWindowOptions(process.platform, appearanceOptions),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -646,13 +653,18 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     },
   });
 
+  registerWindowAppearanceProfile(win, {
+    backgroundColor: (nextUseDarkColors) =>
+      getCanvasNativeBackgroundColor(opts.path, nextUseDarkColors),
+    useMacosNativeGlass,
+    ...(process.platform === "win32" ? { backgroundMaterial: "none" } : {}),
+  });
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
   applyPlatformWindowCreated(win, process.platform);
   applyWindowSecurity(win);
   syncWindowAppearance(win, {
     platform: process.platform,
-    useDarkColors,
-    useMacosNativeGlass,
+    ...appearanceOptions,
   });
 
   win.show();

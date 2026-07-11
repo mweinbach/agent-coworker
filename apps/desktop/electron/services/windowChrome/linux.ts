@@ -5,20 +5,21 @@ import type { WindowChromeModule } from "./types";
 
 function linuxTitleBarOverlay(
   useDarkColors: boolean,
+  backgroundColor?: string,
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
   const chrome = getPlatformChrome("linux");
   return {
-    color: desktopShellBackgroundColor(useDarkColors),
+    color: backgroundColor ?? desktopShellBackgroundColor(useDarkColors),
     symbolColor: getTitlebarSymbolColor(useDarkColors),
     height: chrome.titlebarHeight,
   };
 }
 
 const linuxWindowChrome: WindowChromeModule = {
-  getBrowserWindowOptions({ useDarkColors }) {
+  getBrowserWindowOptions({ backgroundColor, useDarkColors }) {
     return {
       titleBarStyle: "hidden",
-      titleBarOverlay: linuxTitleBarOverlay(useDarkColors),
+      titleBarOverlay: linuxTitleBarOverlay(useDarkColors, backgroundColor),
     };
   },
 
@@ -26,9 +27,9 @@ const linuxWindowChrome: WindowChromeModule = {
     win.setMenu(null);
   },
 
-  syncAppearance(win, { useDarkColors }) {
+  syncAppearance(win, { backgroundColor, useDarkColors }) {
     try {
-      win.setTitleBarOverlay(linuxTitleBarOverlay(useDarkColors));
+      win.setTitleBarOverlay(linuxTitleBarOverlay(useDarkColors, backgroundColor));
     } catch {
       // Some Linux/Wayland/GTK combinations do not support dynamic overlay updates.
     }

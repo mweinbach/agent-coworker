@@ -7,6 +7,7 @@ import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
 import { Button } from "./components/ui/button";
+import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
 import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
@@ -29,6 +30,7 @@ import {
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
+import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./lib/themeBootstrap";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
@@ -443,6 +445,9 @@ const ChatShell = memo(function ChatShell({
 
 export default function App() {
   const windowMode = getDesktopWindowMode();
+  const canvasWindowPath =
+    windowMode === "canvas" ? new URLSearchParams(window.location.search).get("path") || "" : "";
+  const canvasSurfaceKind = getCanvasSurfaceKind(canvasWindowPath);
   const ready = useAppStore((s) => s.ready);
   const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
   const startupError = useAppStore((s) => s.startupError);
@@ -513,10 +518,14 @@ export default function App() {
   useEffect(() => {
     const documentElement = document.documentElement;
     documentElement.dataset.windowMode = windowMode;
+    if (windowMode === "canvas") {
+      documentElement.dataset.canvasSurface = canvasSurfaceKind;
+    }
     return () => {
       delete documentElement.dataset.windowMode;
+      delete documentElement.dataset.canvasSurface;
     };
-  }, [windowMode]);
+  }, [canvasSurfaceKind, windowMode]);
 
   useEffect(() => {
     if (bootstrapPhase !== "idle") return;
@@ -704,28 +713,8 @@ export default function App() {
 
   useEffect(() => {
     function applySystemAppearance(appearance: SystemAppearance): void {
-      const root = document.documentElement;
-      const theme = appearance.shouldUseDarkColors ? "dark" : "light";
-      root.dataset.systemTheme = theme;
-      root.dataset.systemUiTheme = appearance.shouldUseDarkColorsForSystemIntegratedUI
-        ? "dark"
-        : "light";
-      root.dataset.theme = theme;
-      root.dataset.platform = appearance.platform;
-      root.dataset.highContrast =
-        appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
-      root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";
+      applySystemAppearanceToDocument(appearance, document, localStorage);
       syncPlatformChromeCssVars(document);
-      root.style.colorScheme = theme;
-      root.classList.toggle("dark", theme === "dark");
-      root.classList.toggle("light", theme !== "dark");
-      try {
-        // Survives reload so the pre-paint script in index.html can match the
-        // last resolved theme (including forced light/dark) before React boots.
-        localStorage.setItem("cowork.resolvedTheme", theme);
-      } catch {
-        // Private mode / storage quota — media-query FOUC fallback still works.
-      }
     }
 
     const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);
@@ -734,7 +723,9 @@ export default function App() {
       .catch(() => {
         // Keep CSS media-query fallback when system appearance cannot be loaded.
       });
-    void setWindowAppearance({ themeSource: "system" }).catch(() => {
+    void setWindowAppearance({
+      themeSource: readBootstrappedThemeSource(document.documentElement),
+    }).catch(() => {
       // Ignore and continue with default system theme behavior.
     });
     return unsubscribe;
@@ -776,16 +767,12 @@ export default function App() {
         <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
       ) : windowMode === "canvas" ? (
         <div
-          className="relative flex h-full w-full flex-col bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet)]"
-          style={
-            {
-              colorScheme: "light",
-            } as CSSProperties
-          }
+          className="relative flex h-full w-full flex-col bg-canvas text-canvas-foreground"
+          data-canvas-surface={canvasSurfaceKind}
         >
           <div className="flex-1 min-h-0 min-w-0">
             <InlineErrorBoundary label="This canvas couldn't be rendered.">
-              <Canvas path={new URLSearchParams(window.location.search).get("path") || ""} />
+              <Canvas path={canvasWindowPath} />
             </InlineErrorBoundary>
           </div>
         </div>

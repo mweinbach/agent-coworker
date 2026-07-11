@@ -80,4 +80,30 @@ describe("resolveWindowChromePaint", () => {
       backgroundMaterial: "tabbed",
     });
   });
+
+  test("honors an explicit opaque Canvas background over native glass defaults", () => {
+    expect(
+      resolveWindowChromePaint({
+        platform: "darwin",
+        useDarkColors: true,
+        useMacosNativeGlass: true,
+        backgroundColor: "#2a3120",
+      }),
+    ).toEqual({
+      backgroundColor: "#2a3120",
+    });
+
+    expect(
+      resolveWindowChromePaint({
+        platform: "win32",
+        useDarkColors: false,
+        useMacosNativeGlass: false,
+        backgroundColor: "#ffffff",
+        backgroundMaterial: "none",
+      }),
+    ).toEqual({
+      backgroundColor: "#ffffff",
+      backgroundMaterial: "none",
+    });
+  });
 });

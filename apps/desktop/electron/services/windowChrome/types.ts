@@ -1,6 +1,7 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
 
 export type WindowChromeContext = {
+  backgroundColor?: string;
   useDarkColors: boolean;
   useMacosNativeGlass: boolean;
 };

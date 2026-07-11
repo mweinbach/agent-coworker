@@ -5,7 +5,9 @@ import { createElectronMock } from "./helpers/mockElectron";
 
 mock.module("electron", () => createElectronMock());
 
-const { syncWindowAppearance } = await import("../electron/services/appearance");
+const { registerWindowAppearanceProfile, syncWindowAppearance } = await import(
+  "../electron/services/appearance"
+);
 
 function createWindowStub() {
   return {
@@ -39,6 +41,37 @@ describe("syncWindowAppearance", () => {
       {
         color: "#dfe2cc",
         symbolColor: "#556041",
+        height: 48,
+      },
+    ]);
+  });
+
+  test("keeps a Canvas profile synchronized across live light and dark updates", () => {
+    const win = createWindowStub();
+    registerWindowAppearanceProfile(win as unknown as BrowserWindow, {
+      backgroundColor: (useDarkColors) => (useDarkColors ? "#2a3120" : "#f8f9f2"),
+      useMacosNativeGlass: false,
+    });
+
+    syncWindowAppearance(win as unknown as BrowserWindow, {
+      platform: "linux",
+      useDarkColors: false,
+    });
+    syncWindowAppearance(win as unknown as BrowserWindow, {
+      platform: "linux",
+      useDarkColors: true,
+    });
+
+    expect(win.backgroundColorCalls).toEqual(["#f8f9f2", "#2a3120"]);
+    expect(win.titleBarOverlayCalls).toEqual([
+      {
+        color: "#f8f9f2",
+        symbolColor: "#556041",
+        height: 48,
+      },
+      {
+        color: "#2a3120",
+        symbolColor: "#eef0dc",
         height: 48,
       },
     ]);

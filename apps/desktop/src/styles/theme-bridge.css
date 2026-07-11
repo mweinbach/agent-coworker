@@ -8,6 +8,8 @@
 
   --color-background: var(--surface-window);
   --color-foreground: var(--text-primary);
+  --color-canvas: var(--surface-canvas);
+  --color-canvas-foreground: var(--text-canvas);
 
   --color-sidebar: var(--surface-sidebar);
   --color-panel: var(--surface-workspace-pane);
@@ -101,6 +103,7 @@
     --surface-spreadsheet-selected: color-mix(in srgb, var(--accent-base) 18%, #ffffff);
     --surface-spreadsheet-range-overlay: color-mix(in srgb, var(--accent-base) 16%, transparent);
     --surface-spreadsheet-active-overlay: color-mix(in srgb, var(--accent-base) 5%, transparent);
+    --surface-canvas: var(--surface-workspace-pane);
     --surface-landing-accent-glow: radial-gradient(
       circle,
       color-mix(in srgb, var(--accent-base) 9%, transparent) 0%,
@@ -118,6 +121,7 @@
     --text-spreadsheet: #24292f;
     --text-spreadsheet-secondary: #57606a;
     --text-spreadsheet-muted: #6e7781;
+    --text-canvas: var(--text-primary);
 
     --border-default: var(--border-base);
     --border-subtle: color-mix(in srgb, var(--border-base) 76%, transparent);
@@ -200,6 +204,71 @@
     --scrollbar-thumb: color-mix(in srgb, var(--text-base) 18%, transparent);
     --scrollbar-thumb-hover: color-mix(in srgb, var(--text-base) 30%, transparent);
     --toolbar-button-filter: none;
+  }
+
+  :where([data-canvas-surface="document"]) {
+    --surface-canvas: var(--surface-workspace-pane);
+    --text-canvas: var(--text-primary);
+  }
+
+  :where([data-canvas-surface="spreadsheet"]) {
+    --surface-canvas: var(--surface-spreadsheet);
+    --text-canvas: var(--text-spreadsheet);
+    --surface-window: var(--surface-spreadsheet);
+    --surface-card: var(--surface-spreadsheet);
+    --surface-card-elevated: var(--surface-spreadsheet-chrome);
+    --surface-overlay: var(--surface-spreadsheet);
+    --surface-secondary: var(--surface-spreadsheet-header);
+    --surface-accent: var(--surface-spreadsheet-hover);
+    --surface-field: var(--surface-spreadsheet);
+    --surface-muted-fill: var(--surface-spreadsheet-header);
+    --text-primary: var(--text-spreadsheet);
+    --text-secondary: var(--text-spreadsheet-secondary);
+    --text-muted: var(--text-spreadsheet-muted);
+    --border-default: var(--border-spreadsheet);
+    --border-subtle: var(--border-spreadsheet);
+    --background: var(--surface-spreadsheet);
+    --foreground: var(--text-spreadsheet);
+    --surface: var(--surface-spreadsheet);
+    --surface-foreground: var(--text-spreadsheet);
+    --overlay: var(--surface-spreadsheet);
+    --overlay-foreground: var(--text-spreadsheet);
+    --field-background: var(--surface-spreadsheet);
+    --field-foreground: var(--text-spreadsheet);
+    color-scheme: light;
+  }
+
+  :where(
+    :root[data-high-contrast="true"][data-canvas-surface],
+    :root[data-high-contrast="true"] [data-canvas-surface]
+  ) {
+    --surface-canvas: Canvas;
+    --text-canvas: CanvasText;
+    --surface-spreadsheet: Canvas;
+    --text-spreadsheet: CanvasText;
+    --surface-window: Canvas;
+    --surface-card: Canvas;
+    --surface-card-elevated: Canvas;
+    --surface-overlay: Canvas;
+    --surface-secondary: Canvas;
+    --surface-accent: Highlight;
+    --surface-field: Field;
+    --surface-muted-fill: Canvas;
+    --text-primary: CanvasText;
+    --text-secondary: CanvasText;
+    --text-muted: CanvasText;
+    --border-default: CanvasText;
+    --border-subtle: CanvasText;
+    --background: Canvas;
+    --foreground: CanvasText;
+    --surface: Canvas;
+    --surface-foreground: CanvasText;
+    --overlay: Canvas;
+    --overlay-foreground: CanvasText;
+    --field-background: Field;
+    --field-foreground: FieldText;
+    color-scheme: light dark;
+    forced-color-adjust: auto;
   }
 
   html.light,

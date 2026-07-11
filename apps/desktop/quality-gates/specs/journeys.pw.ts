@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
@@ -5,6 +8,17 @@ import {
   settleQualityPage,
 } from "../assertions";
 import { expect, test } from "../fixtures";
+import {
+  assertIndependentMentionGeometry,
+  measureIndependentMentionGeometry,
+} from "../mentionGeometry";
+
+const delayedMentionWebfontPath = fileURLToPath(
+  new URL("../../src/assets/fonts/IBMPlexMono-Regular.ttf", import.meta.url),
+);
+const delayedMentionWebfontBase64 = fs
+  .readFile(delayedMentionWebfontPath)
+  .then((contents) => contents.toString("base64"));
 
 test.describe("first launch", () => {
   test.use({
@@ -307,23 +321,27 @@ test("aborts an external renderer request in the main process", async ({ quality
     .toEqual([proofUrl]);
 });
 
-for (const zoomFactor of [1, 1.25, 2]) {
-  test(`keeps mention text, highlight, scroll, and caret picker aligned at ${zoomFactor}x zoom`, async ({
+for (const zoom of [
+  { factor: 1, label: "100%" },
+  { factor: 1.5, label: "150%" },
+  { factor: 2, label: "200%" },
+] as const) {
+  test(`keeps mention text, highlight, scroll, and caret picker aligned at ${zoom.label} zoom`, async ({
     quality,
   }, testInfo) => {
     const { electronApp, page } = quality;
-    await electronApp.evaluate(({ BrowserWindow }, zoom) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoom);
-    }, zoomFactor);
+    const appliedZoom = await electronApp.evaluate(({ BrowserWindow }, zoomFactor) => {
+      const webContents = BrowserWindow.getAllWindows()[0]?.webContents;
+      if (!webContents) throw new Error("Quality-gate window is missing");
+      webContents.setZoomFactor(zoomFactor);
+      return webContents.getZoomFactor();
+    }, zoom.factor);
+    expect(appliedZoom).toBe(zoom.factor);
     const composer = page.getByRole("combobox", { name: "Message input" });
-    await composer.evaluate(async (textarea) => {
-      textarea.style.fontFamily = "monospace";
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      textarea.style.fontFamily = "serif";
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
-    });
+    const delayedFontFamily = `Quality Gate Delayed Mention Mono ${zoom.label}`;
+    await composer.evaluate((textarea, fontFamily) => {
+      textarea.style.fontFamily = `"${fontFamily}", serif`;
+    }, delayedFontFamily);
     const text = [
       ...Array.from(
         { length: 18 },
@@ -338,110 +356,58 @@ for (const zoomFactor of [1, 1.25, 2]) {
     const menu = page.getByRole("listbox", { name: "Mentions" });
     await expect(menu).toBeVisible();
     await expect(page.getByRole("option", { name: /@geometry-audit/ })).toBeVisible();
-    const geometry = await composer.evaluate((textarea) => {
-      const overlay = textarea.parentElement?.querySelector<HTMLDivElement>(
-        '[data-slot="composer-highlight-overlay"]',
-      );
-      const menuElement = document.querySelector<HTMLElement>(
-        '[data-slot="composer-mention-menu"]',
-      );
-      const highlights = overlay?.querySelectorAll<HTMLElement>("[data-mention-start]");
-      const highlight = highlights?.item((highlights?.length ?? 1) - 1) ?? null;
-      if (!overlay || !menuElement || !highlight) {
-        throw new Error("Mention geometry surface is incomplete");
-      }
-      const textRect = textarea.getBoundingClientRect();
-      const overlayRect = overlay.getBoundingClientRect();
-      const menuRect = menuElement.getBoundingClientRect();
-      const textStyle = getComputedStyle(textarea);
-      const overlayStyle = getComputedStyle(overlay);
-      const highlightStyle = getComputedStyle(highlight);
-      const metricProperties = [
-        "font-family",
-        "font-size",
-        "font-style",
-        "font-weight",
-        "letter-spacing",
-        "line-height",
-        "overflow-wrap",
-        "padding-bottom",
-        "padding-left",
-        "padding-right",
-        "padding-top",
-        "tab-size",
-        "white-space",
-        "word-break",
-        "word-spacing",
-      ];
-      const metricMismatches = metricProperties.filter(
-        (property) =>
-          textStyle.getPropertyValue(property) !== overlayStyle.getPropertyValue(property),
-      );
+    const beforeWebfont = await measureIndependentMentionGeometry(page);
+    const fontStatus = await composer.evaluate(
+      async (textarea, fixture) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, fixture.delayMs));
+        const face = new FontFace(
+          fixture.fontFamily,
+          `url(data:font/ttf;base64,${fixture.base64}) format("truetype")`,
+          { style: "normal", weight: "400" },
+        );
+        document.fonts.add(face);
+        await face.load();
+        await document.fonts.ready;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        return {
+          computedFamily: getComputedStyle(textarea).fontFamily,
+          loaded: face.status,
+        };
+      },
+      {
+        base64: await delayedMentionWebfontBase64,
+        delayMs: 150,
+        fontFamily: delayedFontFamily,
+      },
+    );
+    expect(fontStatus.loaded).toBe("loaded");
+    expect(fontStatus.computedFamily).toContain(delayedFontFamily);
+    await expect(menu).toBeVisible();
 
-      const walker = document.createTreeWalker(overlay, NodeFilter.SHOW_TEXT);
-      let consumed = 0;
-      let caretRect: DOMRect | null = null;
-      let node = walker.nextNode();
-      while (node) {
-        const length = node.textContent?.length ?? 0;
-        if (textarea.value.length <= consumed + length) {
-          const range = document.createRange();
-          range.setStart(node, textarea.value.length - consumed);
-          range.collapse(true);
-          caretRect = range.getClientRects()[0] ?? range.getBoundingClientRect();
-          break;
-        }
-        consumed += length;
-        node = walker.nextNode();
-      }
-      if (!caretRect) throw new Error("Unable to measure mirrored caret");
-
-      const placement = menuElement.dataset.placement;
-      const pickerGap =
-        placement === "above" ? caretRect.top - menuRect.bottom : menuRect.top - caretRect.bottom;
-      return {
-        activeDescendant: textarea.getAttribute("aria-activedescendant"),
-        caretInsideMenuWidth: caretRect.left >= menuRect.left && caretRect.left <= menuRect.right,
-        highlightBackground: highlightStyle.backgroundColor,
-        highlightBorderWidth: highlightStyle.borderWidth,
-        highlightFontWeight: highlightStyle.fontWeight,
-        highlightMargin: highlightStyle.margin,
-        highlightPadding: highlightStyle.padding,
-        insideViewport:
-          menuRect.left >= 0 &&
-          menuRect.top >= 0 &&
-          menuRect.right <= window.innerWidth &&
-          menuRect.bottom <= window.innerHeight,
-        metricMismatches,
-        overlayHeightDelta: Math.abs(overlayRect.height - textarea.clientHeight),
-        overlayLeftDelta: Math.abs(overlayRect.left - (textRect.left + textarea.clientLeft)),
-        overlayScrollTop: overlay.scrollTop,
-        overlayTopDelta: Math.abs(overlayRect.top - (textRect.top + textarea.clientTop)),
-        overlayWidthDelta: Math.abs(overlayRect.width - textarea.clientWidth),
-        pickerGap,
-        scrollTop: textarea.scrollTop,
-        tolerance: 1 / window.devicePixelRatio + 0.01,
-      };
+    const { geometry, pixels } = await assertIndependentMentionGeometry(page, testInfo, {
+      attachmentName: `mention-geometry-${zoom.label}`,
     });
-
+    expect(
+      Math.abs(geometry.nativeMentionAdvance - beforeWebfont.nativeMentionAdvance),
+      "The delayed webfont fixture must change native text metrics after the picker opens",
+    ).toBeGreaterThan(1);
     expect(geometry.metricMismatches).toEqual([]);
-    expect(geometry.overlayLeftDelta).toBeLessThanOrEqual(geometry.tolerance);
-    expect(geometry.overlayTopDelta).toBeLessThanOrEqual(geometry.tolerance);
-    expect(geometry.overlayWidthDelta).toBeLessThanOrEqual(geometry.tolerance);
-    expect(geometry.overlayHeightDelta).toBeLessThanOrEqual(geometry.tolerance);
     expect(geometry.overlayScrollTop).toBe(geometry.scrollTop);
     expect(geometry.scrollTop).toBeGreaterThan(0);
-    expect(geometry.highlightPadding).toBe("0px");
-    expect(geometry.highlightMargin).toBe("0px");
-    expect(geometry.highlightBorderWidth).toBe("0px");
-    expect(geometry.highlightFontWeight).toBe("400");
-    expect(geometry.highlightBackground).not.toBe("rgba(0, 0, 0, 0)");
+    expect(geometry.highlightStyle.padding).toBe("0px");
+    expect(geometry.highlightStyle.margin).toBe("0px");
+    expect(geometry.highlightStyle.borderWidth).toBe("0px");
+    expect(geometry.highlightStyle.fontWeight).toBe("400");
+    expect(geometry.highlightStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
     expect(geometry.activeDescendant).toContain("-skill-geometry-audit");
-    expect(geometry.insideViewport).toBe(true);
     expect(geometry.caretInsideMenuWidth).toBe(true);
-    expect(geometry.pickerGap).toBeGreaterThanOrEqual(0);
-    expect(geometry.pickerGap).toBeLessThanOrEqual(8);
-    if (zoomFactor === 1) {
+    expect(geometry.pickerGap).not.toBeNull();
+    expect(geometry.pickerGap ?? -1).toBeGreaterThanOrEqual(0);
+    expect(geometry.pickerGap ?? 9).toBeLessThanOrEqual(8);
+    expect(pixels.differentPixels).toBeLessThanOrEqual(pixels.maximumDifferentPixels);
+    if (zoom.factor === 1) {
       await assertNoSeriousAxeViolations(page, testInfo);
     }
 
@@ -472,7 +438,7 @@ for (const zoomFactor of [1, 1.25, 2]) {
     expect(horizontalScroll.overlayScrollLeft).toBe(horizontalScroll.scrollLeft);
 
     const screenshot = await page.screenshot();
-    await testInfo.attach(`mention-geometry-${zoomFactor}x`, {
+    await testInfo.attach(`mention-geometry-${zoom.label}-window`, {
       body: screenshot,
       contentType: "image/png",
     });

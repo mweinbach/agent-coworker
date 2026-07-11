@@ -50,9 +50,11 @@ import {
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
+import { selectFeedDerivationWindow } from "./chat/feedWindow";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
+import { recordDesktopRenderMetric } from "./renderDiagnostics";
 
 // Compact-state floor for the feed's bottom reservation and the composer
 // overlay's min-height. The composer auto-grows and a ResizeObserver measures
@@ -60,6 +62,8 @@ import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 // cap (messageBarHeight), or raising the cap would over-reserve empty feed space
 // above a short bar.
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
+const FEED_DERIVATION_WINDOW = 80;
+const FEED_DERIVATION_EXPAND_BATCH = 40;
 // Stable empty reference so the sandbox-approvals selector doesn't allocate a new
 // array each render (which would defeat zustand's reference equality check).
 const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
@@ -262,6 +266,11 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [composerDraftKey],
   );
+  const [feedDerivationWindow, setFeedDerivationWindow] = useState({
+    threadId: selectedThreadId,
+    visibleCount: FEED_DERIVATION_WINDOW,
+  });
+
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
 
@@ -378,9 +387,35 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   );
 
   const feed = rt?.feed ?? [];
+  const feedDerivationVisibleCount =
+    feedDerivationWindow.threadId === selectedThreadId
+      ? feedDerivationWindow.visibleCount
+      : FEED_DERIVATION_WINDOW;
+  const windowedSourceFeed = useMemo(
+    () => selectFeedDerivationWindow(feed, feedDerivationVisibleCount),
+    [feed, feedDerivationVisibleCount],
+  );
+  recordDesktopRenderMetric(
+    "feed-derivation",
+    selectedThreadId ?? undefined,
+    windowedSourceFeed.feed.length,
+  );
+  const expandOlderFeed = useCallback(() => {
+    setFeedDerivationWindow((current) => {
+      const currentVisibleCount =
+        current.threadId === selectedThreadId ? current.visibleCount : FEED_DERIVATION_WINDOW;
+      return {
+        threadId: selectedThreadId,
+        visibleCount: Math.min(feed.length, currentVisibleCount + FEED_DERIVATION_EXPAND_BATCH),
+      };
+    });
+  }, [feed.length, selectedThreadId]);
+  const showAllOlderFeed = useCallback(() => {
+    setFeedDerivationWindow({ threadId: selectedThreadId, visibleCount: feed.length });
+  }, [feed.length, selectedThreadId]);
   const normalizedFeed = useMemo(
-    () => normalizeFeedForToolCards(feed, developerMode),
-    [developerMode, feed],
+    () => normalizeFeedForToolCards(windowedSourceFeed.feed, developerMode),
+    [developerMode, windowedSourceFeed.feed],
   );
   const visibleFeed = useMemo(() => {
     return filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
@@ -871,6 +906,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           retryFailedTurnDisabled={
             busy || inputDisabled || hydrating || transcriptOnly || pendingTurnStart !== null
           }
+          hiddenFeedItemCount={windowedSourceFeed.hiddenCount}
+          onExpandOlderFeed={expandOlderFeed}
+          onShowAllOlderFeed={showAllOlderFeed}
         />
 
         {readOnlyNotice ? (

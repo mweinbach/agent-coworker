@@ -15,7 +15,7 @@ import {
   normalizePrivacyTelemetrySettings,
   type PersistedState,
 } from "../types";
-import { RUNTIME } from "./runtimeState";
+import { getEffectiveThreadLastEventSeq, RUNTIME } from "./runtimeState";
 
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
@@ -35,7 +35,12 @@ let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
  * affects persistence, not runtime behavior.
  */
 function buildPersistableThreads(state: AppStoreState) {
-  return state.threads.filter((thread) => thread.draft !== true && !thread.taskId);
+  return state.threads
+    .filter((thread) => thread.draft !== true && !thread.taskId)
+    .map((thread) => ({
+      ...thread,
+      lastEventSeq: getEffectiveThreadLastEventSeq(state, thread.id),
+    }));
 }
 
 function buildPersistedState(
@@ -159,3 +164,7 @@ export async function persistNow(get: () => AppStoreState) {
   const state = syncDesktopStateCacheNow(get);
   await saveState(state);
 }
+
+export const __internal = {
+  buildPersistableThreads,
+};

@@ -573,6 +573,11 @@ export type ThreadRuntime = {
   wsUrl: string | null;
   connected: boolean;
   sessionId: string | null;
+  /**
+   * Live sequence cursor for this thread. High-frequency legacy stream events
+   * advance it without replacing the global persisted thread collection.
+   */
+  lastEventSeq: number;
   config: ConfigSubset | null;
   sessionConfig: SessionConfigSubset | null;
   sessionKind: ThreadSessionKind | null;

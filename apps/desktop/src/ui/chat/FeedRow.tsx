@@ -38,6 +38,7 @@ import {
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
 import { DesktopMarkdown } from "../markdown";
+import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { useChatViewContext } from "./ChatViewContext";
 import { CitationSourcesCarousel } from "./CitationSourcesCarousel";
 import type { MentionCatalog } from "./composerMentions";
@@ -325,6 +326,7 @@ export const FeedRow = memo(function FeedRow(props: {
 }) {
   const { developerMode, mentionCatalog } = useChatViewContext();
   const item = props.item;
+  recordDesktopRenderMetric("feed-row", item.id);
   const hasSources = props.citationSources && props.citationSources.length > 0;
   const hasInlineCitationChip =
     item.kind === "message" &&
@@ -347,6 +349,9 @@ export const FeedRow = memo(function FeedRow(props: {
           })
         : item.text;
     const isStreamingAssistant = item.role === "assistant" && props.isStreaming === true;
+    if (isStreamingAssistant) {
+      recordDesktopRenderMetric("streaming-markdown", item.id);
+    }
 
     return (
       <Message align={item.role === "user" ? "end" : "start"}>

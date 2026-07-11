@@ -387,6 +387,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     wsUrl: null,
     connected: false,
     sessionId: null,
+    lastEventSeq: 0,
     config: null,
     sessionConfig: null,
     sessionKind: null,
@@ -415,6 +416,16 @@ export function defaultThreadRuntime(): ThreadRuntime {
     transcriptOnly: false,
     composerReasoningEffort: null,
   };
+}
+
+export function getEffectiveThreadLastEventSeq(
+  state: Pick<AppStoreState, "threadRuntimeById" | "threads">,
+  threadId: string,
+): number {
+  const persistedSequence =
+    state.threads.find((thread) => thread.id === threadId)?.lastEventSeq ?? 0;
+  const runtimeSequence = state.threadRuntimeById[threadId]?.lastEventSeq ?? 0;
+  return Math.max(0, Math.floor(Math.max(persistedSequence, runtimeSequence)));
 }
 
 export function getWorkspaceJsonRpcSocketGeneration(workspaceId: string): number {
@@ -485,7 +496,10 @@ export function ensureThreadRuntime(
   set((s) => ({
     threadRuntimeById: {
       ...s.threadRuntimeById,
-      [threadId]: defaultThreadRuntime(),
+      [threadId]: {
+        ...defaultThreadRuntime(),
+        lastEventSeq: getEffectiveThreadLastEventSeq(s, threadId),
+      },
     },
   }));
 }

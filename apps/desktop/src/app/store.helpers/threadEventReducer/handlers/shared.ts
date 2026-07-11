@@ -9,6 +9,8 @@ export type HandlerModuleContext = {
   pushFeedItem: FeedProjectionModule["pushFeedItem"];
   insertFeedItemBefore: FeedProjectionModule["insertFeedItemBefore"];
   applyModelStreamUpdateToThreadFeed: FeedProjectionModule["applyModelStreamUpdateToThreadFeed"];
+  flushPendingContentForThread: FeedProjectionModule["flushPendingContentForThread"];
+  recordPendingThreadEvent: FeedProjectionModule["recordPendingThreadEvent"];
   sendUserMessageToThread: MessagingModule["sendUserMessageToThread"];
   flushOneQueuedThreadMessage: MessagingModule["flushOneQueuedThreadMessage"];
   flushOneQueuedThreadMessageIfReady: MessagingModule["flushOneQueuedThreadMessageIfReady"];

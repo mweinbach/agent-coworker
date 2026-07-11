@@ -1,17 +1,19 @@
 import { describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, type ComponentProps, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
 import type { ChatRenderItem } from "../src/ui/chat/activityGroups";
 import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
+import { selectFeedDerivationWindow } from "../src/ui/chat/feedWindow";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
 const { ChatFeed } = await import("../src/ui/chat/ChatFeed");
+type ChatFeedProps = ComponentProps<typeof ChatFeed>;
 
 const EMPTY_MENTION_CATALOG: MentionCatalog = {
   items: [],
@@ -136,7 +138,12 @@ function message(id: string, role: "assistant" | "user", text: string): ChatRend
   return { kind: "feed-item", item };
 }
 
-function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hydrating = false) {
+function renderFeed(
+  renderItems: ChatRenderItem[],
+  selectedThreadId: string,
+  hydrating = false,
+  overrides: Partial<ChatFeedProps> = {},
+) {
   return createElement(
     ChatViewContext.Provider,
     {
@@ -153,6 +160,7 @@ function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hyd
       renderItems,
       liveActivityGroupId: null,
       liveStartedAt: null,
+      showWorkingPlaceholder: false,
       citationUrlsByMessageId: new Map(),
       citationSourcesByMessageId: new Map(),
       desktopBasePath: null,
@@ -162,6 +170,7 @@ function renderFeed(renderItems: ChatRenderItem[], selectedThreadId: string, hyd
       sandboxApprovals: [],
       onAnswerApproval: () => true,
       selectedThreadId,
+      ...overrides,
     }),
   );
 }
@@ -453,9 +462,27 @@ describe("desktop chat message scroller", () => {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
+      let visibleCount = 80;
+      const renderWindow = () => {
+        const windowedFeed = selectFeedDerivationWindow(items, visibleCount);
+        root.render(
+          renderFeed(windowedFeed.feed, "thread-long", false, {
+            hiddenFeedItemCount: windowedFeed.hiddenCount,
+            onExpandOlderFeed: () => {
+              visibleCount = Math.min(items.length, visibleCount + 40);
+              renderWindow();
+            },
+            onShowAllOlderFeed: () => {
+              visibleCount = items.length;
+              renderWindow();
+            },
+            visibleFeedLength: items.length,
+          }),
+        );
+      };
 
       await act(async () => {
-        root.render(renderFeed(items, "thread-long"));
+        renderWindow();
       });
 
       // Soft window keeps the newest 80 entries + show-older control.

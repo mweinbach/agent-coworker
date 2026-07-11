@@ -48,6 +48,7 @@ export type ThreadModelStreamFeedOps = {
   pushFeedItem: (item: FeedItem) => void;
   insertFeedItemBefore?: (beforeItemId: string, item: FeedItem) => void;
   updateFeedItem: (itemId: string, update: (item: FeedItem) => FeedItem) => void;
+  flushPendingContent?: () => void;
   onToolTerminal?: () => void;
 };
 
@@ -995,6 +996,7 @@ function applyModelStreamUpdate(
             }
           : item,
       );
+      ops.flushPendingContent?.();
       return;
     }
 
@@ -1011,6 +1013,7 @@ function applyModelStreamUpdate(
       args: toolArgsFromApproval(update.toolCall),
       approval: { approvalId: update.approvalId, toolCall: update.toolCall },
     });
+    ops.flushPendingContent?.();
     return;
   }
 

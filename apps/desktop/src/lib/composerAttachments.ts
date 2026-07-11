@@ -9,6 +9,7 @@ import {
 import type { StoreGet, StoreSet } from "../app/store.helpers";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
+import { throwIfOperationAborted, waitForOperation } from "../app/store.helpers/operationIntent";
 
 export type ComposerAttachmentFile = {
   filename: string;
@@ -63,6 +64,11 @@ export type ResolvedComposerAttachments = {
   skippedNotes: string[];
 };
 
+export type PreparedComposerMessage = {
+  text: string;
+  attachments: FileAttachmentInput[] | undefined;
+};
+
 type DesktopUploadAttempt =
   | { attempted: false }
   | { attempted: true; uploaded: { filename: string; path: string } }
@@ -70,6 +76,7 @@ type DesktopUploadAttempt =
 
 type ResolveComposerAttachmentOptions = {
   threadId?: string | null;
+  signal?: AbortSignal;
 };
 
 export async function resolveComposerAttachmentsForWorkspace(
@@ -84,6 +91,7 @@ export async function resolveComposerAttachmentsForWorkspace(
   const skippedNotes: string[] = [];
 
   for (const attachment of attachments) {
+    throwIfOperationAborted(options.signal);
     const uploadValidationMessage = getAttachmentUploadValidationMessage(attachment.size);
     if (uploadValidationMessage) {
       skippedNotes.push(buildAttachmentSkippedNote(attachment.filename, uploadValidationMessage));
@@ -94,7 +102,8 @@ export async function resolveComposerAttachmentsForWorkspace(
       attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE &&
       inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE;
     if (canInline) {
-      const buffer = await attachment.file.arrayBuffer();
+      const buffer = await waitForOperation(attachment.file.arrayBuffer(), options.signal);
+      throwIfOperationAborted(options.signal);
       const base64 = encodeArrayBufferToBase64(buffer);
       inlineByteLength += attachment.size;
       resolvedAttachments.push({
@@ -110,7 +119,9 @@ export async function resolveComposerAttachmentsForWorkspace(
       workspaceId,
       attachment,
       options.threadId ?? null,
+      options.signal,
     );
+    throwIfOperationAborted(options.signal);
     let desktopUploadError: string | null = null;
     if (desktopUpload.attempted) {
       if ("uploaded" in desktopUpload) {
@@ -125,7 +136,8 @@ export async function resolveComposerAttachmentsForWorkspace(
       }
     }
 
-    const buffer = await attachment.file.arrayBuffer();
+    const buffer = await waitForOperation(attachment.file.arrayBuffer(), options.signal);
+    throwIfOperationAborted(options.signal);
     const base64 = encodeArrayBufferToBase64(buffer);
     const uploaded = await uploadJsonRpcWorkspaceFile(
       get,
@@ -133,7 +145,9 @@ export async function resolveComposerAttachmentsForWorkspace(
       workspaceId,
       attachment.filename,
       base64,
+      { signal: options.signal },
     );
+    throwIfOperationAborted(options.signal);
     if (!uploaded.path) {
       const reason = desktopUploadError
         ? `${desktopUploadError}; upload to the project folder failed`
@@ -151,11 +165,42 @@ export async function resolveComposerAttachmentsForWorkspace(
   return { attachments: resolvedAttachments, skippedNotes };
 }
 
+/**
+ * Canonical attachment send policy for existing and new chats:
+ * valid files are included, files rejected by a documented upload limit are
+ * represented by an inline note, and infrastructure/read failures reject the
+ * preparation so the revision-owned draft can be retried intact.
+ */
+export async function prepareComposerMessageForWorkspace(
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  text: string,
+  attachments: readonly ComposerAttachmentFile[],
+  options: ResolveComposerAttachmentOptions = {},
+): Promise<PreparedComposerMessage> {
+  if (attachments.length === 0) {
+    return { text, attachments: undefined };
+  }
+  const resolved = await resolveComposerAttachmentsForWorkspace(
+    get,
+    set,
+    workspaceId,
+    attachments,
+    options,
+  );
+  return {
+    text: appendAttachmentSkippedNotes(text, resolved.skippedNotes),
+    attachments: resolved.attachments.length > 0 ? resolved.attachments : undefined,
+  };
+}
+
 async function tryCopyDesktopAttachmentToWorkspaceUploads(
   get: StoreGet,
   workspaceId: string,
   attachment: ComposerAttachmentFile,
   threadId: string | null,
+  signal?: AbortSignal,
 ): Promise<DesktopUploadAttempt> {
   const desktopApi = typeof window === "undefined" ? undefined : window.cowork;
   if (!desktopApi?.getPathForFile || !desktopApi.copyFileToWorkspaceUploads) {
@@ -167,19 +212,28 @@ async function tryCopyDesktopAttachmentToWorkspaceUploads(
     return { attempted: false };
   }
 
-  const sourcePath = await desktopApi.getPathForFile(attachment.file);
+  const sourcePath = await waitForOperation(
+    Promise.resolve(desktopApi.getPathForFile(attachment.file)),
+    signal,
+  );
+  throwIfOperationAborted(signal);
   if (!sourcePath) {
     return { attempted: false };
   }
 
   try {
     const uploadsDirectory = resolveWorkspaceUploadsDirectory(get, workspaceId, threadId);
-    const uploaded = await desktopApi.copyFileToWorkspaceUploads({
-      workspacePath: workspace.path,
-      sourcePath,
-      filename: attachment.filename,
-      ...(uploadsDirectory ? { uploadsDirectory } : {}),
-    });
+    throwIfOperationAborted(signal);
+    const uploaded = await waitForOperation(
+      desktopApi.copyFileToWorkspaceUploads({
+        workspacePath: workspace.path,
+        sourcePath,
+        filename: attachment.filename,
+        ...(uploadsDirectory ? { uploadsDirectory } : {}),
+      }),
+      signal,
+    );
+    throwIfOperationAborted(signal);
     return { attempted: true, uploaded };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { MARKETPLACE_ADD_PENDING_KEY } from "../../../app/store.actions/marketplaces";
+import { operationKey } from "../../../app/store.helpers";
 import { Button } from "../../../components/ui/button";
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
+import { OperationFeedback } from "../../OperationFeedback";
 
 export function AddMarketplaceDialog({
   workspaceId,
@@ -33,8 +35,13 @@ export function AddMarketplaceDialog({
 
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const addMarketplace = useAppStore((state) => state.addMarketplace);
+  const addOperation = useAppStore(
+    (state) => state.operationsByKey[operationKey("marketplace", "add")],
+  );
 
-  const addPending = runtime?.marketplaceMutationPendingKeys[MARKETPLACE_ADD_PENDING_KEY] === true;
+  const addPending =
+    runtime?.marketplaceMutationPendingKeys[MARKETPLACE_ADD_PENDING_KEY] === true ||
+    addOperation?.status === "pending";
   const normalizedSourceInput = sourceInput.trim();
   const showMutationError =
     Boolean(runtime?.marketplaceMutationError) &&
@@ -54,6 +61,9 @@ export function AddMarketplaceDialog({
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && addPending) {
+      return;
+    }
     if (!nextOpen && !open) {
       return;
     }
@@ -66,11 +76,9 @@ export function AddMarketplaceDialog({
   const handleAdd = async () => {
     if (!normalizedSourceInput || addPending) return;
     setLastMutationSourceInput(normalizedSourceInput);
-    try {
-      await addMarketplace(normalizedSourceInput);
+    const result = await addMarketplace(normalizedSourceInput);
+    if (result.ok) {
       handleOpenChange(false);
-    } catch {
-      // Errors surface via the `marketplaceMutationError` runtime state below.
     }
   };
 
@@ -102,6 +110,7 @@ export function AddMarketplaceDialog({
                 placeholder="owner/repo or https://github.com/owner/repo"
                 value={sourceInput}
                 aria-label="GitHub repository"
+                disabled={addPending}
                 onChange={(event) => {
                   setSourceInput(event.target.value);
                   setLastMutationSourceInput(null);
@@ -123,6 +132,7 @@ export function AddMarketplaceDialog({
                 {dialogError}
               </div>
             ) : null}
+            <OperationFeedback operation={addOperation} />
             <div className="flex justify-end">
               <Button
                 size="sm"

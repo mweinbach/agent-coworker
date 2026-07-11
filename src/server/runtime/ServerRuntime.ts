@@ -661,6 +661,7 @@ export async function createAgentServerRuntime(
     removeBindingSink: (binding, sinkId) => registry.removeBindingSink(binding, sinkId),
     countLiveConnectionSinks: (binding) => registry.countLiveConnectionSinks(binding),
     listThreadJournalEvents: (threadId, journalOpts) => threadJournal.list(threadId, journalOpts),
+    getThreadJournalTailSeq: (threadId) => sessionDb.getThreadJournalTailSeq(threadId),
     enqueueThreadJournalEvent: async (event) => await threadJournal.enqueue(event),
     shouldSendNotification: (ws, method) => sendQueue.shouldSendNotification(ws, method),
     sendJsonRpc,

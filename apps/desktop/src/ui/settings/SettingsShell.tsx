@@ -16,8 +16,7 @@ import {
   WifiIcon,
   WrenchIcon,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
-import { isSandboxApprovalThreadVisible } from "../../app/sandboxApprovalVisibility";
+import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
@@ -369,26 +368,6 @@ export function SettingsShell() {
   const activePage =
     settingsPages.find((page) => page.id === resolvedSettingsPage) ?? settingsPages[0];
   const meta = SETTINGS_PAGE_META[activePage.id];
-
-  // Escape closes settings, but only when no modal surface (Dialog/Sheet) is
-  // open — otherwise Escape should be handled by the inner overlay first.
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (event.defaultPrevented) return;
-      const openOverlay = document.querySelector('[role="dialog"][data-state="open"]');
-      if (openOverlay) return;
-      const state = useAppStore.getState();
-      const hasVisibleSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
-        ([threadId, pending]) =>
-          pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
-      );
-      if (hasVisibleSandboxApproval) return;
-      closeSettings();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeSettings]);
 
   const [pageChrome, setPageChromeState] = useState<SettingsChromeState>({});
   const handleChromeChange = useCallback((next: SettingsChromeState) => {

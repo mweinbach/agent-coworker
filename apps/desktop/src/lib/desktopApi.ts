@@ -347,7 +347,7 @@ export type DesktopMenuCommand =
   | "openUpdates"
   | "openCommandPalette";
 
-type ThemeSource = "system" | "light" | "dark";
+export type ThemeSource = "system" | "light" | "dark";
 
 export type WindowsBackgroundMaterial = "auto" | "none" | "mica" | "acrylic" | "tabbed";
 

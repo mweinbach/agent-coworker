@@ -167,7 +167,16 @@ export function createUserMessageTurnRunner(
       );
       const interrupted = context.state.abortController?.signal.aborted === true;
       if (taskLock || interrupted) {
-        context.state.pendingSteers.splice(0);
+        steerCoordinator.rejectPendingSteers(
+          taskLock?.message ?? "Turn was interrupted before pending steers could be accepted.",
+          taskLock
+            ? {
+                code: "task_locked",
+                source: "session",
+                data: taskLock.data,
+              }
+            : undefined,
+        );
         context.state.currentTurnOutcome = "cancelled";
         context.state.acceptingSteers = false;
         if (taskLock) {
@@ -397,7 +406,9 @@ export function createUserMessageTurnRunner(
           }
 
           if (context.state.abortController?.signal.aborted) {
-            context.state.pendingSteers.splice(0);
+            steerCoordinator.rejectPendingSteers(
+              "Turn was interrupted before pending steers could be accepted.",
+            );
             context.state.currentTurnOutcome = "cancelled";
             context.state.acceptingSteers = false;
             continueSameTurn = false;
@@ -419,7 +430,9 @@ export function createUserMessageTurnRunner(
 
         if (context.state.abortController?.signal.aborted) {
           mergeTurnUsage(res.usage);
-          context.state.pendingSteers.splice(0);
+          steerCoordinator.rejectPendingSteers(
+            "Turn was interrupted before pending steers could be accepted.",
+          );
           context.state.currentTurnOutcome = "cancelled";
           context.state.acceptingSteers = false;
           continueSameTurn = false;
@@ -477,7 +490,9 @@ export function createUserMessageTurnRunner(
 
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (context.state.abortController?.signal.aborted) {
-          context.state.pendingSteers.splice(0);
+          steerCoordinator.rejectPendingSteers(
+            "Turn was interrupted before pending steers could be accepted.",
+          );
           context.state.currentTurnOutcome = "cancelled";
           continueSameTurn = false;
           context.state.acceptingSteers = false;
@@ -601,8 +616,9 @@ export function createUserMessageTurnRunner(
       persistAggregatedUsage();
       context.state.acceptingSteers = false;
       context.state.activeSteerHandler = null;
-      const pendingSteersRejected = context.state.pendingSteers.length > 0;
-      context.state.pendingSteers.splice(0);
+      steerCoordinator.rejectPendingSteers(
+        "Active turn ended before pending steers could be accepted.",
+      );
       if (userMessageTurnFinalizerCheckpointHook) {
         await runUserMessageTurnFinalizerCheckpoint({
           phase: "steer_admission_closed",
@@ -611,13 +627,6 @@ export function createUserMessageTurnRunner(
         });
       }
       await waitForLiveSteerSettlement?.();
-      if (pendingSteersRejected) {
-        context.emitError(
-          "validation_failed",
-          "session",
-          "Active turn ended before pending steers could be accepted.",
-        );
-      }
       context.state.turnReferencedPlugins = undefined;
       if (turnAnnounced) {
         metadataManager.updateSessionInfo({

@@ -151,6 +151,7 @@ export type JsonRpcSocketOpts = {
   onReconnectExhausted?: (reason: string) => void;
   onNotification?: (message: { method: string; params?: unknown }) => void;
   onServerRequest?: (message: JsonRpcLiteRequest) => void;
+  onServerResponse?: (message: JsonRpcLiteClientResponse) => void;
   onInvalidMessage?: (message: JsonRpcSocketInvalidMessage) => void;
 };
 
@@ -189,6 +190,7 @@ export class JsonRpcSocket {
   private readonly onReconnectExhausted?: (reason: string) => void;
   private readonly onNotification?: (message: { method: string; params?: unknown }) => void;
   private readonly onServerRequest?: (message: JsonRpcLiteRequest) => void;
+  private readonly onServerResponse?: (message: JsonRpcLiteClientResponse) => void;
   private readonly onInvalidMessage?: (message: JsonRpcSocketInvalidMessage) => void;
 
   private ws: WebSocketLike | null = null;
@@ -237,6 +239,7 @@ export class JsonRpcSocket {
     this.onReconnectExhausted = opts.onReconnectExhausted;
     this.onNotification = opts.onNotification;
     this.onServerRequest = opts.onServerRequest;
+    this.onServerResponse = opts.onServerResponse;
     this.onInvalidMessage = opts.onInvalidMessage;
 
     const impl = opts.WebSocketImpl ?? (globalThis as { WebSocket?: unknown }).WebSocket;
@@ -616,6 +619,7 @@ export class JsonRpcSocket {
   private handleResponse(message: JsonRpcLiteClientResponse) {
     const pending = this.pendingRequests.get(message.id);
     if (!pending) {
+      this.onServerResponse?.(message);
       return;
     }
     this.pendingRequests.delete(message.id);

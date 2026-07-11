@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { MAX_ATTACHMENT_INLINE_BYTE_SIZE } from "../../../src/shared/attachments";
 import { RUNTIME } from "../src/app/store.helpers/runtimeState";
 import {
   appendAttachmentSkippedNotes,
   buildAttachmentSkippedNote,
+  prepareComposerMessageForWorkspace,
   resolveComposerAttachmentsForWorkspace,
 } from "../src/lib/composerAttachments";
 
@@ -36,6 +37,50 @@ describe("composerAttachments", () => {
     ]);
 
     expect(message).toContain('wanted to attach "clip.mp4"');
+  });
+
+  test("applies identical attachment policy to existing and new chat contexts", async () => {
+    const readFile = mock(async () => {
+      throw new Error("rejected attachments must not be read");
+    });
+    const attachment = {
+      filename: "too-large.bin",
+      mimeType: "application/octet-stream",
+      size: Number.MAX_SAFE_INTEGER,
+      file: { arrayBuffer: readFile } as unknown as File,
+      signature: "too-large",
+    };
+    const get = () =>
+      ({
+        workspaces: [{ id: "workspace-1", path: "/tmp/workspace" }],
+        threads: [{ id: "thread-1", workspaceId: "workspace-1" }],
+        threadRuntimeById: {},
+        workspaceRuntimeById: {},
+      }) as never;
+    const set = (() => {}) as never;
+
+    const existingChat = await prepareComposerMessageForWorkspace(
+      get,
+      set,
+      "workspace-1",
+      "Inspect this",
+      [attachment],
+      { threadId: "thread-1" },
+    );
+    const newChat = await prepareComposerMessageForWorkspace(
+      get,
+      set,
+      "workspace-1",
+      "Inspect this",
+      [attachment],
+    );
+
+    expect(existingChat).toEqual(newChat);
+    expect(existingChat).toEqual({
+      text: expect.stringContaining('wanted to attach "too-large.bin"'),
+      attachments: undefined,
+    });
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   test("copies non-inline desktop attachments before reading or uploading over the socket", async () => {

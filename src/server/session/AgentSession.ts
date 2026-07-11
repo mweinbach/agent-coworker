@@ -134,6 +134,8 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import type { SkillManager } from "./SkillManager";
 import type {
   SendUserMessageOptions,
+  SteerIdempotencyClaim,
+  SteerIdempotencyInput,
   TurnExecutionManager,
   UserMessageIdempotencyClaim,
   UserMessageIdempotencyInput,
@@ -1648,20 +1650,22 @@ export class AgentSession {
     await this.getProviderCatalogManager().refreshProviderStatus(opts);
   }
 
-  handleAskResponse(requestId: string, answer: string) {
+  handleAskResponse(requestId: string, answer: string): boolean {
     const handled = this.getTurnExecutionManager().handleAskResponse(requestId, answer);
     if (handled) {
       this.sessionSnapshotProjector.syncSessionState({ hasPendingAsk: this.hasPendingAsk });
     }
+    return handled;
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean) {
+  handleApprovalResponse(requestId: string, approved: boolean): boolean {
     const handled = this.getTurnExecutionManager().handleApprovalResponse(requestId, approved);
     if (handled) {
       this.sessionSnapshotProjector.syncSessionState({
         hasPendingApproval: this.hasPendingApproval,
       });
     }
+    return handled;
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {
@@ -1917,6 +1921,14 @@ export class AgentSession {
 
   rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
     this.getTurnExecutionManager().rejectUserMessageClaim(claim, message);
+  }
+
+  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
+    return this.getTurnExecutionManager().claimSteer(input);
+  }
+
+  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
+    this.getTurnExecutionManager().rejectSteerClaim(claim, message);
   }
 
   async sendSteerMessage(

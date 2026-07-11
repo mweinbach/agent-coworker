@@ -1,7 +1,8 @@
 import { parseLmStudioUnreachableError } from "../../../lib/lmStudioLocalError";
 import type { TurnReference } from "../../../lib/wsProtocol";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
-import type { ComposerDraftRevision } from "../../composerDrafts";
+import { type ComposerDraftRevision, composerDraftKeyForThread } from "../../composerDrafts";
+import { findComposerSubmissionById } from "../../composerSubmission";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../jsonRpcSocket";
 import {
   clearPendingThreadSteer,
+  markPendingThreadSteerAccepted,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
@@ -92,12 +94,15 @@ export function createMessagingModule(
   }
 
   function surfaceJsonRpcThreadStartFailure(
+    get: StoreGet,
     set: StoreSet,
     threadId: string,
     attemptedText?: string,
     attemptedAttachments?: FileAttachmentInput[],
     error?: unknown,
   ) {
+    const submission = get().composerSubmissionsByKey[composerDraftKeyForThread(threadId)];
+    if (submission) get().failComposerSubmission(submission.id, error);
     const displayText = buildUserInputDisplayText(
       attemptedText?.trim() ?? "",
       attemptedAttachments,
@@ -157,6 +162,7 @@ export function createMessagingModule(
     get: StoreGet,
     threadId: string,
     build: (sessionId: string) => ThreadOutboundMessage,
+    options?: { onSettled?: (error?: unknown) => void },
   ): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -166,10 +172,13 @@ export function createMessagingModule(
       if (!ensureWorkspaceJsonRpcSocket(get, undefined, workspaceId)) {
         return false;
       }
-      void run().catch(() => {
-        // Surface "not connected" through the caller's existing false-path/UI state
-        // instead of leaking unhandled async rejections from fire-and-forget actions.
-      });
+      void run()
+        .then(() => options?.onSettled?.())
+        .catch((error) => {
+          options?.onSettled?.(error);
+          // Callers without a lifecycle callback surface connection errors
+          // through their existing false-path/UI state.
+        });
       return true;
     };
     const sessionId = get().threadRuntimeById[threadId]?.sessionId ?? threadId;
@@ -267,9 +276,12 @@ export function createMessagingModule(
       retryToolItemIds,
     )
       .then(() => {
-        if (draftSubmission) get().clearComposerDraft(draftSubmission);
+        if (draftSubmission) get().completeComposerSubmission(draftSubmission);
       })
       .catch((error) => {
+        if (draftSubmission?.submissionId) {
+          get().failComposerSubmission(draftSubmission.submissionId, error);
+        }
         const lmStudio = parseLmStudioUnreachableError(error);
         if (lmStudio) {
           // The server rejected the turn before it reached the session, so the
@@ -339,10 +351,41 @@ export function createMessagingModule(
       attachments,
       references,
     )
-      .then(() => {
-        if (draftSubmission) get().clearComposerDraft(draftSubmission);
+      .then((result) => {
+        markPendingThreadSteerAccepted(threadId, clientMessageId, result.steerRequestId);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt || rt.pendingSteer?.clientMessageId !== clientMessageId) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: {
+                  ...rt.pendingSteer,
+                  steerRequestId: result.steerRequestId,
+                  status: "accepted",
+                },
+              },
+            },
+          };
+        });
+        if (draftSubmission?.submissionId) {
+          const submission = findComposerSubmissionById(
+            get().composerSubmissionsByKey,
+            draftSubmission.submissionId,
+          );
+          if (submission?.phase === "sending") {
+            get().completeComposerSubmission(draftSubmission);
+          }
+        } else if (draftSubmission) {
+          get().clearComposerDraft(draftSubmission);
+        }
       })
-      .catch(() => {
+      .catch((error) => {
+        if (draftSubmission?.submissionId) {
+          get().failComposerSubmission(draftSubmission.submissionId, error);
+        }
         surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
       });
   }
@@ -389,7 +432,7 @@ export function createMessagingModule(
           trimmed,
           attachments,
           references,
-          undefined,
+          presetClientMessageId,
           draftSubmission,
         );
         return true;
@@ -405,7 +448,7 @@ export function createMessagingModule(
           return false;
         }
 
-        const clientMessageId = ctx.deps.makeId();
+        const clientMessageId = presetClientMessageId ?? ctx.deps.makeId();
         rememberPendingThreadSteer(threadId, {
           clientMessageId,
           text: trimmed,
@@ -425,6 +468,9 @@ export function createMessagingModule(
                   clientMessageId,
                   text: trimmed,
                   attachmentSignature,
+                  ...(draftSubmission?.submissionId
+                    ? { submissionId: draftSubmission.submissionId }
+                    : {}),
                   status: "sending",
                 },
               },

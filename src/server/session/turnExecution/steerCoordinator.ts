@@ -9,6 +9,7 @@ import type {
   ModelMessage,
   ReferencedPluginContext,
   ServerErrorCode,
+  ServerErrorData,
   ServerErrorSource,
   TurnReference,
 } from "../../../types";
@@ -75,6 +76,22 @@ export type SteerCoordinatorDeps = {
   classifyTurnError: (err: unknown) => ClassifiedTurnError;
   getTaskLock?: () => TaskLockError | null;
   trackLiveSteerSettlement?: <T>(operation: () => Promise<T>) => Promise<T>;
+  onSteerAccepted?: (steer: {
+    clientMessageId?: string;
+    steerRequestId: string;
+    turnId: string;
+  }) => void;
+  onSteerDropped?: (steer: {
+    clientMessageId?: string;
+    steerRequestId?: string;
+    message: string;
+  }) => void;
+};
+
+type PendingSteerRejection = {
+  code: ServerErrorCode;
+  source: ServerErrorSource;
+  data?: ServerErrorData;
 };
 
 export type SteerCoordinator = {
@@ -91,7 +108,7 @@ export type SteerCoordinator = {
   drainPendingSteers: (
     stepMessages: ModelMessage[],
   ) => Promise<{ messages: ModelMessage[] } | undefined>;
-  rejectPendingSteers: (message: string) => void;
+  rejectPendingSteers: (message: string, rejection?: PendingSteerRejection) => void;
 };
 
 type ResolvedSteerReferences = {
@@ -148,8 +165,9 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     code: ServerErrorCode,
     source: ServerErrorSource,
     message: string,
-    data?: TaskLockError["data"],
+    data?: ServerErrorData,
     steerRequestId?: string,
+    clientMessageId?: string,
   ) => {
     context.emit({
       type: "error",
@@ -159,7 +177,33 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       message,
       ...(data ? { data } : {}),
       ...(steerRequestId ? { steerRequestId } : {}),
+      ...(clientMessageId ? { clientMessageId } : {}),
     });
+  };
+
+  const rejectPendingSteers = (
+    message: string,
+    rejection: PendingSteerRejection = {
+      code: "validation_failed",
+      source: "session",
+    },
+  ) => {
+    const dropped = context.state.pendingSteers.splice(0);
+    for (const steer of dropped) {
+      deps.onSteerDropped?.({
+        ...(steer.clientMessageId ? { clientMessageId: steer.clientMessageId } : {}),
+        ...(steer.steerRequestId ? { steerRequestId: steer.steerRequestId } : {}),
+        message,
+      });
+      emitSessionError(
+        rejection.code,
+        rejection.source,
+        message,
+        rejection.data,
+        steer.steerRequestId,
+        steer.clientMessageId,
+      );
+    }
   };
 
   const emitTaskLockIfPresent = (steerRequestId?: string): boolean => {
@@ -381,9 +425,17 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
             sessionId: context.id,
             text: displayText,
             ...(clientMessageId ? { clientMessageId } : {}),
+            ...(steerRequestId ? { steerRequestId } : {}),
           });
           mergeReferencedPlugins(resolvedReferences.plugins);
           context.queuePersistSessionSnapshot("session.steer_committed");
+          if (steerRequestId) {
+            deps.onSteerAccepted?.({
+              ...(clientMessageId ? { clientMessageId } : {}),
+              steerRequestId,
+              turnId: currentTurnId,
+            });
+          }
           context.emit({
             type: "steer_accepted",
             sessionId: context.id,
@@ -455,8 +507,16 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(inputParts && inputParts.length > 0 ? { inputParts } : {}),
       ...(references && references.length > 0 ? { references } : {}),
+      ...(steerRequestId ? { steerRequestId } : {}),
       acceptedAt: new Date().toISOString(),
     });
+    if (steerRequestId) {
+      deps.onSteerAccepted?.({
+        ...(clientMessageId ? { clientMessageId } : {}),
+        steerRequestId,
+        turnId: currentTurnId,
+      });
+    }
     context.emit({
       type: "steer_accepted",
       sessionId: context.id,
@@ -473,8 +533,13 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
   }> => {
     const drained = [...context.state.pendingSteers];
     if (drained.length === 0) return { messages: [], committedCount: 0 };
-    if (emitTaskLockIfPresent()) {
-      context.state.pendingSteers.splice(0);
+    const initialTaskLock = deps.getTaskLock?.() ?? null;
+    if (initialTaskLock) {
+      rejectPendingSteers(initialTaskLock.message, {
+        code: "task_locked",
+        source: "session",
+        data: initialTaskLock.data,
+      });
       return { messages: [], committedCount: 0 };
     }
 
@@ -503,15 +568,13 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       await materialization.rollback();
       const sessionError = getTaskLockAbortSessionError(error);
       if (sessionError) {
-        context.emitError(
-          sessionError.code,
-          sessionError.source,
-          sessionError.message,
-          sessionError.data,
-        );
+        rejectPendingSteers(sessionError.message, {
+          code: sessionError.code,
+          source: sessionError.source,
+          ...(sessionError.data ? { data: sessionError.data } : {}),
+        });
       }
       if (!isTaskLockAbortError(error)) throw error;
-      context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }
     try {
@@ -520,15 +583,13 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
       await materialization.rollback();
       const sessionError = getTaskLockAbortSessionError(error);
       if (sessionError) {
-        context.emitError(
-          sessionError.code,
-          sessionError.source,
-          sessionError.message,
-          sessionError.data,
-        );
+        rejectPendingSteers(sessionError.message, {
+          code: sessionError.code,
+          source: sessionError.source,
+          ...(sessionError.data ? { data: sessionError.data } : {}),
+        });
       }
       if (!isTaskLockAbortError(error)) throw error;
-      context.state.pendingSteers.splice(0);
       return { messages: [], committedCount: 0 };
     }
     context.state.pendingSteers.splice(0, drained.length);
@@ -540,6 +601,7 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
         sessionId: context.id,
         text: steer.displayText ?? resolveUserInputDisplayText(steer.text, steer.attachments),
         ...(steer.clientMessageId ? { clientMessageId: steer.clientMessageId } : {}),
+        ...(steer.steerRequestId ? { steerRequestId: steer.steerRequestId } : {}),
       });
     }
     context.queuePersistSessionSnapshot("session.steer_committed");
@@ -555,12 +617,6 @@ export function createSteerCoordinator(deps: SteerCoordinatorDeps): SteerCoordin
     return {
       messages: [...stepMessages, ...committed.messages],
     };
-  };
-
-  const rejectPendingSteers = (message: string) => {
-    if (context.state.pendingSteers.length === 0) return;
-    context.state.pendingSteers.splice(0);
-    context.emitError("validation_failed", "session", message);
   };
 
   return {

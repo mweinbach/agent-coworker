@@ -8,6 +8,7 @@ import { setupJsdom } from "./jsdomHarness";
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
 const { AppTopBar } = await import("../src/ui/layout/AppTopBar");
+const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 
 const sessionUsage = {
   sessionId: "session-1",
@@ -777,19 +778,23 @@ describe("desktop app top bar", () => {
 
       await act(async () => {
         root.render(
-          createElement(AppTopBar, {
-            busy: true,
-            onToggleSidebar: () => {},
-            onNewChat: () => {},
-            sidebarCollapsed: false,
-            sidebarWidth: 280,
-            contextSidebarCollapsed: false,
-            onToggleContextSidebar: () => {},
-            title: "Refine desktop app UI",
-            subtitle: "agent-coworker",
-            sessionUsage,
-            lastTurnUsage,
-          }),
+          createElement(
+            OverlayStackProvider,
+            null,
+            createElement(AppTopBar, {
+              busy: true,
+              onToggleSidebar: () => {},
+              onNewChat: () => {},
+              sidebarCollapsed: false,
+              sidebarWidth: 280,
+              contextSidebarCollapsed: false,
+              onToggleContextSidebar: () => {},
+              title: "Refine desktop app UI",
+              subtitle: "agent-coworker",
+              sessionUsage,
+              lastTurnUsage,
+            }),
+          ),
         );
       });
 
@@ -806,12 +811,21 @@ describe("desktop app top bar", () => {
 
       await act(async () => {
         harness.dom.window.document.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+        await Promise.resolve();
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
         );
       });
 
       expect(windowEscapeCount).toBe(0);
       expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(titleButton);
 
       harness.dom.window.removeEventListener("keydown", handleWindowKeyDown);
 

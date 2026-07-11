@@ -7,6 +7,7 @@ import type {
   Ref,
   RefObject,
 } from "react";
+import type { ComposerSubmission } from "../../app/composerSubmission";
 import type { ReasoningEffortValue } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
@@ -20,18 +21,19 @@ import {
   MessageComposerForm,
   MessageComposerRoot,
   MessageComposerStatus,
+  MessageComposerStop,
+  MessageComposerSubmissionNotice,
   MessageComposerSubmit,
   MessageComposerTools,
 } from "../composer/MessageComposer";
 import { MessageBarResizer } from "../layout/MessageBarResizer";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { ComposerReasoningSelector } from "./ComposerReasoningToggle";
-import { type getComposerSubmitState, resolveComposerBusyPolicy } from "./chatLogic";
+import type { getComposerSubmitState } from "./chatLogic";
 import type { MentionCatalog } from "./composerMentions";
+import { ThreadModelSelector } from "./ThreadModelSelector";
 
 type ComposerSubmitState = ReturnType<typeof getComposerSubmitState>;
-
-import { ThreadModelSelector } from "./ThreadModelSelector";
 
 export function ChatComposer(props: {
   messageBarOverlayRef: Ref<HTMLDivElement>;
@@ -43,7 +45,7 @@ export function ChatComposer(props: {
   isUploading: boolean;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
-  submitComposer: (busyPolicy: "reject" | "steer") => void;
+  submitComposer: () => void;
   busy: boolean;
   composerHint: string | null;
   composerSubmitState: ComposerSubmitState;
@@ -66,6 +68,12 @@ export function ChatComposer(props: {
   selectedThreadId: string;
   modelDisplayNames: Record<ProviderName, Record<string, string>>;
   preparingAttachments: boolean;
+  submission: ComposerSubmission | null;
+  canEditAcceptedSubmission: boolean;
+  interruptPending: boolean;
+  onRetrySubmission: () => void;
+  onEditSubmission: () => void;
+  onDismissSubmission: () => void;
   onStop?: () => void;
 }) {
   const {
@@ -98,6 +106,12 @@ export function ChatComposer(props: {
     selectedThreadId,
     modelDisplayNames,
     preparingAttachments,
+    submission,
+    canEditAcceptedSubmission,
+    interruptPending,
+    onRetrySubmission,
+    onEditSubmission,
+    onDismissSubmission,
     onStop,
   } = props;
   const developerMode = useAppStore((s) => s.developerMode);
@@ -141,11 +155,18 @@ export function ChatComposer(props: {
             onRemove={removeAttachment}
             className="px-0"
           />
+          <MessageComposerSubmissionNotice
+            submission={submission}
+            onRetry={onRetrySubmission}
+            onEdit={onEditSubmission}
+            canEditAccepted={canEditAcceptedSubmission}
+            onDismiss={onDismissSubmission}
+          />
           <MessageComposerForm
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
-              if (composerSubmitState.disabled || preparingAttachments) return;
-              submitComposer(resolveComposerBusyPolicy(busy));
+              if (composerSubmitState.disabled) return;
+              submitComposer();
             }}
           >
             <MessageComposerStatus>{composerHint}</MessageComposerStatus>
@@ -211,19 +232,13 @@ export function ChatComposer(props: {
                 ) : null}
               </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
-                {/* Always expose Stop while a run is active, even when typing a steer. */}
-                {busy && onStop && composerSubmitState.status !== "streaming" ? (
-                  <MessageComposerSubmit
-                    status="streaming"
-                    disabled={inputDisabled || !onStop}
-                    onStop={onStop}
-                  />
+                {busy && onStop ? (
+                  <MessageComposerStop pending={interruptPending} onStop={onStop} />
                 ) : null}
                 <MessageComposerSubmit
                   mode={composerSubmitState.mode}
                   status={composerSubmitState.status}
-                  disabled={composerSubmitState.disabled || preparingAttachments}
-                  onStop={onStop}
+                  disabled={composerSubmitState.disabled}
                 />
               </div>
             </MessageComposerFooter>

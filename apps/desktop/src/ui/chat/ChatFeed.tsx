@@ -1,7 +1,7 @@
 import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon } from "lucide-react";
 import { memo, type UIEvent, useCallback, useEffect, useMemo, useRef } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
-import type { SandboxApprovalPrompt } from "../../app/types";
+import type { ChatInteraction } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import {
@@ -31,7 +31,7 @@ import {
   unresolvedToolFailureIds,
 } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
-import { SandboxApprovalCard } from "./SandboxApprovalCard";
+import { InteractionCard } from "./InteractionCard";
 
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
 /** Expand when within this many px of the top of the scrollable content. */
@@ -39,9 +39,9 @@ const FEED_NEAR_TOP_PX = 160;
 /** Estimated height for unmounted older rows (scrollbar proportion only). */
 const FEED_ESTIMATED_ROW_HEIGHT_PX = 120;
 
-export type VisibleSandboxApproval = {
+export type VisibleInteraction = {
   threadId: string;
-  prompt: SandboxApprovalPrompt;
+  interaction: ChatInteraction;
 };
 
 function isVisibleUserTurn(item: ChatRenderItem): boolean {
@@ -244,8 +244,10 @@ export const ChatFeed = memo(function ChatFeed(props: {
   desktopBasePath: string | null;
 
   composerOverlayHeight: number;
-  sandboxApprovals: VisibleSandboxApproval[];
+  interactions: VisibleInteraction[];
+  onAnswerAsk: (threadId: string, requestId: string, answer: string) => boolean;
   onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
+  onRetryInteraction: (threadId: string, requestId: string) => boolean;
   selectedThreadId?: string | null;
   threadTitleById?: ReadonlyMap<string, string>;
   onSelectThread?: (threadId: string) => void;
@@ -270,8 +272,10 @@ export const ChatFeed = memo(function ChatFeed(props: {
     citationSourcesByMessageId,
     desktopBasePath,
     composerOverlayHeight,
-    sandboxApprovals,
+    interactions,
+    onAnswerAsk,
     onAnswerApproval,
+    onRetryInteraction,
     selectedThreadId,
     threadTitleById,
     onSelectThread,
@@ -456,15 +460,19 @@ export const ChatFeed = memo(function ChatFeed(props: {
               </MessageScrollerItem>
             ) : null}
 
-            {sandboxApprovals.map(({ threadId, prompt }) => (
+            {interactions.map(({ threadId, interaction }, index) => (
               <MessageScrollerItem
-                key={`${threadId}:${prompt.requestId}`}
-                messageId={`sandbox-approval:${threadId}:${prompt.requestId}`}
+                key={`${threadId}:${interaction.requestId}`}
+                messageId={`interaction:${threadId}:${interaction.requestId}`}
               >
-                <SandboxApprovalCard
+                <InteractionCard
                   threadId={threadId}
-                  prompt={prompt}
-                  onAnswer={onAnswerApproval}
+                  interaction={interaction}
+                  position={index + 1}
+                  total={interactions.length}
+                  onAnswerAsk={onAnswerAsk}
+                  onAnswerApproval={onAnswerApproval}
+                  onRetry={onRetryInteraction}
                   selectedThreadId={selectedThreadId}
                   threadTitle={threadTitleById?.get(threadId)}
                   onSelectThread={onSelectThread}

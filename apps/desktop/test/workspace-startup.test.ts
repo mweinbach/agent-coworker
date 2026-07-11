@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  composerDraftKeyForNewChatTarget,
+  createEmptyComposerDraft,
+} from "../src/app/composerDrafts";
 import type { SessionSnapshot } from "../src/app/types";
 import type { WorkspaceServerStatus } from "../src/lib/desktopApi";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
@@ -184,9 +188,10 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { isSandboxApprovalThreadVisible } = await import("../src/app/sandboxApprovalVisibility");
+const { isInteractionThreadVisible } = await import("../src/app/interactionVisibility");
 const { RUNTIME } = await import("../src/app/store.helpers");
 const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
+const { __internalOperationIntent } = await import("../src/app/store.helpers/operationIntent");
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
@@ -252,6 +257,20 @@ function seedCachedSnapshot(sessionId: string, text: string) {
   return snapshot;
 }
 
+function projectWorkspace(id: string) {
+  return {
+    id,
+    name: id,
+    path: `/tmp/${id}`,
+    workspaceKind: "project" as const,
+    createdAt: "2026-03-08T00:00:00.000Z",
+    lastOpenedAt: "2026-03-08T00:00:00.000Z",
+    defaultEnableMcp: true,
+    defaultBackupsEnabled: false,
+    yolo: false,
+  };
+}
+
 describe("workspace startup flow", () => {
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
@@ -276,6 +295,7 @@ describe("workspace startup flow", () => {
     RUNTIME.modelStreamByThread.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.sessionSnapshots.clear();
+    __internalOperationIntent.reset();
     MockJsonRpcSocket.autoOpen = true;
 
     useAppStore.setState({
@@ -294,7 +314,7 @@ describe("workspace startup flow", () => {
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
       workspaceExplorerRefreshById: {},
-      promptModal: null,
+      interactionsByThread: {},
       filePreview: null,
       notifications: [],
       providerStatusByName: {},
@@ -1329,7 +1349,7 @@ describe("workspace startup flow", () => {
     expect(state.newTaskWorkspaceId).toBe("ws-1");
     expect(state.newTaskWorkspaceRequestId).toBe(1);
     expect(state.threadRuntimeById["chat-session-1"]).toBeUndefined();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-1")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-1")).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
     await selectPromise;
@@ -1397,7 +1417,7 @@ describe("workspace startup flow", () => {
     expect(state.selectedWorkspaceId).toBe("ws-2");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
     await selectPromise;
@@ -1566,14 +1586,19 @@ describe("workspace startup flow", () => {
           ],
         },
       },
-      sandboxApprovalsByThread: {
+      interactionsByThread: {
         "task-session-1": [
           {
+            kind: "approval",
+            approvalKind: "sandbox",
             requestId: "approval-task-1",
             command: "curl https://example.com/task",
-            reason: "The OS sandbox blocked network access for this command.",
+            dangerous: true,
+            reasonCode: "sandbox_denied_escalation",
+            detail: "The OS sandbox blocked network access for this command.",
             category: "network",
             receivedSequence: 1,
+            status: "pending",
           },
         ],
       },
@@ -1590,7 +1615,7 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Preserved task transcript" }),
     );
-    expect(isSandboxApprovalThreadVisible(state, "task-session-1")).toBe(true);
+    expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
@@ -1704,7 +1729,7 @@ describe("workspace startup flow", () => {
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(state.newTaskWorkspaceId).toBeNull();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
@@ -1916,8 +1941,8 @@ describe("workspace startup flow", () => {
       expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
         expect.objectContaining({ text: "Task one transcript" }),
       );
-      expect(isSandboxApprovalThreadVisible(state, "task-session-1")).toBe(true);
-      expect(isSandboxApprovalThreadVisible(state, "task-session-2")).toBe(false);
+      expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
+      expect(isInteractionThreadVisible(state, "task-session-2")).toBe(false);
       expect(startCalls).toHaveLength(0);
     });
   }
@@ -1995,7 +2020,7 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById["orphan-task-thread"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Ordinary orphan transcript" }),
     );
-    expect(isSandboxApprovalThreadVisible(state, "orphan-task-thread")).toBe(true);
+    expect(isInteractionThreadVisible(state, "orphan-task-thread")).toBe(true);
     expect(startCalls).toHaveLength(0);
   });
 
@@ -2066,6 +2091,273 @@ describe("workspace startup flow", () => {
     expect(state.view).toBe("chat");
     expect(state.selectedThreadId).toBe("draft-ws-1");
     expect(state.selectedTaskId).toBeNull();
+  });
+
+  test("a delayed chat finishes without leaving a newer Settings navigation", async () => {
+    const workspace = projectWorkspace("ws-create");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 1,
+      text: "Keep working in the background",
+    };
+    useAppStore.setState({
+      view: "chat",
+      lastNonSettingsView: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+      composerDraftRevisionFloorByKey: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    useAppStore.getState().openSettings("models");
+    startDeferreds[0]?.resolve({ url: "ws://create" });
+
+    await expect(creation).resolves.toBe(true);
+    const state = useAppStore.getState();
+    expect(state.view).toBe("settings");
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.threads).toHaveLength(1);
+    expect(state.threads[0]?.title).toBe("New chat");
+  });
+
+  test("the newest overlapping chat creation alone owns navigation", async () => {
+    const firstWorkspace = projectWorkspace("ws-first");
+    const secondWorkspace = projectWorkspace("ws-second");
+    useAppStore.setState({
+      view: "chat",
+      lastNonSettingsView: "chat",
+      workspaces: [firstWorkspace, secondWorkspace],
+      threads: [],
+      selectedWorkspaceId: firstWorkspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const first = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: firstWorkspace.id,
+      mode: "session",
+      titleHint: "First delayed chat",
+      firstMessage: "first",
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    const second = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: secondWorkspace.id,
+      mode: "session",
+      titleHint: "Second delayed chat",
+      firstMessage: "second",
+    });
+    await waitForCondition(() => startCalls.length === 2);
+
+    startDeferreds[1]?.resolve({ url: "ws://second" });
+    await expect(second).resolves.toBe(true);
+    const secondThreadId = useAppStore.getState().selectedThreadId;
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === secondThreadId)?.title,
+    ).toBe("Second delayed chat");
+
+    startDeferreds[0]?.resolve({ url: "ws://first" });
+    await expect(first).resolves.toBe(true);
+    expect(useAppStore.getState().selectedThreadId).toBe(secondThreadId);
+    expect(
+      useAppStore
+        .getState()
+        .threads.map((thread) => thread.title)
+        .toSorted(),
+    ).toEqual(["First delayed chat", "Second delayed chat"]);
+  });
+
+  test("a successful chat creation still opens while its intent remains current", async () => {
+    const workspace = projectWorkspace("ws-current");
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: "stay here",
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    startDeferreds[0]?.resolve({ url: "ws://current" });
+
+    await expect(creation).resolves.toBe(true);
+    const state = useAppStore.getState();
+    expect(state.view).toBe("chat");
+    expect(state.selectedWorkspaceId).toBe(workspace.id);
+    expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+  });
+
+  test("cancelling delayed startup preserves the exact submitted draft", async () => {
+    const workspace = projectWorkspace("ws-cancel-start");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 7,
+      text: "Do not lose this draft",
+    };
+    const controller = new AbortController();
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+      signal: controller.signal,
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    controller.abort();
+
+    const outcome = await Promise.race([creation, Bun.sleep(100).then(() => "timed-out" as const)]);
+    expect(outcome).toBe(false);
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+
+    startDeferreds[0]?.resolve({ url: "ws://cancelled" });
+    await flushAsyncWork();
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+  });
+
+  test("cancelling attachment processing preserves the exact submitted draft", async () => {
+    const workspace = projectWorkspace("ws-cancel-attachment");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 9,
+      text: "Keep the attachment draft",
+    };
+    const attachmentRead = createDeferred<ArrayBuffer>();
+    let attachmentReadStarted = false;
+    const file = {
+      name: "notes.txt",
+      type: "text/plain",
+      size: 5,
+      lastModified: 1,
+      arrayBuffer: async () => {
+        attachmentReadStarted = true;
+        return await attachmentRead.promise;
+      },
+    } as File;
+    const controller = new AbortController();
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {
+        [workspace.id]: {
+          serverUrl: "ws://ready",
+          error: null,
+          starting: false,
+        },
+      },
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    } as never);
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      attachmentFiles: [file],
+      draftSubmission: { key: draftKey, revision: draft.revision },
+      signal: controller.signal,
+    });
+    await waitForCondition(() => attachmentReadStarted);
+    controller.abort();
+
+    const outcome = await Promise.race([creation, Bun.sleep(100).then(() => "timed-out" as const)]);
+    expect(outcome).toBe(false);
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+
+    attachmentRead.resolve(new ArrayBuffer(5));
+    await flushAsyncWork();
+    expect(useAppStore.getState().threads).toEqual([]);
+    expect(useAppStore.getState().composerDraftsByKey[draftKey]).toEqual(draft);
+  });
+
+  test("startup failure preserves the exact submitted draft", async () => {
+    const workspace = projectWorkspace("ws-failure");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 11,
+      text: "Retry this exact request",
+    };
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    startDeferreds[0]?.reject(new Error("server failed"));
+
+    await expect(creation).resolves.toBe(false);
+    const state = useAppStore.getState();
+    expect(state.threads).toEqual([]);
+    expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
   });
 
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {

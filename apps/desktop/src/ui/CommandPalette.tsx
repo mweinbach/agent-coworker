@@ -216,6 +216,7 @@ export const CommandPalette = memo(function CommandPalette({
             <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
               <SquareIcon />
               <span>Stop current turn</span>
+              <CommandKbd keys={[MOD, "."]} />
             </CommandItem>
           ) : null}
           <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">

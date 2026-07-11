@@ -19,6 +19,7 @@ import {
   persistCalls,
   RUNTIME,
   registerControlSocketLifecycleHooks,
+  requestJsonRpc,
   respondToJsonRpcRequest,
   setJsonRpcSocketOverride,
 } from "./control-socket.harness";
@@ -108,6 +109,103 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(socket).toBeInstanceOf(MockJsonRpcSocket);
     expect((socket as MockJsonRpcSocket).opts.openTimeoutMs).toBe(5_000);
     expect((socket as MockJsonRpcSocket).opts.handshakeTimeoutMs).toBe(10_000);
+  });
+
+  test("waitForControlSession aborts before an unresolved socket becomes ready", async () => {
+    const workspaceId = "ws-abort-ready";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+    const readyGate = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: readyGate.promise,
+      connect() {},
+      request: async () => ({}),
+      respond: () => true,
+      close() {},
+    } as never);
+
+    const pending = helpers.waitForControlSession(get as never, set as never, workspaceId, 10_000, {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    const outcome = await Promise.race([
+      pending.then(
+        () => "resolved" as const,
+        (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+      ),
+      Bun.sleep(100).then(() => "timed-out" as const),
+    ]);
+    expect(outcome).toBe("AbortError");
+    expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(0);
+    readyGate.resolve();
+  });
+
+  test("requestJsonRpc aborts before an unresolved response arrives", async () => {
+    const workspaceId = "ws-abort-request";
+    const { get, set } = createState(workspaceId);
+    const requestGate = Promise.withResolvers<Record<string, unknown>>();
+    const controller = new AbortController();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      connect() {},
+      request: () => requestGate.promise,
+      respond: () => true,
+      close() {},
+    } as never);
+
+    const pending = requestJsonRpc(
+      get as never,
+      set as never,
+      workspaceId,
+      "research/start",
+      {},
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    const outcome = await Promise.race([
+      pending.then(
+        () => "resolved" as const,
+        (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+      ),
+      Bun.sleep(100).then(() => "timed-out" as const),
+    ]);
+    expect(outcome).toBe("AbortError");
+    requestGate.resolve({});
+  });
+
+  test("requestJsonRpc does not send an already-cancelled request", async () => {
+    const workspaceId = "ws-pre-aborted-request";
+    const { get, set } = createState(workspaceId);
+    const controller = new AbortController();
+    let requestCount = 0;
+    controller.abort();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      connect() {},
+      request: async () => {
+        requestCount += 1;
+        return {};
+      },
+      respond: () => true,
+      close() {},
+    } as never);
+
+    await expect(
+      requestJsonRpc(
+        get as never,
+        set as never,
+        workspaceId,
+        "research/start",
+        {},
+        {
+          signal: controller.signal,
+        },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(requestCount).toBe(0);
   });
 
   test("stale socket close after a serverUrl swap does not clear the active control session", async () => {

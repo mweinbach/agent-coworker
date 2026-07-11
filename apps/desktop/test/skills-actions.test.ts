@@ -17,46 +17,46 @@ const { createSkillActions } = skillActionsModule;
 const failedSkillMutationActions = [
   {
     name: "deleteSkill",
-    expectedError: "Unable to delete skill.",
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkill("skill-1"),
   },
   {
     name: "disableSkill",
-    expectedError: "Unable to disable skill.",
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkill("skill-1"),
   },
   {
     name: "enableSkill",
-    expectedError: "Unable to enable skill.",
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkill("skill-1"),
   },
   {
     name: "disableSkillInstallation",
-    expectedError: null,
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.disableSkillInstallation("inst-1"),
   },
   {
     name: "enableSkillInstallation",
-    expectedError: null,
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.enableSkillInstallation("inst-1"),
   },
   {
     name: "deleteSkillInstallation",
-    expectedError: null,
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.deleteSkillInstallation("inst-1"),
   },
   {
     name: "copySkillInstallation",
-    expectedError: null,
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.copySkillInstallation("inst-1", "project"),
   },
   {
     name: "updateSkillInstallation",
-    expectedError: null,
+    expectedError: "JSON-RPC workspace socket is unavailable",
     invoke: (actions: ReturnType<typeof createSkillActions>) =>
       actions.updateSkillInstallation("inst-1"),
   },
@@ -285,7 +285,10 @@ describe("skill store actions", () => {
 
     await expect(
       createSkillActions(set, get).installSkills("owner/repo", "global"),
-    ).rejects.toThrow("JSON-RPC workspace socket is unavailable");
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "JSON-RPC workspace socket is unavailable" },
+    });
 
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
       other: true,
@@ -317,7 +320,10 @@ describe("skill store actions", () => {
 
     await expect(
       createSkillActions(set, get).installSkills("owner/repo", "global"),
-    ).rejects.toThrow("request failed");
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "request failed" },
+    });
 
     expect(waiterPendingKey).toBe("install:global");
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
@@ -543,10 +549,14 @@ describe("skill store actions", () => {
       state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
       const { get, set } = createStoreHarness(state);
 
-      await invoke(createSkillActions(set, get));
+      const result = await invoke(createSkillActions(set, get));
 
       expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
         other: true,
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { message: expectedError },
       });
       expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(expectedError);
       expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();

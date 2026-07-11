@@ -13,6 +13,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { WorkItem } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -31,6 +32,7 @@ import { Spinner } from "../../components/ui/spinner";
 import { Textarea } from "../../components/ui/textarea";
 import { confirmAction } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
+import { OperationFeedback } from "../OperationFeedback";
 import { ArtifactReviewCard } from "./ArtifactReviewCard";
 import { TaskQuestionsCard } from "./TaskQuestionsCard";
 import { formatTaskStatus, taskStatusBadgeClassName } from "./taskPresentation";
@@ -69,6 +71,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const reopenTask = useAppStore((state) => state.reopenTask);
   const retryTask = useAppStore((state) => state.retryTask);
   const taskLifecycleRequestByTaskId = useAppStore((state) => state.taskLifecycleRequestByTaskId);
+  const operationsByKey = useAppStore((state) => state.operationsByKey);
   const openFilePreview = useAppStore((state) => state.openFilePreview);
   const selectThread = useAppStore((state) => state.selectThread);
   const [title, setTitle] = useState(task?.title ?? "");
@@ -77,6 +80,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const [saving, setSaving] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const draftTaskId = useRef(task?.id ?? null);
@@ -122,7 +126,11 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const canReopen = ["completed", "cancelled"].includes(task.status);
   const lifecycleAction = task.status === "failed" ? "retry" : canReopen ? "reopen" : null;
   const lifecycleRequest = taskLifecycleRequestByTaskId[task.id];
-  const lifecyclePending = lifecycleAction !== null && lifecycleRequest?.action === lifecycleAction;
+  const briefOperation = operationsByKey[operationKey("task", "brief", task.id)];
+  const lifecycleOperation = operationsByKey[operationKey("task", "lifecycle", task.id)];
+  const lifecyclePending =
+    lifecycleOperation?.status === "pending" ||
+    (lifecycleAction !== null && lifecycleRequest?.action === lifecycleAction);
   const lifecyclePendingLabel = lifecycleAction === "retry" ? "Retrying..." : "Reopening...";
 
   const retry = async () => {
@@ -138,7 +146,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
         title: title.trim(),
         objective: objective.trim(),
       });
-      if (saved) setBriefDirty(false);
+      if (saved.ok) setBriefDirty(false);
     } finally {
       setSaving(false);
     }
@@ -147,10 +155,17 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
   const submitFeedback = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = feedback.trim();
-    if (!value) return;
-    await requestTaskChanges(task.id, value);
-    setFeedback("");
-    setFeedbackOpen(false);
+    if (!value || feedbackSubmitting) return;
+    setFeedbackSubmitting(true);
+    try {
+      const result = await requestTaskChanges(task.id, value);
+      if (result.ok) {
+        setFeedback("");
+        setFeedbackOpen(false);
+      }
+    } finally {
+      setFeedbackSubmitting(false);
+    }
   };
 
   const requestCancelTask = async () => {
@@ -183,8 +198,8 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
     if (cancelling) return;
     setCancelling(true);
     try {
-      await cancelTask(task.id);
-      setCancelConfirmOpen(false);
+      const result = await cancelTask(task.id);
+      if (result.ok) setCancelConfirmOpen(false);
     } finally {
       setCancelling(false);
     }
@@ -243,7 +258,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               <Input
                 id="task-brief-title"
                 className="h-8 text-xs"
-                disabled={!canEdit}
+                disabled={!canEdit || saving}
                 value={title}
                 onChange={(event) => {
                   setTitle(event.target.value);
@@ -258,7 +273,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               <Textarea
                 id="task-brief-objective"
                 className="min-h-24 resize-y text-xs leading-5"
-                disabled={!canEdit}
+                disabled={!canEdit || saving}
                 value={objective}
                 onChange={(event) => {
                   setObjective(event.target.value);
@@ -279,6 +294,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               Save brief
             </Button>
           ) : null}
+          <OperationFeedback operation={briefOperation} />
         </Section>
 
         {task.requirements.filter((item) => item.status === "active").length > 0 ? (
@@ -427,7 +443,12 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
         <Section title="Review and control">
           <div className="grid gap-2">
             {task.status === "awaiting_review" ? (
-              <Button type="button" size="sm" onClick={() => void acceptTask(task.id)}>
+              <Button
+                type="button"
+                size="sm"
+                disabled={lifecyclePending}
+                onClick={() => void acceptTask(task.id)}
+              >
                 <CheckCircle2Icon data-icon="inline-start" />
                 Accept delivery
               </Button>
@@ -437,6 +458,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 type="button"
                 size="sm"
                 variant="outline"
+                disabled={lifecyclePending}
                 onClick={() => setFeedbackOpen(true)}
               >
                 Request changes
@@ -448,7 +470,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 size="sm"
                 variant="ghost"
                 className="text-destructive hover:text-destructive"
-                disabled={cancelling}
+                disabled={cancelling || lifecyclePending}
                 aria-busy={cancelling || undefined}
                 onClick={() => void requestCancelTask()}
               >
@@ -495,6 +517,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 {lifecyclePending ? lifecyclePendingLabel : "Retry task"}
               </Button>
             ) : null}
+            <OperationFeedback operation={lifecycleOperation} />
             {terminal && task.sourceSessionId ? (
               <Button
                 type="button"
@@ -510,9 +533,14 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
         </Section>
       </div>
 
-      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+      <Dialog
+        open={feedbackOpen}
+        onOpenChange={(nextOpen) => {
+          if (!feedbackSubmitting) setFeedbackOpen(nextOpen);
+        }}
+      >
         <DialogContent>
-          <form onSubmit={submitFeedback}>
+          <form aria-busy={feedbackSubmitting} onSubmit={submitFeedback}>
             <DialogHeader>
               <DialogTitle>Request task changes</DialogTitle>
               <DialogDescription>
@@ -528,23 +556,35 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                   className="min-h-28"
                   placeholder="Describe what should change and what should stay intact."
                   value={feedback}
+                  disabled={feedbackSubmitting}
                   onChange={(event) => setFeedback(event.target.value)}
                 />
               </Field>
             </FieldGroup>
+            <OperationFeedback operation={lifecycleOperation} />
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setFeedbackOpen(false)}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={feedbackSubmitting}
+                onClick={() => setFeedbackOpen(false)}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={!feedback.trim()}>
-                Request changes
+              <Button type="submit" disabled={!feedback.trim() || feedbackSubmitting}>
+                {feedbackSubmitting ? "Requesting…" : "Request changes"}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>
+      <Dialog
+        open={cancelConfirmOpen}
+        onOpenChange={(nextOpen) => {
+          if (!cancelling) setCancelConfirmOpen(nextOpen);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel this task?</DialogTitle>
@@ -552,8 +592,14 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
               This stops the task agent and marks the task as cancelled. You can reopen it later.
             </DialogDescription>
           </DialogHeader>
+          <OperationFeedback operation={lifecycleOperation} />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setCancelConfirmOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={cancelling}
+              onClick={() => setCancelConfirmOpen(false)}
+            >
               Keep working
             </Button>
             <Button

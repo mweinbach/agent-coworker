@@ -45,6 +45,8 @@ export function createFeedItemProjection(state: ConversationProjectionState) {
       code: evt.code,
       source: evt.source,
       ...(evt.data !== undefined ? { data: evt.data } : {}),
+      ...(evt.clientMessageId ? { clientMessageId: evt.clientMessageId } : {}),
+      ...(evt.steerRequestId ? { steerRequestId: evt.steerRequestId } : {}),
     };
     // Attach mid-turn errors to their turn: thread/read reconstruction drops
     // items without a turnId, so a failed turn's cause would otherwise vanish

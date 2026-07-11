@@ -31,7 +31,7 @@ function resetAppStore(overrides: Record<string, unknown>) {
     threadRuntimeById: {},
     latestTodosByThreadId: {},
     workspaceExplorerById: {},
-    promptModal: null,
+    interactionsByThread: {},
     notifications: [],
     providerStatusByName: {},
     providerStatusLastUpdatedAt: null,

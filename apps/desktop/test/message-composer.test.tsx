@@ -3,6 +3,8 @@ import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { createEmptyComposerDraft } from "../src/app/composerDrafts";
+import type { ComposerSubmission } from "../src/app/composerSubmission";
 import {
   type MessageComposerAttachmentItem,
   MessageComposerAttachments,
@@ -11,6 +13,8 @@ import {
   MessageComposerForm,
   MessageComposerRoot,
   MessageComposerStatus,
+  MessageComposerStop,
+  MessageComposerSubmissionNotice,
   MessageComposerSubmit,
   MessageComposerTextarea,
   MessageComposerTools,
@@ -21,6 +25,17 @@ const IMAGE_ATTACHMENT: MessageComposerAttachmentItem = {
   filename: "diagram.png",
   mimeType: "image/png",
   previewUrl: "blob:diagram-preview",
+};
+const ACCEPTED_SUBMISSION: ComposerSubmission = {
+  id: "submission-1",
+  clientMessageId: "client-message-1",
+  owner: { key: "thread:thread-1", revision: 1, submissionId: "submission-1" },
+  request: { kind: "thread", threadId: "thread-1" },
+  draft: { ...createEmptyComposerDraft(), revision: 1, text: "Tighten the answer" },
+  prepared: { text: "Tighten the answer", attachments: undefined },
+  phase: "accepted",
+  delivery: "steer",
+  error: null,
 };
 
 function AttachmentHarness({ onRemove }: { onRemove: (index: number) => void }) {
@@ -171,14 +186,50 @@ describe("message composer", () => {
     const pending = renderToStaticMarkup(
       createElement(MessageComposerSubmit, { status: "pending" }),
     );
-    const stop = renderToStaticMarkup(
-      createElement(MessageComposerSubmit, { status: "streaming", onStop: () => {} }),
+    const pendingSteer = renderToStaticMarkup(
+      createElement(MessageComposerSubmit, { status: "pending", mode: "steer-pending" }),
+    );
+    const stop = renderToStaticMarkup(createElement(MessageComposerStop, { onStop: () => {} }));
+    const stopping = renderToStaticMarkup(
+      createElement(MessageComposerStop, { pending: true, onStop: () => {} }),
     );
 
     expect(send).toContain('aria-label="Send message"');
-    expect(steer).toContain('aria-label="Steer current response"');
+    expect(send).toContain('type="submit"');
+    expect(steer).toContain('aria-label="Send guidance to current response"');
     expect(pending).toContain('aria-label="Sending message"');
-    expect(stop).toContain('aria-label="Stop generating response"');
+    expect(pendingSteer).toContain('aria-label="Sending guidance to current response"');
+    expect(stop).toContain('aria-label="Stop current response"');
+    expect(stop).toContain('type="button"');
     expect(stop).toContain("bg-destructive");
+    expect(stopping).toContain('aria-label="Stopping current response"');
+    expect(stopping).toContain('aria-busy="true"');
+  });
+
+  test("keeps accepted guidance status clear without offering an unsafe edit", () => {
+    const editable = renderToStaticMarkup(
+      createElement(MessageComposerSubmissionNotice, {
+        submission: ACCEPTED_SUBMISSION,
+        onRetry: () => {},
+        onEdit: () => {},
+        onDismiss: () => {},
+      }),
+    );
+    const protectedDraft = renderToStaticMarkup(
+      createElement(MessageComposerSubmissionNotice, {
+        submission: ACCEPTED_SUBMISSION,
+        onRetry: () => {},
+        onEdit: () => {},
+        canEditAccepted: false,
+        onDismiss: () => {},
+      }),
+    );
+
+    expect(editable).toContain("Guidance accepted. Restore it to edit and send as a follow-up.");
+    expect(editable).toContain("Edit as follow-up");
+    expect(protectedDraft).toContain("Guidance accepted. Your newer draft stays unchanged.");
+    expect(protectedDraft).not.toContain("Edit as follow-up");
+    expect(protectedDraft).toContain('role="status"');
+    expect(protectedDraft).toContain('aria-live="polite"');
   });
 });

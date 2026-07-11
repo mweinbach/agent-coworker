@@ -415,7 +415,7 @@ function seedStore(
     },
     latestTodosByThreadId: {},
     workspaceExplorerById: {},
-    promptModal: null,
+    interactionsByThread: {},
     notifications: [],
     providerStatusByName: {},
     providerStatusLastUpdatedAt: null,

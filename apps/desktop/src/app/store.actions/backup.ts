@@ -13,6 +13,7 @@ import {
   sendThread,
 } from "../store.helpers";
 import { workspaceBackupActionKey } from "../store.helpers/backupActionKey";
+import { operationKey, runAcknowledgedOperation } from "../store.helpers/operations";
 
 function setWorkspaceBackupsLoading(
   set: StoreSet,
@@ -84,14 +85,66 @@ export function createWorkspaceBackupActions(
     return true;
   }
 
+  async function requestBackupMutation(options: {
+    workspaceId: string;
+    targetSessionId: string;
+    checkpointId?: string;
+    action: string;
+    label: string;
+    errorTitle: string;
+    errorMessage: string;
+    method:
+      | "cowork/backups/workspace/checkpoint"
+      | "cowork/backups/workspace/restore"
+      | "cowork/backups/workspace/deleteCheckpoint"
+      | "cowork/backups/workspace/deleteEntry";
+  }) {
+    const {
+      workspaceId,
+      targetSessionId,
+      checkpointId,
+      action,
+      label,
+      errorTitle,
+      errorMessage,
+      method,
+    } = options;
+    ensureWorkspaceRuntime(get, set, workspaceId);
+    const pendingActionKey = workspaceBackupActionKey(action, targetSessionId, checkpointId);
+
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("backup", action, workspaceId, targetSessionId, checkpointId),
+      label,
+      errorTitle,
+      errorMessage,
+      repairAction: "Confirm the workspace session is connected and retry.",
+      optimistic: () => {
+        addWorkspaceBackupPendingAction(set, workspaceId, pendingActionKey);
+        return () => clearWorkspaceBackupPendingAction(set, workspaceId, pendingActionKey);
+      },
+      execute: async () => {
+        await ensureWorkspaceControl(workspaceId);
+        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, method, {
+          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          targetSessionId,
+          ...(checkpointId ? { checkpointId } : {}),
+        });
+        if (!ok) {
+          throw new Error(errorMessage);
+        }
+      },
+    });
+  }
+
   function notifyNotConnected(detail: string) {
-    set((s) => ({
-      notifications: pushNotification(s.notifications, {
+    set((state) => ({
+      notifications: pushNotification(state.notifications, {
         id: makeId(),
         ts: nowIso(),
         kind: "error",
         title: "Not connected",
         detail,
+        audience: "foreground",
       }),
     }));
   }
@@ -160,45 +213,27 @@ export function createWorkspaceBackupActions(
     },
 
     createWorkspaceBackupCheckpoint: async (workspaceId: string, targetSessionId: string) => {
-      await ensureWorkspaceControl(workspaceId);
-      const actionKey = workspaceBackupActionKey("checkpoint", targetSessionId);
-      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
+      return await requestBackupMutation({
         workspaceId,
-        "cowork/backups/workspace/checkpoint",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        },
-      );
-      if (ok) return;
-
-      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-      notifyNotConnected("Unable to create a workspace checkpoint.");
+        targetSessionId,
+        action: "checkpoint",
+        label: "Create workspace checkpoint",
+        errorTitle: "Checkpoint not created",
+        errorMessage: "Unable to create a workspace checkpoint.",
+        method: "cowork/backups/workspace/checkpoint",
+      });
     },
 
     restoreWorkspaceBackupOriginal: async (workspaceId: string, targetSessionId: string) => {
-      await ensureWorkspaceControl(workspaceId);
-      const actionKey = workspaceBackupActionKey("restore-original", targetSessionId);
-      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
+      return await requestBackupMutation({
         workspaceId,
-        "cowork/backups/workspace/restore",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        },
-      );
-      if (ok) return;
-
-      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-      notifyNotConnected("Unable to restore the original workspace snapshot.");
+        targetSessionId,
+        action: "restore-original",
+        label: "Restore original workspace snapshot",
+        errorTitle: "Workspace not restored",
+        errorMessage: "Unable to restore the original workspace snapshot.",
+        method: "cowork/backups/workspace/restore",
+      });
     },
 
     restoreWorkspaceBackupCheckpoint: async (
@@ -206,29 +241,16 @@ export function createWorkspaceBackupActions(
       targetSessionId: string,
       checkpointId: string,
     ) => {
-      await ensureWorkspaceControl(workspaceId);
-      const actionKey = workspaceBackupActionKey(
-        "restore-checkpoint",
+      return await requestBackupMutation({
+        workspaceId,
         targetSessionId,
         checkpointId,
-      );
-      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/backups/workspace/restore",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          checkpointId,
-        },
-      );
-      if (ok) return;
-
-      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-      notifyNotConnected("Unable to restore the selected checkpoint.");
+        action: "restore-checkpoint",
+        label: "Restore workspace checkpoint",
+        errorTitle: "Checkpoint not restored",
+        errorMessage: "Unable to restore the selected checkpoint.",
+        method: "cowork/backups/workspace/restore",
+      });
     },
 
     deleteWorkspaceBackupCheckpoint: async (
@@ -236,50 +258,28 @@ export function createWorkspaceBackupActions(
       targetSessionId: string,
       checkpointId: string,
     ) => {
-      await ensureWorkspaceControl(workspaceId);
-      const actionKey = workspaceBackupActionKey(
-        "delete-checkpoint",
+      return await requestBackupMutation({
+        workspaceId,
         targetSessionId,
         checkpointId,
-      );
-      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/backups/workspace/deleteCheckpoint",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          checkpointId,
-        },
-      );
-      if (ok) return;
-
-      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-      notifyNotConnected("Unable to delete the selected checkpoint.");
+        action: "delete-checkpoint",
+        label: "Delete workspace checkpoint",
+        errorTitle: "Checkpoint not deleted",
+        errorMessage: "Unable to delete the selected checkpoint.",
+        method: "cowork/backups/workspace/deleteCheckpoint",
+      });
     },
 
     deleteWorkspaceBackupEntry: async (workspaceId: string, targetSessionId: string) => {
-      await ensureWorkspaceControl(workspaceId);
-      const actionKey = workspaceBackupActionKey("delete-entry", targetSessionId);
-      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
+      return await requestBackupMutation({
         workspaceId,
-        "cowork/backups/workspace/deleteEntry",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        },
-      );
-      if (ok) return;
-
-      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-      notifyNotConnected("Unable to delete the selected backup entry.");
+        targetSessionId,
+        action: "delete-entry",
+        label: "Delete workspace backup",
+        errorTitle: "Backup not deleted",
+        errorMessage: "Unable to delete the selected backup entry.",
+        method: "cowork/backups/workspace/deleteEntry",
+      });
     },
 
     setWorkspaceBackupSessionEnabled: async (
@@ -292,28 +292,71 @@ export function createWorkspaceBackupActions(
           entry.workspaceId === workspaceId &&
           get().threadRuntimeById[entry.id]?.sessionId === targetSessionId,
       );
-      if (!thread) {
-        notifyNotConnected("Connect the selected session to change its backup setting.");
-        return;
-      }
+      const previousSessionConfig = thread
+        ? (get().threadRuntimeById[thread.id]?.sessionConfig ?? null)
+        : null;
 
-      const ok = sendThread(get, thread.id, (sessionId) => ({
-        type: "set_config",
-        sessionId,
-        config: {
-          backupsEnabled: enabled,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("backup", "session-enabled", workspaceId, targetSessionId),
+        label: enabled ? "Enable session backups" : "Disable session backups",
+        errorTitle: "Session backup setting not updated",
+        errorMessage: "Unable to update the selected session backup setting.",
+        repairAction: "Confirm the selected session is connected and retry.",
+        optimistic: () => {
+          if (!thread) return undefined;
+          set((state) => {
+            const runtime = state.threadRuntimeById[thread.id];
+            if (!runtime?.sessionConfig) return {};
+            return {
+              threadRuntimeById: {
+                ...state.threadRuntimeById,
+                [thread.id]: {
+                  ...runtime,
+                  sessionConfig: {
+                    ...runtime.sessionConfig,
+                    backupsEnabled: enabled,
+                  },
+                },
+              },
+            };
+          });
+          return () => {
+            set((state) => {
+              const runtime = state.threadRuntimeById[thread.id];
+              if (!runtime) return {};
+              return {
+                threadRuntimeById: {
+                  ...state.threadRuntimeById,
+                  [thread.id]: {
+                    ...runtime,
+                    sessionConfig: previousSessionConfig,
+                  },
+                },
+              };
+            });
+          };
         },
-      }));
-      if (!ok) {
-        notifyNotConnected("Unable to update the selected session backup setting.");
-        return;
-      }
-
-      appendThreadTranscript(thread.id, "client", {
-        type: "set_config",
-        sessionId: targetSessionId,
-        config: {
-          backupsEnabled: enabled,
+        execute: async () => {
+          if (!thread) {
+            throw new Error("Connect the selected session to change its backup setting.");
+          }
+          const ok = sendThread(get, thread.id, (sessionId) => ({
+            type: "set_config",
+            sessionId,
+            config: {
+              backupsEnabled: enabled,
+            },
+          }));
+          if (!ok) {
+            throw new Error("Unable to update the selected session backup setting.");
+          }
+          appendThreadTranscript(thread.id, "client", {
+            type: "set_config",
+            sessionId: targetSessionId,
+            config: {
+              backupsEnabled: enabled,
+            },
+          });
         },
       });
     },

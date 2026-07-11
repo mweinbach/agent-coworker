@@ -32,6 +32,7 @@ import {
   waitForControlSession,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
+import { operationKey, runAcknowledgedOperation } from "../store.helpers/operations";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import {
   isOneOffChatWorkspace,
@@ -612,16 +613,7 @@ export function createWorkspaceDefaultsActions(
     }
 
     if (!persisted && opts.notifyOnMissingControl) {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Workspace settings partially applied",
-          detail:
-            "Control session is not fully connected yet. Reopen the workspace settings to retry.",
-        }),
-      }));
+      throw new Error("Control session is not fully connected yet.");
     }
 
     const threadIds = get()
@@ -915,126 +907,159 @@ export function createWorkspaceDefaultsActions(
         ? resolveSharedSettingsSource(workspaceId)
         : (get().workspaces.find((workspace) => workspace.id === workspaceId) ?? null);
       if (!sourceWorkspace) {
-        return;
+        return await runAcknowledgedOperation(get, set, {
+          key: operationKey("workspace-defaults", workspaceId, opts?.scope ?? "settings"),
+          label: "Update workspace settings",
+          errorTitle: "Workspace settings not updated",
+          errorMessage: "The selected workspace is no longer available.",
+          repairAction: "Select an available workspace and retry.",
+          execute: async () => {
+            throw new Error("The selected workspace is no longer available.");
+          },
+        });
       }
       const chatSettingsTarget = !sharedSettings && isOneOffChatWorkspace(sourceWorkspace);
 
       const optimisticWorkspace = resolveWorkspaceDefaults(sourceWorkspace.id) ?? sourceWorkspace;
-      if (!optimisticWorkspace) {
-        return;
-      }
-
       const nextWorkspace = applyWorkspacePatch(optimisticWorkspace, patch);
       const globalMemoryPatch = buildGlobalMemoryDefaultsPatch(patch, nextWorkspace);
       const hasGlobalMemoryPatch = hasGlobalMemoryDefaultsPatch(globalMemoryPatch);
 
-      set((s) => ({
-        workspaces: s.workspaces.map((workspace) => {
-          const patchedWorkspace = sharedSettings
-            ? copyWorkspaceSettings(workspace, nextWorkspace)
-            : chatSettingsTarget && isOneOffChatWorkspace(workspace)
-              ? copyWorkspaceSettings(workspace, nextWorkspace)
-              : workspace.id === sourceWorkspace.id
-                ? nextWorkspace
-                : workspace;
-          return applyGlobalMemoryDefaults(patchedWorkspace, globalMemoryPatch);
-        }),
-      }));
-      await persistNow(get);
+      const previousWorkspaces = new Map<string, WorkspaceRecord>();
 
-      const {
-        clearDefaultToolOutputOverflowChars,
-        userProfile: userProfilePatch,
-        ...workspacePatch
-      } = patch;
-      const shouldSyncCoreSettings =
-        workspacePatch.defaultProvider !== undefined ||
-        workspacePatch.defaultModel !== undefined ||
-        workspacePatch.defaultPreferredChildModel !== undefined ||
-        workspacePatch.defaultChildModelRoutingMode !== undefined ||
-        workspacePatch.defaultPreferredChildModelRef !== undefined ||
-        workspacePatch.defaultAllowedChildModelRefs !== undefined ||
-        workspacePatch.defaultToolOutputOverflowChars !== undefined ||
-        clearDefaultToolOutputOverflowChars === true ||
-        workspacePatch.defaultAdvancedMemory !== undefined ||
-        workspacePatch.defaultMemoryGenerationModel !== undefined ||
-        workspacePatch.defaultSkillImprovementEnabled !== undefined ||
-        workspacePatch.defaultSkillImprovementModel !== undefined ||
-        workspacePatch.defaultSkillImprovementScope !== undefined ||
-        workspacePatch.defaultSkillImprovementExcludedSkills !== undefined ||
-        workspacePatch.defaultEnableMcp !== undefined ||
-        workspacePatch.defaultBackupsEnabled !== undefined ||
-        workspacePatch.providerOptions !== undefined ||
-        workspacePatch.userName !== undefined ||
-        userProfilePatch !== undefined ||
-        workspacePatch.yolo !== undefined;
-      if (!shouldSyncCoreSettings) {
-        return;
-      }
-
-      if (hasGlobalMemoryPatch && !sharedSettings) {
-        const workspaceIds = get().workspaces.map((workspace) => workspace.id);
-        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-          ensureControl: true,
-          notifyOnMissingControl: true,
-        });
-        await Promise.all(
-          workspaceIds
-            .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-            .map((targetWorkspaceId) =>
-              syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                ensureControl: false,
-                notifyOnMissingControl: false,
-              }),
-            ),
-        );
-        return;
-      }
-
-      if (chatSettingsTarget) {
-        const workspaceIds = get()
-          .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
-          .map((workspace) => workspace.id);
-        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-          ensureControl: true,
-          notifyOnMissingControl: true,
-        });
-        await Promise.all(
-          workspaceIds
-            .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-            .map((targetWorkspaceId) =>
-              syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-                ensureControl: false,
-                notifyOnMissingControl: false,
-              }),
-            ),
-        );
-        return;
-      }
-
-      if (!sharedSettings) {
-        await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-          ensureControl: true,
-          notifyOnMissingControl: true,
-        });
-        return;
-      }
-
-      const workspaceIds = get().workspaces.map((workspace) => workspace.id);
-      await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
-        ensureControl: true,
-        notifyOnMissingControl: true,
-      });
-      await Promise.all(
-        workspaceIds
-          .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
-          .map((targetWorkspaceId) =>
-            syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
-              ensureControl: false,
-              notifyOnMissingControl: false,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("workspace-defaults", workspaceId, opts?.scope ?? "settings"),
+        label: "Update workspace settings",
+        errorTitle: "Workspace settings not updated",
+        errorMessage: "Unable to update workspace settings.",
+        repairAction: "Wait for the workspace connection to finish, then retry.",
+        optimistic: () => {
+          set((state) => ({
+            workspaces: state.workspaces.map((workspace) => {
+              const patchedWorkspace = sharedSettings
+                ? copyWorkspaceSettings(workspace, nextWorkspace)
+                : chatSettingsTarget && isOneOffChatWorkspace(workspace)
+                  ? copyWorkspaceSettings(workspace, nextWorkspace)
+                  : workspace.id === sourceWorkspace.id
+                    ? nextWorkspace
+                    : workspace;
+              const updatedWorkspace = applyGlobalMemoryDefaults(
+                patchedWorkspace,
+                globalMemoryPatch,
+              );
+              if (updatedWorkspace !== workspace) {
+                previousWorkspaces.set(workspace.id, workspace);
+              }
+              return updatedWorkspace;
             }),
-          ),
-      );
+          }));
+          return () => {
+            set((state) => ({
+              workspaces: state.workspaces.map(
+                (workspace) => previousWorkspaces.get(workspace.id) ?? workspace,
+              ),
+            }));
+            void persistNow(get);
+          };
+        },
+        execute: async () => {
+          await persistNow(get);
+
+          const {
+            clearDefaultToolOutputOverflowChars,
+            userProfile: userProfilePatch,
+            ...workspacePatch
+          } = patch;
+          const shouldSyncCoreSettings =
+            workspacePatch.defaultProvider !== undefined ||
+            workspacePatch.defaultModel !== undefined ||
+            workspacePatch.defaultPreferredChildModel !== undefined ||
+            workspacePatch.defaultChildModelRoutingMode !== undefined ||
+            workspacePatch.defaultPreferredChildModelRef !== undefined ||
+            workspacePatch.defaultAllowedChildModelRefs !== undefined ||
+            workspacePatch.defaultToolOutputOverflowChars !== undefined ||
+            clearDefaultToolOutputOverflowChars === true ||
+            workspacePatch.defaultAdvancedMemory !== undefined ||
+            workspacePatch.defaultMemoryGenerationModel !== undefined ||
+            workspacePatch.defaultSkillImprovementEnabled !== undefined ||
+            workspacePatch.defaultSkillImprovementModel !== undefined ||
+            workspacePatch.defaultSkillImprovementScope !== undefined ||
+            workspacePatch.defaultSkillImprovementExcludedSkills !== undefined ||
+            workspacePatch.defaultEnableMcp !== undefined ||
+            workspacePatch.defaultBackupsEnabled !== undefined ||
+            workspacePatch.providerOptions !== undefined ||
+            workspacePatch.userName !== undefined ||
+            userProfilePatch !== undefined ||
+            workspacePatch.yolo !== undefined;
+          if (!shouldSyncCoreSettings) {
+            return;
+          }
+
+          if (hasGlobalMemoryPatch && !sharedSettings) {
+            const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+            await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+              ensureControl: true,
+              notifyOnMissingControl: true,
+            });
+            await Promise.all(
+              workspaceIds
+                .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+                .map((targetWorkspaceId) =>
+                  syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                    ensureControl: false,
+                    notifyOnMissingControl: false,
+                  }),
+                ),
+            );
+            return;
+          }
+
+          if (chatSettingsTarget) {
+            const workspaceIds = get()
+              .workspaces.filter((workspace) => isOneOffChatWorkspace(workspace))
+              .map((workspace) => workspace.id);
+            await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+              ensureControl: true,
+              notifyOnMissingControl: true,
+            });
+            await Promise.all(
+              workspaceIds
+                .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+                .map((targetWorkspaceId) =>
+                  syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                    ensureControl: false,
+                    notifyOnMissingControl: false,
+                  }),
+                ),
+            );
+            return;
+          }
+
+          if (!sharedSettings) {
+            await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+              ensureControl: true,
+              notifyOnMissingControl: true,
+            });
+            return;
+          }
+
+          const workspaceIds = get().workspaces.map((workspace) => workspace.id);
+          await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
+            ensureControl: true,
+            notifyOnMissingControl: true,
+          });
+          await Promise.all(
+            workspaceIds
+              .filter((targetWorkspaceId) => targetWorkspaceId !== sourceWorkspace.id)
+              .map((targetWorkspaceId) =>
+                syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
+                  ensureControl: false,
+                  notifyOnMissingControl: false,
+                }),
+              ),
+          );
+        },
+      });
     },
   };
 }

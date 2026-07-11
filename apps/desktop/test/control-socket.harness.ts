@@ -84,7 +84,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { createControlSocketHelpers } = await import("../src/app/store.helpers/controlSocket");
-const { ensureWorkspaceJsonRpcSocket, respondToJsonRpcRequest } = await import(
+const { ensureWorkspaceJsonRpcSocket, requestJsonRpc, respondToJsonRpcRequest } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
 const { RUNTIME, defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
@@ -241,6 +241,7 @@ export {
   makeThreadListEntry,
   persistCalls,
   RUNTIME,
+  requestJsonRpc,
   respondToJsonRpcRequest,
   setJsonRpcSocketOverride,
 };

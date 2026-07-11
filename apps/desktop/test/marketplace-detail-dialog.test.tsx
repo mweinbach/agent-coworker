@@ -129,12 +129,14 @@ function findButtonsByLabel(harness: ReturnType<typeof setupJsdom>, label: strin
 describe("marketplace detail dialog", () => {
   test("renders sections with installed state and dispatches installs", async () => {
     const previousState = useAppStore.getState();
-    const installPluginsMock = mock(
-      async (_sourceInput: string, _scope: "workspace" | "user") => {},
-    );
-    const installSkillsMock = mock(
-      async (_sourceInput: string, _scope: "project" | "global") => {},
-    );
+    const installPluginsMock = mock(async (_sourceInput: string, _scope: "workspace" | "user") => ({
+      ok: true as const,
+      value: undefined,
+    }));
+    const installSkillsMock = mock(async (_sourceInput: string, _scope: "project" | "global") => ({
+      ok: true as const,
+      value: undefined,
+    }));
     const readMarketplaceDetailMock = mock(async (_id: string, _workspaceId?: string) => {});
     openExternalUrlMock.mockClear();
 
@@ -234,7 +236,10 @@ describe("marketplace detail dialog", () => {
 
   test("shows the connectors empty state and removes user-added marketplaces", async () => {
     const previousState = useAppStore.getState();
-    const removeMarketplaceMock = mock(async (_id: string) => {});
+    const removeMarketplaceMock = mock(async (_id: string) => ({
+      ok: true as const,
+      value: undefined,
+    }));
     const selectMarketplaceMock = mock(async (_id: string | null) => {});
     confirmActionMock.mockClear();
     confirmActionMock.mockResolvedValue(true);

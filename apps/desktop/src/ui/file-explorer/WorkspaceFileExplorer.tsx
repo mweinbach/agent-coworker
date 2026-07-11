@@ -10,16 +10,11 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { useAppStore } from "../../app/store";
+import { publishForegroundNotification, useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
-import {
-  confirmAction,
-  listDirectory,
-  showContextMenu,
-  showNotification,
-} from "../../lib/desktopCommands";
+import { confirmAction, listDirectory, showContextMenu } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
 export type WorkspaceFileExplorerProps = {
@@ -804,10 +799,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             void refreshExpandedDirectories();
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
-            void showNotification({
+            publishForegroundNotification({
+              kind: "error",
               title: "Move to Trash failed",
-              body: detail || "Unable to move the selected item to Trash.",
-            }).catch(() => {});
+              detail: detail || "Unable to move the selected item to Trash.",
+            });
           }
         }
       }

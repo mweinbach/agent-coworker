@@ -9,6 +9,10 @@ import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
+  type ControlEventAcknowledgementDecoder,
+  decodeControlEventAcknowledgement,
+} from "./controlEventAcknowledgement";
+import {
   applyPluginsCatalogEvent,
   applySkillsCatalogEvent,
   resolveClearedPluginInstallWaiter,
@@ -24,6 +28,7 @@ import {
   requestJsonRpcThreadRead,
   type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
+import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
 
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
@@ -60,6 +65,7 @@ type ControlSocketHelperOptions = {
 
 type RequestJsonRpcControlEventOptions = {
   beforeApplyEvent?: (event: SessionEvent) => void;
+  decodeAcknowledgement?: ControlEventAcknowledgementDecoder;
   shouldApplyEvent?: (event: SessionEvent) => boolean;
 };
 
@@ -581,7 +587,9 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     timeoutMs = 3_000,
+    options: AbortableActionOptions = {},
   ): Promise<boolean> {
+    throwIfOperationAborted(options.signal);
     if (isWorkspaceDisposed(workspaceId)) {
       return false;
     }
@@ -595,7 +603,7 @@ export function createControlSocketHelpers(
         return false;
       }
       const startedAt = Date.now();
-      const ready = await waitForReady(socket, timeoutMs);
+      const ready = await waitForOperation(waitForReady(socket, timeoutMs), options.signal);
       if (!ready) {
         return false;
       }
@@ -611,7 +619,10 @@ export function createControlSocketHelpers(
       if (remainingMs <= 0) {
         return false;
       }
-      return await waitForPromiseCompletion(bootstrap, remainingMs);
+      return await waitForOperation(
+        waitForPromiseCompletion(bootstrap, remainingMs),
+        options.signal,
+      );
     });
   }
 
@@ -1941,11 +1952,14 @@ export function createControlSocketHelpers(
         }
         options.beforeApplyEvent?.(nextEvent);
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
-        if (nextEvent.type === "error") {
+        const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
+        const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
+        const rejection = [acknowledgement, operationAcknowledgement].find(
+          (candidate) => candidate && !candidate.ok,
+        );
+        if (rejection && !rejection.ok) {
           ok = false;
-          if (typeof (nextEvent as Extract<SessionEvent, { type: "error" }>).message === "string") {
-            setErrorDetail((nextEvent as Extract<SessionEvent, { type: "error" }>).message);
-          }
+          setErrorDetail(rejection.message);
         }
       }
       return ok;

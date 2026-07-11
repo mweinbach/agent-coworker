@@ -102,7 +102,7 @@ describe("agent profile store actions", () => {
       targetId: "qa-reviewer-copy",
     });
 
-    expect(saved).toBe(true);
+    expect(saved).toMatchObject({ ok: true });
     expect(calls.map((call) => call.method)).toEqual([
       "cowork/agentProfiles/upsert",
       "cowork/agentProfiles/delete",
@@ -115,6 +115,42 @@ describe("agent profile store actions", () => {
     ]);
     expect(state.workspaceRuntimeById["missing-workspace"]).toBeUndefined();
     expect(state.notifications).toHaveLength(0);
+  });
+
+  test("failed profile saves return an acknowledged error for the editor", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://profiles";
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: () => Promise.reject(new Error("Profile directory is read-only.")),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    const result = await createAgentProfileActions(set, get).upsertAgentProfile(
+      profileInput(),
+      workspaceId,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "Profile directory is read-only.",
+        retryable: true,
+      },
+    });
+    expect(
+      state.operationsByKey[`agent-profile:save:${workspaceId}:workspace%3Aqa-reviewer`],
+    ).toMatchObject({
+      status: "error",
+      error: { message: "Profile directory is read-only." },
+    });
+    expect(state.notifications.at(-1)).toMatchObject({
+      title: "Subagent profile not saved",
+      audience: "foreground",
+    });
   });
 
   test("stale profile catalog reads do not overwrite mutation results", async () => {
@@ -145,7 +181,7 @@ describe("agent profile store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].agentProfilesLoading).toBe(true);
 
     const saved = await actions.upsertAgentProfile(profileInput(), workspaceId);
-    expect(saved).toBe(true);
+    expect(saved).toMatchObject({ ok: true });
     expect(
       state.workspaceRuntimeById[workspaceId].agentProfilesCatalog?.profiles[0]?.profile
         .displayName,

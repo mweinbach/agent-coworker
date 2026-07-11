@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Badge } from "../../../components/ui/badge";
 import { Button, buttonVariants } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
@@ -47,6 +48,7 @@ import { compareProviderNamesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import { ManageModelsDialog } from "./ManageModelsDialog";
 import {
@@ -101,6 +103,7 @@ export function ProvidersPage({
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
@@ -315,7 +318,8 @@ export function ProvidersPage({
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod, code?: string) => {
     void (async () => {
-      await authorizeProviderAuth(provider, method.id);
+      const authorized = await authorizeProviderAuth(provider, method.id);
+      if (!authorized.ok) return;
       if (method.oauthMode !== "code") {
         await callbackProviderAuth(provider, method.id, code);
       }
@@ -333,6 +337,22 @@ export function ProvidersPage({
     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
     const credentialValues = credentialValuesByMethod[stateKey] ?? {};
     const codeValue = oauthCodesByMethod[stateKey] ?? "";
+    const methodOperations = [
+      operationsByKey[
+        operationKey("provider", `api-key:${opts.method.id.trim() || "api_key"}`, opts.provider)
+      ],
+      operationsByKey[operationKey("provider", `config:${opts.method.id.trim()}`, opts.provider)],
+      operationsByKey[
+        operationKey("provider", `authorize:${opts.method.id.trim() || "missing"}`, opts.provider)
+      ],
+      operationsByKey[
+        operationKey("provider", `callback:${opts.method.id.trim() || "missing"}`, opts.provider)
+      ],
+    ].filter((operation) => operation !== undefined);
+    const methodOperation =
+      methodOperations.find((operation) => operation.status === "pending") ??
+      methodOperations.find((operation) => operation.status === "error");
+    const methodPending = methodOperation?.status === "pending";
     const savedApiKeyMask =
       opts.status?.savedApiKeyMasks?.[opts.method.id] ?? optimisticApiKeyMaskByMethod[stateKey];
     const savedFieldMasks =
@@ -379,6 +399,7 @@ export function ProvidersPage({
     return (
       <div
         key={stateKey}
+        aria-busy={methodPending}
         className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0"
       >
         <div className="flex items-center justify-between gap-3">
@@ -423,6 +444,7 @@ export function ProvidersPage({
                       }
                       type={field.kind === "password" ? "password" : "text"}
                       readOnly={!isEditingCredentials}
+                      disabled={methodPending}
                       aria-label={`${opts.providerDisplayName} ${field.label}`}
                     />
                   );
@@ -446,6 +468,7 @@ export function ProvidersPage({
                   <Button
                     variant="outline"
                     type="button"
+                    disabled={methodPending}
                     onClick={() => {
                       setCredentialEditingByMethod((s) => ({ ...s, [stateKey]: false }));
                       setCredentialValuesByMethod((s) => ({ ...s, [stateKey]: {} }));
@@ -457,7 +480,7 @@ export function ProvidersPage({
                 {isEditingCredentials ? (
                   <Button
                     type="button"
-                    disabled={!canConnectProvider || !canSaveStructuredMethod}
+                    disabled={!canConnectProvider || !canSaveStructuredMethod || methodPending}
                     title={!canConnectProvider ? "Add a workspace first." : undefined}
                     onClick={() => {
                       const nextValues = Object.fromEntries(
@@ -496,6 +519,7 @@ export function ProvidersPage({
                   }
                   type={revealApiKey ? "text" : "password"}
                   readOnly={!isEditingApiKey}
+                  disabled={methodPending}
                   aria-label={`${opts.providerDisplayName} ${opts.method.label} API key`}
                 />
                 <InputGroupButton
@@ -529,6 +553,7 @@ export function ProvidersPage({
                 <Button
                   variant="outline"
                   type="button"
+                  disabled={methodPending}
                   onClick={() => {
                     setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
                     setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
@@ -541,7 +566,7 @@ export function ProvidersPage({
               {isEditingApiKey ? (
                 <Button
                   type="button"
-                  disabled={!canConnectProvider || !apiKeyValue.trim()}
+                  disabled={!canConnectProvider || !apiKeyValue.trim() || methodPending}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
                   onClick={() => {
                     void setProviderApiKey(opts.provider, opts.method.id, apiKeyValue.trim());
@@ -569,7 +594,7 @@ export function ProvidersPage({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              disabled={!canConnectProvider}
+              disabled={!canConnectProvider || methodPending}
               title={!canConnectProvider ? "Add a workspace first." : undefined}
               onClick={() => {
                 startOauthSignIn(opts.provider, opts.method);
@@ -582,6 +607,7 @@ export function ProvidersPage({
                 <Input
                   className="max-w-xs"
                   value={codeValue}
+                  disabled={methodPending}
                   onChange={(e) => {
                     const nextValue = e.currentTarget.value;
                     setOauthCodesByMethod((s) => ({ ...s, [stateKey]: nextValue }));
@@ -593,7 +619,7 @@ export function ProvidersPage({
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={!canConnectProvider}
+                  disabled={!canConnectProvider || methodPending}
                   onClick={() => {
                     void callbackProviderAuth(opts.provider, opts.method.id, codeValue);
                   }}
@@ -604,6 +630,8 @@ export function ProvidersPage({
             ) : null}
           </div>
         )}
+
+        <OperationFeedback operation={methodOperation} />
 
         {challengeMatch ? (
           <div className="text-xs text-muted-foreground">
@@ -676,6 +704,13 @@ export function ProvidersPage({
       const lmStudioModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
       const hiddenModels = new Set(providerUiState.lmstudio.hiddenModels);
       const visibleLmStudioModels = lmStudioModels.filter((model) => !hiddenModels.has(model.id));
+      const enabledOperation = operationsByKey[operationKey("provider", "lmstudio-enabled")];
+      const enabledPending = enabledOperation?.status === "pending";
+      const modelVisibilityPending = lmStudioModels.some(
+        (model) =>
+          operationsByKey[operationKey("provider", "lmstudio-model-visible", model.id)]?.status ===
+          "pending",
+      );
       const lmStudioCard = describeLmStudioCard({
         enabled: lmStudioEnabled,
         status,
@@ -746,11 +781,12 @@ export function ProvidersPage({
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
+                    disabled={enabledPending}
                     onClick={() => {
                       void setLmStudioEnabled(!lmStudioEnabled);
                     }}
                   >
-                    {lmStudioEnabled ? "Disable" : "Connect"}
+                    {enabledPending ? "Saving..." : lmStudioEnabled ? "Disable" : "Connect"}
                   </Button>
                   <Button
                     variant="outline"
@@ -761,6 +797,7 @@ export function ProvidersPage({
                     {providerStatusRefreshing ? "Refreshing..." : "Refresh"}
                   </Button>
                 </div>
+                <OperationFeedback operation={enabledOperation} />
 
                 {lmStudioCard.subtitle ? (
                   <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
@@ -777,6 +814,7 @@ export function ProvidersPage({
                         type="button"
                         size="sm"
                         className="h-7 rounded-sm px-2 text-xs shadow-none"
+                        disabled={modelVisibilityPending}
                         onClick={() => {
                           for (const modelId of providerUiState.lmstudio.hiddenModels) {
                             void setLmStudioModelVisible(modelId, true);
@@ -794,6 +832,10 @@ export function ProvidersPage({
                         const isHidden = hiddenModels.has(model.id);
                         const checked = !isHidden;
                         const checkboxId = `lmstudio-model-${model.id}`;
+                        const visibilityOperation =
+                          operationsByKey[
+                            operationKey("provider", "lmstudio-model-visible", model.id)
+                          ];
                         return (
                           <div
                             key={model.id}
@@ -810,6 +852,7 @@ export function ProvidersPage({
                             <Checkbox
                               id={checkboxId}
                               checked={checked}
+                              disabled={visibilityOperation?.status === "pending"}
                               onCheckedChange={(checked) => {
                                 void setLmStudioModelVisible(model.id, Boolean(checked));
                               }}

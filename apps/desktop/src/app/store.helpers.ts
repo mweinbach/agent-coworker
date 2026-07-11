@@ -56,10 +56,14 @@ import type {
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
+  ComposerDraft,
+  ComposerDraftAttachment,
   ComposerDraftRevision,
   ComposerDraftRevisionFloor,
   ComposerDraftsByKey,
 } from "./composerDrafts";
+import type { ComposerSubmissionRequest, ComposerSubmissionsByKey } from "./composerSubmission";
+import type { CreationDraftError, TaskCreationDraft } from "./creationDrafts";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -68,6 +72,12 @@ import {
   disposeWorkspaceJsonRpcSocketState,
   reactivateWorkspaceJsonRpcSocketState,
 } from "./store.helpers/jsonRpcSocket";
+import type {
+  CreationOperationControl,
+  CreationOperationIntent,
+} from "./store.helpers/operationIntent";
+import { throwIfOperationAborted, waitForOperation } from "./store.helpers/operationIntent";
+import { operationError, operationKey, runAcknowledgedOperation } from "./store.helpers/operations";
 import {
   persist,
   persistNow,
@@ -101,20 +111,21 @@ import {
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
+  ChatInteraction,
   CloudSyncSettings,
   DesktopSettings,
   LmStudioStartModalState,
   Notification,
   OnboardingStep,
+  OperationResult,
+  OperationState,
   PersistedOnboardingState,
   PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
   PrivacyTelemetrySettings,
-  PromptModalState,
   ResearchCard,
   ResearchDetail,
   ResearchSettingsState,
-  SandboxApprovalPrompt,
   SettingsPageId,
   SidebarSectionKey,
   TaskArtifactDetail,
@@ -248,19 +259,14 @@ export type AppStoreState = {
   workspaceExplorerById: Record<string, WorkspaceExplorerState>;
   workspaceExplorerRefreshById: Record<string, number>;
 
-  promptModal: PromptModalState;
+  interactionsByThread: Record<string, ChatInteraction[]>;
   lmStudioStartModal: LmStudioStartModalState | null;
-  /**
-   * Pending sandbox-denial escalations rendered inline in the chat feed, keyed by
-   * threadId. Sandbox escapes use this inline path; ordinary approvals
-   * (`requires_manual_review`) still use `promptModal`.
-   */
-  sandboxApprovalsByThread: Record<string, SandboxApprovalPrompt[]>;
   filePreview: { path: string } | null;
   canvasActiveTab: "preview" | "edit";
   canvasShowFormattingBar: boolean;
   isCanvasMaximized: boolean;
   notifications: Notification[];
+  operationsByKey: Record<string, OperationState>;
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
   providerStatusLastUpdatedAt: string | null;
@@ -279,7 +285,12 @@ export type AppStoreState = {
   composerDraftsByKey: ComposerDraftsByKey;
   composerDraftRevisionFloorByKey: Record<string, ComposerDraftRevisionFloor>;
   composerAttachmentIngestionCountByKey: Record<string, number>;
+  composerSubmissionsByKey: ComposerSubmissionsByKey;
   newChatLandingTarget: NewChatLandingTarget | null;
+  researchCreationDraft: ComposerDraft;
+  researchCreationError: CreationDraftError | null;
+  taskCreationDraft: TaskCreationDraft;
+  taskCreationError: CreationDraftError | null;
   injectContext: boolean;
   developerMode: boolean;
   showHiddenFiles: boolean;
@@ -319,26 +330,33 @@ export type AppStoreState = {
   closeSettings: () => void;
   setSettingsPage: (page: SettingsPageId) => void;
 
-  addWorkspace: () => Promise<void>;
+  addWorkspace: (options?: { intent?: CreationOperationIntent }) => Promise<void>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
-  selectWorkspace: (workspaceId: string, options?: AbortableActionOptions) => Promise<void>;
+  selectWorkspace: (
+    workspaceId: string,
+    options?: AbortableActionOptions & { intent?: CreationOperationIntent },
+  ) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
   setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
-  newThread: (opts?: {
-    workspaceId?: string;
-    scope?: "oneOff" | "project";
-    titleHint?: string;
-    firstMessage?: string;
-    references?: import("../lib/wsProtocol").TurnReference[];
-    mode?: "draft" | "session";
-    attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
-    attachmentFiles?: File[];
-    provider?: ProviderName;
-    model?: string;
-    reasoningEffort?: ReasoningEffortValue;
-    draftSubmission?: ComposerDraftRevision;
-  }) => Promise<boolean>;
+  newThread: (
+    opts?: {
+      workspaceId?: string;
+      scope?: "oneOff" | "project";
+      titleHint?: string;
+      firstMessage?: string;
+      references?: import("../lib/wsProtocol").TurnReference[];
+      mode?: "draft" | "session";
+      attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
+      attachmentFiles?: File[];
+      draftAttachments?: ComposerDraftAttachment[];
+      provider?: ProviderName;
+      model?: string;
+      reasoningEffort?: ReasoningEffortValue;
+      draftSubmission?: ComposerDraftRevision;
+      clientMessageId?: string;
+    } & CreationOperationControl,
+  ) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
     target?: NewChatLandingTarget;
@@ -360,6 +378,7 @@ export type AppStoreState = {
       refreshSnapshot?: boolean;
       signal?: AbortSignal;
       draftSubmission?: ComposerDraftRevision;
+      clientMessageId?: string;
     },
   ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -372,10 +391,17 @@ export type AppStoreState = {
     options?: {
       targetThreadId?: string;
       draftSubmission?: ComposerDraftRevision;
+      clientMessageId?: string;
       retryToolItemIds?: string[];
     },
   ) => Promise<boolean>;
-  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
+  submitComposerDraft: (request: ComposerSubmissionRequest) => boolean;
+  retryComposerSubmission: (key?: string) => boolean;
+  editAcceptedComposerSubmission: (key?: string) => boolean;
+  dismissComposerSubmission: (key?: string) => void;
+  completeComposerSubmission: (owner: ComposerDraftRevision) => void;
+  failComposerSubmission: (submissionId: string, error: unknown) => void;
+  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => boolean;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setThreadReasoningEffort: (
@@ -465,32 +491,48 @@ export type AppStoreState = {
   }>;
   openNewTask: (workspaceId?: string) => Promise<void>;
   refreshTasks: (workspaceId?: string, options?: AbortableActionOptions) => Promise<void>;
-  startTask: (opts: { workspaceId: string; task: TaskCreationInput }) => Promise<TaskRecord | null>;
+  startTask: (
+    opts: {
+      workspaceId: string;
+      task: TaskCreationInput;
+      draftRevision?: number;
+    } & CreationOperationControl,
+  ) => Promise<OperationResult<TaskRecord>>;
+  setTaskCreationDraft: (
+    patch: Partial<Omit<TaskCreationDraft, "revision" | "updatedAt" | "idempotencyKey">>,
+  ) => void;
+  setTaskCreationError: (revision: number, message: string | null) => boolean;
+  clearTaskCreationDraft: (revision: number) => boolean;
   selectTask: (
     taskId: string,
     options?: AbortableActionOptions & { preserveView?: boolean },
   ) => Promise<void>;
   selectTaskThread: (taskId: string, taskThreadId: string) => Promise<void>;
-  createTaskThread: (taskId: string, title: string, workItemId?: string) => Promise<void>;
+  createTaskThread: (
+    taskId: string,
+    title: string,
+    workItemId?: string,
+    options?: CreationOperationControl,
+  ) => Promise<OperationResult>;
   updateTaskBrief: (
     taskId: string,
     patch: { title?: string; objective?: string },
-  ) => Promise<boolean>;
-  acceptTask: (taskId: string) => Promise<void>;
-  requestTaskChanges: (taskId: string, feedback: string) => Promise<void>;
-  cancelTask: (taskId: string, reason?: string) => Promise<void>;
-  reopenTask: (taskId: string, reason?: string) => Promise<void>;
-  retryTask: (taskId: string) => Promise<boolean>;
+  ) => Promise<OperationResult>;
+  acceptTask: (taskId: string) => Promise<OperationResult>;
+  requestTaskChanges: (taskId: string, feedback: string) => Promise<OperationResult>;
+  cancelTask: (taskId: string, reason?: string) => Promise<OperationResult>;
+  reopenTask: (taskId: string, reason?: string) => Promise<OperationResult>;
+  retryTask: (taskId: string) => Promise<OperationResult>;
   resolveTaskQuestions: (
     taskId: string,
     answers: TaskQuestionAnswerInput[],
-  ) => Promise<TaskQuestionResumeStatus | null>;
+  ) => Promise<OperationResult<TaskQuestionResumeStatus>>;
   readTaskArtifact: (taskId: string, artifactId: string) => Promise<TaskArtifactDetail | null>;
   captureTaskArtifactVersion: (
     taskId: string,
     artifactId: string,
     changeSummary?: string,
-  ) => Promise<TaskArtifactDetail | null>;
+  ) => Promise<OperationResult<TaskArtifactDetail>>;
   compareTaskArtifactVersions: (
     taskId: string,
     artifactId: string,
@@ -506,90 +548,117 @@ export type AppStoreState = {
     taskId: string,
     artifactId: string,
     versionId: string,
-  ) => Promise<TaskArtifactDetail | null>;
+  ) => Promise<OperationResult<TaskArtifactDetail>>;
   acceptTaskArtifactVersion: (
     taskId: string,
     artifactId: string,
     versionId?: string,
-  ) => Promise<TaskArtifactDetail | null>;
+  ) => Promise<OperationResult<TaskArtifactDetail>>;
   startTaskArtifactRevision: (
     taskId: string,
     artifactId: string,
     baseVersionId: string,
     instruction: string,
-  ) => Promise<TaskArtifactDetail | null>;
+  ) => Promise<OperationResult<TaskArtifactDetail>>;
   refreshSkillsCatalog: (workspaceId?: string) => Promise<void>;
   refreshAgentProfilesCatalog: (workspaceId?: string) => Promise<void>;
-  upsertAgentProfile: (profile: AgentProfileUpsertInput, workspaceId?: string) => Promise<boolean>;
-  deleteAgentProfile: (scope: AgentProfileScope, id: string, workspaceId?: string) => Promise<void>;
-  copyAgentProfile: (copy: AgentProfileCopyInput, workspaceId?: string) => Promise<boolean>;
+  upsertAgentProfile: (
+    profile: AgentProfileUpsertInput,
+    workspaceId?: string,
+  ) => Promise<OperationResult>;
+  deleteAgentProfile: (
+    scope: AgentProfileScope,
+    id: string,
+    workspaceId?: string,
+  ) => Promise<OperationResult>;
+  copyAgentProfile: (copy: AgentProfileCopyInput, workspaceId?: string) => Promise<OperationResult>;
   setAgentProfileWorkspaceAvailability: (
     id: string,
     disabled: boolean,
     workspaceId?: string,
-  ) => Promise<boolean>;
+  ) => Promise<OperationResult>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
   previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
-  installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
-  enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
-  disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
-  deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  installPlugins: (
+    sourceInput: string,
+    targetScope: "workspace" | "user",
+  ) => Promise<OperationResult>;
+  enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<OperationResult>;
+  disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<OperationResult>;
+  deletePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<OperationResult>;
   checkPluginUpdate: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
-  updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  updatePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<OperationResult>;
   dismissPluginMutationError: (workspaceId?: string) => void;
   listImportable: (source: ImportSource, kind: ImportableKind) => Promise<void>;
-  importPlugin: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
-  importSkill: (item: ImportableItem, targetScope: "workspace" | "user") => Promise<void>;
+  importPlugin: (
+    item: ImportableItem,
+    targetScope: "workspace" | "user",
+  ) => Promise<OperationResult>;
+  importSkill: (
+    item: ImportableItem,
+    targetScope: "workspace" | "user",
+  ) => Promise<OperationResult>;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;
   previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;
-  installSkills: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;
-  disableSkill: (skillName: string) => Promise<void>;
-  enableSkill: (skillName: string) => Promise<void>;
-  deleteSkill: (skillName: string) => Promise<void>;
-  disableSkillInstallation: (installationId: string) => Promise<void>;
-  enableSkillInstallation: (installationId: string) => Promise<void>;
-  deleteSkillInstallation: (installationId: string) => Promise<void>;
+  installSkills: (
+    sourceInput: string,
+    targetScope: "project" | "global",
+  ) => Promise<OperationResult>;
+  disableSkill: (skillName: string) => Promise<OperationResult>;
+  enableSkill: (skillName: string) => Promise<OperationResult>;
+  deleteSkill: (skillName: string) => Promise<OperationResult>;
+  disableSkillInstallation: (installationId: string) => Promise<OperationResult>;
+  enableSkillInstallation: (installationId: string) => Promise<OperationResult>;
+  deleteSkillInstallation: (installationId: string) => Promise<OperationResult>;
   copySkillInstallation: (
     installationId: string,
     targetScope: "project" | "global",
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
-  updateSkillInstallation: (installationId: string) => Promise<void>;
+  updateSkillInstallation: (installationId: string) => Promise<OperationResult>;
   dismissSkillMutationError: (workspaceId?: string) => void;
   refreshMarketplaces: (workspaceId?: string) => Promise<void>;
   selectMarketplace: (id: string | null) => Promise<void>;
   readMarketplaceDetail: (id: string, workspaceId?: string) => Promise<void>;
-  addMarketplace: (sourceInput: string) => Promise<void>;
-  removeMarketplace: (id: string) => Promise<void>;
+  addMarketplace: (sourceInput: string) => Promise<OperationResult>;
+  removeMarketplace: (id: string) => Promise<OperationResult>;
   dismissMarketplaceMutationError: (workspaceId?: string) => void;
 
   refreshResearchList: () => Promise<void>;
   selectResearch: (researchId: string | null) => Promise<void>;
-  startResearch: (opts: {
-    input: string;
-    title?: string;
-    files?: File[];
-    settings?: Partial<ResearchSettingsState>;
-  }) => Promise<ResearchCard | null>;
-  cancelResearch: (researchId: string) => Promise<void>;
-  renameResearch: (researchId: string, title: string) => Promise<void>;
-  deleteResearch: (researchId: string) => Promise<boolean>;
+  startResearch: (
+    opts: {
+      input: string;
+      title?: string;
+      files?: File[];
+      settings?: Partial<ResearchSettingsState>;
+      draftRevision?: number;
+    } & CreationOperationControl,
+  ) => Promise<OperationResult<ResearchCard>>;
+  setResearchCreationInput: (input: string) => void;
+  addResearchCreationAttachments: (files: File[]) => Promise<void>;
+  removeResearchCreationAttachment: (index: number) => void;
+  setResearchCreationError: (revision: number, message: string | null) => boolean;
+  clearResearchCreationDraft: (revision: number) => boolean;
+  cancelResearch: (researchId: string) => Promise<OperationResult>;
+  renameResearch: (researchId: string, title: string) => Promise<OperationResult>;
+  deleteResearch: (researchId: string) => Promise<OperationResult>;
   sendResearchFollowUp: (opts: {
     parentResearchId: string;
     input: string;
     title?: string;
     files?: File[];
     settings?: Partial<ResearchSettingsState>;
-  }) => Promise<ResearchCard | null>;
+  }) => Promise<OperationResult<ResearchCard>>;
   setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
   exportResearch: (
     researchId: string,
     format: import("../../../../src/server/research/types").ResearchExportFormat,
-  ) => Promise<string | null>;
-  approveResearchPlan: (researchId: string) => Promise<ResearchCard | null>;
-  refineResearchPlan: (researchId: string, input: string) => Promise<ResearchCard | null>;
+  ) => Promise<OperationResult<string | null>>;
+  approveResearchPlan: (researchId: string) => Promise<OperationResult<ResearchCard>>;
+  refineResearchPlan: (researchId: string, input: string) => Promise<OperationResult<ResearchCard>>;
 
   applyWorkspaceDefaultsToThread: (
     threadId: string,
@@ -601,7 +670,7 @@ export type AppStoreState = {
     workspaceId: string,
     patch: WorkspaceDefaultsPatch,
     opts?: { scope?: "settings" | "target" },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   handleWorkspaceServerExited: (event: WorkspaceServerExitedEvent) => void;
   setWorkspaceServerStartupProgress: (event: WorkspaceServerStartupProgress) => void;
@@ -618,12 +687,12 @@ export type AppStoreState = {
     },
     previousName?: string,
     source?: "workspace" | "user",
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   deleteWorkspaceMcpServer: (
     workspaceId: string,
     name: string,
     source?: "workspace" | "user",
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceMcpServerEnabled: (
     workspaceId: string,
     server: {
@@ -633,64 +702,73 @@ export type AppStoreState = {
       pluginId?: string;
       pluginScope?: "workspace" | "user";
     },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   validateWorkspaceMcpServer: (
     workspaceId: string,
     name: string,
     source?: "workspace" | "user" | "plugin" | "system",
     plugin?: { pluginId?: string; pluginScope?: "workspace" | "user" },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   authorizeWorkspaceMcpServerAuth: (
     workspaceId: string,
     name: string,
     source?: "workspace" | "user" | "plugin" | "system",
     plugin?: { pluginId?: string; pluginScope?: "workspace" | "user" },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   callbackWorkspaceMcpServerAuth: (
     workspaceId: string,
     name: string,
     code?: string,
     source?: "workspace" | "user" | "plugin" | "system",
     plugin?: { pluginId?: string; pluginScope?: "workspace" | "user" },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceMcpServerApiKey: (
     workspaceId: string,
     name: string,
     apiKey: string,
     source?: "workspace" | "user" | "plugin" | "system",
     plugin?: { pluginId?: string; pluginScope?: "workspace" | "user" },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   requestOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   refreshOpenAiNativeConnectors: (workspaceId: string) => Promise<void>;
   setOpenAiNativeConnectorEnabled: (
     workspaceId: string,
     connectorId: string,
     enabled: boolean,
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   requestWorkspaceBackups: (workspaceId: string) => Promise<void>;
   requestWorkspaceBackupDelta: (
     workspaceId: string,
     targetSessionId: string,
     checkpointId: string,
   ) => Promise<void>;
-  createWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string) => Promise<void>;
-  restoreWorkspaceBackupOriginal: (workspaceId: string, targetSessionId: string) => Promise<void>;
+  createWorkspaceBackupCheckpoint: (
+    workspaceId: string,
+    targetSessionId: string,
+  ) => Promise<OperationResult>;
+  restoreWorkspaceBackupOriginal: (
+    workspaceId: string,
+    targetSessionId: string,
+  ) => Promise<OperationResult>;
   restoreWorkspaceBackupCheckpoint: (
     workspaceId: string,
     targetSessionId: string,
     checkpointId: string,
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   deleteWorkspaceBackupCheckpoint: (
     workspaceId: string,
     targetSessionId: string,
     checkpointId: string,
-  ) => Promise<void>;
-  deleteWorkspaceBackupEntry: (workspaceId: string, targetSessionId: string) => Promise<void>;
+  ) => Promise<OperationResult>;
+  deleteWorkspaceBackupEntry: (
+    workspaceId: string,
+    targetSessionId: string,
+  ) => Promise<OperationResult>;
   setWorkspaceBackupSessionEnabled: (
     workspaceId: string,
     targetSessionId: string,
     enabled: boolean,
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
 
   requestWorkspaceMemories: (workspaceId: string, opts?: { cwd?: string }) => Promise<void>;
   upsertWorkspaceMemory: (
@@ -699,13 +777,13 @@ export type AppStoreState = {
     id: string | undefined,
     content: string,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   deleteWorkspaceMemory: (
     workspaceId: string,
     scope: "workspace" | "user",
     id: string,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
 
   requestAdvancedMemories: (
     workspaceId: string,
@@ -722,80 +800,91 @@ export type AppStoreState = {
       body: string;
     },
     opts?: { cwd?: string },
-  ) => Promise<boolean>;
+  ) => Promise<OperationResult>;
   deleteAdvancedMemory: (
     workspaceId: string,
     folder: string | undefined,
     slug: string,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   generateAdvancedMemoryForThread: (
     workspaceId: string,
     threadId: string,
     opts?: { cwd?: string; folder?: string },
-  ) => Promise<boolean>;
+  ) => Promise<OperationResult>;
   setWorkspaceAdvancedMemory: (
     workspaceId: string,
     advancedMemory: boolean,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceMemoryGenerationModel: (
     workspaceId: string,
     model: string,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   requestSkillImprovementStatus: (workspaceId: string, opts?: { cwd?: string }) => Promise<void>;
   runSkillImprovement: (
     workspaceId: string,
     skillName?: string,
     opts?: { cwd?: string },
-  ) => Promise<boolean>;
+  ) => Promise<OperationResult>;
   restoreSkillImprovement: (
     workspaceId: string,
     skillName: string,
     opts?: { cwd?: string },
-  ) => Promise<boolean>;
+  ) => Promise<OperationResult>;
   setWorkspaceSkillImprovementEnabled: (
     workspaceId: string,
     enabled: boolean,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceSkillImprovementModel: (
     workspaceId: string,
     model: string,
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceSkillImprovementScope: (
     workspaceId: string,
     scope: "user" | "all",
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
   setWorkspaceSkillImprovementExcludedSkills: (
     workspaceId: string,
     excludedSkills: string[],
     opts?: { cwd?: string },
-  ) => Promise<void>;
+  ) => Promise<OperationResult>;
 
-  connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
-  setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
+  connectProvider: (provider: ProviderName, apiKey?: string) => Promise<OperationResult>;
+  setProviderApiKey: (
+    provider: ProviderName,
+    methodId: string,
+    apiKey: string,
+  ) => Promise<OperationResult>;
   setProviderConfig: (
     provider: ProviderName,
     methodId: string,
     values: Record<string, string>,
-  ) => Promise<void>;
-  copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;
-  authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
-  logoutProviderAuth: (provider: ProviderName) => Promise<void>;
-  callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
+  ) => Promise<OperationResult>;
+  copyProviderApiKey: (
+    provider: ProviderName,
+    sourceProvider: ProviderName,
+  ) => Promise<OperationResult>;
+  authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<OperationResult>;
+  logoutProviderAuth: (provider: ProviderName) => Promise<OperationResult>;
+  callbackProviderAuth: (
+    provider: ProviderName,
+    methodId: string,
+    code?: string,
+  ) => Promise<OperationResult>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
-  addCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<boolean>;
-  deleteCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<void>;
+  addCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<OperationResult>;
+  deleteCustomProviderModel: (provider: ProviderName, modelId: string) => Promise<OperationResult>;
   setProviderModelsEnabled: (
     provider: ProviderName,
     models: ReadonlyArray<{ id: string; enabled: boolean }>,
-  ) => Promise<boolean>;
-  resetProviderModelPreferences: (provider: ProviderName) => Promise<void>;
+  ) => Promise<OperationResult>;
+  resetProviderModelPreferences: (provider: ProviderName) => Promise<OperationResult>;
   refreshProviderStatus: (opts?: {
     refreshBedrockDiscovery?: boolean;
     workspaceId?: string;
@@ -805,16 +894,17 @@ export type AppStoreState = {
   checkLibreOfficeRuntime: (opts?: {
     smoke?: boolean;
   }) => Promise<import("../lib/wsProtocol").LibreOfficeRuntimeDiagnostic | null>;
-  setLmStudioEnabled: (enabled: boolean) => Promise<void>;
-  setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
+  setLmStudioEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<OperationResult>;
   startLmStudioServerAndRetry: () => Promise<void>;
   dismissLmStudioStartModal: () => void;
 
   loadAllThreadUsage: () => Promise<void>;
 
-  answerAsk: (threadId: string, requestId: string, answer: string) => void;
+  answerAsk: (threadId: string, requestId: string, answer: string) => boolean;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
   dismissPrompt: () => void;
+  retryInteractionResponse: (threadId: string, requestId: string) => boolean;
 
   startOnboarding: () => void;
   dismissOnboarding: () => void;
@@ -1112,8 +1202,8 @@ async function ensureServerRunning(
   options: AbortableActionOptions = {},
 ) {
   const lifecycleGeneration = jsonRpcLifecycleGeneration;
-  const isCurrent = () =>
-    options.signal?.aborted !== true && jsonRpcLifecycleGeneration === lifecycleGeneration;
+  const isCurrent = () => jsonRpcLifecycleGeneration === lifecycleGeneration;
+  throwIfOperationAborted(options.signal);
   if (!isCurrent()) return;
   const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
   if (!ws) return;
@@ -1126,13 +1216,16 @@ async function ensureServerRunning(
   let forceRestart = false;
   if (rt.serverUrl && !rt.error) {
     if (!isCurrent()) return;
-    const status = await getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
-      workspaceId,
-      running: false as const,
-      url: rt.serverUrl,
-      reason: "health_failed" as const,
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    const status = await waitForOperation(
+      getWorkspaceServerStatus({ workspaceId }).catch((error) => ({
+        workspaceId,
+        running: false as const,
+        url: rt.serverUrl,
+        reason: "health_failed" as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      options.signal,
+    );
     if (!isCurrent()) return;
     if (status.running) {
       syncWorkspaceServerRunningUrl(get, set, workspaceId, status.url);
@@ -1152,14 +1245,15 @@ async function ensureServerRunning(
     if (status.reason === "health_failed") {
       if (!isCurrent()) return;
       try {
-        await stopWorkspaceServer({ workspaceId });
+        await waitForOperation(stopWorkspaceServer({ workspaceId }), options.signal);
       } catch {
+        throwIfOperationAborted(options.signal);
         // ignore; startup below will surface persistent failures
       }
       if (!isCurrent()) return;
     }
     if (!isCurrent()) return;
-    await waitForWorkspaceServerRestartBackoff(workspaceId);
+    await waitForOperation(waitForWorkspaceServerRestartBackoff(workspaceId), options.signal);
     if (!isCurrent()) return;
     reactivateWorkspaceJsonRpcState(workspaceId);
     forceRestart = status.reason === "health_failed";
@@ -1169,7 +1263,7 @@ async function ensureServerRunning(
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
   const generation = getWorkspaceStartGeneration(workspaceId);
   if (inFlight && inFlight.generation === generation) {
-    await inFlight.promise;
+    await waitForOperation(inFlight.promise, options.signal);
     return;
   }
 
@@ -1241,19 +1335,15 @@ async function ensureServerRunning(
     }
   })();
 
-  if (!isCurrent()) {
-    await startPromise;
-    return;
-  }
   RUNTIME.workspaceStartPromises.set(workspaceId, { generation, promise: startPromise });
-  try {
-    await startPromise;
-  } finally {
+  const clearStartPromise = () => {
     const active = RUNTIME.workspaceStartPromises.get(workspaceId);
     if (active?.generation === generation && active.promise === startPromise) {
       RUNTIME.workspaceStartPromises.delete(workspaceId);
     }
-  }
+  };
+  void startPromise.then(clearStartPromise, clearStartPromise);
+  await waitForOperation(startPromise, options.signal);
 }
 
 export {
@@ -1286,6 +1376,8 @@ export {
   markWorkspaceServerStale,
   normalizeThreadTitleSource,
   nowIso,
+  operationError,
+  operationKey,
   persistNow,
   prependPendingThreadMessageWithAttachments,
   providerAuthMethodsFor,
@@ -1297,6 +1389,7 @@ export {
   requestJsonRpcControlEvent,
   requestSessionSnapshot,
   requestWorkspaceSessions,
+  runAcknowledgedOperation,
   sendThread,
   sendUserMessageToThread,
   shiftPendingThreadAttachments,

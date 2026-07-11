@@ -17,6 +17,7 @@ import {
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   onWindowCloseRequested,
+  onWorkspaceFileChanged,
   onWorkspaceServerExited,
   onWorkspaceServerStartupProgress,
   resolveWindowCloseRequest,
@@ -27,6 +28,7 @@ import {
   writeRendererLog,
 } from "./lib/desktopCommands";
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
+import { workspaceFileChangeEvents } from "./lib/filePreviewResource";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./lib/themeBootstrap";
@@ -478,6 +480,8 @@ function AppContent() {
   const init = useAppStore((s) => s.init);
   const invalidateBootstrap = useAppStore((s) => s.invalidateBootstrap);
   const view = useAppStore((s) => s.view);
+  const filePreviewPath = useAppStore((s) => s.filePreview?.path ?? null);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
   const handleWorkspaceServerExited = useAppStore((s) => s.handleWorkspaceServerExited);
@@ -667,6 +671,12 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    return onWorkspaceFileChanged((event) => {
+      workspaceFileChangeEvents.publish(event);
+    });
+  }, []);
+
+  useEffect(() => {
     return onUpdateStateChanged(setUpdateState);
   }, [setUpdateState]);
 
@@ -756,7 +766,10 @@ function AppContent() {
         />
       )}
       <LmStudioStartDialog />
-      {windowMode === "main" ? <FilePreviewModal /> : null}
+      {windowMode === "main" &&
+      !(canvasEnabled && filePreviewPath && isCanvasSupportedFile(filePreviewPath)) ? (
+        <FilePreviewModal />
+      ) : null}
       {windowMode === "main" ? (
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       ) : null}

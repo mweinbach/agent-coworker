@@ -4,6 +4,7 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import { resolveFeatureFlags } from "../../../../src/shared/featureFlags";
+import type { WorkspaceFileChangeEvent } from "../../../../src/shared/fileVersion";
 import type {
   HydratedTranscriptSnapshot,
   PersistedPrivacyTelemetrySettings,
@@ -413,6 +414,12 @@ export function onSystemAppearanceChanged(
   listener: (appearance: SystemAppearance) => void,
 ): () => void {
   return getDesktopApi()?.onSystemAppearanceChanged(listener) ?? noopUnsubscribe;
+}
+
+export function onWorkspaceFileChanged(
+  listener: (event: WorkspaceFileChangeEvent) => void,
+): () => void {
+  return getDesktopApi()?.onWorkspaceFileChanged?.(listener) ?? noopUnsubscribe;
 }
 
 export function onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void {

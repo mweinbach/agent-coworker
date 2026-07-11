@@ -1,5 +1,8 @@
 import { z } from "zod";
-
+import type {
+  FileChangeVersion,
+  WorkspaceFileChangeEvent,
+} from "../../../../src/shared/fileVersion";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
@@ -505,6 +508,33 @@ export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> =
     .max(50 * 1024 * 1024)
     .optional(),
 });
+
+const fileChangeVersionSchema: z.ZodType<FileChangeVersion> = z
+  .object({
+    modifiedAtMs: z.number().nonnegative(),
+    changeTimeMs: z.number().nonnegative(),
+    size: z.number().int().nonnegative(),
+    fingerprint: nonEmptyStringSchema,
+  })
+  .strict();
+
+export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent> =
+  z.discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("changed"),
+        path: nonEmptyStringSchema,
+        version: fileChangeVersionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("deleted"),
+        path: nonEmptyStringSchema,
+        version: z.null(),
+      })
+      .strict(),
+  ]);
 
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;

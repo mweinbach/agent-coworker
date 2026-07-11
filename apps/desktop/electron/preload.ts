@@ -5,6 +5,7 @@ import {
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
 } from "../../../src/shared/featureFlags";
+import type { WorkspaceFileChangeEvent } from "../../../src/shared/fileVersion";
 import {
   type CrashReportingEnvironment,
   resolveCrashReportingConfig,
@@ -115,6 +116,7 @@ import {
   windowCloseRequestSchema,
   windowCloseResponseInputSchema,
   windowDragPointInputSchema,
+  workspaceFileChangeEventSchema,
   workspaceServerExitedEventSchema,
   workspaceServerStartupProgressSchema,
   workspaceServerStatusSchema,
@@ -307,6 +309,10 @@ function assertWorkspaceServerExitedEvent(
   value: unknown,
 ): asserts value is WorkspaceServerExitedEvent {
   parseWithSchema(workspaceServerExitedEventSchema, value, "workspace server exited event");
+}
+
+function assertWorkspaceFileChangeEvent(value: unknown): asserts value is WorkspaceFileChangeEvent {
+  parseWithSchema(workspaceFileChangeEventSchema, value, "workspace file change event");
 }
 
 function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
@@ -847,6 +853,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.windowCloseRequested, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.windowCloseRequested, wrapped);
+    };
+  },
+
+  onWorkspaceFileChanged: (listener: (event: WorkspaceFileChangeEvent) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onWorkspaceFileChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertWorkspaceFileChangeEvent(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, wrapped);
     };
   },
 

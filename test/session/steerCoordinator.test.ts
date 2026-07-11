@@ -11,6 +11,71 @@ import {
 import { createUserMessageAttachmentHelpers } from "../../src/server/session/turnExecution/userMessageAttachments";
 
 describe("SteerCoordinator", () => {
+  test("correlates an accepted queued steer with its later dropped error", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const state = {
+      allMessages: [],
+      messages: [],
+      pendingSteers: [],
+      running: true,
+      currentTurnId: "turn-1",
+      acceptingSteers: true,
+      activeSteerHandler: null,
+    };
+    const context = {
+      id: "session-1",
+      state,
+      emit: (event: Record<string, unknown>) => events.push(event),
+      emitError: (
+        code: string,
+        source: string,
+        message: string,
+        data?: Record<string, unknown>,
+      ) => {
+        events.push({ type: "error", sessionId: "session-1", code, source, message, data });
+      },
+      formatError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      queuePersistSessionSnapshot: (reason: string) => {
+        events.push({ type: "persist", reason });
+      },
+    } as unknown as SessionContext;
+    const coordinator = createSteerCoordinator({
+      context,
+      historyManager: new HistoryManager(context),
+      getTurnAttachmentValidationMessage: () => null,
+      validateUploadedFileAttachments: async () => {},
+      buildUserMessageContent: async (text) => text,
+      classifyTurnError: () => ({ code: "internal_error", source: "session" }),
+    });
+
+    await coordinator.sendSteerMessage(
+      "queued steer",
+      "turn-1",
+      "client-steer-1",
+      undefined,
+      undefined,
+      undefined,
+      "steer-request-1",
+    );
+    coordinator.rejectPendingSteers("The turn ended before queued guidance was used.");
+
+    expect(state.pendingSteers).toEqual([]);
+    expect(events.filter((event) => event.type === "steer_accepted")).toEqual([
+      expect.objectContaining({
+        clientMessageId: "client-steer-1",
+        steerRequestId: "steer-request-1",
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "error")).toEqual([
+      expect.objectContaining({
+        clientMessageId: "client-steer-1",
+        steerRequestId: "steer-request-1",
+        message: "The turn ended before queued guidance was used.",
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "user_message")).toHaveLength(0);
+  });
+
   test("does not materialize live steer content when a task lock closes before build", async () => {
     const events: Array<Record<string, unknown>> = [];
     const state = {
@@ -331,6 +396,15 @@ describe("SteerCoordinator", () => {
     expect(events.filter((event) => event.type === "error")).toEqual([
       expect.objectContaining({
         code: "task_locked",
+        data: expect.objectContaining({
+          lockKind: "active_source_chat",
+          taskId: "task-1",
+          taskStatus: "working",
+        }),
+      }),
+      expect.objectContaining({
+        code: "task_locked",
+        clientMessageId: "steer-2",
         data: expect.objectContaining({
           lockKind: "active_source_chat",
           taskId: "task-1",

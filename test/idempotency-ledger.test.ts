@@ -35,4 +35,14 @@ describe("IdempotencyLedger", () => {
       IdempotencyConflictError,
     );
   });
+
+  test("can release a provisionally accepted key after downstream delivery drops", () => {
+    const ledger = new IdempotencyLedger<Receipt>();
+    const first = ledger.claim("steer-1", "fingerprint-a");
+    expect(first.kind).toBe("owner");
+    ledger.accept("steer-1", { turnId: "turn-1" });
+
+    expect(ledger.forgetAccepted("steer-1")).toBe(true);
+    expect(ledger.claim("steer-1", "fingerprint-a").kind).toBe("owner");
+  });
 });

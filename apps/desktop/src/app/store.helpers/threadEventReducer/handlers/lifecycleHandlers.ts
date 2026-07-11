@@ -307,7 +307,7 @@ export function handleLifecycleThreadEvent(
 
   if (evt.type === "steer_accepted") {
     if (typeof evt.clientMessageId === "string") {
-      markPendingThreadSteerAccepted(threadId, evt.clientMessageId);
+      markPendingThreadSteerAccepted(threadId, evt.clientMessageId, evt.steerRequestId);
       const pendingSteer = get().threadRuntimeById[threadId]?.pendingSteer;
       const submissionId =
         pendingSteer?.clientMessageId === evt.clientMessageId

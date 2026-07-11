@@ -438,11 +438,24 @@ export function createFeedProjectionModule(
   ) {
     workspace.resetLiveModelStreamRuntime(threadId);
     const cmid = typeof item.clientMessageId === "string" ? item.clientMessageId : null;
-    if (cmid && hasPendingThreadSteer(threadId, cmid)) {
+    const trackedSteer = cmid ? RUNTIME.pendingThreadSteers.get(threadId)?.get(cmid) : undefined;
+    const steerRequestMatches =
+      !item.steerRequestId ||
+      !trackedSteer?.steerRequestId ||
+      item.steerRequestId === trackedSteer.steerRequestId;
+    if (cmid && hasPendingThreadSteer(threadId, cmid) && steerRequestMatches) {
       clearPendingThreadSteer(threadId, cmid);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
-        if (!rt || rt.pendingSteer?.clientMessageId !== cmid) return {};
+        if (
+          !rt ||
+          rt.pendingSteer?.clientMessageId !== cmid ||
+          (item.steerRequestId &&
+            rt.pendingSteer.steerRequestId &&
+            item.steerRequestId !== rt.pendingSteer.steerRequestId)
+        ) {
+          return {};
+        }
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,
@@ -484,12 +497,43 @@ export function createFeedProjectionModule(
     );
   }
 
-  function applyProjectedCompleted(set: StoreSet, threadId: string, item: ProjectedItem) {
+  function applyProjectedCompleted(
+    get: StoreGet,
+    set: StoreSet,
+    threadId: string,
+    item: ProjectedItem,
+  ) {
     if (item.type === "userMessage") {
       const cmid = typeof item.clientMessageId === "string" ? item.clientMessageId : null;
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
         if (seen?.has(cmid)) return;
+      }
+    }
+    if (item.type === "error" && (item.steerRequestId || item.clientMessageId)) {
+      const pendingSteer = get().threadRuntimeById[threadId]?.pendingSteer;
+      const matchesSteerRequest =
+        Boolean(item.steerRequestId) && item.steerRequestId === pendingSteer?.steerRequestId;
+      const matchesClientMessage =
+        Boolean(item.clientMessageId) && item.clientMessageId === pendingSteer?.clientMessageId;
+      if (pendingSteer && (matchesSteerRequest || matchesClientMessage)) {
+        if (pendingSteer.submissionId) {
+          get().failComposerSubmission(pendingSteer.submissionId, new Error(item.message));
+        }
+        clearPendingThreadSteer(threadId, pendingSteer.clientMessageId);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt || rt.pendingSteer?.clientMessageId !== pendingSteer.clientMessageId) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: null,
+              },
+            },
+          };
+        });
       }
     }
 

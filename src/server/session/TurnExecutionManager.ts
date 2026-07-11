@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { type IdempotencyClaim, IdempotencyLedger } from "../../shared/idempotencyLedger";
 import type { ToolRetryIntent, ToolRetryRequest } from "../../shared/toolRetry";
@@ -47,10 +47,33 @@ export type UserMessageIdempotencyInput = {
   retry?: ToolRetryRequest;
 };
 
+export type SteerReceipt = {
+  turnId: string;
+  steerRequestId: string;
+};
+
+type SteerOwnerClaim = Extract<IdempotencyClaim<SteerReceipt>, { kind: "owner" }> & {
+  steerRequestId: string;
+};
+
+export type SteerIdempotencyClaim =
+  | SteerOwnerClaim
+  | Extract<IdempotencyClaim<SteerReceipt>, { kind: "replay" }>;
+
+export type SteerIdempotencyInput = {
+  text: string;
+  expectedTurnId: string;
+  clientMessageId?: string;
+  attachments?: FileAttachment[];
+  inputParts?: OrderedInputPart[];
+  references?: TurnReference[];
+};
+
 export class TurnExecutionManager {
   private readonly steerCoordinator: SteerCoordinator;
   private readonly userMessageTurnRunner: UserMessageTurnRunner;
   private readonly userMessageLedger = new IdempotencyLedger<UserMessageReceipt>();
+  private readonly steerLedger = new IdempotencyLedger<SteerReceipt>();
   private userMessageLedgerHydrated = false;
   private activeTurnSettlement: Promise<void> | null = null;
   private readonly activeSteerSettlements = new Set<Promise<void>>();
@@ -80,6 +103,14 @@ export class TurnExecutionManager {
       classifyTurnError,
       getTaskLock: () => this.getTaskLock(),
       trackLiveSteerSettlement: async (operation) => await this.trackLiveSteerSettlement(operation),
+      onSteerAccepted: ({ clientMessageId, steerRequestId, turnId }) => {
+        if (!clientMessageId) return;
+        this.steerLedger.accept(clientMessageId, { turnId, steerRequestId });
+      },
+      onSteerDropped: ({ clientMessageId }) => {
+        if (!clientMessageId) return;
+        this.steerLedger.forgetAccepted(clientMessageId);
+      },
     });
 
     this.userMessageTurnRunner = createUserMessageTurnRunner({
@@ -248,6 +279,33 @@ export class TurnExecutionManager {
   rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
     if (claim?.kind !== "owner") return;
     this.userMessageLedger.reject(claim.key, message);
+  }
+
+  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
+    const clientMessageId = input.clientMessageId?.trim();
+    if (!clientMessageId) return null;
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          expectedTurnId: input.expectedTurnId,
+          text: input.text,
+          attachments: input.attachments ?? [],
+          inputParts: input.inputParts ?? [],
+          references: input.references ?? [],
+        }),
+      )
+      .digest("hex");
+    const claim = this.steerLedger.claim(clientMessageId, fingerprint);
+    if (claim.kind === "replay") return claim;
+    return {
+      ...claim,
+      steerRequestId: randomUUID(),
+    };
+  }
+
+  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
+    if (claim?.kind !== "owner") return;
+    this.steerLedger.reject(claim.key, message);
   }
 
   private hydrateUserMessageLedger(): void {

@@ -2,6 +2,7 @@ import { parseLmStudioUnreachableError } from "../../../lib/lmStudioLocalError";
 import type { TurnReference } from "../../../lib/wsProtocol";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
 import { type ComposerDraftRevision, composerDraftKeyForThread } from "../../composerDrafts";
+import { findComposerSubmissionById } from "../../composerSubmission";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../jsonRpcSocket";
 import {
   clearPendingThreadSteer,
+  markPendingThreadSteerAccepted,
   prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   RUNTIME,
@@ -349,8 +351,34 @@ export function createMessagingModule(
       attachments,
       references,
     )
-      .then(() => {
-        if (draftSubmission && !draftSubmission.submissionId) {
+      .then((result) => {
+        markPendingThreadSteerAccepted(threadId, clientMessageId, result.steerRequestId);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt || rt.pendingSteer?.clientMessageId !== clientMessageId) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: {
+                  ...rt.pendingSteer,
+                  steerRequestId: result.steerRequestId,
+                  status: "accepted",
+                },
+              },
+            },
+          };
+        });
+        if (draftSubmission?.submissionId) {
+          const submission = findComposerSubmissionById(
+            get().composerSubmissionsByKey,
+            draftSubmission.submissionId,
+          );
+          if (submission?.phase === "sending") {
+            get().completeComposerSubmission(draftSubmission);
+          }
+        } else if (draftSubmission) {
           get().clearComposerDraft(draftSubmission);
         }
       })

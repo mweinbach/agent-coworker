@@ -134,6 +134,8 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import type { SkillManager } from "./SkillManager";
 import type {
   SendUserMessageOptions,
+  SteerIdempotencyClaim,
+  SteerIdempotencyInput,
   TurnExecutionManager,
   UserMessageIdempotencyClaim,
   UserMessageIdempotencyInput,
@@ -1917,6 +1919,14 @@ export class AgentSession {
 
   rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
     this.getTurnExecutionManager().rejectUserMessageClaim(claim, message);
+  }
+
+  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
+    return this.getTurnExecutionManager().claimSteer(input);
+  }
+
+  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
+    this.getTurnExecutionManager().rejectSteerClaim(claim, message);
   }
 
   async sendSteerMessage(

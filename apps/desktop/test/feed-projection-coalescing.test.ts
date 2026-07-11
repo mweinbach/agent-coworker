@@ -465,7 +465,7 @@ describe("model-stream feed update coalescing", () => {
       "assistant-1",
       "streamed",
     );
-    harness.feed.applyProjectedCompleted(harness.set, "thread-1", {
+    harness.feed.applyProjectedCompleted(harness.get, harness.set, "thread-1", {
       id: "assistant-1",
       type: "agentMessage",
       text: "streamed complete",

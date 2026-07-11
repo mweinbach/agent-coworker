@@ -232,7 +232,7 @@ export function createJsonRpcWorkspaceModule(
       if (message.method === "item/completed") {
         const item = parseProjectedItem(params.item);
         if (!item) return;
-        applyProjectedCompleted(set, mappedThreadId, item);
+        applyProjectedCompleted(get, set, mappedThreadId, item);
         return;
       }
     });

@@ -132,6 +132,7 @@ type PendingSteer = {
   text: string;
   displayText?: string;
   clientMessageId?: string;
+  steerRequestId?: string;
   acceptedAt: string;
   attachments?: import("../jsonrpc/routes/shared").FileAttachment[];
   inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[];

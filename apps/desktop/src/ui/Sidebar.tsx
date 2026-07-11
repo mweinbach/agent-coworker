@@ -21,7 +21,7 @@ import {
   useState,
 } from "react";
 import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
-import { useAppStore } from "../app/store";
+import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
   isOneOffChatWorkspace,
@@ -31,12 +31,7 @@ import {
 } from "../app/types";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import {
-  confirmAction,
-  isPackagedDesktopApp,
-  showContextMenu,
-  showNotification,
-} from "../lib/desktopCommands";
+import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
@@ -436,10 +431,11 @@ export const Sidebar = memo(function Sidebar() {
       });
       if (!confirmed) return;
       await archiveThread(tId);
-      void showNotification({
+      publishForegroundNotification({
+        kind: "info",
         title: "Chat archived",
-        body: `"${tTitle}" was archived. Restore it anytime from Settings → Chats.`,
-      }).catch(() => {});
+        detail: `"${tTitle}" was archived. Restore it anytime from Settings → Chats.`,
+      });
     },
     [archiveThread],
   );

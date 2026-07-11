@@ -9,7 +9,8 @@ import {
 import { useState } from "react";
 
 import { useAppStore } from "../../../app/store";
-import { isOneOffChatWorkspace } from "../../../app/types";
+import { operationKey } from "../../../app/store.helpers";
+import { isOneOffChatWorkspace, type OperationState } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -23,6 +24,7 @@ import { Spinner } from "../../../components/ui/spinner";
 import { pickDirectory } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import type { ImportableItem, ImportableKind, ImportSource } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 
 type ImportTab = ImportSource | "folder";
 
@@ -85,6 +87,7 @@ function ImportItemCard({
   globalPending,
   workspacePending,
   workspaceScopeAvailable,
+  operation,
   onImport,
 }: {
   item: ImportableItem;
@@ -92,6 +95,7 @@ function ImportItemCard({
   globalPending: boolean;
   workspacePending: boolean;
   workspaceScopeAvailable: boolean;
+  operation?: OperationState;
   onImport: (item: ImportableItem, targetScope: "workspace" | "user") => void;
 }) {
   const hasDiagnostics = item.diagnostics.length > 0;
@@ -165,6 +169,7 @@ function ImportItemCard({
           ) : null}
         </div>
       )}
+      <OperationFeedback operation={operation} className="mt-2.5" />
     </div>
   );
 }
@@ -204,12 +209,15 @@ function FolderImportPanel({
     setSuccess(null);
     setBusyScope(targetScope);
     try {
-      if (kind === "skill") {
-        await installSkills(folderPath, targetScope === "user" ? "global" : "project");
+      const result =
+        kind === "skill"
+          ? await installSkills(folderPath, targetScope === "user" ? "global" : "project")
+          : await installPlugins(folderPath, targetScope);
+      if (result.ok) {
+        setSuccess(`Copied to ${targetScope === "user" ? "Global" : "Workspace"}.`);
       } else {
-        await installPlugins(folderPath, targetScope);
+        setError(result.error.message);
       }
-      setSuccess(`Copied to ${targetScope === "user" ? "Global" : "Workspace"}.`);
     } catch (err) {
       setError(
         err instanceof Error && err.message
@@ -311,6 +319,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
   const listImportable = useAppStore((state) => state.listImportable);
   const importPlugin = useAppStore((state) => state.importPlugin);
   const importSkill = useAppStore((state) => state.importSkill);
+  const operationsByKey = useAppStore((state) => state.operationsByKey);
   const anchorWorkspace = useAppStore(
     (state) => state.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
   );
@@ -323,6 +332,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
     ? (runtime?.importItemsByKey?.[importKey(homeSource, kind)] ?? null)
     : null;
   const pendingKeys = runtime?.importPendingKeys ?? {};
+  const importPending = Object.values(pendingKeys).some((pending) => pending === true);
   const noun = kind === "plugin" ? "plugin" : "skill";
   const items = state?.items ?? [];
 
@@ -355,7 +365,13 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
         <DownloadIcon data-icon="inline-start" />
         Import
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && importPending) return;
+          setOpen(nextOpen);
+        }}
+      >
         <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[600px]">
           <DialogHeader className="border-b border-border/60 px-6 pt-6 pb-4">
             <DialogTitle>Import {noun}s</DialogTitle>
@@ -413,17 +429,37 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
               </div>
             ) : (
               <div className="space-y-2.5">
-                {items.map((item) => (
-                  <ImportItemCard
-                    key={`${item.source}:${item.id}`}
-                    item={item}
-                    kind={kind}
-                    globalPending={pendingKeys[itemPendingKey(item, "user")] === true}
-                    workspacePending={pendingKeys[itemPendingKey(item, "workspace")] === true}
-                    workspaceScopeAvailable={workspaceScopeAvailable}
-                    onImport={onImport}
-                  />
-                ))}
+                {items.map((item) => {
+                  const globalOperation =
+                    operationsByKey[
+                      operationKey("import", item.kind, item.source, item.id, "user")
+                    ];
+                  const workspaceOperation =
+                    operationsByKey[
+                      operationKey("import", item.kind, item.source, item.id, "workspace")
+                    ];
+                  const operation = [globalOperation, workspaceOperation].find(
+                    (candidate) => candidate?.status === "pending" || candidate?.status === "error",
+                  );
+                  return (
+                    <ImportItemCard
+                      key={`${item.source}:${item.id}`}
+                      item={item}
+                      kind={kind}
+                      globalPending={
+                        pendingKeys[itemPendingKey(item, "user")] === true ||
+                        globalOperation?.status === "pending"
+                      }
+                      workspacePending={
+                        pendingKeys[itemPendingKey(item, "workspace")] === true ||
+                        workspaceOperation?.status === "pending"
+                      }
+                      workspaceScopeAvailable={workspaceScopeAvailable}
+                      operation={operation}
+                      onImport={onImport}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>

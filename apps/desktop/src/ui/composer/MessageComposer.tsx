@@ -161,12 +161,14 @@ function keyedComposerAttachments(attachments: readonly MessageComposerAttachmen
 export type MessageComposerAttachmentsProps = {
   attachments: readonly MessageComposerAttachmentItem[];
   onRemove: (index: number) => void;
+  disabled?: boolean;
   className?: string;
 };
 
 export function MessageComposerAttachments({
   attachments,
   onRemove,
+  disabled = false,
   className,
 }: MessageComposerAttachmentsProps) {
   if (attachments.length === 0) return null;
@@ -195,6 +197,7 @@ export function MessageComposerAttachments({
               <AttachmentActions>
                 <AttachmentAction
                   type="button"
+                  disabled={disabled}
                   onClick={() => onRemove(index)}
                   aria-label={`Remove ${item.filename}`}
                 >

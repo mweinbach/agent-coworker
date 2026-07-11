@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import type { WorkspaceRuntime } from "../../../app/types";
 import {
   resolveManagementWorkspaceId,
@@ -47,6 +48,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import type { MCPServerConfig } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { EntityIcon, SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
 import { NoMatchesState } from "../toolAccess/catalogShared";
 import {
@@ -219,6 +221,10 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   const canChooseLocation = projectWorkspace !== null;
 
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
+  const saveOperation = workspace
+    ? operationsByKey[operationKey("mcp", "save", workspace.id)]
+    : undefined;
 
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [draft, setDraft] = useState<DraftState>(defaultDraftState);
@@ -350,8 +356,8 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     }));
   };
 
-  const submitDraft = () => {
-    if (!workspace) return;
+  const submitDraft = async () => {
+    if (!workspace || saveOperation?.status === "pending") return;
     const next = buildServerFromDraft(draft);
     if (!next) return;
     const workspaceId = workspace.id;
@@ -362,7 +368,8 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         : canChooseLocation
           ? createLocation
           : "user";
-    void upsertWorkspaceMcpServer(workspaceId, next, previousName, source);
+    const result = await upsertWorkspaceMcpServer(workspaceId, next, previousName, source);
+    if (!result.ok) return;
     setValidationServerKeyByName((prev) => ({
       ...prev,
       [next.name]: serverIdentityKey({ name: next.name, source }),
@@ -396,16 +403,24 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         <Dialog
           open={editorState !== null}
           onOpenChange={(open) => {
+            if (!open && saveOperation?.status === "pending") return;
             if (!open && editorState === null) return;
             if (!open) resetDraft();
           }}
         >
           {editorState !== null ? (
-            <DialogContent forceMount className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogContent
+              forceMount
+              aria-busy={saveOperation?.status === "pending"}
+              className="max-w-2xl max-h-[85vh] overflow-y-auto"
+            >
               <DialogHeader>
                 <DialogTitle>{getMcpEditorTitle(editorState)}</DialogTitle>
               </DialogHeader>
-              <div className="flex flex-col gap-5 py-2">
+              <fieldset
+                disabled={saveOperation?.status === "pending"}
+                className="flex flex-col gap-5 py-2"
+              >
                 <Field>
                   <FieldLabel htmlFor="mcp-connector-name">Name</FieldLabel>
                   <Input
@@ -744,15 +759,18 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   </CollapsibleContent>
                 </Collapsible>
 
+                <OperationFeedback operation={saveOperation} />
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" onClick={submitDraft}>
-                    {getMcpEditorSubmitLabel(editorState)}
+                  <Button type="button" onClick={() => void submitDraft()}>
+                    {saveOperation?.status === "pending"
+                      ? "Saving…"
+                      : getMcpEditorSubmitLabel(editorState)}
                   </Button>
                   <Button type="button" variant="outline" onClick={() => resetDraft()}>
                     Cancel
                   </Button>
                 </div>
-              </div>
+              </fieldset>
             </DialogContent>
           ) : null}
         </Dialog>
@@ -781,6 +799,19 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         {visibleServers.map((server) => {
           const serverKey = serverIdentityKey(server);
           const draftKey = workspace ? mcpCredentialDraftKey(workspace.id, server) : serverKey;
+          const enabledOperation = workspace
+            ? operationsByKey[
+                operationKey(
+                  "mcp",
+                  "enabled",
+                  workspace.id,
+                  server.source,
+                  server.pluginScope,
+                  server.pluginId,
+                  server.name,
+                )
+              ]
+            : undefined;
           const validation = validationByServerKey[serverKey];
           const editSource = editableSource(server.source);
           const apiKeyDraft = apiKeyByName[draftKey] ?? "";
@@ -908,7 +939,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     </span>
                     <Switch
                       checked={serverEnabled}
-                      disabled={!canToggle}
+                      disabled={!canToggle || enabledOperation?.status === "pending"}
                       aria-label={`Enable ${server.name}`}
                       onCheckedChange={(enabled) => {
                         if (!workspace || !canToggle) return;

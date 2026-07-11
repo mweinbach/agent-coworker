@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { type TaskCreationInput, taskCreationInputSchema } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -26,6 +27,7 @@ import { Separator } from "../../components/ui/separator";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
+import { OperationFeedback } from "../OperationFeedback";
 import { formatTaskStatus, taskStatusBadgeClassName } from "./taskPresentation";
 
 type DraftWorkItem = {
@@ -71,6 +73,7 @@ export function NewTaskLanding() {
   const taskSummariesByWorkspaceId = useAppStore((state) => state.taskSummariesByWorkspaceId);
   const taskListLoadingByWorkspaceId = useAppStore((state) => state.taskListLoadingByWorkspaceId);
   const taskError = useAppStore((state) => state.taskError);
+  const operationsByKey = useAppStore((state) => state.operationsByKey);
   const startTask = useAppStore((state) => state.startTask);
   const selectTask = useAppStore((state) => state.selectTask);
   const refreshTasks = useAppStore((state) => state.refreshTasks);
@@ -100,6 +103,8 @@ export function NewTaskLanding() {
   const nextWorkItemNumber = useRef(2);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const createOperation =
+    operationsByKey[operationKey("task", "create", workspaceId, idempotencyKey)];
   const previousNewTaskWorkspaceId = useRef(newTaskWorkspaceId);
   const previousNewTaskWorkspaceRequestId = useRef(newTaskWorkspaceRequestId);
 
@@ -527,6 +532,7 @@ export function NewTaskLanding() {
                   {validationError || taskError ? (
                     <FieldError>{validationError ?? taskError}</FieldError>
                   ) : null}
+                  <OperationFeedback operation={createOperation} />
                   <Button type="submit" className="w-full" disabled={!canSubmit}>
                     Create and start task
                     <ArrowRightIcon data-icon="inline-end" />

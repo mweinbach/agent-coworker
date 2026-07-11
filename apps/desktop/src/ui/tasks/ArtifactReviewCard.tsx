@@ -20,6 +20,8 @@ import type {
   TaskStatus,
 } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
+import type { OperationResult } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -44,6 +46,7 @@ import { Separator } from "../../components/ui/separator";
 import { Spinner } from "../../components/ui/spinner";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
+import { OperationFeedback } from "../OperationFeedback";
 
 type ArtifactReviewCardProps = {
   taskId: string;
@@ -251,6 +254,10 @@ export function ArtifactReviewCard({
   const restoreVersion = useAppStore((state) => state.restoreTaskArtifactVersion);
   const acceptVersion = useAppStore((state) => state.acceptTaskArtifactVersion);
   const startRevision = useAppStore((state) => state.startTaskArtifactRevision);
+  const revisionOperation = useAppStore(
+    (state) =>
+      state.operationsByKey[operationKey("task", "artifact", "revision", taskId, artifact.id)],
+  );
   const [detail, setDetail] = useState<TaskArtifactDetail | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -356,16 +363,17 @@ export function ArtifactReviewCard({
 
   const runDetailMutation = async (
     key: string,
-    operation: () => Promise<TaskArtifactDetail | null>,
-  ) => {
+    operation: () => Promise<OperationResult<TaskArtifactDetail>>,
+  ): Promise<TaskArtifactDetail | null> => {
     setPendingAction(key);
     try {
-      const next = await operation();
-      if (next) {
-        setDetail(next);
-        setSelectedVersionId(next.latestVersionId);
+      const result = await operation();
+      if (result.ok) {
+        setDetail(result.value);
+        setSelectedVersionId(result.value.latestVersionId);
+        return result.value;
       }
-      return next;
+      return null;
     } finally {
       setPendingAction(null);
     }
@@ -704,12 +712,12 @@ export function ArtifactReviewCard({
       <Dialog
         open={revisionOpen}
         onOpenChange={(open) => {
-          if (!terminal) setRevisionOpen(open);
+          if (!terminal && pendingAction === null) setRevisionOpen(open);
         }}
       >
         {revisionOpen ? (
           <DialogContent>
-            <form onSubmit={submitRevision}>
+            <form aria-busy={pendingAction === "revision"} onSubmit={submitRevision}>
               <DialogHeader>
                 <DialogTitle>Request artifact changes</DialogTitle>
                 <DialogDescription>
@@ -727,12 +735,19 @@ export function ArtifactReviewCard({
                     className="min-h-32"
                     placeholder="Keep the analysis, update the recommendation, and revise only this artifact."
                     value={instruction}
+                    disabled={pendingAction === "revision"}
                     onChange={(event) => setInstruction(event.target.value)}
                   />
                 </Field>
               </FieldGroup>
+              <OperationFeedback operation={revisionOperation} />
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setRevisionOpen(false)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pendingAction === "revision"}
+                  onClick={() => setRevisionOpen(false)}
+                >
                   Cancel
                 </Button>
                 <Button

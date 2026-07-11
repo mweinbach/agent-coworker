@@ -144,7 +144,7 @@ describe("research actions", () => {
       sourcePath: "/tmp/report.pdf",
       defaultFileName: "Quarterly Findings 2026.pdf",
     });
-    expect(result).toBe("/Users/test/Downloads/report.pdf");
+    expect(result).toEqual({ ok: true, value: "/Users/test/Downloads/report.pdf" });
     expect(harness.state.researchExportPendingIds).toEqual([]);
     expect(harness.state.notifications).toHaveLength(1);
     expect(harness.state.notifications[0]?.kind).toBe("info");
@@ -159,7 +159,7 @@ describe("research actions", () => {
 
     const result = await actions.exportResearch("research-1", "docx");
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ ok: true, value: null });
     expect(saveExportedFileMock).toHaveBeenCalledWith({
       sourcePath: "/tmp/report.pdf",
       defaultFileName: "Quarterly Findings 2026.docx",
@@ -177,12 +177,12 @@ describe("research actions", () => {
 
     const result = await actions.exportResearch("research-1", "markdown");
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ ok: false, error: { message: "disk full" } });
     expect(harness.state.researchExportPendingIds).toEqual([]);
     expect(harness.state.notifications).toHaveLength(1);
     expect(harness.state.notifications[0]?.kind).toBe("error");
-    expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
-    expect(harness.state.notifications[0]?.detail).toBe("disk full");
+    expect(harness.state.notifications[0]?.title).toBe("Research not exported");
+    expect(harness.state.notifications[0]?.detail).toContain("disk full");
   });
 
   test("exportResearch reports an invalid export response and clears pending state", async () => {
@@ -192,12 +192,15 @@ describe("research actions", () => {
 
     const result = await actions.exportResearch("research-1", "pdf");
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("Invalid research/export response") },
+    });
     expect(saveExportedFileMock).not.toHaveBeenCalled();
     expect(harness.state.researchExportPendingIds).toEqual([]);
     expect(harness.state.notifications).toHaveLength(1);
     expect(harness.state.notifications[0]?.kind).toBe("error");
-    expect(harness.state.notifications[0]?.title).toBe("Unable to export research");
+    expect(harness.state.notifications[0]?.title).toBe("Research not exported");
     expect(harness.state.notifications[0]?.detail).toContain("Invalid research/export response");
   });
 
@@ -249,7 +252,7 @@ describe("research actions", () => {
     expect(harness.state.selectedResearchId).toBeNull();
 
     deletionGate.resolve();
-    await expect(deletion).resolves.toBe(true);
+    await expect(deletion).resolves.toMatchObject({ ok: true });
   });
 
   test("deleteResearch restores parent links when the server rejects deletion", async () => {
@@ -282,7 +285,10 @@ describe("research actions", () => {
     }));
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);
 
-    await expect(actions.deleteResearch(parent.id)).resolves.toBe(false);
+    await expect(actions.deleteResearch(parent.id)).resolves.toMatchObject({
+      ok: false,
+      error: { message: "The server did not delete this research." },
+    });
     expect(harness.state.researchById[parent.id]).toEqual(parent);
     expect(harness.state.researchById[child.id]?.parentResearchId).toBe(parent.id);
   });
@@ -303,11 +309,14 @@ describe("research actions", () => {
       files: [oversizedFile],
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining(String(MAX_RESEARCH_UPLOAD_BYTES)) },
+    });
     expect(arrayBufferMock).not.toHaveBeenCalled();
     expect(requestJsonRpcMock).not.toHaveBeenCalled();
     expect(harness.state.notifications).toHaveLength(1);
-    expect(harness.state.notifications[0]?.title).toBe("Unable to start research");
+    expect(harness.state.notifications[0]?.title).toBe("Research not started");
     expect(harness.state.notifications[0]?.detail).toContain(String(MAX_RESEARCH_UPLOAD_BYTES));
   });
 
@@ -348,7 +357,7 @@ describe("research actions", () => {
       files,
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ ok: false, error: { message: "upload failed" } });
     expect(requestJsonRpcMock).toHaveBeenCalledWith(
       harness.get,
       harness.set,
@@ -356,7 +365,7 @@ describe("research actions", () => {
       "research/discardUploads",
       { fileIds: ["file-1"] },
     );
-    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
+    expect(harness.state.notifications.at(-1)?.title).toBe("Research not started");
   });
 
   test("sendResearchFollowUp does not discard uploaded blobs when follow-up start fails after upload success", async () => {
@@ -385,11 +394,11 @@ describe("research actions", () => {
       files: [file],
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ ok: false, error: { message: "follow-up failed" } });
     expect(
       requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/discardUploads"),
     ).toBeFalse();
-    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
+    expect(harness.state.notifications.at(-1)?.title).toBe("Research follow-up not sent");
   });
 
   test("sendResearchFollowUp discards uploaded blobs when the server definitively rejects the request", async () => {
@@ -425,7 +434,10 @@ describe("research actions", () => {
       files: [file],
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "parent research is not completed" },
+    });
     expect(requestJsonRpcMock).toHaveBeenCalledWith(
       harness.get,
       harness.set,
@@ -433,7 +445,7 @@ describe("research actions", () => {
       "research/discardUploads",
       { fileIds: ["file-4"] },
     );
-    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to send follow-up");
+    expect(harness.state.notifications.at(-1)?.title).toBe("Research follow-up not sent");
   });
 
   test("sendResearchFollowUp omits settings when no explicit overrides are provided", async () => {
@@ -553,11 +565,11 @@ describe("research actions", () => {
       files: [file],
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ ok: false, error: { message: "socket closed" } });
     expect(
       requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/discardUploads"),
     ).toBeFalse();
-    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
+    expect(harness.state.notifications.at(-1)?.title).toBe("Research not started");
   });
 
   test("startResearch discards uploaded blobs when the server definitively rejects the request", async () => {
@@ -592,7 +604,10 @@ describe("research actions", () => {
       files: [file],
     });
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "research input is required" },
+    });
     expect(requestJsonRpcMock).toHaveBeenCalledWith(
       harness.get,
       harness.set,
@@ -600,7 +615,7 @@ describe("research actions", () => {
       "research/discardUploads",
       { fileIds: ["file-5"] },
     );
-    expect(harness.state.notifications.at(-1)?.title).toBe("Unable to start research");
+    expect(harness.state.notifications.at(-1)?.title).toBe("Research not started");
   });
 
   test("research text deltas advance the local event cursor", async () => {

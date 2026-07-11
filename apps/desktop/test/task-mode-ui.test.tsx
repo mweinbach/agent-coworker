@@ -249,19 +249,20 @@ function resetStore(task: TaskRecord | null) {
     tasksById: task ? { [task.id]: task } : {},
     taskListLoadingByWorkspaceId: {},
     taskError: null,
+    operationsByKey: {},
     refreshTasks: async () => {},
-    startTask: async () => null,
+    startTask: async () => ({ ok: true, value: task ?? taskRecord() }),
     selectTask: async () => {},
-    updateTaskBrief: async () => true,
-    acceptTask: async () => {},
-    requestTaskChanges: async () => {},
-    cancelTask: async () => {},
-    reopenTask: async () => {},
-    retryTask: async () => true,
-    resolveTaskQuestions: async () => "not_needed",
+    updateTaskBrief: async () => ({ ok: true, value: undefined }),
+    acceptTask: async () => ({ ok: true, value: undefined }),
+    requestTaskChanges: async () => ({ ok: true, value: undefined }),
+    cancelTask: async () => ({ ok: true, value: undefined }),
+    reopenTask: async () => ({ ok: true, value: undefined }),
+    retryTask: async () => ({ ok: true, value: undefined }),
+    resolveTaskQuestions: async () => ({ ok: true, value: "not_needed" }),
     openFilePreview: () => {},
     readTaskArtifact: async () => artifactDetail(),
-    captureTaskArtifactVersion: async () => artifactDetail(),
+    captureTaskArtifactVersion: async () => ({ ok: true, value: artifactDetail() }),
     compareTaskArtifactVersions: async () => ({
       kind: "text",
       summary: {
@@ -295,9 +296,9 @@ function resetStore(task: TaskRecord | null) {
         encoding: "utf-8",
       },
     }),
-    restoreTaskArtifactVersion: async () => artifactDetail(),
-    acceptTaskArtifactVersion: async () => artifactDetail(),
-    startTaskArtifactRevision: async () => artifactDetail(),
+    restoreTaskArtifactVersion: async () => ({ ok: true, value: artifactDetail() }),
+    acceptTaskArtifactVersion: async () => ({ ok: true, value: artifactDetail() }),
+    startTaskArtifactRevision: async () => ({ ok: true, value: artifactDetail() }),
   } as never);
 }
 
@@ -1734,7 +1735,10 @@ describe("desktop task mode UI", () => {
 
   test.serial("bundles pending task questions and submits partial answers", async () => {
     const harness = setupJsdom();
-    const resolveQuestions = mock(async () => "not_needed" as const);
+    const resolveQuestions = mock(async () => ({
+      ok: true as const,
+      value: "not_needed" as const,
+    }));
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -1883,10 +1887,10 @@ describe("desktop task mode UI", () => {
     "keeps terminal artifact history readable while disabling revision starts",
     async () => {
       const harness = setupJsdom();
-      const startRevision = mock(async () => artifactDetail());
-      const captureVersion = mock(async () => artifactDetail());
-      const restoreVersion = mock(async () => artifactDetail());
-      const acceptVersion = mock(async () => artifactDetail());
+      const startRevision = mock(async () => ({ ok: true as const, value: artifactDetail() }));
+      const captureVersion = mock(async () => ({ ok: true as const, value: artifactDetail() }));
+      const restoreVersion = mock(async () => ({ ok: true as const, value: artifactDetail() }));
+      const acceptVersion = mock(async () => ({ ok: true as const, value: artifactDetail() }));
       try {
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
@@ -1974,9 +1978,9 @@ describe("desktop task mode UI", () => {
 
   test.serial("reviews artifact history and gates restore and revision actions", async () => {
     const harness = setupJsdom();
-    const restoreVersion = mock(async () => artifactDetail());
-    const acceptVersion = mock(async () => artifactDetail());
-    const startRevision = mock(async () => artifactDetail());
+    const restoreVersion = mock(async () => ({ ok: true as const, value: artifactDetail() }));
+    const acceptVersion = mock(async () => ({ ok: true as const, value: artifactDetail() }));
+    const startRevision = mock(async () => ({ ok: true as const, value: artifactDetail() }));
     const readArtifact = mock(async () => artifactDetail());
     try {
       const container = harness.dom.window.document.getElementById("root");

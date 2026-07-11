@@ -2,6 +2,7 @@ import { PaperclipIcon, Settings2Icon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { Button } from "../../components/ui/button";
 import {
   MessageComposerAttachments,
@@ -13,11 +14,15 @@ import {
   MessageComposerTextarea,
   MessageComposerTools,
 } from "../composer/MessageComposer";
+import { OperationFeedback } from "../OperationFeedback";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
 import { useResearchAttachments } from "./useResearchAttachments";
 
 export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void }) {
   const startResearch = useAppStore((s) => s.startResearch);
+  const operation = useAppStore(
+    (state) => state.operationsByKey[operationKey("research", "start")],
+  );
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -36,7 +41,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         input: trimmed,
         files: attachments.map((attachment) => attachment.file),
       });
-      if (created) {
+      if (created.ok) {
         setInput("");
         clearAttachments();
         setSettingsOpen(false);
@@ -73,6 +78,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
           <MessageComposerAttachments
             attachments={attachmentPreviews}
             onRemove={removeAttachment}
+            disabled={submitting}
           />
 
           <MessageComposerBody>
@@ -92,6 +98,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
                 size="icon-sm"
                 variant="ghost"
                 className="rounded-full"
+                disabled={submitting}
                 onClick={() => setSettingsOpen(true)}
                 aria-label="Research settings"
               >
@@ -102,6 +109,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
                 size="icon-sm"
                 variant="ghost"
                 className="rounded-full"
+                disabled={submitting}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Attach files"
               >
@@ -115,6 +123,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
           </MessageComposerFooter>
         </MessageComposerForm>
       </MessageComposerRoot>
+      <OperationFeedback operation={operation} className="mt-3" />
 
       <ResearchSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
@@ -123,6 +132,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         type="file"
         className="hidden"
         multiple
+        disabled={submitting}
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];
           addFiles(files);

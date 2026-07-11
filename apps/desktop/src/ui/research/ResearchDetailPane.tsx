@@ -9,6 +9,7 @@ import {
 import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 
+import { operationKey } from "../../app/store.helpers";
 import type { ResearchDetail } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -16,6 +17,7 @@ import { formatRelativeAge } from "../../lib/time";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { OperationFeedback } from "../OperationFeedback";
 import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
@@ -105,6 +107,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const approveResearchPlan = useAppStore((s) => s.approveResearchPlan);
   const refineResearchPlan = useAppStore((s) => s.refineResearchPlan);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
@@ -126,6 +129,15 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   }
 
   const exportPending = exportPendingIds.includes(research.id);
+  const planOperations = [
+    operationsByKey[operationKey("research", "approve-plan", research.id)],
+    operationsByKey[operationKey("research", "refine-plan", research.id)],
+    operationsByKey[operationKey("research", "cancel", research.id)],
+  ].filter((operation) => operation !== undefined);
+  const planOperation =
+    planOperations.find((operation) => operation.status === "pending") ??
+    planOperations.find((operation) => operation.status === "error");
+  const operationPending = planOperation?.status === "pending";
   const startedAgo = formatRelativeAge(research.createdAt);
   const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
   const sourceCount = research.sources.length;
@@ -227,6 +239,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 size="sm"
                 variant="outline"
                 type="button"
+                disabled={operationPending}
                 onClick={() => void cancelResearch(research.id)}
               >
                 Cancel
@@ -256,7 +269,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                       <Button
                         size="sm"
                         className="gap-1.5 rounded-full"
-                        disabled={planActionLoading}
+                        disabled={planActionLoading || operationPending}
                         onClick={() => {
                           setPlanActionLoading(true);
                           void approveResearchPlan(research.id).finally(() =>
@@ -271,7 +284,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         size="sm"
                         variant="outline"
                         className="gap-1.5 rounded-full"
-                        disabled={planActionLoading}
+                        disabled={planActionLoading || operationPending}
                         onClick={() => setRefineOpen(true)}
                       >
                         <PencilIcon className="h-3.5 w-3.5" />
@@ -285,20 +298,26 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         rows={3}
                         placeholder="What would you like to change about the plan?"
                         value={refineInput}
+                        disabled={planActionLoading || operationPending}
                         onChange={(e) => setRefineInput(e.target.value)}
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button
                           size="sm"
                           className="gap-1.5 rounded-full"
-                          disabled={planActionLoading || !refineInput.trim()}
+                          disabled={planActionLoading || operationPending || !refineInput.trim()}
                           onClick={() => {
                             setPlanActionLoading(true);
-                            void refineResearchPlan(research.id, refineInput.trim()).finally(() => {
-                              setPlanActionLoading(false);
-                              setRefineOpen(false);
-                              setRefineInput("");
-                            });
+                            void refineResearchPlan(research.id, refineInput.trim())
+                              .then((result) => {
+                                if (result.ok) {
+                                  setRefineOpen(false);
+                                  setRefineInput("");
+                                }
+                              })
+                              .finally(() => {
+                                setPlanActionLoading(false);
+                              });
                           }}
                         >
                           Submit Refinement
@@ -306,7 +325,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={planActionLoading}
+                          disabled={planActionLoading || operationPending}
                           onClick={() => {
                             setRefineOpen(false);
                             setRefineInput("");
@@ -319,6 +338,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   )}
                 </div>
               ) : null}
+              <OperationFeedback operation={planOperation} />
 
               {running ? (
                 <ResearchReasoningStream

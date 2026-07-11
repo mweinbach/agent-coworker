@@ -27,12 +27,14 @@ import {
   ensureThreadRuntime,
   makeId,
   nowIso,
+  operationKey,
   persistNow,
   pushNotification,
+  runAcknowledgedOperation,
   syncDesktopStateCache,
 } from "../store.helpers";
 import { registerWorkspaceJsonRpcRouter, requestJsonRpc } from "../store.helpers/jsonRpcSocket";
-import { isOneOffChatWorkspace, type ThreadRecord } from "../types";
+import { isOneOffChatWorkspace, type OperationResult, type ThreadRecord } from "../types";
 
 const taskRouterCleanupByWorkspace = new Map<string, () => void>();
 
@@ -67,6 +69,25 @@ function terminalLifecycleActionForMethod(method: TaskLifecycleMethod): "reopen"
   if (method === "task/reopen") return "reopen";
   if (method === "task/retry") return "retry";
   return null;
+}
+
+function taskLifecycleLabel(method: TaskLifecycleMethod): string {
+  switch (method) {
+    case "task/accept":
+      return "Accept task";
+    case "task/requestChanges":
+      return "Request task changes";
+    case "task/cancel":
+      return "Cancel task";
+    case "task/reopen":
+      return "Reopen task";
+    case "task/retry":
+      return "Retry task";
+    default: {
+      const exhaustive: never = method;
+      return exhaustive;
+    }
+  }
 }
 
 function workspacePlatform(): NodeJS.Platform {
@@ -332,6 +353,7 @@ function ensureTaskRouter(
                 kind: "info",
                 title: `${current.title} needs input`,
                 detail: activity.summary,
+                audience: "background",
               }),
         }));
       }
@@ -413,65 +435,71 @@ export function createTaskActions(
     taskId: string,
     method: TaskLifecycleMethod,
     extra: Record<string, unknown> = {},
-  ): Promise<boolean> => {
-    const task = get().tasksById[taskId];
-    if (!task) return false;
-    const workspaceId = workspaceIdForTask(get, task);
-    const workspace = workspaceId ? get().workspaces.find((item) => item.id === workspaceId) : null;
-    if (!workspaceId || !workspace) return false;
-    const terminalAction = terminalLifecycleActionForMethod(method);
-    const lifecycleRequest =
-      terminalAction !== null
-        ? {
-            action: terminalAction,
-            expectedRevision: task.revision,
-            requestId: makeId(),
+  ): Promise<OperationResult> => {
+    const label = taskLifecycleLabel(method);
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("task", "lifecycle", taskId),
+      label,
+      errorTitle: `${label} failed`,
+      errorMessage: `Unable to ${label.toLowerCase()}.`,
+      execute: async () => {
+        const task = get().tasksById[taskId];
+        if (!task) throw new Error("Task not found.");
+        const workspaceId = workspaceIdForTask(get, task);
+        const workspace = workspaceId
+          ? get().workspaces.find((item) => item.id === workspaceId)
+          : null;
+        if (!workspaceId || !workspace) throw new Error("Task workspace not found.");
+        const terminalAction = terminalLifecycleActionForMethod(method);
+        const lifecycleRequest =
+          terminalAction !== null
+            ? {
+                action: terminalAction,
+                expectedRevision: task.revision,
+                requestId: makeId(),
+              }
+            : null;
+        if (lifecycleRequest) {
+          set((state) => ({
+            taskLifecycleRequestByTaskId: {
+              ...(state.taskLifecycleRequestByTaskId ?? {}),
+              [taskId]: lifecycleRequest,
+            },
+          }));
+        }
+        const lifecycleRequestIsCurrent = () =>
+          !lifecycleRequest ||
+          get().taskLifecycleRequestByTaskId?.[taskId]?.requestId === lifecycleRequest.requestId;
+        try {
+          await ensureTaskTransport(get, set, workspaceId, deps);
+          if (!lifecycleRequestIsCurrent()) {
+            throw new Error("A newer task request replaced this operation.");
           }
-        : null;
-    const existingLifecycleRequest = get().taskLifecycleRequestByTaskId?.[taskId];
-    if (lifecycleRequest && existingLifecycleRequest?.action === lifecycleRequest.action) {
-      return false;
-    }
-    if (lifecycleRequest) {
-      set((state) => ({
-        taskLifecycleRequestByTaskId: {
-          ...(state.taskLifecycleRequestByTaskId ?? {}),
-          [taskId]: lifecycleRequest,
-        },
-      }));
-    }
-    const lifecycleRequestIsCurrent = () =>
-      !lifecycleRequest ||
-      get().taskLifecycleRequestByTaskId?.[taskId]?.requestId === lifecycleRequest.requestId;
-    try {
-      await ensureTaskTransport(get, set, workspaceId, deps);
-      if (!lifecycleRequestIsCurrent()) return false;
-      const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
-        cwd: workspace.path,
-        taskId,
-        expectedRevision: task.revision,
-        ...extra,
-      });
-      if (!lifecycleRequestIsCurrent()) return false;
-      const parsed = taskRecordSchema.safeParse(result?.task);
-      if (!parsed.success) throw new Error(`Invalid ${method} response`);
-      upsertTask(set, get, parsed.data, deps);
-      return true;
-    } catch (error) {
-      if (!lifecycleRequestIsCurrent()) return false;
-      notifyError(set, "Unable to update task", error);
-      return false;
-    } finally {
-      if (lifecycleRequest) {
-        set((state) => {
-          const current = state.taskLifecycleRequestByTaskId?.[taskId];
-          if (current?.requestId !== lifecycleRequest.requestId) return {};
-          const next = { ...(state.taskLifecycleRequestByTaskId ?? {}) };
-          delete next[taskId];
-          return { taskLifecycleRequestByTaskId: next };
-        });
-      }
-    }
+          const result = await deps.requestJsonRpc(get, set, workspaceId, method, {
+            cwd: workspace.path,
+            taskId,
+            expectedRevision: task.revision,
+            ...extra,
+          });
+          if (!lifecycleRequestIsCurrent()) {
+            throw new Error("A newer task request replaced this operation.");
+          }
+          const parsed = taskRecordSchema.safeParse(result?.task);
+          if (!parsed.success) throw new Error(`Invalid ${method} response`);
+          upsertTask(set, get, parsed.data, deps);
+        } finally {
+          if (lifecycleRequest) {
+            set((state) => {
+              const current = state.taskLifecycleRequestByTaskId?.[taskId];
+              if (current?.requestId !== lifecycleRequest.requestId) return {};
+              const next = { ...(state.taskLifecycleRequestByTaskId ?? {}) };
+              delete next[taskId];
+              return { taskLifecycleRequestByTaskId: next };
+            });
+          }
+        }
+      },
+    });
   };
 
   const taskRequestContext = (taskId: string) => {
@@ -490,25 +518,28 @@ export function createTaskActions(
       | "task/artifact/version/restore"
       | "task/artifact/version/accept",
     params: Record<string, unknown>,
-  ): Promise<TaskArtifactDetail | null> => {
-    const context = taskRequestContext(taskId);
-    if (!context) return null;
-    try {
-      await ensureTaskTransport(get, set, context.workspaceId, deps);
-      const result = await deps.requestJsonRpc(get, set, context.workspaceId, method, {
-        taskId,
-        expectedRevision: context.task.revision,
-        ...params,
-      });
-      const parsedTask = taskRecordSchema.safeParse(result?.task);
-      if (!parsedTask.success) throw new Error(`Invalid ${method} task`);
-      const detail = parseArtifactDetail(result?.detail, method);
-      upsertTask(set, get, parsedTask.data, deps);
-      return detail;
-    } catch (error) {
-      notifyError(set, "Unable to update artifact", error);
-      return null;
-    }
+  ): Promise<OperationResult<TaskArtifactDetail>> => {
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("task", "artifact", method, taskId, String(params.artifactId ?? "")),
+      label: "Update task artifact",
+      errorTitle: "Artifact not updated",
+      errorMessage: "Unable to update artifact.",
+      execute: async () => {
+        const context = taskRequestContext(taskId);
+        if (!context) throw new Error("Task not found.");
+        await ensureTaskTransport(get, set, context.workspaceId, deps);
+        const result = await deps.requestJsonRpc(get, set, context.workspaceId, method, {
+          taskId,
+          expectedRevision: context.task.revision,
+          ...params,
+        });
+        const parsedTask = taskRecordSchema.safeParse(result?.task);
+        if (!parsedTask.success) throw new Error(`Invalid ${method} task`);
+        const detail = parseArtifactDetail(result?.detail, method);
+        upsertTask(set, get, parsedTask.data, deps);
+        return detail;
+      },
+    });
   };
 
   return {
@@ -591,40 +622,47 @@ export function createTaskActions(
     },
 
     startTask: async ({ workspaceId, task: rawTask }) => {
-      if (get().desktopFeatureFlags.tasks !== true) return null;
-      const workspace = get().workspaces.find((item) => item.id === workspaceId);
-      if (!workspace || isOneOffChatWorkspace(workspace)) return null;
       const task: TaskCreationInput = rawTask;
-      try {
-        await ensureTaskTransport(get, set, workspaceId, deps);
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "task/create", {
-          cwd: workspace.path,
-          ...task,
-        });
-        const parsed = taskRecordSchema.safeParse(result?.task);
-        if (!parsed.success) throw new Error("Invalid task/create response");
-        upsertTask(set, get, parsed.data, deps, result?.thread);
-        const mainThread = parsed.data.threads[0];
-        set({
-          selectedWorkspaceId: workspaceId,
-          selectedTaskId: parsed.data.id,
-          selectedThreadId: mainThread?.sessionId ?? null,
-          newTaskWorkspaceId: null,
-          view: "task",
-          taskError: null,
-        });
-        if (mainThread) {
-          await get().reconnectThread(mainThread.sessionId, undefined, {
-            skipWorkspaceSelect: true,
-            refreshSnapshot: true,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("task", "create", workspaceId, task.idempotencyKey),
+        label: "Create task",
+        errorTitle: "Task not created",
+        errorMessage: "Unable to create task.",
+        execute: async () => {
+          if (get().desktopFeatureFlags.tasks !== true) {
+            throw new Error("Task mode is not enabled.");
+          }
+          const workspace = get().workspaces.find((item) => item.id === workspaceId);
+          if (!workspace || isOneOffChatWorkspace(workspace)) {
+            throw new Error("Select a project workspace before creating a task.");
+          }
+          await ensureTaskTransport(get, set, workspaceId, deps);
+          const result = await deps.requestJsonRpc(get, set, workspaceId, "task/create", {
+            cwd: workspace.path,
+            ...task,
           });
-        }
-        deps.syncDesktopStateCache(get);
-        return parsed.data;
-      } catch (error) {
-        notifyError(set, "Unable to create task", error);
-        return null;
-      }
+          const parsed = taskRecordSchema.safeParse(result?.task);
+          if (!parsed.success) throw new Error("Invalid task/create response");
+          upsertTask(set, get, parsed.data, deps, result?.thread);
+          const mainThread = parsed.data.threads[0];
+          set({
+            selectedWorkspaceId: workspaceId,
+            selectedTaskId: parsed.data.id,
+            selectedThreadId: mainThread?.sessionId ?? null,
+            newTaskWorkspaceId: null,
+            view: "task",
+            taskError: null,
+          });
+          if (mainThread) {
+            await get().reconnectThread(mainThread.sessionId, undefined, {
+              skipWorkspaceSelect: true,
+              refreshSnapshot: true,
+            });
+          }
+          deps.syncDesktopStateCache(get);
+          return parsed.data;
+        },
+      });
     },
 
     selectTask: async (taskId, options = {}) => {
@@ -691,114 +729,128 @@ export function createTaskActions(
     },
 
     createTaskThread: async (taskId, title, workItemId) => {
-      if (get().desktopFeatureFlags.tasks !== true) return;
-      const task = get().tasksById[taskId];
-      if (!task) return;
-      const workspaceId = workspaceIdForTask(get, task);
-      const workspace = workspaceId
-        ? get().workspaces.find((item) => item.id === workspaceId)
-        : null;
-      if (!workspaceId || !workspace) return;
-      try {
-        await ensureTaskTransport(get, set, workspaceId, deps);
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "task/thread/create", {
-          cwd: workspace.path,
-          taskId,
-          expectedRevision: task.revision,
-          title: title.trim(),
-          ...(workItemId ? { workItemId } : {}),
-        });
-        const parsed = taskRecordSchema.safeParse(result?.task);
-        if (!parsed.success) throw new Error("Invalid task/thread/create response");
-        upsertTask(set, get, parsed.data, deps, result?.thread);
-        const previousIds = new Set(task.threads.map((item) => item.id));
-        const created = parsed.data.threads.find((item) => !previousIds.has(item.id));
-        if (created) {
-          set({ selectedThreadId: created.sessionId, selectedTaskId: taskId, view: "task" });
-          await get().reconnectThread(created.sessionId, undefined, { skipWorkspaceSelect: true });
-        }
-      } catch (error) {
-        notifyError(set, "Unable to create task thread", error);
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("task", "thread", "create", taskId),
+        label: "Create task thread",
+        errorTitle: "Task thread not created",
+        errorMessage: "Unable to create task thread.",
+        execute: async () => {
+          if (get().desktopFeatureFlags.tasks !== true) {
+            throw new Error("Task mode is not enabled.");
+          }
+          const task = get().tasksById[taskId];
+          if (!task) throw new Error("Task not found.");
+          const workspaceId = workspaceIdForTask(get, task);
+          const workspace = workspaceId
+            ? get().workspaces.find((item) => item.id === workspaceId)
+            : null;
+          if (!workspaceId || !workspace) throw new Error("Task workspace not found.");
+          await ensureTaskTransport(get, set, workspaceId, deps);
+          const result = await deps.requestJsonRpc(get, set, workspaceId, "task/thread/create", {
+            cwd: workspace.path,
+            taskId,
+            expectedRevision: task.revision,
+            title: title.trim(),
+            ...(workItemId ? { workItemId } : {}),
+          });
+          const parsed = taskRecordSchema.safeParse(result?.task);
+          if (!parsed.success) throw new Error("Invalid task/thread/create response");
+          upsertTask(set, get, parsed.data, deps, result?.thread);
+          const previousIds = new Set(task.threads.map((item) => item.id));
+          const created = parsed.data.threads.find((item) => !previousIds.has(item.id));
+          if (created) {
+            set({ selectedThreadId: created.sessionId, selectedTaskId: taskId, view: "task" });
+            await get().reconnectThread(created.sessionId, undefined, {
+              skipWorkspaceSelect: true,
+            });
+          }
+        },
+      });
     },
 
     updateTaskBrief: async (taskId, patch) => {
-      const task = get().tasksById[taskId];
-      if (!task) return false;
-      const workspaceId = workspaceIdForTask(get, task);
-      const workspace = workspaceId
-        ? get().workspaces.find((item) => item.id === workspaceId)
-        : null;
-      if (!workspaceId || !workspace) return false;
-      try {
-        await ensureTaskTransport(get, set, workspaceId, deps);
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "task/updateBrief", {
-          cwd: workspace.path,
-          taskId,
-          expectedRevision: task.revision,
-          ...patch,
-        });
-        const parsed = taskRecordSchema.safeParse(result?.task);
-        if (!parsed.success) throw new Error("Invalid task/updateBrief response");
-        upsertTask(set, get, parsed.data, deps);
-        return true;
-      } catch (error) {
-        notifyError(set, "Unable to update task brief", error);
-        return false;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("task", "brief", taskId),
+        label: "Save task brief",
+        errorTitle: "Task brief not saved",
+        errorMessage: "Unable to update task brief.",
+        execute: async () => {
+          const task = get().tasksById[taskId];
+          if (!task) throw new Error("Task not found.");
+          const workspaceId = workspaceIdForTask(get, task);
+          const workspace = workspaceId
+            ? get().workspaces.find((item) => item.id === workspaceId)
+            : null;
+          if (!workspaceId || !workspace) throw new Error("Task workspace not found.");
+          await ensureTaskTransport(get, set, workspaceId, deps);
+          const result = await deps.requestJsonRpc(get, set, workspaceId, "task/updateBrief", {
+            cwd: workspace.path,
+            taskId,
+            expectedRevision: task.revision,
+            ...patch,
+          });
+          const parsed = taskRecordSchema.safeParse(result?.task);
+          if (!parsed.success) throw new Error("Invalid task/updateBrief response");
+          upsertTask(set, get, parsed.data, deps);
+        },
+      });
     },
 
     acceptTask: async (taskId) => {
-      await mutateLifecycle(taskId, "task/accept");
+      return await mutateLifecycle(taskId, "task/accept");
     },
     requestTaskChanges: async (taskId, feedback) => {
-      await mutateLifecycle(taskId, "task/requestChanges", { feedback });
+      return await mutateLifecycle(taskId, "task/requestChanges", { feedback });
     },
     cancelTask: async (taskId, reason) => {
-      await mutateLifecycle(taskId, "task/cancel", reason ? { reason } : {});
+      return await mutateLifecycle(taskId, "task/cancel", reason ? { reason } : {});
     },
     reopenTask: async (taskId, reason) => {
-      await mutateLifecycle(taskId, "task/reopen", reason ? { reason } : {});
+      return await mutateLifecycle(taskId, "task/reopen", reason ? { reason } : {});
     },
     retryTask: async (taskId) => await mutateLifecycle(taskId, "task/retry"),
 
     resolveTaskQuestions: async (
       taskId: string,
       answers: TaskQuestionAnswerInput[],
-    ): Promise<TaskQuestionResumeStatus | null> => {
-      const context = taskRequestContext(taskId);
-      if (!context || answers.length === 0) return null;
-      try {
-        await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(
-          get,
-          set,
-          context.workspaceId,
-          "task/questions/resolve",
-          {
-            cwd: context.task.workspacePath,
-            taskId,
-            expectedRevision: context.task.revision,
-            answers,
-          },
-        );
-        const parsedTask = taskRecordSchema.safeParse(result?.task);
-        const resumeStatus = result?.resumeStatus;
-        if (
-          !parsedTask.success ||
-          (resumeStatus !== "queued" &&
-            resumeStatus !== "steered" &&
-            resumeStatus !== "not_needed" &&
-            resumeStatus !== "failed")
-        ) {
-          throw new Error("Invalid task/questions/resolve response");
-        }
-        upsertTask(set, get, parsedTask.data, deps);
-        return resumeStatus;
-      } catch (error) {
-        notifyError(set, "Unable to answer task questions", error);
-        return null;
-      }
+    ): Promise<OperationResult<TaskQuestionResumeStatus>> => {
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("task", "questions", taskId),
+        label: "Submit task answers",
+        errorTitle: "Task answers not submitted",
+        errorMessage: "Unable to answer task questions.",
+        execute: async () => {
+          const context = taskRequestContext(taskId);
+          if (!context) throw new Error("Task not found.");
+          if (answers.length === 0) throw new Error("Answer at least one question.");
+          await ensureTaskTransport(get, set, context.workspaceId, deps);
+          const result = await deps.requestJsonRpc(
+            get,
+            set,
+            context.workspaceId,
+            "task/questions/resolve",
+            {
+              cwd: context.task.workspacePath,
+              taskId,
+              expectedRevision: context.task.revision,
+              answers,
+            },
+          );
+          const parsedTask = taskRecordSchema.safeParse(result?.task);
+          const resumeStatus = result?.resumeStatus;
+          if (
+            !parsedTask.success ||
+            (resumeStatus !== "queued" &&
+              resumeStatus !== "steered" &&
+              resumeStatus !== "not_needed" &&
+              resumeStatus !== "failed")
+          ) {
+            throw new Error("Invalid task/questions/resolve response");
+          }
+          upsertTask(set, get, parsedTask.data, deps);
+          return resumeStatus;
+        },
+      });
     },
 
     readTaskArtifact: async (taskId, artifactId) => {
@@ -880,59 +932,65 @@ export function createTaskActions(
       }),
 
     startTaskArtifactRevision: async (taskId, artifactId, baseVersionId, instruction) => {
-      if (get().desktopFeatureFlags.tasks !== true) return null;
-      const context = taskRequestContext(taskId);
       const normalizedInstruction = instruction.trim();
-      if (!context || !normalizedInstruction) return null;
-      try {
-        await ensureTaskTransport(get, set, context.workspaceId, deps);
-        const result = await deps.requestJsonRpc(
-          get,
-          set,
-          context.workspaceId,
-          "task/artifact/revision/start",
-          {
-            taskId,
-            artifactId,
-            baseVersionId,
-            instruction: normalizedInstruction,
-            expectedRevision: context.task.revision,
-          },
-        );
-        const parsedTask = taskRecordSchema.safeParse(result?.task);
-        const parsedRevision = taskArtifactRevisionSchema.safeParse(result?.revision);
-        const thread = isRecord(result?.thread) ? result.thread : null;
-        if (!parsedTask.success || !parsedRevision.success || typeof thread?.id !== "string") {
-          throw new Error("Invalid task/artifact/revision/start response");
-        }
-        const detail = parseArtifactDetail(result?.detail, "task/artifact/revision/start");
-        const focusedTaskThread = parsedTask.data.threads.find(
-          (candidate) => candidate.id === parsedRevision.data.taskThreadId,
-        );
-        if (
-          !focusedTaskThread ||
-          focusedTaskThread.sessionId !== parsedRevision.data.sessionId ||
-          focusedTaskThread.sessionId !== thread.id
-        ) {
-          throw new Error("Artifact revision did not return its focused task thread");
-        }
-        upsertTask(set, get, parsedTask.data, deps, thread);
-        set({
-          selectedWorkspaceId: context.workspaceId,
-          selectedTaskId: taskId,
-          selectedThreadId: thread.id,
-          view: "task",
-        });
-        await get().reconnectThread(thread.id, undefined, {
-          skipWorkspaceSelect: true,
-          refreshSnapshot: true,
-        });
-        deps.syncDesktopStateCache(get);
-        return detail;
-      } catch (error) {
-        notifyError(set, "Unable to start artifact revision", error);
-        return null;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("task", "artifact", "revision", taskId, artifactId),
+        label: "Start artifact revision",
+        errorTitle: "Artifact revision not started",
+        errorMessage: "Unable to start artifact revision.",
+        execute: async () => {
+          if (get().desktopFeatureFlags.tasks !== true) {
+            throw new Error("Task mode is not enabled.");
+          }
+          const context = taskRequestContext(taskId);
+          if (!context) throw new Error("Task not found.");
+          if (!normalizedInstruction) throw new Error("Enter a revision instruction.");
+          await ensureTaskTransport(get, set, context.workspaceId, deps);
+          const result = await deps.requestJsonRpc(
+            get,
+            set,
+            context.workspaceId,
+            "task/artifact/revision/start",
+            {
+              taskId,
+              artifactId,
+              baseVersionId,
+              instruction: normalizedInstruction,
+              expectedRevision: context.task.revision,
+            },
+          );
+          const parsedTask = taskRecordSchema.safeParse(result?.task);
+          const parsedRevision = taskArtifactRevisionSchema.safeParse(result?.revision);
+          const thread = isRecord(result?.thread) ? result.thread : null;
+          if (!parsedTask.success || !parsedRevision.success || typeof thread?.id !== "string") {
+            throw new Error("Invalid task/artifact/revision/start response");
+          }
+          const detail = parseArtifactDetail(result?.detail, "task/artifact/revision/start");
+          const focusedTaskThread = parsedTask.data.threads.find(
+            (candidate) => candidate.id === parsedRevision.data.taskThreadId,
+          );
+          if (
+            !focusedTaskThread ||
+            focusedTaskThread.sessionId !== parsedRevision.data.sessionId ||
+            focusedTaskThread.sessionId !== thread.id
+          ) {
+            throw new Error("Artifact revision did not return its focused task thread");
+          }
+          upsertTask(set, get, parsedTask.data, deps, thread);
+          set({
+            selectedWorkspaceId: context.workspaceId,
+            selectedTaskId: taskId,
+            selectedThreadId: thread.id,
+            view: "task",
+          });
+          await get().reconnectThread(thread.id, undefined, {
+            skipWorkspaceSelect: true,
+            refreshSnapshot: true,
+          });
+          deps.syncDesktopStateCache(get);
+          return detail;
+        },
+      });
     },
   };
 }

@@ -26,7 +26,7 @@ const { useAppStore } = await import("../src/app/store");
 
 const defaultStoreState = useAppStore.getState();
 
-function seedReadyState() {
+function seedReadyState(audience: "foreground" | "background" = "foreground") {
   useAppStore.setState({
     ...useAppStore.getState(),
     ready: true,
@@ -40,7 +40,8 @@ function seedReadyState() {
         kind: "info",
         title: "Heads up",
         detail: "Popup test",
-        createdAt: "2026-04-30T00:00:00.000Z",
+        ts: "2026-04-30T00:00:00.000Z",
+        audience,
       },
     ],
   });
@@ -197,6 +198,29 @@ describe("app window-mode notification routing", () => {
     });
 
     try {
+      seedReadyState("background");
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      expect(showNotification).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("main window keeps foreground notifications in-app", async () => {
+    const harness = setupJsdom();
+
+    try {
       seedReadyState();
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -216,11 +240,19 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("main window still forwards new notifications to the OS", async () => {
+  test("main window forwards background notifications while unfocused", async () => {
     const harness = setupJsdom();
 
     try {
-      seedReadyState();
+      Object.defineProperty(harness.dom.window.document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      Object.defineProperty(harness.dom.window.document, "hasFocus", {
+        configurable: true,
+        value: () => false,
+      });
+      seedReadyState("background");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
@@ -233,6 +265,37 @@ describe("app window-mode notification routing", () => {
         title: "Heads up",
         body: "Popup test",
       });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("main window keeps background notifications in-app while focused", async () => {
+    const harness = setupJsdom();
+
+    try {
+      Object.defineProperty(harness.dom.window.document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      Object.defineProperty(harness.dom.window.document, "hasFocus", {
+        configurable: true,
+        value: () => true,
+      });
+      seedReadyState("background");
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      expect(showNotification).not.toHaveBeenCalled();
 
       await act(async () => {
         root.unmount();

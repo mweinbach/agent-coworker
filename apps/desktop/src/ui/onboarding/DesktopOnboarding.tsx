@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import type { OnboardingStep } from "../../app/types";
 import {
   resolveWorkspaceDisplayTargets,
@@ -40,6 +41,7 @@ import {
 import { cn } from "../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
+import { OperationFeedback } from "../OperationFeedback";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -315,6 +317,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const setLmStudioEnabled = useAppStore((s) => s.setLmStudioEnabled);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
 
   const [expandedProvider, setExpandedProvider] = useState<ProviderName | null>(null);
@@ -394,7 +397,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod) => {
     void (async () => {
-      await authorizeProviderAuth(provider, method.id);
+      const authorized = await authorizeProviderAuth(provider, method.id);
+      if (!authorized.ok) return;
       if (method.oauthMode !== "code") {
         await callbackProviderAuth(provider, method.id);
       }
@@ -418,6 +422,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           const methods = authMethodsFor(provider);
           const providerDisplayName = displayProviderName(provider);
           const lmStudioEnabled = providerUiState.lmstudio.enabled;
+          const lmStudioOperation = operationsByKey[operationKey("provider", "lmstudio-enabled")];
+          const lmStudioPending = lmStudioOperation?.status === "pending";
 
           return (
             <Card
@@ -467,11 +473,16 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         <div className="flex flex-wrap items-center gap-2">
                           <Button
                             type="button"
+                            disabled={lmStudioPending}
                             onClick={() => {
                               void setLmStudioEnabled(!lmStudioEnabled);
                             }}
                           >
-                            {lmStudioEnabled ? "Disable" : "Connect"}
+                            {lmStudioPending
+                              ? "Saving..."
+                              : lmStudioEnabled
+                                ? "Disable"
+                                : "Connect"}
                           </Button>
                           <Button
                             type="button"
@@ -481,6 +492,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                             Refresh
                           </Button>
                         </div>
+                        <OperationFeedback operation={lmStudioOperation} />
                         <div className="text-xs text-muted-foreground">
                           {lmStudioEnabled
                             ? status?.message ||
@@ -493,6 +505,33 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         const stateKey = `${provider}:${method.id}`;
                         const apiKeyValue = apiKeys[stateKey] ?? "";
                         const codeValue = oauthCodes[stateKey] ?? "";
+                        const operationCandidates = [
+                          operationsByKey[
+                            operationKey(
+                              "provider",
+                              `api-key:${method.id.trim() || "api_key"}`,
+                              provider,
+                            )
+                          ],
+                          operationsByKey[
+                            operationKey(
+                              "provider",
+                              `authorize:${method.id.trim() || "missing"}`,
+                              provider,
+                            )
+                          ],
+                          operationsByKey[
+                            operationKey(
+                              "provider",
+                              `callback:${method.id.trim() || "missing"}`,
+                              provider,
+                            )
+                          ],
+                        ].filter((operation) => operation !== undefined);
+                        const methodOperation =
+                          operationCandidates.find((operation) => operation.status === "pending") ??
+                          operationCandidates.find((operation) => operation.status === "error");
+                        const methodPending = methodOperation?.status === "pending";
                         const challengeMatch =
                           providerLastAuthChallenge?.provider === provider &&
                           providerLastAuthChallenge?.methodId === method.id
@@ -511,6 +550,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         return (
                           <div
                             key={stateKey}
+                            aria-busy={methodPending}
                             className="space-y-2 border-t border-border/70 pt-3 first:border-t-0 first:pt-0"
                           >
                             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -521,6 +561,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                 <Input
                                   className="max-w-xs"
                                   value={apiKeyValue}
+                                  disabled={methodPending}
                                   onChange={(e) => {
                                     const nextValue = e.currentTarget.value;
                                     setApiKeys((s) => ({ ...s, [stateKey]: nextValue }));
@@ -531,7 +572,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                 />
                                 <Button
                                   type="button"
-                                  disabled={!apiKeyValue.trim()}
+                                  disabled={!apiKeyValue.trim() || methodPending}
                                   onClick={() => {
                                     void setProviderApiKey(provider, method.id, apiKeyValue.trim());
                                   }}
@@ -543,6 +584,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                               <div className="flex flex-wrap items-center gap-2">
                                 <Button
                                   type="button"
+                                  disabled={methodPending}
                                   onClick={() => startOauthSignIn(provider, method)}
                                 >
                                   Sign in
@@ -552,6 +594,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                     <Input
                                       className="max-w-xs"
                                       value={codeValue}
+                                      disabled={methodPending}
                                       onChange={(e) => {
                                         const nextValue = e.currentTarget.value;
                                         setOauthCodes((s) => ({
@@ -566,6 +609,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                     <Button
                                       variant="outline"
                                       type="button"
+                                      disabled={methodPending}
                                       onClick={() => {
                                         void callbackProviderAuth(provider, method.id, codeValue);
                                       }}
@@ -576,6 +620,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                                 ) : null}
                               </div>
                             )}
+
+                            <OperationFeedback operation={methodOperation} />
 
                             {challengeMatch ? (
                               <div className="text-xs text-muted-foreground">
@@ -648,6 +694,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const workspace = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? null,
@@ -693,6 +740,10 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     modelSelectorVisibility,
   );
   const workspaceId = workspace?.id ?? null;
+  const defaultsOperation = workspaceId
+    ? operationsByKey[operationKey("workspace-defaults", workspaceId, "settings")]
+    : undefined;
+  const defaultsPending = defaultsOperation?.status === "pending";
   const providerDefaultById = useMemo(
     () =>
       new Map(
@@ -751,6 +802,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           <div className="text-sm font-medium">Default provider</div>
           <Select
             value={effectiveProvider}
+            disabled={defaultsPending}
             onValueChange={(value) => {
               if (!isProviderNameString(value)) return;
               const providerDefault =
@@ -781,6 +833,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           <div className="text-sm font-medium">Default model</div>
           <Select
             value={model || (modelOptions[0] ?? "")}
+            disabled={defaultsPending}
             onValueChange={(value) => {
               void updateWorkspaceDefaults(workspace.id, {
                 defaultModel: value,
@@ -809,6 +862,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           </div>
           <Switch
             checked={enableMcp}
+            disabled={defaultsPending}
             aria-label="MCP servers"
             onCheckedChange={(checked) =>
               void updateWorkspaceDefaults(workspace.id, { defaultEnableMcp: checked })
@@ -823,6 +877,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           </div>
           <Switch
             checked={backupsEnabled}
+            disabled={defaultsPending}
             aria-label="Backups"
             onCheckedChange={(checked) =>
               void updateWorkspaceDefaults(workspace.id, {
@@ -831,10 +886,11 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             }
           />
         </div>
+        <OperationFeedback operation={defaultsOperation} />
       </div>
 
       <div className="flex gap-3 pt-2">
-        <Button onClick={onContinue} disabled={!defaultProviderConnected}>
+        <Button onClick={onContinue} disabled={!defaultProviderConnected || defaultsPending}>
           Continue
         </Button>
         <Button variant="ghost" onClick={onBack}>

@@ -12,6 +12,7 @@ import {
 } from "./store.helpers";
 import {
   DEFAULT_RESEARCH_SETTINGS,
+  type Notification,
   normalizeCloudSyncSettings,
   normalizeDesktopSettings,
   normalizePrivacyTelemetrySettings,
@@ -55,6 +56,7 @@ const initialState: AppStoreDataState = {
   canvasShowFormattingBar: true,
   isCanvasMaximized: false,
   notifications: [],
+  operationsByKey: {},
 
   providerStatusByName: {},
   providerStatusLastUpdatedAt: null,
@@ -124,6 +126,19 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
 
+export function publishForegroundNotification(
+  notification: Pick<Notification, "kind" | "title" | "detail">,
+): void {
+  useAppStore.setState((state) => ({
+    notifications: pushNotification(state.notifications, {
+      ...notification,
+      id: crypto.randomUUID(),
+      ts: new Date().toISOString(),
+      audience: "foreground",
+    }),
+  }));
+}
+
 onTranscriptDeliveryFailure((failure) => {
   const notificationId = `transcript-delivery-${failure.recoveryId ?? failure.batchId ?? failure.reason}`;
   useAppStore.setState((state) => ({
@@ -135,6 +150,7 @@ onTranscriptDeliveryFailure((failure) => {
         kind: "error",
         title: "Transcript sync needs attention",
         detail: failure.message,
+        audience: "background",
       },
     ),
   }));

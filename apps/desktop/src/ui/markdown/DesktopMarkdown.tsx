@@ -312,7 +312,7 @@ function DesktopCitationChip({
   const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
-  useOverlayOwner({
+  const citationOwner = useOverlayOwner({
     active: open,
     label: "Citation sources",
     onDismiss: () => setOpen(false),
@@ -533,11 +533,12 @@ function DesktopCitationChip({
               role="dialog"
               aria-label="Citation sources"
               className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
-              style={
-                popupPosition
+              style={{
+                ...(popupPosition
                   ? { left: popupPosition.left, top: popupPosition.top }
-                  : { left: 0, top: 0, visibility: "hidden" }
-              }
+                  : { left: 0, top: 0, visibility: "hidden" }),
+                zIndex: citationOwner?.zIndex,
+              }}
               onMouseEnter={handleHoverEnter}
               onMouseLeave={handleHoverLeave}
             >

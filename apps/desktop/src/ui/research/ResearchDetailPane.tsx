@@ -120,7 +120,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const detailBodyWidth = useElementWidth(detailBodyRef);
   const sourcesOverlay =
     detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
-  useOverlayOwner({
+  const sourcesOwner = useOverlayOwner({
     active: sourcesOpen && sourcesOverlay && (research?.sources.length ?? 0) > 0,
     label: "Research sources",
     onDismiss: () => setSourcesOpen(false),
@@ -362,7 +362,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               )}
               aria-label="Sources"
               aria-hidden={!showSourcesPanel}
-              style={sourcesPanelStyle}
+              style={{
+                ...sourcesPanelStyle,
+                zIndex: sourcesOverlay ? sourcesOwner?.zIndex : sourcesPanelStyle.zIndex,
+              }}
             >
               <div
                 className="flex h-full min-h-0 min-w-0 flex-col"
@@ -407,16 +410,6 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
       return;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (!followUpOwner?.handleEscape(event)) {
-          event.preventDefault();
-          event.stopPropagation();
-          setExpanded(false);
-        }
-      }
-    };
-
     const onPointerDown = (event: MouseEvent) => {
       const shell = composerShellRef.current;
       if (!shell) {
@@ -428,20 +421,21 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
       setExpanded(false);
     };
 
-    document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onPointerDown);
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("mousedown", onPointerDown);
     };
-  }, [expanded, followUpOwner]);
+  }, [expanded]);
 
   const springTransition = prefersReducedMotion
     ? { duration: 0 }
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
 
   return (
-    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-start">
+    <div
+      className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-start"
+      style={{ zIndex: followUpOwner?.zIndex }}
+    >
       <AnimatePresence mode="popLayout" initial={false}>
         {expanded ? (
           <motion.div
@@ -455,6 +449,11 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
             transition={springTransition}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                followUpOwner?.handleEscape(event);
+              }
+            }}
           >
             <ResearchFollowUpComposer
               parentResearchId={parentResearchId}

@@ -532,6 +532,133 @@ describe("app window-mode notification routing", () => {
     }
   });
 
+  test("composing Escape in the Radix ask input never submits skip", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    const answerAsk = mock(() => {
+      useAppStore.setState({ promptModal: null });
+    });
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      useAppStore.setState({
+        answerAsk,
+        promptModal: {
+          kind: "ask",
+          threadId: "chat-session-1",
+          prompt: {
+            requestId: "ask-ime",
+            question: "Continue composing?",
+            options: [],
+          },
+        },
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => root?.render(createElement(App)));
+      const input = harness.dom.window.document.querySelector('input[aria-label="Custom answer"]');
+      if (!(input instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing ask input");
+      }
+      input.focus();
+      const composingEscape = new harness.dom.window.KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+      Object.defineProperty(composingEscape, "isComposing", { value: true });
+
+      await act(async () => {
+        input.dispatchEvent(composingEscape);
+      });
+
+      expect(composingEscape.defaultPrevented).toBe(true);
+      expect(answerAsk).not.toHaveBeenCalled();
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).not.toBeNull();
+      expect(cancelThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("editable Escape is consumed before Radix and a later bare Escape skips once", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    const answerAsk = mock(() => {
+      useAppStore.setState({ promptModal: null });
+    });
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      useAppStore.setState({
+        answerAsk,
+        promptModal: {
+          kind: "ask",
+          threadId: "chat-session-1",
+          prompt: {
+            requestId: "ask-editable",
+            question: "Continue editing?",
+            options: [],
+          },
+        },
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => root?.render(createElement(App)));
+      const input = harness.dom.window.document.querySelector('input[aria-label="Custom answer"]');
+      if (!(input instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing ask input");
+      }
+      input.focus();
+      const editableEscape = new harness.dom.window.KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+
+      await act(async () => {
+        input.dispatchEvent(editableEscape);
+      });
+
+      expect(editableEscape.defaultPrevented).toBe(true);
+      expect(answerAsk).not.toHaveBeenCalled();
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).not.toBeNull();
+
+      input.blur();
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+
+      expect(answerAsk).toHaveBeenCalledTimes(1);
+      expect(answerAsk).toHaveBeenCalledWith("chat-session-1", "ask-editable", "[skipped]");
+      expect(cancelThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
   test("bare Escape never stops a busy run while Control+Period does", async () => {
     const harness = setupJsdom();
     const cancelThread = mock(() => {});

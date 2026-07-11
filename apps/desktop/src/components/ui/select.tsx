@@ -7,13 +7,17 @@ import { createContext, useContext } from "react";
 
 import { cn } from "@/lib/utils";
 import {
-  OverlayLayerBoundary,
+  type OverlayOwnership,
   type OverlayRootState,
   useOverlayOwner,
   useOverlayRootState,
 } from "@/ui/OverlayStack";
 
-const SelectOverlayContext = createContext<OverlayRootState | null>(null);
+type SelectOverlayState = OverlayRootState & {
+  ownership: OverlayOwnership | null;
+};
+
+const SelectOverlayContext = createContext<SelectOverlayState | null>(null);
 
 function Select({
   defaultOpen,
@@ -22,16 +26,20 @@ function Select({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   const state = useOverlayRootState({ defaultOpen, onOpenChange, open });
+  const ownership = useOverlayOwner({
+    active: state.open,
+    label: "Select menu",
+    onDismiss: () => state.setOpen(false),
+    restoreFocus: () => state.restoreFocusRef.current,
+  });
   return (
-    <SelectOverlayContext.Provider value={state}>
-      <OverlayLayerBoundary>
-        <SelectPrimitive.Root
-          data-slot="select"
-          open={state.open}
-          onOpenChange={state.setOpen}
-          {...props}
-        />
-      </OverlayLayerBoundary>
+    <SelectOverlayContext.Provider value={{ ...state, ownership }}>
+      <SelectPrimitive.Root
+        data-slot="select"
+        open={state.open}
+        onOpenChange={state.setOpen}
+        {...props}
+      />
     </SelectOverlayContext.Provider>
   );
 }
@@ -76,15 +84,11 @@ function SelectContent({
   position = "item-aligned",
   align = "center",
   onEscapeKeyDown,
+  style,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   const owner = useContext(SelectOverlayContext);
-  const ownership = useOverlayOwner({
-    active: owner?.open ?? false,
-    label: "Select menu",
-    onDismiss: () => owner?.setOpen(false),
-    restoreFocus: () => owner?.restoreFocusRef.current ?? null,
-  });
+  const ownership = owner?.ownership;
 
   return (
     <SelectPrimitive.Portal
@@ -98,6 +102,7 @@ function SelectContent({
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className,
         )}
+        style={{ ...style, zIndex: ownership?.zIndex ?? style?.zIndex }}
         position={position}
         align={align}
         onEscapeKeyDown={(event) => {

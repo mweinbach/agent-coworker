@@ -13,7 +13,6 @@ import {
 } from "react";
 
 type OverlayOwner = {
-  depth: number;
   id: string;
   label: string;
   onDismiss: () => void | Promise<void>;
@@ -22,16 +21,26 @@ type OverlayOwner = {
 };
 
 type OverlayStack = {
+  claimSequence: () => number;
   dismissOwner: (id: string) => boolean;
   dismissTop: (event?: KeyboardEvent) => boolean;
   hasOpenOverlay: () => boolean;
-  register: (owner: Omit<OverlayOwner, "sequence">) => () => void;
+  register: (owner: OverlayOwner) => () => void;
 };
 
 type OverlayEscapeEvent = {
   defaultPrevented: boolean;
+  isComposing?: boolean;
+  nativeEvent?: KeyboardEvent;
   preventDefault: () => void;
+  stopImmediatePropagation?: () => void;
   stopPropagation?: () => void;
+};
+
+type OverlayOwnership = {
+  handleEscape: (event: OverlayEscapeEvent) => boolean;
+  sequence: number;
+  zIndex: number;
 };
 
 type OverlayRootState = {
@@ -41,7 +50,12 @@ type OverlayRootState = {
 };
 
 const OverlayStackContext = createContext<OverlayStack | null>(null);
-const OverlayDepthContext = createContext(0);
+const stackReservedEditableEscapes = new WeakSet<object>();
+const OVERLAY_Z_INDEX_BASE = 1_000;
+
+function nativeEscapeEvent(event: OverlayEscapeEvent): object {
+  return event.nativeEvent ?? event;
+}
 
 function activeElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -50,11 +64,7 @@ function activeElement(): HTMLElement | null {
 function topOwner(owners: OverlayOwner[]): OverlayOwner | undefined {
   let top: OverlayOwner | undefined;
   for (const candidate of owners) {
-    if (
-      !top ||
-      candidate.depth > top.depth ||
-      (candidate.depth === top.depth && candidate.sequence > top.sequence)
-    ) {
+    if (!top || candidate.sequence > top.sequence) {
       top = candidate;
     }
   }
@@ -66,7 +76,7 @@ function scheduleFocusRestore(owner: OverlayOwner, getOwners: () => OverlayOwner
     const owners = getOwners();
     if (owners.some((candidate) => candidate.id === owner.id)) return;
     const currentTop = topOwner(owners);
-    if (currentTop && currentTop.depth >= owner.depth && currentTop.sequence > owner.sequence) {
+    if (currentTop && currentTop.sequence > owner.sequence) {
       return;
     }
     const target = owner.restoreFocus();
@@ -83,18 +93,25 @@ export function isEditableEscapeTarget(target: EventTarget | null): boolean {
   );
 }
 
+export function isReservedEditableEscape(event: OverlayEscapeEvent): boolean {
+  return stackReservedEditableEscapes.has(nativeEscapeEvent(event));
+}
+
 export function OverlayStackProvider({ children }: { children: ReactNode }) {
   const ownersRef = useRef<OverlayOwner[]>([]);
   const sequenceRef = useRef(0);
 
-  const register = useCallback((owner: Omit<OverlayOwner, "sequence">) => {
-    const registered = { ...owner, sequence: ++sequenceRef.current };
+  const claimSequence = useCallback(() => ++sequenceRef.current, []);
+
+  const register = useCallback((owner: OverlayOwner) => {
     ownersRef.current = [
       ...ownersRef.current.filter((candidate) => candidate.id !== owner.id),
-      registered,
+      owner,
     ];
     return () => {
-      ownersRef.current = ownersRef.current.filter((candidate) => candidate.id !== owner.id);
+      ownersRef.current = ownersRef.current.filter(
+        (candidate) => candidate.id !== owner.id || candidate.sequence !== owner.sequence,
+      );
     };
   }, []);
 
@@ -102,6 +119,7 @@ export function OverlayStackProvider({ children }: { children: ReactNode }) {
     const owner = topOwner(ownersRef.current);
     if (!owner || owner.id !== id) return false;
 
+    ownersRef.current = ownersRef.current.filter((candidate) => candidate.id !== owner.id);
     void Promise.resolve(owner.onDismiss()).finally(() => {
       scheduleFocusRestore(owner, () => ownersRef.current);
     });
@@ -121,18 +139,23 @@ export function OverlayStackProvider({ children }: { children: ReactNode }) {
 
   const stack = useMemo<OverlayStack>(
     () => ({
+      claimSequence,
       dismissOwner,
       dismissTop,
       hasOpenOverlay: () => ownersRef.current.length > 0,
       register,
     }),
-    [dismissOwner, dismissTop, register],
+    [claimSequence, dismissOwner, dismissTop, register],
   );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
-      if (isEditableEscapeTarget(event.target)) return;
+      if (event.key !== "Escape" || event.defaultPrevented || !topOwner(ownersRef.current)) return;
+      if (event.isComposing || isEditableEscapeTarget(event.target)) {
+        stackReservedEditableEscapes.add(event);
+        event.preventDefault();
+        return;
+      }
       dismissTop(event);
     };
 
@@ -144,10 +167,7 @@ export function OverlayStackProvider({ children }: { children: ReactNode }) {
 }
 
 export function OverlayLayerBoundary({ children }: { children: ReactNode }) {
-  const parentDepth = useContext(OverlayDepthContext);
-  return (
-    <OverlayDepthContext.Provider value={parentDepth + 1}>{children}</OverlayDepthContext.Provider>
-  );
+  return <>{children}</>;
 }
 
 export function useOverlayStack(): Pick<OverlayStack, "hasOpenOverlay"> {
@@ -165,39 +185,68 @@ export function useOverlayOwner(options: {
   label: string;
   onDismiss: () => void | Promise<void>;
   restoreFocus?: () => HTMLElement | null;
-}): { handleEscape: (event: OverlayEscapeEvent) => boolean } | null {
+}): OverlayOwnership | null {
   const stack = useContext(OverlayStackContext);
-  const depth = useContext(OverlayDepthContext);
   const id = useId();
   const optionsRef = useRef(options);
+  const stackRef = useRef(stack);
+  const activeRef = useRef(false);
+  const sequenceRef = useRef(0);
   optionsRef.current = options;
 
+  if (stackRef.current !== stack) {
+    stackRef.current = stack;
+    activeRef.current = false;
+    sequenceRef.current = 0;
+  }
+  if (options.active && !activeRef.current && stack) {
+    sequenceRef.current = stack.claimSequence();
+  } else if (!options.active) {
+    sequenceRef.current = 0;
+  }
+  activeRef.current = options.active;
+  const sequence = sequenceRef.current;
+
   useLayoutEffect(() => {
-    if (!stack || !options.active) return;
+    if (!stack || !options.active || sequence === 0) return;
     const currentOptions = optionsRef.current;
     const capturedFocus = currentOptions.restoreFocus?.() ?? activeElement();
     return stack.register({
-      depth,
       id,
       label: currentOptions.label,
       onDismiss: () => optionsRef.current.onDismiss(),
       restoreFocus: () => optionsRef.current.restoreFocus?.() ?? capturedFocus,
+      sequence,
     });
-  }, [depth, id, options.active, stack]);
+  }, [id, options.active, sequence, stack]);
 
   return useMemo(
     () =>
       stack
         ? {
             handleEscape: (event: OverlayEscapeEvent) => {
-              if (event.defaultPrevented || !stack.dismissOwner(id)) return false;
+              const reservedByStack = isReservedEditableEscape(event);
+              const isComposing = event.isComposing || event.nativeEvent?.isComposing === true;
+              if (
+                isComposing ||
+                (event.defaultPrevented && !reservedByStack) ||
+                !stack.dismissOwner(id)
+              ) {
+                return false;
+              }
               event.preventDefault();
-              event.stopPropagation?.();
+              if (event.stopImmediatePropagation) {
+                event.stopImmediatePropagation();
+              } else {
+                event.stopPropagation?.();
+              }
               return true;
             },
+            sequence,
+            zIndex: OVERLAY_Z_INDEX_BASE + sequence,
           }
         : null,
-    [id, stack],
+    [id, sequence, stack],
   );
 }
 
@@ -237,4 +286,4 @@ export function useOverlayRootState(options: {
   );
 }
 
-export type { OverlayRootState };
+export type { OverlayOwnership, OverlayRootState };

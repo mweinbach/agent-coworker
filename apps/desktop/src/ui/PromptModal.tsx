@@ -202,6 +202,7 @@ export function PromptModal() {
               : "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0"
           }
           aria-describedby={isAsk ? "ask-prompt-esc-hint" : undefined}
+          preventEditableEscapeDismissal={isAsk}
           onEscapeKeyDown={
             isAsk
               ? () => {

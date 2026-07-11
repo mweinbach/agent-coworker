@@ -269,7 +269,7 @@ export function AppTopBar({
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const detailsId = useId();
-  useOverlayOwner({
+  const detailsOwner = useOverlayOwner({
     active: detailsOpen,
     label: "Thread details",
     onDismiss: () => setDetailsOpen(false),
@@ -535,6 +535,7 @@ export function AppTopBar({
                 role="dialog"
                 aria-label="Thread details"
                 className="app-topbar__thread-popover absolute left-0 top-full mt-1.5 w-[19.5rem] max-w-[min(19.5rem,calc(100vw-2rem))]"
+                style={{ zIndex: detailsOwner?.zIndex }}
               >
                 <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
                   <div className="min-w-0 flex-1">

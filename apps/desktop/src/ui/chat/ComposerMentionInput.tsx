@@ -152,11 +152,7 @@ export function ComposerMentionInput(props: {
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (menuOpen) {
         if (event.key === "Escape") {
-          if (!mentionMenuOwner?.handleEscape(event)) {
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuOpen(false);
-          }
+          mentionMenuOwner?.handleEscape(event);
           return;
         }
         if (event.key === "Tab") {
@@ -250,6 +246,7 @@ export function ComposerMentionInput(props: {
           query={query}
           onSelect={handleSelect}
           onHover={setActiveIndex}
+          zIndex={mentionMenuOwner?.zIndex}
         />
       ) : null}
     </div>

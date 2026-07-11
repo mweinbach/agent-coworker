@@ -1059,7 +1059,7 @@ export function Canvas({ path }: { path: string }) {
               left: `${floatingCoords.x}px`,
               top: `${floatingCoords.y}px`,
               transform: "translate(-50%, -100%) translateY(-10px)",
-              zIndex: 100,
+              zIndex: selectionEditorOwner?.zIndex ?? 100,
             }}
           >
             {showFormattingBar && isMarkdown && activeTab === "edit" && (
@@ -1134,15 +1134,12 @@ export function Canvas({ path }: { path: string }) {
                   e.stopPropagation();
                 }}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void handleSendPrompt(floatingPromptText);
                   } else if (e.key === "Escape") {
-                    if (!selectionEditorOwner?.handleEscape(e)) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      clearSelection();
-                    }
+                    selectionEditorOwner?.handleEscape(e);
                   }
                 }}
                 placeholder="How should the model edit this selection?"

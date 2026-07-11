@@ -8,6 +8,10 @@ import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
 import type { ResearchRecord } from "../../../src/server/research/types";
+import type {
+  CanvasDocumentRevision,
+  CanvasDocumentSnapshot,
+} from "../../../src/shared/canvasDocument";
 import {
   createQualityTaskArtifactDetail,
   createQualityTaskFixture,
@@ -125,6 +129,7 @@ let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 const researchRecords = new Map<string, ResearchRecord>();
+const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
 const pendingDeltaBursts = new Map<
   string,
@@ -958,6 +963,22 @@ function qualityResearchRecord(
   };
 }
 
+const QUALITY_CANVAS_CONTENT =
+  "# Electron quality gates\n\nThis deterministic fixture is rendered through the shipping Canvas.";
+
+function canvasDocumentSessionKey(documentId: string, generation: number): string {
+  return `${documentId}:${generation}`;
+}
+
+function qualityCanvasRevision(content: string): CanvasDocumentRevision {
+  return {
+    modifiedAtMs: Date.parse(FIXED_NOW),
+    changeTimeMs: Date.parse(FIXED_NOW),
+    size: new TextEncoder().encode(content).byteLength,
+    fingerprint: `quality:${content.length}`,
+  };
+}
+
 function jsonRpcResult(method: string, rawParams: unknown): unknown {
   const params = asRecord(rawParams);
   switch (method) {
@@ -1014,6 +1035,86 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       });
       researchRecords.set(record.id, record);
       return { research: record };
+    }
+    case "cowork/workspace/document/open": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      const document: CanvasDocumentSnapshot = {
+        documentId,
+        generation,
+        path:
+          typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md",
+        content: QUALITY_CANVAS_CONTENT,
+        truncated: false,
+        revision: qualityCanvasRevision(QUALITY_CANVAS_CONTENT),
+      };
+      canvasDocumentSessions.set(canvasDocumentSessionKey(documentId, generation), document);
+      return { ok: true, document };
+    }
+    case "cowork/workspace/document/revision": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      const document = canvasDocumentSessions.get(canvasDocumentSessionKey(documentId, generation));
+      return document
+        ? {
+            ok: true,
+            documentId,
+            generation,
+            path: document.path,
+            revision: document.revision,
+          }
+        : {
+            ok: false,
+            documentId,
+            generation,
+            error: {
+              kind: "session_not_found",
+              message: "Quality-gate Canvas session was not found.",
+            },
+          };
+    }
+    case "cowork/workspace/document/save":
+    case "cowork/workspace/document/saveAs": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      const key = canvasDocumentSessionKey(documentId, generation);
+      const current = canvasDocumentSessions.get(key);
+      const content = typeof params.content === "string" ? params.content : "";
+      const editRevision = typeof params.editRevision === "number" ? params.editRevision : 0;
+      if (!current) {
+        return {
+          ok: false,
+          documentId,
+          generation,
+          editRevision,
+          error: {
+            kind: "session_not_found",
+            message: "Quality-gate Canvas session was not found.",
+          },
+        };
+      }
+      const next = {
+        ...current,
+        path: typeof params.path === "string" ? params.path : current.path,
+        content,
+        revision: qualityCanvasRevision(content),
+      };
+      canvasDocumentSessions.set(key, next);
+      return {
+        ok: true,
+        documentId,
+        generation,
+        editRevision,
+        path: next.path,
+        revision: next.revision,
+        status: "saved",
+      };
+    }
+    case "cowork/workspace/document/close": {
+      const documentId = typeof params.documentId === "string" ? params.documentId : "";
+      const generation = typeof params.generation === "number" ? params.generation : 0;
+      canvasDocumentSessions.delete(canvasDocumentSessionKey(documentId, generation));
+      return { ok: true, documentId, generation };
     }
     case "task/list":
       return { tasks: [createQualityTaskFixture()] };

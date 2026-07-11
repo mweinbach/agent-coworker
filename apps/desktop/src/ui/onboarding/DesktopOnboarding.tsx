@@ -1054,7 +1054,7 @@ export function DesktopOnboarding() {
   const [completionError, setCompletionError] = useState<string | null>(null);
 
   useFocusTrap(cardRef, visible);
-  useOverlayOwner({
+  const onboardingOwner = useOverlayOwner({
     active: visible,
     label: "Onboarding",
     onDismiss: requestDismiss,
@@ -1098,6 +1098,7 @@ export function DesktopOnboarding() {
       role="dialog"
       aria-modal="true"
       aria-label="Onboarding"
+      style={{ zIndex: onboardingOwner?.zIndex }}
     >
       {/* Backdrop */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />

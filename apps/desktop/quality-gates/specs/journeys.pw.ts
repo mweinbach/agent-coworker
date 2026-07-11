@@ -229,10 +229,19 @@ test.describe("connection recovery", () => {
     const { page } = quality;
     await quality.emitLongTranscript(200, 7);
     const viewport = page.locator('[data-slot="message-scroller-viewport"]');
-    await viewport.evaluate((element) => {
-      element.scrollTop = 0;
+    await expect(page.getByText("Deterministic transcript run 7 message 200")).toBeAttached();
+    const scrolledAway = await viewport.evaluate(async (element) => {
+      const maxScrollTop = element.scrollHeight - element.clientHeight;
+      element.scrollTop = Math.max(200, maxScrollTop - 600);
+      element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -600 }));
       element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      return { maxScrollTop, scrollTop: element.scrollTop };
     });
+    expect(scrolledAway.scrollTop).toBeGreaterThan(160);
+    expect(scrolledAway.maxScrollTop - scrolledAway.scrollTop).toBeGreaterThanOrEqual(500);
     const composer = page.getByRole("combobox", { name: "Message input" });
     await composer.fill("Preserve this draft while the connection recovers.");
     await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
@@ -241,7 +250,7 @@ test.describe("connection recovery", () => {
     ).toBeVisible();
     await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
-    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(0);
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
 
     await page.getByRole("button", { name: "Reconnect" }).click();
     await expect(page.getByText("Reconnecting this chat… Your draft is safe.")).toBeVisible();

@@ -1,12 +1,56 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
-import type { SessionSnapshotLike } from "../apps/mobile/src/features/cowork/protocolTypes";
+import type {
+  CoworkThread,
+  SessionSnapshotLike,
+} from "../apps/mobile/src/features/cowork/protocolTypes";
 import { loadThreadOfflineCache } from "../apps/mobile/src/features/cowork/threadOfflineCache";
 import { useThreadStore } from "../apps/mobile/src/features/cowork/threadStore";
 
 async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function createRemoteSnapshot(
+  sessionId: string,
+  overrides: Partial<SessionSnapshotLike> = {},
+): SessionSnapshotLike {
+  return {
+    sessionId,
+    title: "Remote Thread",
+    titleSource: "manual",
+    provider: "opencode",
+    model: "remote-session",
+    sessionKind: "primary",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    updatedAt: "2026-07-09T00:00:00.000Z",
+    messageCount: 0,
+    lastEventSeq: 1,
+    feed: [],
+    agents: [],
+    todos: [],
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    ...overrides,
+  };
+}
+
+function createRemoteThread(id: string, overrides: Partial<CoworkThread> = {}): CoworkThread {
+  return {
+    id,
+    title: "Remote Thread",
+    preview: "Updated preview",
+    modelProvider: "opencode",
+    model: "remote-session",
+    cwd: "/workspace",
+    createdAt: "2026-07-09T00:00:00.000Z",
+    updatedAt: "2026-07-09T00:01:00.000Z",
+    messageCount: 0,
+    lastEventSeq: 2,
+    status: { type: "idle" },
+    ...overrides,
+  };
 }
 
 describe("mobile thread store offline draft preservation", () => {
@@ -151,6 +195,105 @@ describe("mobile thread store offline draft preservation", () => {
     expect(thread?.composerDraft).toBe("new draft");
     expect(thread?.composerAttachments).toEqual([]);
     expect(thread?.composerSubmission).toBeNull();
+  });
+
+  test("keeps a single composer recovery transaction active until accepted", () => {
+    useThreadStore.getState().hydrate(createRemoteSnapshot("remote-recovery"));
+    const store = useThreadStore.getState();
+    store.setComposerDraft("remote-recovery", "send once");
+
+    const firstSubmission = store.beginComposerSubmission("remote-recovery", "client-message-1");
+    expect(firstSubmission).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "send once",
+      status: "submitting",
+    });
+    expect(
+      useThreadStore.getState().beginComposerSubmission("remote-recovery", "client-message-2"),
+    ).toBeNull();
+    expect(useThreadStore.getState().retryComposerSubmission("remote-recovery")).toBeNull();
+
+    useThreadStore
+      .getState()
+      .failComposerSubmission("remote-recovery", "stale-client-message", "stale failure");
+    expect(
+      useThreadStore.getState().getThread("remote-recovery")?.composerSubmission,
+    ).toMatchObject({
+      clientMessageId: "client-message-1",
+      status: "submitting",
+      error: null,
+    });
+
+    useThreadStore
+      .getState()
+      .failComposerSubmission("remote-recovery", "client-message-1", "transport lost");
+    expect(
+      useThreadStore.getState().beginComposerSubmission("remote-recovery", "client-message-2"),
+    ).toBeNull();
+
+    const retry = useThreadStore.getState().retryComposerSubmission("remote-recovery");
+    expect(retry).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "send once",
+      status: "submitting",
+      error: null,
+    });
+  });
+
+  test("syncRemoteThreads preserves in-flight composer submission state", () => {
+    useThreadStore.getState().hydrate(createRemoteSnapshot("remote-sync-submission"));
+    const attachment = {
+      type: "uploadedFile" as const,
+      filename: "notes.txt",
+      path: "/workspace/User Uploads/notes.txt",
+      mimeType: "text/plain",
+    };
+    const store = useThreadStore.getState();
+    store.setComposerDraft("remote-sync-submission", "still sending");
+    store.setComposerAttachments("remote-sync-submission", [attachment]);
+    const submission = store.beginComposerSubmission("remote-sync-submission", "client-message-1");
+    expect(submission).toMatchObject({
+      clientMessageId: "client-message-1",
+      attachments: [attachment],
+      status: "submitting",
+    });
+
+    useThreadStore.getState().syncRemoteThreads([
+      createRemoteThread("remote-sync-submission", {
+        title: "Remote Thread Updated",
+      }),
+    ]);
+
+    expect(
+      useThreadStore.getState().getThread("remote-sync-submission")?.composerSubmission,
+    ).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "still sending",
+      attachments: [attachment],
+      status: "submitting",
+      error: null,
+    });
+
+    useThreadStore
+      .getState()
+      .failComposerSubmission("remote-sync-submission", "client-message-1", "network lost");
+    useThreadStore.getState().syncRemoteThreads([
+      createRemoteThread("remote-sync-submission", {
+        title: "Remote Thread Refreshed",
+        updatedAt: "2026-07-09T00:02:00.000Z",
+        lastEventSeq: 3,
+      }),
+    ]);
+
+    expect(
+      useThreadStore.getState().getThread("remote-sync-submission")?.composerSubmission,
+    ).toMatchObject({
+      clientMessageId: "client-message-1",
+      text: "still sending",
+      attachments: [attachment],
+      status: "failed",
+      error: "network lost",
+    });
   });
 
   test("does not append a second optimistic row after server reconciliation", () => {

@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   createComposerSubmission,
   getComposerPolicy,
+  hasComposerContent,
+  sameComposerAttachments,
   toComposerTurnInput,
 } from "../apps/mobile/src/features/cowork/composer-policy";
 
@@ -80,6 +82,32 @@ describe("mobile composer policy", () => {
     expect(getComposerPolicy(input)).toEqual(expected);
   });
 
+  test("failed submissions keep recovery editable while blocking a new send", () => {
+    expect(
+      getComposerPolicy({
+        connected: true,
+        draftThread: false,
+        hasContent: true,
+        isBusy: false,
+        isSubmitting: false,
+        hasFailedSubmission: true,
+      }),
+    ).toEqual({ canEdit: true, canSubmit: false });
+  });
+
+  test("attachment-only drafts count as composer content", () => {
+    expect(
+      hasComposerContent("", [
+        {
+          type: "uploadedFile",
+          filename: "notes.txt",
+          path: "/workspace/User Uploads/notes.txt",
+          mimeType: "text/plain",
+        },
+      ]),
+    ).toBe(true);
+  });
+
   test("submission snapshots exact text and attachments for retry", () => {
     const attachment = {
       type: "uploadedFile" as const,
@@ -104,5 +132,24 @@ describe("mobile composer policy", () => {
       { type: "text", text: "  keep my spacing\n" },
       attachment,
     ]);
+  });
+
+  test("attachment equality distinguishes uploaded and inline files", () => {
+    const uploaded = {
+      type: "uploadedFile" as const,
+      filename: "notes.txt",
+      path: "/workspace/User Uploads/notes.txt",
+      mimeType: "text/plain",
+    };
+    const inline = {
+      type: "file" as const,
+      filename: "notes.txt",
+      contentBase64: "bm90ZXM=",
+      mimeType: "text/plain",
+    };
+
+    expect(sameComposerAttachments([uploaded], [{ ...uploaded }])).toBe(true);
+    expect(sameComposerAttachments([inline], [{ ...inline }])).toBe(true);
+    expect(sameComposerAttachments([uploaded], [inline])).toBe(false);
   });
 });

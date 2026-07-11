@@ -496,6 +496,58 @@ describe("memory store actions", () => {
     });
   });
 
+  test("runSkillImprovement returns a new failed status using its error detail", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "skill_improvement_status",
+          sessionId: "control-session",
+          enabled: true,
+          scope: "user",
+          excludedSkills: [],
+          busy: false,
+          blockReason: null,
+          pendingJobs: [],
+          runHistory: [
+            {
+              id: "manual-failure",
+              skillName: "alpha",
+              status: "failed",
+              startedAt: new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+              message: "The improvement run failed.",
+              error: "The selected model is unavailable.",
+              usageCount: 1,
+            },
+          ],
+          backups: [],
+          skills: [],
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+    const result = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "alpha: The selected model is unavailable.",
+      },
+    });
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to improve skill",
+      audience: "foreground",
+    });
+  });
+
   test("setWorkspaceSkillImprovementExcludedSkills applies the config patch globally", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";

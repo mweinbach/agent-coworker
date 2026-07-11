@@ -394,6 +394,38 @@ describe("workspace MCP editor flow", () => {
     });
   });
 
+  test("MCP auth adapter returns a negative domain acknowledgment as an operation error", async () => {
+    jsonRpcHandlers.set("cowork/mcp/server/auth/callback", async () => ({
+      event: {
+        type: "mcp_server_auth_result",
+        sessionId: "jsonrpc-control",
+        name: "grep",
+        ok: false,
+        mode: "error",
+        message: "The authorization code expired.",
+      },
+    }));
+
+    const result = await useAppStore
+      .getState()
+      .callbackWorkspaceMcpServerAuth(workspaceId, "grep", "expired-code", "workspace");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "The authorization code expired.",
+      },
+    });
+    expect(
+      useAppStore.getState().operationsByKey[`mcp:callback:${workspaceId}:workspace:grep`],
+    ).toMatchObject({
+      status: "error",
+      error: {
+        message: "The authorization code expired.",
+      },
+    });
+  });
+
   test("setWorkspaceMcpServerEnabled sends source metadata and applies the returned snapshot", async () => {
     jsonRpcHandlers.set("cowork/mcp/server/setEnabled", async (params) => ({
       event: {

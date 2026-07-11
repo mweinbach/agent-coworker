@@ -22,6 +22,53 @@ import {
 describe("control socket helpers over JSON-RPC", () => {
   registerControlSocketLifecycleHooks();
 
+  test("provider auth negative acknowledgments return the domain failure", async () => {
+    const workspaceId = "ws-provider-auth-rejected";
+    const { state, get, set } = createState(workspaceId);
+    const calls: string[] = [];
+    installFakeSocket(workspaceId, async (method) => {
+      calls.push(method);
+      if (method !== "cowork/provider/auth/setApiKey") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        event: {
+          type: "provider_auth_result",
+          sessionId: "jsonrpc-control",
+          provider: "openai",
+          methodId: "api_key",
+          ok: false,
+          message: "The API key was rejected.",
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const errorDetail: { message?: string } = {};
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/provider/auth/setApiKey",
+      {
+        cwd: "/tmp/workspace",
+        provider: "openai",
+        methodId: "api_key",
+        apiKey: "sk-invalid",
+      },
+      errorDetail,
+    );
+    await flushAsyncWork();
+
+    expect(ok).toBe(false);
+    expect(errorDetail.message).toBe("The API key was rejected.");
+    expect(state.providerLastAuthResult).toMatchObject({
+      type: "provider_auth_result",
+      ok: false,
+    });
+    expect(calls).toEqual(["cowork/provider/auth/setApiKey"]);
+  });
+
   test("provider auth refresh clears loading when the follow-up refresh only partially succeeds", async () => {
     const workspaceId = "ws-provider-auth";
     const { state, get, set } = createState(workspaceId);

@@ -1,3 +1,4 @@
+import type { SessionEvent } from "../../lib/wsProtocol";
 import {
   type AppStoreActions,
   ensureControlSocket,
@@ -11,6 +12,7 @@ import {
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
+import { createControlEventAcknowledgementDecoder } from "../store.helpers/controlEventAcknowledgement";
 
 export function createWorkspaceMemoryActions(
   set: StoreSet,
@@ -469,6 +471,24 @@ export function createWorkspaceMemoryActions(
             : null;
           const requestedAt = Date.now();
           const errorDetail: { message?: string } = {};
+          const decodeAcknowledgement = createControlEventAcknowledgementDecoder(
+            "skill_improvement_status",
+            (event) => {
+              const outcome = latestRunOutcomeFromHistory(
+                event.runHistory,
+                historyIdsBefore,
+                requestedAt,
+                skillName,
+              );
+              if (outcome?.status !== "failed") {
+                return { ok: true };
+              }
+              return {
+                ok: false,
+                message: `${outcome.skillName}: ${outcome.error?.trim() || outcome.message}`,
+              };
+            },
+          );
           try {
             const ok = await requestJsonRpcControlEvent(
               get,
@@ -480,6 +500,7 @@ export function createWorkspaceMemoryActions(
                 ...(skillName ? { skillName } : {}),
               },
               errorDetail,
+              { decodeAcknowledgement },
             );
             if (!ok) {
               throw new Error(
@@ -493,9 +514,6 @@ export function createWorkspaceMemoryActions(
               requestedAt,
               skillName,
             );
-            if (outcome?.status === "failed") {
-              throw new Error(`${outcome.skillName}: ${outcome.message}`);
-            }
             set((s) => ({
               notifications: pushNotification(s.notifications, {
                 id: makeId(),
@@ -806,8 +824,27 @@ function latestRunOutcome(
   historyIdsBefore: Set<string> | null,
   requestedAtMs: number,
   skillName?: string,
-): { skillName: string; status: "completed" | "failed" | "skipped"; message: string } | null {
+): SkillImprovementRunOutcome | null {
   const history = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus?.runHistory ?? [];
+  return latestRunOutcomeFromHistory(history, historyIdsBefore, requestedAtMs, skillName);
+}
+
+type SkillImprovementRunHistory = Extract<
+  SessionEvent,
+  { type: "skill_improvement_status" }
+>["runHistory"];
+
+type SkillImprovementRunOutcome = Pick<
+  SkillImprovementRunHistory[number],
+  "skillName" | "status" | "message" | "error"
+>;
+
+function latestRunOutcomeFromHistory(
+  history: SkillImprovementRunHistory,
+  historyIdsBefore: Set<string> | null,
+  requestedAtMs: number,
+  skillName?: string,
+): SkillImprovementRunOutcome | null {
   const entry = history.find((candidate) => {
     if (skillName && candidate.skillName !== skillName) return false;
     // With a pre-request snapshot, only entries this request added count — a
@@ -819,7 +856,12 @@ function latestRunOutcome(
       : new Date(candidate.finishedAt).getTime() >= requestedAtMs;
   });
   return entry
-    ? { skillName: entry.skillName, status: entry.status, message: entry.message }
+    ? {
+        skillName: entry.skillName,
+        status: entry.status,
+        message: entry.message,
+        error: entry.error,
+      }
     : null;
 }
 

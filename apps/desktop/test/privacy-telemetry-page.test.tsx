@@ -1,15 +1,37 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 
 import { operationKey } from "../src/app/store.helpers/operations";
 import type { TelemetryStatusInput } from "../src/lib/desktopApi";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock, DEFAULT_TELEMETRY_STATUS } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
+import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
 
 const getTelemetryStatusMock = mock(async () => DEFAULT_TELEMETRY_STATUS);
-const saveStateMock = mock(async () => {});
+const saveStateMock = mock(async (_state?: unknown) => {});
+
+function createDeferred() {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function cleanupRenderedRoot(root: Root | null, harness: JsdomHarness): Promise<void> {
+  try {
+    if (root) {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  } finally {
+    harness.restore();
+  }
+}
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -45,6 +67,8 @@ describe("privacy telemetry settings page", () => {
   beforeEach(() => {
     getTelemetryStatusMock.mockImplementation(async () => DEFAULT_TELEMETRY_STATUS);
     saveStateMock.mockImplementation(async () => {});
+    getTelemetryStatusMock.mockClear();
+    saveStateMock.mockClear();
     useAppStore.setState({ ...defaultStoreActions, operationsByKey: {} });
   });
 
@@ -56,10 +80,11 @@ describe("privacy telemetry settings page", () => {
     const setCrashReportsEnabled = mock(async () => ({ ok: true as const, value: undefined }));
     const setAiTracePayloadsEnabled = mock(async () => ({ ok: true as const, value: undefined }));
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -84,7 +109,7 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain("Crash reports");
       expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain(
-        "Sends sanitized errors, stack traces, app version, platform, and architecture to the configured Sentry destination.",
+        "The scrubber removes payload- and credential-keyed fields, redacts local paths, and filters common labeled or token-shaped secrets from free-form errors.",
       );
       expect(container.textContent).toContain("Anonymous product analytics");
       expect(container.textContent).toContain(
@@ -130,12 +155,8 @@ describe("privacy telemetry settings page", () => {
 
       expect(setCrashReportsEnabled).toHaveBeenCalledWith(false);
       expect(setAiTracePayloadsEnabled).not.toHaveBeenCalled();
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -175,10 +196,11 @@ describe("privacy telemetry settings page", () => {
       },
     }));
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -206,12 +228,8 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain("Diagnostics upload");
       // Cloud sync stays off the privacy page even when status reports an error.
       expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -250,10 +268,11 @@ describe("privacy telemetry settings page", () => {
       },
     }));
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(PrivacyTelemetryPage));
@@ -265,12 +284,8 @@ describe("privacy telemetry settings page", () => {
       expect(container.querySelector('[aria-label="Diagnostics upload"]')).toBeTruthy();
       expect(container.querySelector('[aria-label="Cloud sync"]')).toBeNull();
       expect(container.textContent).not.toContain("Cloud sync");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -280,10 +295,11 @@ describe("privacy telemetry settings page", () => {
       value: undefined,
     }));
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -358,12 +374,59 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(setAiTracePayloadsEnabled).toHaveBeenCalledWith(true);
+    } finally {
+      await cleanupRenderedRoot(root, harness);
+    }
+  });
+
+  test("removes an open full-payload confirmation portal when the page unmounts", async () => {
+    const harness = setupJsdom();
+    let root: Root | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      useAppStore.setState({
+        privacyTelemetrySettings: {
+          crashReportsEnabled: false,
+          productAnalyticsEnabled: false,
+          aiTraceTelemetryEnabled: true,
+          aiTracePayloadsEnabled: false,
+          diagnosticsUploadEnabled: false,
+          cloudSyncEnabled: false,
+        },
+      });
 
       await act(async () => {
-        root.unmount();
+        root?.render(createElement(PrivacyTelemetryPage));
       });
+      const aiPayloadSwitch = container.querySelector(
+        '[aria-label="Include prompts and responses in AI traces"]',
+      );
+      if (!(aiPayloadSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing AI trace payload switch");
+      }
+      await act(async () => {
+        aiPayloadSwitch.click();
+      });
+
+      expect(harness.dom.window.document.querySelector('[role="alertdialog"]')).toBeTruthy();
+      expect(
+        harness.dom.window.document.querySelector('[data-slot="alert-dialog-overlay"]'),
+      ).toBeTruthy();
+
+      const mountedRoot = root;
+      await act(async () => {
+        mountedRoot.unmount();
+      });
+      root = null;
+
+      expect(harness.dom.window.document.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(
+        harness.dom.window.document.querySelector('[data-slot="alert-dialog-overlay"]'),
+      ).toBeNull();
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -372,10 +435,11 @@ describe("privacy telemetry settings page", () => {
       throw new Error("privacy settings are read-only");
     });
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -426,12 +490,8 @@ describe("privacy telemetry settings page", () => {
       });
       expect(container.textContent).toContain("privacy settings are read-only");
       expect(container.textContent).toContain("Review the preference and retry.");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -446,10 +506,11 @@ describe("privacy telemetry settings page", () => {
       },
     }));
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -474,12 +535,8 @@ describe("privacy telemetry settings page", () => {
       }
 
       expect(aiTraceSwitch.parentElement?.textContent).toContain("Not configured");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -513,10 +570,11 @@ describe("privacy telemetry settings page", () => {
         };
       },
     });
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -547,12 +605,8 @@ describe("privacy telemetry settings page", () => {
       });
 
       expect(container.textContent).toContain("Enabled");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -570,10 +624,11 @@ describe("privacy telemetry settings page", () => {
       };
     });
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         useAppStore.setState({
@@ -616,12 +671,8 @@ describe("privacy telemetry settings page", () => {
         },
       });
       expect(container.textContent).toContain("Enabled");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -691,5 +742,56 @@ describe("privacy telemetry settings page", () => {
     } finally {
       harness.restore();
     }
+  });
+
+  test("serializes privacy saves so failed full-payload consent is never persisted by another toggle", async () => {
+    const firstSaveStarted = createDeferred();
+    const firstSave = createDeferred();
+    saveStateMock.mockImplementation(async () => {
+      if (saveStateMock.mock.calls.length === 1) {
+        firstSaveStarted.resolve();
+        await firstSave.promise;
+      }
+    });
+    useAppStore.setState({
+      ...defaultStoreActions,
+      operationsByKey: {},
+      notifications: [],
+      privacyTelemetrySettings: {
+        crashReportsEnabled: false,
+        productAnalyticsEnabled: false,
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: false,
+        cloudSyncEnabled: false,
+      },
+    });
+
+    const fullPayloadResult = useAppStore.getState().setAiTracePayloadsEnabled(true);
+    await firstSaveStarted.promise;
+    const diagnosticsResult = useAppStore.getState().setDiagnosticsUploadEnabled(true);
+    await Promise.resolve();
+
+    expect(saveStateMock).toHaveBeenCalledTimes(1);
+    firstSave.reject(new Error("disk unavailable"));
+
+    expect(await fullPayloadResult).toMatchObject({
+      ok: false,
+      error: { message: "disk unavailable" },
+    });
+    expect(await diagnosticsResult).toMatchObject({ ok: true });
+    expect(saveStateMock).toHaveBeenCalledTimes(2);
+    expect(saveStateMock.mock.calls[1]?.[0]).toMatchObject({
+      privacyTelemetrySettings: {
+        aiTraceTelemetryEnabled: true,
+        aiTracePayloadsEnabled: false,
+        diagnosticsUploadEnabled: true,
+      },
+    });
+    expect(useAppStore.getState().privacyTelemetrySettings).toMatchObject({
+      aiTraceTelemetryEnabled: true,
+      aiTracePayloadsEnabled: false,
+      diagnosticsUploadEnabled: true,
+    });
   });
 });

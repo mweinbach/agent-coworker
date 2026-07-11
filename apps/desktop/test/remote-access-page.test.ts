@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { operationKey } from "../src/app/store.helpers/operations";
@@ -9,7 +9,19 @@ import type {
   MobileRelayUpdateTrustedPhonePermissionsInput,
 } from "../src/lib/desktopApi";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
-import { setupJsdom } from "./jsdomHarness";
+import { type JsdomHarness, setupJsdom } from "./jsdomHarness";
+
+async function cleanupRenderedRoot(root: Root | null, harness: JsdomHarness): Promise<void> {
+  try {
+    if (root) {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  } finally {
+    harness.restore();
+  }
+}
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -274,10 +286,11 @@ describe("desktop remote access page", () => {
 
   test("names the exact device, cancels safely, restores focus, and records success", async () => {
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(RemoteAccessPage));
@@ -343,12 +356,8 @@ describe("desktop remote access page", () => {
         status: "success",
         label: "Forget trusted device",
       });
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -361,10 +370,11 @@ describe("desktop remote access page", () => {
       }),
     );
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(RemoteAccessPage));
@@ -401,12 +411,8 @@ describe("desktop remote access page", () => {
         expectedDeviceIds: ["phone-1", "phone-2"],
       });
       expect(container.textContent).toContain("No trusted device yet");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -415,10 +421,11 @@ describe("desktop remote access page", () => {
       throw new Error("revoke failed");
     });
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(RemoteAccessPage));
@@ -454,12 +461,8 @@ describe("desktop remote access page", () => {
         status: "error",
         error: { message: "revoke failed" },
       });
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 
@@ -474,10 +477,11 @@ describe("desktop remote access page", () => {
     getMobileRelayStateMock.mockImplementation(async () => otherWorkspaceState);
     refreshMobileRelayTrustedPhonesMock.mockImplementation(async () => otherWorkspaceState);
     const harness = setupJsdom();
+    let root: Root | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(RemoteAccessPage));
@@ -487,12 +491,8 @@ describe("desktop remote access page", () => {
       expect(container.textContent).toContain("running bridge belongs to another workspace");
       expect(container.querySelector('[aria-label="Forget Pixel 9"]')).toBeNull();
       expect(container.textContent).not.toContain("Forget all devices");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
-      harness.restore();
+      await cleanupRenderedRoot(root, harness);
     }
   });
 

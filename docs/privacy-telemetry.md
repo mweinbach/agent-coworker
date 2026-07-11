@@ -54,9 +54,11 @@ The page exposes diagnostic-upload permission and status. Enabling permission do
 
 Existing local-dev and sidecar envs are still honored when policy allows them: `COWORK_CRASH_REPORTS_ENABLED`, `COWORK_PRODUCT_ANALYTICS_ENABLED`, `AGENT_OBSERVABILITY_ENABLED`, `AGENT_OBSERVABILITY_RECORD_INPUTS`, `AGENT_OBSERVABILITY_RECORD_OUTPUTS`, `AGENT_OBSERVABILITY_RECORD_PAYLOADS`, `COWORK_CLOUD_SYNC_ENABLED`, and `COWORK_CLOUD_SYNC_TOKEN`.
 
-## Data Never Collected
+## Data handling boundaries
 
-Crash reports and product analytics must never collect prompts, model responses, transcripts, file contents, shell commands, stdout/stderr, local filenames, repo names, workspace paths, provider auth, MCP credentials, API keys, tokens, cookies, email addresses, local usernames, or machine names.
+Product analytics events use fixed names and numeric/boolean feature state; they do not include prompts, model responses, transcripts, file contents, shell commands, stdout/stderr, local filenames, repo names, workspace paths, auth, credentials, email addresses, local usernames, or machine names.
+
+Crash reports are limited to scrubbed error data and the technical fields listed below. The scrubber removes payload- and credential-keyed fields, request bodies, and unsafe automatic breadcrumbs; redacts known local paths, email addresses, credential-bearing URLs, and common token shapes; and filters labeled prompts, responses, commands, and secrets in free-form errors. Unlabeled arbitrary error text cannot be classified perfectly, so callers must not deliberately place user or model content in errors.
 
 Diagnostics bundles are local unless the user explicitly uploads them. The bundle redactor removes home/workspace paths, secret-like fields, emails, JSON bodies, prompts, completions, stdout/stderr, oversized strings, and local paths.
 
@@ -72,7 +74,7 @@ Diagnostics bundles are written under the app user-data directory and remain loc
 
 ## Event Schemas
 
-Crash reports may include sanitized error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
+Crash reports may include scrubbed error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
 
 Product analytics event names are fixed in `src/telemetry/productAnalytics.ts`:
 

@@ -132,7 +132,7 @@ export function PrivacyTelemetryPage() {
         ) : null}
         <SettingsRow
           title="Crash reports"
-          description="Sends sanitized errors, stack traces, app version, platform, and architecture to the configured Sentry destination. It excludes prompts, responses, file contents, paths, commands, and credentials."
+          description="Sends scrubbed errors, stack traces, app version, platform, and architecture to the configured Sentry destination. The scrubber removes payload- and credential-keyed fields, redacts local paths, and filters common labeled or token-shaped secrets from free-form errors."
           control={
             <div className="flex items-center gap-2">
               {statusBadge(status.crashReports)}

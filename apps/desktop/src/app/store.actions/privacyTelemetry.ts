@@ -46,44 +46,53 @@ export function createPrivacyTelemetryActions(
   set: StoreSet,
   get: StoreGet,
 ): Pick<AppStoreActions, PrivacyTelemetryActionKeys> {
-  const updatePrivacyTelemetrySettings = async ({
+  let pendingPrivacyMutation: Promise<void> = Promise.resolve();
+
+  const updatePrivacyTelemetrySettings = ({
     setting,
     label,
     errorTitle,
     patch,
     syncRuntime,
   }: PrivacyTelemetryMutationOptions) => {
-    const previous = get().privacyTelemetrySettings;
-    const next = normalizePrivacyTelemetrySettings({
-      ...previous,
-      ...patch,
-    });
+    const result = pendingPrivacyMutation.then(async () => {
+      const previous = get().privacyTelemetrySettings;
+      const next = normalizePrivacyTelemetrySettings({
+        ...previous,
+        ...patch,
+      });
 
-    return await runAcknowledgedOperation(get, set, {
-      key: operationKey("privacy-telemetry", setting),
-      label,
-      errorTitle,
-      errorMessage: "Unable to save the privacy preference.",
-      repairAction: "Review the preference and retry.",
-      optimistic: () => {
-        setPrivacyTelemetrySettingsState(set, next);
-        return () => {
-          setPrivacyTelemetrySettingsState(set, previous);
-          syncDesktopStateCacheNow(get);
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("privacy-telemetry", setting),
+        label,
+        errorTitle,
+        errorMessage: "Unable to save the privacy preference.",
+        repairAction: "Review the preference and retry.",
+        optimistic: () => {
+          setPrivacyTelemetrySettingsState(set, next);
+          return () => {
+            setPrivacyTelemetrySettingsState(set, previous);
+            syncDesktopStateCacheNow(get);
+            if (syncRuntime) {
+              void Promise.resolve(syncRuntime(previous)).catch(() => {
+                // The persisted preference and store state are authoritative on the next app start.
+              });
+            }
+          };
+        },
+        execute: async () => {
           if (syncRuntime) {
-            void Promise.resolve(syncRuntime(previous)).catch(() => {
-              // The persisted preference and store state are authoritative on the next app start.
-            });
+            await syncRuntime(next);
           }
-        };
-      },
-      execute: async () => {
-        if (syncRuntime) {
-          await syncRuntime(next);
-        }
-        await persistNow(get);
-      },
+          await persistNow(get);
+        },
+      });
     });
+    pendingPrivacyMutation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   return {

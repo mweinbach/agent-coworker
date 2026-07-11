@@ -151,6 +151,7 @@ export function Canvas({ path }: { path: string }) {
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [promptSending, setPromptSending] = useState(false);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -552,12 +553,13 @@ export function Canvas({ path }: { path: string }) {
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
-    if (!textToSend) return;
+    if (!textToSend || promptSending) return;
     if (!selectedThreadId) {
       setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
     setPromptError(null);
+    setPromptSending(true);
 
     const filename = basenamePath(documentPath);
     const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
@@ -569,23 +571,25 @@ export function Canvas({ path }: { path: string }) {
       request: textToSend,
     });
 
-    const originalPrompt = promptText;
-    if (explicitPrompt !== undefined) {
-      setFloatingPromptText("");
-    } else {
-      setPromptText("");
-    }
-    clearSelection();
-
     try {
-      await sendMessage(promptWithContext);
+      const acknowledged = await sendMessage(promptWithContext);
+      if (!acknowledged) {
+        setPromptError(
+          "The request was not sent. The chat may be busy, reconnecting, or missing an active session. Try again when it is ready.",
+        );
+        return;
+      }
+      if (explicitPrompt !== undefined) {
+        setFloatingPromptText("");
+      } else {
+        setPromptText("");
+      }
+      clearSelection();
     } catch (err) {
       console.error("Failed to send collaborative edit instructions:", err);
-      if (explicitPrompt !== undefined) {
-        setFloatingPromptText(explicitPrompt);
-      } else {
-        setPromptText(originalPrompt);
-      }
+      setPromptError("The request was not sent. Check the chat connection and try again.");
+    } finally {
+      setPromptSending(false);
     }
   };
 
@@ -1002,6 +1006,8 @@ export function Canvas({ path }: { path: string }) {
           {promptError ? (
             <div
               role="alert"
+              aria-atomic="true"
+              aria-live="assertive"
               data-testid="canvas-prompt-error"
               className="absolute -top-2 left-0 right-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
             >
@@ -1011,6 +1017,7 @@ export function Canvas({ path }: { path: string }) {
           <Input
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}
+            disabled={promptSending}
             onFocus={applyTempHighlight}
             onBlur={removeTempHighlight}
             onKeyDown={(e) => {
@@ -1028,7 +1035,8 @@ export function Canvas({ path }: { path: string }) {
             variant="ghost"
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => handleSendPrompt()}
-            disabled={!promptText.trim()}
+            disabled={promptSending || !promptText.trim()}
+            aria-label="Send Canvas prompt"
             className={cn(
               "absolute right-1.5 size-8.5 rounded-lg transition-all duration-150 shrink-0",
               promptText.trim()
@@ -1116,6 +1124,7 @@ export function Canvas({ path }: { path: string }) {
               <Input
                 value={floatingPromptText}
                 onChange={(e) => setFloatingPromptText(e.target.value)}
+                disabled={promptSending}
                 onFocus={applyTempHighlight}
                 onBlur={removeTempHighlight}
                 onPointerDown={(e) => {

@@ -113,10 +113,12 @@ Foreground mutations use the shared store contract in `apps/desktop/src/app/type
 - Actions return `Promise<OperationResult<T>>`; callers close or clear editors only when `result.ok` is `true`.
 - `operationsByKey` exposes typed `pending`, `success`, and `error` states. Stable keys deduplicate matching in-flight requests.
 - Optimistic actions provide a rollback callback. The helper runs rollback before publishing the failure state.
+- A successful JSON-RPC envelope is not sufficient acknowledgment. Control-event adapters use typed, event-specific decoders so domain failures such as `ok: false`, failed status entries, and their `message` or `error` details settle the operation as an error.
 - `OperationFeedback` renders pending status as a polite live region and failures as an assertive alert with a retry or repair action. It never moves focus.
 - Foreground failures are also added to `InAppToasts` with `audience: "foreground"`. Only notifications explicitly marked `audience: "background"` may be mirrored to the operating system, and only while the app is unfocused or hidden. Missing audiences fail closed as foreground.
 
 Canvas document persistence retains its existing typed JSON-RPC result envelopes and controller state machine. Its save status, retry controls, duplicate-save coalescing, and transition guard provide the same acknowledged behavior for document edits.
+Canvas collaboration prompts likewise remain populated while sending and clear only after `sendMessage` returns an acknowledged `true`; rejected, disconnected, or missing-session sends surface an assertive in-app error without discarding the prompt.
 
 ## Related
 

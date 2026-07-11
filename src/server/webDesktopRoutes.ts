@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { WorkspaceFileChangeEvent } from "../shared/fileVersion";
 import { TRANSCRIPT_REQUEST_BODY_MAX_BYTES } from "../shared/transcriptBatchProtocol";
-import { readCappedFilePreview } from "../utils/filePreviewRead";
+import { readCappedFilePreview, readFileChangeVersion } from "../utils/filePreviewRead";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS } from "./transcriptInbox";
 import { TRANSCRIPT_BATCH_ID_PATTERN, type WebDesktopServiceLike } from "./webDesktopService";
 
@@ -14,6 +15,17 @@ type ExplorerEntryPayload = {
   sizeBytes: number | null;
   modifiedAtMs: number | null;
 };
+
+function notifyWorkspaceFileChanged(
+  listener: ((event: WorkspaceFileChangeEvent) => void) | undefined,
+  event: WorkspaceFileChangeEvent,
+): void {
+  try {
+    listener?.(event);
+  } catch {
+    // A completed file mutation remains authoritative when invalidation delivery fails.
+  }
+}
 
 const DEFAULT_TEXT_READ_BYTES = 256 * 1024;
 const DEFAULT_PREVIEW_MAX_BYTES = 15 * 1024 * 1024;
@@ -423,7 +435,11 @@ async function handleOpenPathRequest(
 
 export async function handleWebDesktopRoute(
   req: Request,
-  opts: { cwd: string; desktopService?: WebDesktopServiceLike | null },
+  opts: {
+    cwd: string;
+    desktopService?: WebDesktopServiceLike | null;
+    onWorkspaceFileChanged?: (event: WorkspaceFileChangeEvent) => void;
+  },
 ): Promise<Response | null> {
   const url = new URL(req.url);
   const workspaceRoots = opts.desktopService
@@ -680,13 +696,33 @@ export async function handleWebDesktopRoute(
       const targetPath = path.join(path.dirname(safePath), newName);
       assertPathWithinRoots(workspaceRoots, targetPath, "path");
       await fsp.rename(safePath, targetPath);
+      notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
+        kind: "deleted",
+        path: safePath,
+        version: null,
+      });
+      try {
+        notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
+          kind: "changed",
+          path: targetPath,
+          version: await readFileChangeVersion(targetPath),
+        });
+      } catch {
+        // The watcher provides a second invalidation path if metadata cannot be read here.
+      }
       return new Response(null, { status: 204 });
     }
 
     if (url.pathname === "/cowork/fs/trash" && req.method === "POST") {
       const body = await readJsonBody(req);
       const requestedPath = readRequiredStringField(body, "path");
-      await movePathToWorkspaceTrash(workspaceRoots, requestedPath);
+      const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+      await movePathToWorkspaceTrash(workspaceRoots, safePath);
+      notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
+        kind: "deleted",
+        path: safePath,
+        version: null,
+      });
       return new Response(null, { status: 204 });
     }
   } catch (error) {

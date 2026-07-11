@@ -368,6 +368,7 @@ const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
   z
     .object({
       ok: z.literal(true),
+      dependencies: z.array(nonEmptyTrimmedStringSchema),
       path: nonEmptyTrimmedStringSchema,
       slides: z.array(presentationSlideSchema),
       version: fileChangeVersionSchema,

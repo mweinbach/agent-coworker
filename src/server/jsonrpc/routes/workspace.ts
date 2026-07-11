@@ -1,5 +1,5 @@
 import type { FileChangeVersion } from "../../../shared/fileVersion";
-import { fileChangeVersionFromStat } from "../../../utils/filePreviewRead";
+import { readFileChangeVersion } from "../../../utils/filePreviewRead";
 import { canvasDocumentPersistence } from "../../canvasDocumentPersistence";
 import { previewPresentationFile } from "../../presentationPreview";
 import { patchSpreadsheetBatch } from "../../spreadsheetEdit";
@@ -24,22 +24,18 @@ export function createWorkspaceRouteHandlers(
     }
     return workspaceRoot;
   };
-  const broadcastFileChanged = (
+  const broadcastFileChanged = async (
     cwd: string,
     filePath: string,
-    version: FileChangeVersion,
-  ): void => {
-    const genericVersion = fileChangeVersionFromStat({
-      mtimeMs: version.modifiedAtMs,
-      ctimeMs: version.changeTimeMs,
-      size: version.size,
-    });
+    fallbackVersion: FileChangeVersion,
+  ): Promise<void> => {
+    const version = await readFileChangeVersion(filePath).catch(() => fallbackVersion);
     try {
       context.jsonrpc.broadcast?.("cowork/workspace/fileChanged", {
         cwd,
         kind: "changed",
         path: filePath,
-        version: genericVersion,
+        version,
       });
     } catch {
       // A notification transport failure must not change the completed mutation result.
@@ -203,7 +199,7 @@ export function createWorkspaceRouteHandlers(
         const result = await canvasDocuments.save(cwd, parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
         if (result.ok && result.status === "saved") {
-          broadcastFileChanged(cwd, result.path, result.revision);
+          await broadcastFileChanged(cwd, result.path, result.revision);
         }
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -230,7 +226,7 @@ export function createWorkspaceRouteHandlers(
         const result = await canvasDocuments.saveAs(cwd, parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
         if (result.ok && result.status === "saved") {
-          broadcastFileChanged(cwd, result.path, result.revision);
+          await broadcastFileChanged(cwd, result.path, result.revision);
         }
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -354,7 +350,7 @@ export function createWorkspaceRouteHandlers(
               filePath: parsed.data.path,
             });
             if (versionResult.ok) {
-              broadcastFileChanged(
+              await broadcastFileChanged(
                 cwd,
                 await resolveWorkspaceFilePath(cwd, parsed.data.path),
                 versionResult.version,

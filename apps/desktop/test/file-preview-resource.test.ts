@@ -254,6 +254,50 @@ describe("VersionedResourceCache", () => {
     expect(changes.getRevision("/workspace/a.md")).toBe(0);
     cache.dispose();
   });
+
+  test("invalidates every requested, canonical, dependency, and case alias", async () => {
+    const changes = new FileChangeEventStore();
+    const cache = new VersionedResourceCache<string>({ changes });
+    const requestedPath = "/workspace/Report.md";
+    const caseAliasPath = "/workspace/report.md";
+    const canonicalPath = "/workspace/source.md";
+    const dependencyPath = "/workspace/preview/slide-1.png";
+    const loader = mock(async () => ({
+      path: canonicalPath,
+      relatedPaths: [dependencyPath],
+      value: "old",
+      version: VERSION_ONE,
+    }));
+
+    await cache.load({
+      cacheKey: `${requestedPath}:text`,
+      path: requestedPath,
+      loader,
+    });
+    await cache.load({
+      cacheKey: `${caseAliasPath}:text`,
+      path: caseAliasPath,
+      loader,
+    });
+    changes.publish({
+      kind: "changed",
+      path: dependencyPath,
+      version: VERSION_TWO,
+    });
+
+    expect(changes.getRevision(requestedPath)).toBe(1);
+    expect(changes.getRevision(caseAliasPath)).toBe(1);
+    expect(changes.getRevision(canonicalPath)).toBe(1);
+    expect(changes.getRevision(dependencyPath)).toBe(1);
+
+    await cache.load({
+      cacheKey: `${requestedPath}:text`,
+      path: requestedPath,
+      loader,
+    });
+    expect(loader).toHaveBeenCalledTimes(3);
+    cache.dispose();
+  });
 });
 
 describe("BlobResourceStore", () => {

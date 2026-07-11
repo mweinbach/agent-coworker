@@ -4,7 +4,10 @@ import { createRoot } from "react-dom/client";
 
 import type { PresentationPreviewResult } from "../../../src/server/presentationPreview";
 import { useAppStore } from "../src/app/store";
-import { __internalFilePreviewResources } from "../src/lib/filePreviewResource";
+import {
+  __internalFilePreviewResources,
+  workspaceFileChangeEvents,
+} from "../src/lib/filePreviewResource";
 import { PptxPreview } from "../src/ui/PptxPreview";
 import { SlidePreview } from "../src/ui/SlidePreview";
 import { setupJsdom } from "./jsdomHarness";
@@ -17,9 +20,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function presentation(path: string, title: string, pngBase64: string): PresentationPreviewResult {
+function presentation(
+  path: string,
+  title: string,
+  pngBase64: string,
+  dependencies: string[] = [path],
+): PresentationPreviewResult {
   return {
     ok: true,
+    dependencies,
     path,
     slides: [{ slideIndex: 0, title, pngBase64 }],
     version: {
@@ -172,6 +181,56 @@ describe("presentation preview path safety", () => {
       expect(harness.dom.window.document.body.textContent).toContain("b.pptx");
       expect(harness.dom.window.document.body.textContent).not.toContain("a.pptx");
 
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("PptxPreview reloads when a rendered dependency changes", async () => {
+    const harness = setupJsdom();
+    __internalFilePreviewResources.clear();
+    const deckPath = "/workspace/deck.pptx";
+    const pngPath = "/workspace/preview/slide-1.png";
+    let title = "First dependency";
+    const loader = mock(async () =>
+      presentation(deckPath, title, `data:image/png;base64,${title}`, [deckPath, pngPath]),
+    );
+    configurePresentationStore(loader);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(createElement(PptxPreview, { path: deckPath }));
+        await flushUi();
+      });
+      await waitForUi(
+        () => harness.dom.window.document.body.textContent?.includes("First dependency") === true,
+      );
+
+      title = "Updated dependency";
+      await act(async () => {
+        workspaceFileChangeEvents.publish({
+          kind: "changed",
+          path: pngPath,
+          version: {
+            modifiedAtMs: 3,
+            changeTimeMs: 3,
+            size: 20,
+            fingerprint: "dependency:3",
+          },
+        });
+        await flushUi();
+      });
+      await waitForUi(
+        () => harness.dom.window.document.body.textContent?.includes("Updated dependency") === true,
+      );
+
+      expect(loader).toHaveBeenCalledTimes(2);
       await act(async () => {
         root.unmount();
       });

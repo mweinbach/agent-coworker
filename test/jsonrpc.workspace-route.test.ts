@@ -18,6 +18,7 @@ import type {
 } from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceRouteHandlers } from "../src/server/jsonrpc/routes/workspace";
 import { jsonRpcWorkspaceResultSchemas } from "../src/server/jsonrpc/schema.workspace";
+import { readFileChangeVersion } from "../src/utils/filePreviewRead";
 
 const WORKSPACE_BOOTSTRAP_METHOD = "cowork/workspace/bootstrap";
 
@@ -334,16 +335,7 @@ describe("workspace JSON-RPC route", () => {
       );
       expect(saved.ok).toBe(true);
       expect(await fs.readFile(filePath, "utf8")).toBe("saved through JSON-RPC");
-      const savedChangeVersion = saved.ok
-        ? {
-            modifiedAtMs: Math.round(saved.revision.modifiedAtMs),
-            changeTimeMs: Math.round(saved.revision.changeTimeMs),
-            size: saved.revision.size,
-            fingerprint: `${Math.round(saved.revision.modifiedAtMs)}:${Math.round(
-              saved.revision.changeTimeMs,
-            )}:${saved.revision.size}`,
-          }
-        : null;
+      const savedChangeVersion = saved.ok ? await readFileChangeVersion(filePath) : null;
       expect(harness.notifications).toEqual([
         {
           method: "cowork/workspace/fileChanged",

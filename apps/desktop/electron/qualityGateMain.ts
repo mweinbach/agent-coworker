@@ -1264,9 +1264,13 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
           fingerprint: "sha256:quality-spreadsheet",
         },
       };
-    case "cowork/workspace/presentation/preview":
+    case "cowork/workspace/presentation/preview": {
+      const filePath =
+        typeof params.path === "string" ? params.path : "/quality/project/presentation.pptx";
       return {
         ok: true,
+        dependencies: [filePath],
+        path: filePath,
         slides: [
           {
             slideIndex: 0,
@@ -1275,7 +1279,14 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
             pngBase64: PRESENTATION_SLIDE_DATA_URL,
           },
         ],
+        version: {
+          modifiedAtMs: Date.parse(FIXED_NOW),
+          changeTimeMs: Date.parse(FIXED_NOW),
+          size: 128,
+          fingerprint: "sha256:quality-presentation",
+        },
       };
+    }
     case "task/list":
       return { tasks: [createQualityTaskFixture()] };
     case "task/read":

@@ -269,6 +269,87 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
     });
   });
 
+  test("versions cached previews from the deck and every PNG dependency", async () => {
+    await withTempDir(async (dir) => {
+      const previewDir = path.join(dir, "preview");
+      const deckPath = path.join(dir, "deck.pptx");
+      const pngPath = path.join(previewDir, "slide-1.png");
+      await fs.mkdir(previewDir, { recursive: true });
+      await fs.writeFile(deckPath, "unchanged-deck", "utf8");
+      await fs.writeFile(pngPath, "first-preview", "utf8");
+
+      const first = await previewPresentationFile({
+        cwd: dir,
+        filePath: "deck.pptx",
+        builtInDir: dir,
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.dependencies).toEqual(expect.arrayContaining([deckPath, pngPath]));
+
+      await fs.writeFile(pngPath, "second-preview-is-different", "utf8");
+      const second = await previewPresentationFile({
+        cwd: dir,
+        filePath: "deck.pptx",
+        builtInDir: dir,
+      });
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+
+      expect(second.dependencies).toEqual(expect.arrayContaining([deckPath, pngPath]));
+      expect(second.version.fingerprint).not.toBe(first.version.fingerprint);
+      expect(second.slides[0]?.pngBase64).not.toBe(first.slides[0]?.pngBase64);
+    });
+  });
+
+  test("versions rendered deck previews from the PPTX and slide modules", {
+    timeout: 20_000,
+  }, async () => {
+    await withTempDir(async (dir) => {
+      const slidesDir = path.join(dir, "slides");
+      const deckPath = path.join(dir, "deck.pptx");
+      const modulePath = path.join(slidesDir, "slide-1.mjs");
+      await fs.mkdir(slidesDir, { recursive: true });
+      await fs.writeFile(deckPath, "unchanged-deck", "utf8");
+      await fs.writeFile(modulePath, "export default { version: 1 }", "utf8");
+
+      const scriptDir = path.join(dir, "skills/presentations/scripts");
+      await fs.mkdir(scriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(scriptDir, "render_artifact_slide.mjs"),
+        `
+          import fs from "node:fs";
+          const outIdx = process.argv.indexOf("--output");
+          fs.writeFileSync(process.argv[outIdx + 1], "slide-data");
+        `,
+        "utf8",
+      );
+
+      const first = await previewPresentationFile({
+        cwd: dir,
+        filePath: "deck.pptx",
+        builtInDir: dir,
+        env: localRuntimeEnv(dir),
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.dependencies).toEqual(expect.arrayContaining([deckPath, modulePath]));
+
+      await fs.writeFile(modulePath, "export default { version: 200 }", "utf8");
+      const second = await previewPresentationFile({
+        cwd: dir,
+        filePath: "deck.pptx",
+        builtInDir: dir,
+        env: localRuntimeEnv(dir),
+      });
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+
+      expect(second.dependencies).toEqual(expect.arrayContaining([deckPath, modulePath]));
+      expect(second.version.fingerprint).not.toBe(first.version.fingerprint);
+    });
+  });
+
   test("does not load cached slides from an adjacent directory outside the workspace", async () => {
     await withTempDir(async (dir) => {
       const workspace = path.join(dir, "workspace");

@@ -562,6 +562,7 @@ export function FilePreviewModal() {
             kind === "markdown" ? (
               <div data-file-preview-markdown-shell="true" className="mx-auto w-full max-w-[78ch]">
                 <Streamdown
+                  key={`${path}:${fileChangeRevision}`}
                   className="leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
                   components={{ a: DesktopMessageLink }}
                   plugins={previewStreamdownPlugins}

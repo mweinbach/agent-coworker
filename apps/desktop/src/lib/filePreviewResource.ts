@@ -10,6 +10,7 @@ import { readFileForPreview } from "./desktopCommands";
 export type VersionedResource<T> = {
   cacheable?: boolean;
   path: string;
+  relatedPaths?: readonly string[];
   value: T;
   version: FileChangeVersion;
 };
@@ -27,6 +28,7 @@ type CacheLoadOptions<T> = {
 type CacheEntry<T> = {
   resource: VersionedResource<T>;
   requestedPath: string;
+  unlinkRelatedPaths: () => void;
 };
 
 type InFlightEntry<T> = {
@@ -46,6 +48,7 @@ export function normalizePreviewResourcePath(filePath: string): string {
 
 export class FileChangeEventStore {
   private readonly listeners = new Set<FileChangeListener>();
+  private readonly relatedPathLinks = new Map<string, Map<string, number>>();
   private readonly revisions = new Map<string, number>();
   private readonly versions = new Map<string, FileChangeVersion | null>();
 
@@ -60,31 +63,113 @@ export class FileChangeEventStore {
     return this.revisions.get(normalizePreviewResourcePath(filePath)) ?? 0;
   }
 
+  linkPaths(filePaths: readonly string[]): () => void {
+    const normalizedPaths = [...new Set(filePaths.map(normalizePreviewResourcePath))].filter(
+      Boolean,
+    );
+    if (normalizedPaths.length < 2) {
+      return () => {};
+    }
+    const anchor = normalizedPaths[0];
+    if (!anchor) {
+      return () => {};
+    }
+    for (const filePath of normalizedPaths.slice(1)) {
+      this.incrementPathLink(anchor, filePath);
+      this.incrementPathLink(filePath, anchor);
+    }
+    let linked = true;
+    return () => {
+      if (!linked) {
+        return;
+      }
+      linked = false;
+      for (const filePath of normalizedPaths.slice(1)) {
+        this.decrementPathLink(anchor, filePath);
+        this.decrementPathLink(filePath, anchor);
+      }
+    };
+  }
+
   remember(filePath: string, version: FileChangeVersion): void {
-    this.versions.set(normalizePreviewResourcePath(filePath), version);
+    const normalizedPath = normalizePreviewResourcePath(filePath);
+    const relatedPaths = this.collectRelatedPaths(normalizedPath);
+    for (const relatedPath of relatedPaths) {
+      this.versions.set(relatedPath, version);
+    }
   }
 
   publish(event: WorkspaceFileChangeEvent): void {
     const normalizedPath = normalizePreviewResourcePath(event.path);
-    const previousVersion = this.versions.get(normalizedPath);
-    if (event.kind === "changed" && fileChangeVersionsEqual(previousVersion, event.version)) {
+    const relatedPaths = this.collectRelatedPaths(normalizedPath);
+    if (
+      event.kind === "changed" &&
+      [...relatedPaths].every((filePath) =>
+        fileChangeVersionsEqual(this.versions.get(filePath), event.version),
+      )
+    ) {
       return;
     }
-    if (event.kind === "deleted" && previousVersion === null) {
+    if (
+      event.kind === "deleted" &&
+      [...relatedPaths].every((filePath) => this.versions.get(filePath) === null)
+    ) {
       return;
     }
 
-    this.versions.set(normalizedPath, event.version);
-    this.revisions.set(normalizedPath, (this.revisions.get(normalizedPath) ?? 0) + 1);
-    const normalizedEvent = { ...event, path: normalizedPath };
-    for (const listener of this.listeners) {
-      listener(normalizedEvent);
+    for (const filePath of relatedPaths) {
+      this.versions.set(filePath, event.version);
+      this.revisions.set(filePath, (this.revisions.get(filePath) ?? 0) + 1);
+    }
+    for (const filePath of relatedPaths) {
+      const normalizedEvent = { ...event, path: filePath };
+      for (const listener of this.listeners) {
+        listener(normalizedEvent);
+      }
     }
   }
 
   reset(): void {
+    this.relatedPathLinks.clear();
     this.revisions.clear();
     this.versions.clear();
+  }
+
+  private collectRelatedPaths(filePath: string): Set<string> {
+    const collected = new Set([filePath]);
+    const pending = [filePath];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current) continue;
+      for (const relatedPath of this.relatedPathLinks.get(current)?.keys() ?? []) {
+        if (collected.has(relatedPath)) continue;
+        collected.add(relatedPath);
+        pending.push(relatedPath);
+      }
+    }
+    return collected;
+  }
+
+  private incrementPathLink(fromPath: string, toPath: string): void {
+    const links = this.relatedPathLinks.get(fromPath) ?? new Map<string, number>();
+    links.set(toPath, (links.get(toPath) ?? 0) + 1);
+    this.relatedPathLinks.set(fromPath, links);
+  }
+
+  private decrementPathLink(fromPath: string, toPath: string): void {
+    const links = this.relatedPathLinks.get(fromPath);
+    const count = links?.get(toPath);
+    if (!links || count === undefined) {
+      return;
+    }
+    if (count > 1) {
+      links.set(toPath, count - 1);
+      return;
+    }
+    links.delete(toPath);
+    if (links.size === 0) {
+      this.relatedPathLinks.delete(fromPath);
+    }
   }
 }
 
@@ -150,7 +235,7 @@ export class VersionedResourceCache<T> {
         return awaitWithSignal(activeLoad.promise, options.signal);
       }
     } else {
-      this.entries.delete(options.cacheKey);
+      this.deleteEntry(options.cacheKey);
     }
 
     const generation = (this.generations.get(options.cacheKey) ?? 0) + 1;
@@ -159,12 +244,18 @@ export class VersionedResourceCache<T> {
       .then(options.loader)
       .then((resource) => {
         if (resource.cacheable !== false && this.generations.get(options.cacheKey) === generation) {
+          this.deleteEntry(options.cacheKey);
+          const unlinkRelatedPaths = this.changes.linkPaths([
+            options.path,
+            resource.path,
+            ...(resource.relatedPaths ?? []),
+          ]);
           this.entries.set(options.cacheKey, {
             requestedPath: normalizePreviewResourcePath(options.path),
             resource,
+            unlinkRelatedPaths,
           });
           this.changes.remember(options.path, resource.version);
-          this.changes.remember(resource.path, resource.version);
           this.evictOverflow();
         }
         return resource;
@@ -189,6 +280,9 @@ export class VersionedResourceCache<T> {
       this.bumpGeneration(cacheKey);
     }
     this.inFlight.clear();
+    for (const entry of this.entries.values()) {
+      entry.unlinkRelatedPaths();
+    }
     this.entries.clear();
   }
 
@@ -211,7 +305,7 @@ export class VersionedResourceCache<T> {
       ) {
         continue;
       }
-      this.entries.delete(cacheKey);
+      this.deleteEntry(cacheKey);
       this.bumpGeneration(cacheKey);
     }
 
@@ -227,13 +321,22 @@ export class VersionedResourceCache<T> {
     this.generations.set(cacheKey, (this.generations.get(cacheKey) ?? 0) + 1);
   }
 
+  private deleteEntry(cacheKey: string): void {
+    const entry = this.entries.get(cacheKey);
+    if (!entry) {
+      return;
+    }
+    entry.unlinkRelatedPaths();
+    this.entries.delete(cacheKey);
+  }
+
   private evictOverflow(): void {
     while (this.entries.size > this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
       if (typeof oldestKey !== "string") {
         return;
       }
-      this.entries.delete(oldestKey);
+      this.deleteEntry(oldestKey);
     }
   }
 }
@@ -390,6 +493,7 @@ export async function loadPresentationPreviewResource(options: {
       }
       return {
         path: result.path,
+        relatedPaths: result.dependencies,
         value: result,
         version: result.version,
       };

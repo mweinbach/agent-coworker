@@ -13,21 +13,26 @@ export type CappedFilePreview = {
 };
 
 export function fileChangeVersionFromStat(
-  stat: Pick<Stats, "mtimeMs" | "ctimeMs" | "size">,
+  stat: Pick<Stats, "mtimeMs" | "ctimeMs" | "size"> & Partial<Pick<Stats, "dev" | "ino">>,
 ): FileChangeVersion {
   const modifiedAtMs = Math.round(stat.mtimeMs);
   const changeTimeMs = Math.round(stat.ctimeMs);
+  const identity =
+    typeof stat.dev === "number" && typeof stat.ino === "number" ? `${stat.dev}:${stat.ino}:` : "";
   return {
     modifiedAtMs,
     changeTimeMs,
     size: stat.size,
-    fingerprint: `${modifiedAtMs}:${changeTimeMs}:${stat.size}`,
+    fingerprint: `${identity}${modifiedAtMs}:${changeTimeMs}:${stat.size}`,
   };
 }
 
-export async function readFileChangeVersion(absPath: string): Promise<FileChangeVersion> {
+export async function readFileChangeVersion(
+  absPath: string,
+  options?: { allowDirectory?: boolean },
+): Promise<FileChangeVersion> {
   const stat = await fs.stat(absPath);
-  if (!stat.isFile()) {
+  if (!stat.isFile() && !(options?.allowDirectory && stat.isDirectory())) {
     throw new Error("Path is not a file");
   }
   return fileChangeVersionFromStat(stat);
@@ -36,6 +41,9 @@ export async function readFileChangeVersion(absPath: string): Promise<FileChange
 export async function readCappedFilePreview(
   absPath: string,
   maxBytes: number,
+  hooks?: {
+    beforePathVerification?: () => Promise<void>;
+  },
 ): Promise<CappedFilePreview> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const handle = await fs.open(absPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
@@ -48,13 +56,33 @@ export async function readCappedFilePreview(
       const buffer = Buffer.alloc(toRead);
       const { bytesRead } = await handle.read(buffer, 0, toRead, 0);
       const afterStat = await handle.stat();
-      const beforeVersion = fileChangeVersionFromStat(beforeStat);
-      const afterVersion = fileChangeVersionFromStat(afterStat);
-      if (!fileChangeVersionsEqual(beforeVersion, afterVersion)) {
+      await hooks?.beforePathVerification?.();
+      let pathStat: Stats;
+      try {
+        pathStat = await fs.lstat(absPath);
+      } catch (error) {
         if (attempt === 0) {
           continue;
         }
-        throw new Error("File changed while the preview was being read.");
+        throw error;
+      }
+      if (!pathStat.isFile()) {
+        if (attempt === 0) {
+          continue;
+        }
+        throw new Error("Preview path was replaced while it was being read.");
+      }
+      const beforeVersion = fileChangeVersionFromStat(beforeStat);
+      const afterVersion = fileChangeVersionFromStat(afterStat);
+      const pathVersion = fileChangeVersionFromStat(pathStat);
+      if (
+        !fileChangeVersionsEqual(beforeVersion, afterVersion) ||
+        !fileChangeVersionsEqual(afterVersion, pathVersion)
+      ) {
+        if (attempt === 0) {
+          continue;
+        }
+        throw new Error("File changed or was replaced while the preview was being read.");
       }
 
       const bytes = new Uint8Array(bytesRead);
@@ -64,7 +92,7 @@ export async function readCappedFilePreview(
         bytes,
         byteLength: bytesRead,
         truncated: afterStat.size > bytesRead,
-        version: afterVersion,
+        version: pathVersion,
       };
     } finally {
       await handle.close();

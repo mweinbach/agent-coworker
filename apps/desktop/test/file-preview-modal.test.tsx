@@ -80,7 +80,9 @@ const { reactivateWorkspaceJsonRpcSocketState } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
-const { __internalFilePreviewResources } = await import("../src/lib/filePreviewResource");
+const { __internalFilePreviewResources, workspaceFileChangeEvents } = await import(
+  "../src/lib/filePreviewResource"
+);
 const { FilePreviewModal, __internalFilePreviewModal } = await import("../src/ui/FilePreviewModal");
 
 function setupPreviewJsdom() {
@@ -406,6 +408,64 @@ describe("file preview modal", () => {
       expect(harness.dom.window.document.body.textContent).toContain("b.md");
       expect(harness.dom.window.document.body.textContent).toContain("B content");
       expect(harness.dom.window.document.body.textContent).not.toContain("A stale content");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("rerenders a mounted alias when its canonical file changes", async () => {
+    const harness = setupPreviewJsdom();
+
+    try {
+      const requestedPath = "/Users/mweinbach/Projects/preview-workspace/REPORT.md";
+      const canonicalPath = "/Users/mweinbach/Projects/preview-workspace/report.md";
+      let content = "# Old canonical content";
+      let version = { ...PREVIEW_VERSION, size: content.length, fingerprint: "old" };
+      readFileForPreviewMock.mockImplementation(async () => ({
+        path: canonicalPath,
+        bytes: new TextEncoder().encode(content),
+        byteLength: content.length,
+        truncated: false,
+        version,
+      }));
+      useAppStore.setState({ filePreview: { path: requestedPath } });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+      });
+      await waitForUi(
+        () =>
+          harness.dom.window.document.body.textContent?.includes("Old canonical content") === true,
+      );
+      const initialReadCount = readFileForPreviewMock.mock.calls.length;
+
+      content = "# New canonical content";
+      version = { ...PREVIEW_VERSION, modifiedAtMs: 2, size: content.length, fingerprint: "new" };
+      await act(async () => {
+        workspaceFileChangeEvents.publish({
+          kind: "changed",
+          path: canonicalPath,
+          version,
+        });
+        await flushUi();
+      });
+      expect(workspaceFileChangeEvents.getRevision(requestedPath)).toBe(1);
+      await waitForUi(() => readFileForPreviewMock.mock.calls.length === initialReadCount + 1);
+      await waitForUi(
+        () =>
+          harness.dom.window.document.body.textContent?.includes("New canonical content") === true,
+      );
+
+      expect(readFileForPreviewMock).toHaveBeenCalledTimes(2);
+      expect(harness.dom.window.document.body.textContent).not.toContain("Old canonical content");
 
       await act(async () => {
         root.unmount();

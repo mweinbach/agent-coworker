@@ -6,6 +6,7 @@ import path from "node:path";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
+import type { WorkspaceFileChangeEvent } from "../src/shared/fileVersion";
 import {
   measureTranscriptEventsBytes,
   measureUtf8Bytes,
@@ -1024,6 +1025,50 @@ describe("web desktop routes", () => {
     );
     expect(escaped?.status).not.toBe(200);
     expect(await escaped?.text()).toContain("outside allowed workspace roots");
+  });
+
+  test("publishes complete invalidation events for web rename and trash mutations", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-mutations-");
+    const sourcePath = path.join(workspace, "before.md");
+    const renamedPath = path.join(workspace, "after.md");
+    await fs.writeFile(sourcePath, "# preview", "utf8");
+    const events: WorkspaceFileChangeEvent[] = [];
+    const opts = {
+      cwd: workspace,
+      onWorkspaceFileChanged: (event: WorkspaceFileChangeEvent) => {
+        events.push(event);
+      },
+    };
+
+    const renamed = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: sourcePath, newName: "after.md" }),
+      }),
+      opts,
+    );
+    expect(renamed?.status).toBe(204);
+    expect(events).toEqual([
+      { kind: "deleted", path: sourcePath, version: null },
+      {
+        kind: "changed",
+        path: renamedPath,
+        version: expect.objectContaining({ size: 9 }),
+      },
+    ]);
+
+    events.length = 0;
+    const trashed = await handleWebDesktopRoute(
+      new Request("http://localhost/cowork/fs/trash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: renamedPath }),
+      }),
+      opts,
+    );
+    expect(trashed?.status).toBe(204);
+    expect(events).toEqual([{ kind: "deleted", path: renamedPath, version: null }]);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

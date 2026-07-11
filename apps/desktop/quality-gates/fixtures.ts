@@ -8,7 +8,7 @@ import electronPath from "electron";
 import type { ElectronApplication, Page, TestInfo } from "playwright";
 import { hostPlatform } from "../../../src/platform/host";
 
-export type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
+export type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
 export type QualityScenario = "first-launch" | "product";
 export type QualityDeltaBurstPath = "legacy-chunk" | "legacy-raw" | "projected";
 
@@ -22,10 +22,14 @@ export type QualityDeltaBurstDescriptor = {
 };
 
 export type QualityLaunchOptions = {
+  appearanceDelayMs?: number;
   height: number;
   holdBootstrap?: boolean;
   mode: QualityMode;
+  recordVideo?: boolean;
+  reconnectDelayMs?: number;
   scenario: QualityScenario;
+  startupFailureCount?: number;
   startupDelayMs: number;
   width: number;
 };
@@ -35,6 +39,9 @@ type QualityMainMetrics = {
   blockedRequests: string[];
   clientRequestsByMethod: Record<string, number>;
   confirmationRequests: number;
+  diagnosticBundles: number;
+  diagnosticCopies: number;
+  diagnosticReveals: number;
   filesystemRequests: number;
   missingAssetRequests: number;
   mobileForgetRequests: number;
@@ -92,6 +99,7 @@ const mainEntry = path.join(desktopRoot, "out-quality/main/qualityGateMain.js");
 const ignoredRendererWarnings = [
   "Electron Security Warning (Insecure Content-Security-Policy)",
   "Autofocus processing was blocked",
+  "Deterministic quality-gate renderer crash.",
 ];
 const credentialEnvironmentName =
   /(?:API_KEY|API_TOKEN|ACCESS_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|PASSWORD|SECRET|SESSION_TOKEN)$/;
@@ -104,6 +112,7 @@ const fixedRendererNow = Date.parse("2026-07-09T21:00:00.000Z");
 const externalNetworkProofUrl = "https://example.invalid/quality-gate-network-proof";
 const blockedRequestConsoleError =
   "[renderer:error] Failed to load resource: net::ERR_BLOCKED_BY_CLIENT";
+const expectedStartupFailureMessage = "Quality fixture could not restore the saved workspace.";
 
 function processEnvironment(overrides: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
@@ -113,6 +122,10 @@ function processEnvironment(overrides: Record<string, string>): Record<string, s
     }
   }
   return { ...env, ...overrides };
+}
+
+function qualityColorScheme(mode: QualityMode): "light" | "dark" {
+  return mode === "dark" || mode === "system" ? "dark" : "light";
 }
 
 function isLoopbackWebSocket(url: string): boolean {
@@ -241,7 +254,7 @@ async function launchQualityHarness(
   harness: QualityHarness;
   mainLogs: string[];
   pages: Page[];
-  recorder: ScreenRecorder;
+  recorder: ScreenRecorder | null;
   runtimeDir: string;
   userDataDir: string;
 }> {
@@ -252,7 +265,8 @@ async function launchQualityHarness(
   const errors: string[] = [];
   const mainLogs: string[] = [];
   const pages: Page[] = [];
-  const recorder = await startScreenRecorder(runtimeDir, options);
+  const recorder =
+    options.recordVideo === false ? null : await startScreenRecorder(runtimeDir, options);
   const captureReadyPath = path.join(runtimeDir, "capture-ready");
   await fs.writeFile(captureReadyPath, "recorder-ready\n", "utf8");
   const launchArgs = [mainEntry, "--disable-dev-shm-usage", "--disable-gpu"];
@@ -267,17 +281,20 @@ async function launchQualityHarness(
       cwd: repoRoot,
       artifactsDir: runtimeDir,
       tracesDir: runtimeDir,
-      colorScheme: options.mode === "dark" ? "dark" : "light",
+      colorScheme: qualityColorScheme(options.mode),
       forcedColors: options.mode === "forced-colors" ? "active" : "none",
       locale: "en-US",
       reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
       timezoneId: "UTC",
       env: processEnvironment({
         COWORK_QUALITY_CAPTURE_READY_FILE: captureReadyPath,
+        COWORK_QUALITY_APPEARANCE_DELAY_MS: String(options.appearanceDelayMs ?? 0),
         COWORK_QUALITY_HEIGHT: String(options.height),
         COWORK_QUALITY_HOLD_BOOTSTRAP: options.holdBootstrap ? "1" : "0",
         COWORK_QUALITY_MODE: options.mode,
+        COWORK_QUALITY_RECONNECT_DELAY_MS: String(options.reconnectDelayMs ?? 0),
         COWORK_QUALITY_SCENARIO: options.scenario,
+        COWORK_QUALITY_STARTUP_FAILURES: String(options.startupFailureCount ?? 0),
         COWORK_QUALITY_STARTUP_DELAY_MS: String(options.startupDelayMs),
         COWORK_QUALITY_USER_DATA: userDataDir,
         COWORK_QUALITY_WIDTH: String(options.width),
@@ -287,7 +304,9 @@ async function launchQualityHarness(
       }),
     });
   } catch (error) {
-    await stopScreenRecorder(recorder);
+    if (recorder) {
+      await stopScreenRecorder(recorder);
+    }
     throw error;
   }
 
@@ -387,7 +406,7 @@ async function launchQualityHarness(
     });
   }
   await page.emulateMedia({
-    colorScheme: options.mode === "dark" ? "dark" : "light",
+    colorScheme: qualityColorScheme(options.mode),
     forcedColors: options.mode === "forced-colors" ? "active" : "none",
     reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
   });
@@ -407,7 +426,7 @@ async function launchQualityHarness(
     await document.fonts.ready;
   });
   await page.waitForLoadState("networkidle");
-  if (!options.holdBootstrap) {
+  if (!options.holdBootstrap && !options.startupFailureCount) {
     await page.waitForFunction(() => window.__coworkQualityGate?.isReady() === true);
   }
   const viewport = await page.evaluate(() => ({
@@ -594,15 +613,20 @@ export const test = base.extend<QualityFixtures>({
         errors.push(`[trace] ${error instanceof Error ? error.message : String(error)}`);
       });
 
-    await stopScreenRecorder(recorder).catch((error) => {
-      errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
-    });
+    if (recorder) {
+      await stopScreenRecorder(recorder).catch((error) => {
+        errors.push(`[video] ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
     await harness.electronApp.close().catch((error) => {
       errors.push(`[electron:close] ${error instanceof Error ? error.message : String(error)}`);
     });
 
     let ignoredBlockedRequestConsoleError = false;
     const effectiveErrors = errors.filter((entry) => {
+      if (qualityOptions.startupFailureCount && entry.includes(expectedStartupFailureMessage)) {
+        return false;
+      }
       if (
         !ignoredBlockedRequestConsoleError &&
         entry === blockedRequestConsoleError &&
@@ -629,7 +653,9 @@ export const test = base.extend<QualityFixtures>({
       await fs.writeFile(diagnosticsPath, `${JSON.stringify(diagnostics, null, 2)}\n`, "utf8");
       await attachIfPresent(testInfo, "quality-gate-diagnostics", diagnosticsPath);
       await attachIfPresent(testInfo, "quality-gate-trace", tracePath);
-      await attachIfPresent(testInfo, "quality-gate-video", recorder.path);
+      if (recorder) {
+        await attachIfPresent(testInfo, "quality-gate-video", recorder.path);
+      }
       for (const [index] of pages.entries()) {
         await attachIfPresent(
           testInfo,

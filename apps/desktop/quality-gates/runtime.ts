@@ -1,4 +1,4 @@
-import type { ProfilerOnRenderCallback } from "react";
+import { type ProfilerOnRenderCallback, useEffect, useState } from "react";
 import type { ResearchRecord } from "../../../src/server/research/types";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
 import { useAppStore } from "../src/app/store";
@@ -42,6 +42,7 @@ export type QualityGateRuntime = {
   resetFeed(): void;
   resetMetrics(): void;
   showDisconnect(): void;
+  showCrashFallback(): void;
   showFilePreview(): void;
   showReconnect(): void;
   showResearch(state: "empty" | "completed" | "follow-up"): Promise<void>;
@@ -68,6 +69,22 @@ let metrics: QualityGateMetrics = {
   streamingMarkdownRenders: 0,
 };
 let installed = false;
+const crashListeners = new Set<() => void>();
+
+export function QualityCrashProbe() {
+  const [shouldCrash, setShouldCrash] = useState(false);
+  useEffect(() => {
+    const trigger = () => setShouldCrash(true);
+    crashListeners.add(trigger);
+    return () => {
+      crashListeners.delete(trigger);
+    };
+  }, []);
+  if (shouldCrash) {
+    throw new Error("Deterministic quality-gate renderer crash.");
+  }
+  return null;
+}
 
 function selectedThreadId(): string {
   return useAppStore.getState().selectedThreadId ?? PROJECT_THREAD_ID;
@@ -277,11 +294,16 @@ export function installQualityGateRuntime(): void {
         streamingMarkdownRenders: 0,
       };
     },
+    showCrashFallback: () => {
+      for (const listener of crashListeners) {
+        listener();
+      }
+    },
     showDisconnect: () => {
       const threadId = selectedThreadId();
       useAppStore.setState((state) => ({
         threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "active" as const } : thread,
+          thread.id === threadId ? { ...thread, status: "disconnected" as const } : thread,
         ),
         threadRuntimeById: {
           ...state.threadRuntimeById,

@@ -6,42 +6,98 @@ import {
 } from "../assertions";
 import { expect, test } from "../fixtures";
 
-test.describe("first launch", () => {
+for (const mode of ["light", "dark", "system"] as const) {
+  test.describe(`first launch ${mode}`, () => {
+    test.use({
+      qualityOptions: {
+        appearanceDelayMs: 900,
+        height: 820,
+        holdBootstrap: true,
+        mode,
+        scenario: "first-launch",
+        startupDelayMs: 900,
+        width: 1_024,
+      },
+    });
+
+    test(`captures a native-aligned ${mode} first paint before slow appearance and bootstrap`, async ({
+      quality,
+    }, testInfo) => {
+      const { electronApp, page } = quality;
+      const resolvedTheme = mode === "light" ? "light" : "dark";
+      await expect(page.locator("html")).toHaveAttribute("data-theme", resolvedTheme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);
+      await expect(page.locator("html")).toHaveAttribute("data-platform", /darwin|win32|linux/);
+      await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+      const nativeBackground = await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.getBackgroundColor().toLowerCase(),
+      );
+      expect(nativeBackground).toContain(mode === "light" ? "dde1ca" : "171d13");
+      const lifecycle = await quality.getLifecycle();
+      expect(lifecycle.networkGuardInstalled).toBeLessThan(lifecycle.captureReady);
+      expect(lifecycle.captureReady).toBeLessThan(lifecycle.firstWindowCreated);
+      expect(lifecycle.firstWindowCreated).toBeLessThan(lifecycle.firstLoadStarted);
+      await expect(page).toHaveScreenshot(`first-paint-${mode}-1024.png`);
+
+      await quality.releaseBootstrap();
+      await expect(page.getByRole("dialog", { name: "Onboarding" })).toBeVisible();
+      if (mode !== "dark") {
+        return;
+      }
+      await expect(page.getByText("Welcome to Cowork")).toBeVisible();
+      await assertKeyboardFocusJourney(page);
+      await assertNoViewportClipping(page, '[role="dialog"]', "button");
+      await assertNoSeriousAxeViolations(page, testInfo, '[role="dialog"]');
+      await settleQualityPage(page);
+      await expect(page).toHaveScreenshot("first-launch-dark-1024.png");
+      await page.getByRole("button", { name: "Not now" }).click();
+      await expect(page.getByRole("dialog", { name: "Onboarding" })).toHaveCount(0);
+      await expect
+        .poll(async () => (await quality.getMainMetrics()).stateSaves)
+        .toBeGreaterThanOrEqual(1);
+    });
+  });
+}
+
+test.describe("startup recovery", () => {
   test.use({
     qualityOptions: {
       height: 820,
-      holdBootstrap: true,
-      mode: "dark",
-      scenario: "first-launch",
-      startupDelayMs: 750,
+      mode: "light",
+      scenario: "product",
+      startupDelayMs: 250,
+      startupFailureCount: 1,
       width: 1_024,
     },
   });
 
-  test("captures the requested first paint before bootstrap and persists onboarding dismissal", async ({
+  test("reports a truthful failure, exposes diagnostics, and retries without discarding work", async ({
     quality,
-  }, testInfo) => {
+  }) => {
     const { page } = quality;
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    const lifecycle = await quality.getLifecycle();
-    expect(lifecycle.networkGuardInstalled).toBeLessThan(lifecycle.captureReady);
-    expect(lifecycle.captureReady).toBeLessThan(lifecycle.firstWindowCreated);
-    expect(lifecycle.firstWindowCreated).toBeLessThan(lifecycle.firstLoadStarted);
-    await expect(page).toHaveScreenshot("first-paint-dark-1024.png");
+    const recovery = page.locator('[data-slot="startup-recovery"]');
+    await expect(recovery).toContainText("Cowork couldn't start");
+    await expect(recovery).toContainText("Quality fixture could not restore the saved workspace.");
+    await expect(page.getByText("Recovered", { exact: true })).toHaveCount(0);
 
-    await quality.releaseBootstrap();
-    await expect(page.getByRole("dialog", { name: "Onboarding" })).toBeVisible();
-    await expect(page.getByText("Welcome to Cowork")).toBeVisible();
-    await assertKeyboardFocusJourney(page);
-    await assertNoViewportClipping(page, '[role="dialog"]', "button");
-    await assertNoSeriousAxeViolations(page, testInfo, '[role="dialog"]');
-    await settleQualityPage(page);
-    await expect(page).toHaveScreenshot("first-launch-dark-1024.png");
-    await page.getByRole("button", { name: "Not now" }).click();
-    await expect(page.getByRole("dialog", { name: "Onboarding" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Copy diagnostics" }).click();
+    await expect(page.getByText("Diagnostics copied.")).toBeVisible();
+    await page.getByRole("button", { name: "Open diagnostics" }).click();
+    await expect(page.getByText("Diagnostics opened.")).toBeVisible();
     await expect
-      .poll(async () => (await quality.getMainMetrics()).stateSaves)
-      .toBeGreaterThanOrEqual(1);
+      .poll(async () => {
+        const metrics = await quality.getMainMetrics();
+        return {
+          bundles: metrics.diagnosticBundles,
+          copies: metrics.diagnosticCopies,
+          reveals: metrics.diagnosticReveals,
+        };
+      })
+      .toEqual({ bundles: 1, copies: 1, reveals: 1 });
+
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+    await expect(page.getByRole("group", { name: "Message composer" })).toBeVisible();
   });
 });
 
@@ -155,19 +211,61 @@ test("switches through a draft chat and restores the conversation scroll anchor"
     .toBeGreaterThan(0);
 });
 
-test("covers persistent disconnect recovery, tool failures, and quick chat", async ({
-  quality,
-}) => {
+test.describe("connection recovery", () => {
+  test.use({
+    qualityOptions: {
+      height: 820,
+      mode: "light",
+      reconnectDelayMs: 750,
+      scenario: "product",
+      startupDelayMs: 0,
+      width: 1_240,
+    },
+  });
+
+  test("covers persistent disconnect recovery while the feed is scrolled away", async ({
+    quality,
+  }) => {
+    const { page } = quality;
+    await quality.emitLongTranscript(200, 7);
+    const viewport = page.locator('[data-slot="message-scroller-viewport"]');
+    await expect(page.getByText("Deterministic transcript run 7 message 200")).toBeAttached();
+    const scrolledAway = await viewport.evaluate(async (element) => {
+      const maxScrollTop = element.scrollHeight - element.clientHeight;
+      element.scrollTop = Math.max(200, maxScrollTop - 600);
+      element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -600 }));
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      return { maxScrollTop, scrollTop: element.scrollTop };
+    });
+    expect(scrolledAway.scrollTop).toBeGreaterThan(160);
+    expect(scrolledAway.maxScrollTop - scrolledAway.scrollTop).toBeGreaterThanOrEqual(500);
+    const composer = page.getByRole("combobox", { name: "Message input" });
+    await composer.fill("Preserve this draft while the connection recovers.");
+    await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
+    await expect(
+      page.getByText("Connection lost. Your draft is safe; reconnect to continue."),
+    ).toBeVisible();
+    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
+
+    await page.getByRole("button", { name: "Reconnect" }).click();
+    await expect(page.getByText("Reconnecting this chat… Your draft is safe.")).toBeVisible();
+    await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
+    await expect(
+      page.getByText("Reconnected. Your draft and conversation are intact."),
+    ).toBeVisible();
+    await expect(composer).toHaveValue("Preserve this draft while the connection recovers.");
+    await page.getByRole("button", { name: "Dismiss connection status" }).click();
+    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(0);
+  });
+});
+
+test("covers tool failures and quick chat", async ({ quality }) => {
   const { page } = quality;
-  await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
-  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
-
-  await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
-  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toHaveCount(
-    0,
-  );
-
   await page.evaluate(() => window.__coworkQualityGate?.showToolFailureHistory());
   await page.getByRole("button", { name: /Couldn't finish/ }).click();
   await expect(page.getByText("Finished with an issue")).toBeVisible();
@@ -181,6 +279,7 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   });
   await expect(quickWindow.getByRole("button", { name: "Open full app" })).toBeVisible();
   await expect(quickWindow.getByRole("group", { name: "Message composer" })).toBeVisible();
+  await expect(quickWindow.locator('[data-slot="connection-banner"]')).toHaveCount(0);
 
   const quickComposer = quickWindow.getByRole("combobox", { name: "Message input" });
   await quickComposer.fill("@");
@@ -198,6 +297,28 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   await quickWindow.getByRole("button", { name: "Close quick chat" }).focus();
   await quickWindow.keyboard.press("Escape");
   await quickWindowClosed;
+});
+
+test("exposes usable diagnostics from the root crash fallback", async ({ quality }) => {
+  const { page } = quality;
+  await page.evaluate(() => window.__coworkQualityGate?.showCrashFallback());
+  await expect(page.getByText("Cowork hit an unexpected error")).toBeVisible();
+  await expect(page.getByText("Deterministic quality-gate renderer crash.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy diagnostics" }).click();
+  await expect(page.getByText("Diagnostics copied.")).toBeVisible();
+  await page.getByRole("button", { name: "Open diagnostics" }).click();
+  await expect(page.getByText("Diagnostics opened.")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const metrics = await quality.getMainMetrics();
+      return {
+        bundles: metrics.diagnosticBundles,
+        copies: metrics.diagnosticCopies,
+        reveals: metrics.diagnosticReveals,
+      };
+    })
+    .toEqual({ bundles: 1, copies: 1, reveals: 1 });
 });
 
 test("covers file preview, Canvas popout, and resizers with bounded filesystem work", async ({

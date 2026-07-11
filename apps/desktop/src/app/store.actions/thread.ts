@@ -82,6 +82,7 @@ import {
   recordThreadNavigationIntent,
   waitForOperation,
 } from "../store.helpers/operationIntent";
+import { operationKey, runAcknowledgedOperation } from "../store.helpers/operations";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { persist } from "../store.helpers/persistence";
 import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
@@ -97,6 +98,9 @@ import {
   type ThreadRecord,
   type TranscriptEvent,
 } from "../types";
+
+const RECONNECT_OUTCOME_TIMEOUT_MS = 15_000;
+const RECONNECT_OUTCOME_POLL_MS = 50;
 
 type HydrateThreadSelectionOptions = {
   preserveView?: boolean;
@@ -693,6 +697,7 @@ export function createThreadActions(
   | "setNewChatLandingTarget"
   | "selectThread"
   | "reconnectThread"
+  | "reconnectThreadWithFeedback"
   | "sendMessage"
   | "submitComposerDraft"
   | "retryComposerSubmission"
@@ -1522,6 +1527,35 @@ export function createThreadActions(
       );
       return true;
     },
+
+    reconnectThreadWithFeedback: async (threadId: string) =>
+      await runAcknowledgedOperation(get, set, {
+        key: operationKey("thread-reconnect", threadId),
+        label: "Reconnect chat",
+        errorTitle: "Chat did not reconnect",
+        errorMessage: "Cowork could not reconnect this chat.",
+        repairAction: "Your draft is safe. Check the workspace connection and retry.",
+        execute: async () => {
+          const accepted = await get().reconnectThread(threadId);
+          if (!accepted) {
+            throw new Error("Cowork could not start a reconnect attempt for this chat.");
+          }
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < RECONNECT_OUTCOME_TIMEOUT_MS) {
+            const state = get();
+            if (!state.threads.some((thread) => thread.id === threadId)) {
+              throw new Error("This chat is no longer available.");
+            }
+            if (state.threadRuntimeById[threadId]?.connected === true) {
+              return;
+            }
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, RECONNECT_OUTCOME_POLL_MS);
+            });
+          }
+          throw new Error("Cowork could not reconnect this chat before the request timed out.");
+        },
+      }),
 
     sendMessage: async (
       text: string,

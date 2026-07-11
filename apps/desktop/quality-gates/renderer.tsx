@@ -4,7 +4,7 @@ import App from "@/App";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CrashReportingErrorBoundary } from "@/ui/CrashReportingErrorBoundary";
 import "./quality.css";
-import { installQualityGateRuntime, recordQualityGateRender } from "./runtime";
+import { installQualityGateRuntime, QualityCrashProbe, recordQualityGateRender } from "./runtime";
 
 installQualityGateRuntime();
 
@@ -13,6 +13,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <Profiler id="quality-gate-root" onRender={recordQualityGateRender}>
       <TooltipProvider>
         <CrashReportingErrorBoundary>
+          <QualityCrashProbe />
           <App />
         </CrashReportingErrorBoundary>
       </TooltipProvider>

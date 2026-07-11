@@ -145,7 +145,7 @@ describe("InlineErrorBoundary", () => {
     expect(typeof receivedRetry).toBe("function");
   });
 
-  test("CrashReportingErrorBoundary still renders fullscreen fallback (unchanged backstop)", () => {
+  test("CrashReportingErrorBoundary renders the fullscreen diagnostic backstop", () => {
     act(() => {
       root.render(
         createElement(CrashReportingErrorBoundary, null, createElement(Boom, { message: "boom" })),
@@ -153,6 +153,8 @@ describe("InlineErrorBoundary", () => {
     });
     const fullscreen = container.querySelector(".min-h-screen");
     expect(fullscreen).toBeTruthy();
-    expect(fullscreen?.textContent).toContain("Something went wrong.");
+    expect(fullscreen?.textContent).toContain("Cowork hit an unexpected error");
+    expect(fullscreen?.textContent).toContain("Copy diagnostics");
+    expect(fullscreen?.textContent).toContain("Open diagnostics");
   });
 });

@@ -8,6 +8,7 @@ import {
   hydrateComposerDrafts,
   MAX_COMPOSER_DRAFT_ATTACHMENT_BYTE_SIZE,
   MAX_COMPOSER_DRAFTS,
+  mergeComposerDraftsByRevision,
   pruneComposerDrafts,
   revokeComposerDraftAttachmentPreviews,
   serializeComposerDrafts,
@@ -62,6 +63,58 @@ describe("composer draft ownership", () => {
     expect(serializeComposerDrafts(current.drafts)[composerDraftKeyForThread("thread-a")]).toBe(
       undefined,
     );
+  });
+
+  test("keeps the newest revision owner when merging disk and in-memory drafts", () => {
+    const currentKey = composerDraftKeyForThread("current");
+    const diskKey = composerDraftKeyForThread("disk");
+    const equalKey = composerDraftKeyForThread("equal");
+    const merged = mergeComposerDraftsByRevision(
+      {
+        [currentKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:00:00.000Z"),
+          revision: 2,
+          generation: 1,
+          text: "stale disk text",
+        },
+        [diskKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:01:00.000Z"),
+          revision: 1,
+          generation: 3,
+          text: "new disk generation",
+        },
+        [equalKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:01:00.000Z"),
+          revision: 4,
+          generation: 1,
+          text: "authoritative equal disk revision",
+        },
+      },
+      {
+        [currentKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:02:00.000Z"),
+          revision: 3,
+          generation: 1,
+          text: "recent in-memory text",
+        },
+        [diskKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:03:00.000Z"),
+          revision: 9,
+          generation: 2,
+          text: "obsolete in-memory generation",
+        },
+        [equalKey]: {
+          ...createEmptyComposerDraft("2026-07-11T16:03:00.000Z"),
+          revision: 4,
+          generation: 1,
+          text: "unowned equal in-memory revision",
+        },
+      },
+    );
+
+    expect(merged[currentKey]?.text).toBe("recent in-memory text");
+    expect(merged[diskKey]?.text).toBe("new disk generation");
+    expect(merged[equalKey]?.text).toBe("authoritative equal disk revision");
   });
 
   test("round-trips the complete draft and recreates one preview URL after restart", async () => {

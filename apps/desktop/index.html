@@ -17,32 +17,64 @@
           requestedWindowMode === "canvas"
             ? requestedWindowMode
             : "main";
-        let themeSource = "system";
+        const requestedThemeSource = params.get("themeSource");
+        const nativeThemeSource =
+          requestedThemeSource === "light" || requestedThemeSource === "dark"
+            ? requestedThemeSource
+            : "system";
+        const requestedResolvedTheme = params.get("resolvedTheme");
+        const nativeResolvedTheme =
+          requestedResolvedTheme === "light" || requestedResolvedTheme === "dark"
+            ? requestedResolvedTheme
+            : null;
+        let themeSource = nativeThemeSource;
         let prefersDark = false;
         let forcedColors = false;
         try {
           const storedThemeSource = localStorage.getItem("cowork.themeSource");
-          themeSource =
-            storedThemeSource === "light" || storedThemeSource === "dark"
-              ? storedThemeSource
-              : "system";
+          // Explicit native preferences are authoritative. When upgrading from
+          // renderer-only persistence, retain that explicit choice for one
+          // launch so the main process can persist it through IPC.
+          if (nativeThemeSource === "system") {
+            themeSource =
+              storedThemeSource === "light" || storedThemeSource === "dark"
+                ? storedThemeSource
+                : "system";
+          }
         } catch {
           // Persisted preference is optional; continue with the system media probes.
         }
         try {
           prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
-          forcedColors = window.matchMedia?.("(forced-colors: active)").matches === true;
+          forcedColors =
+            params.get("highContrast") === "true" ||
+            window.matchMedia?.("(forced-colors: active)").matches === true;
         } catch {
           // Media probes are optional; the light system fallback is safe.
         }
 
-        const dark = themeSource === "dark" || (themeSource === "system" && prefersDark);
+        const dark =
+          themeSource === "dark" ||
+          (themeSource === "system" &&
+            (nativeResolvedTheme ? nativeResolvedTheme === "dark" : prefersDark));
         const theme = dark ? "dark" : "light";
+        const requestedPlatform = params.get("platform");
+        const platform =
+          requestedPlatform === "darwin" ||
+          requestedPlatform === "win32" ||
+          requestedPlatform === "linux"
+            ? requestedPlatform
+            : null;
         root.dataset.systemTheme = theme;
         root.dataset.theme = theme;
         root.dataset.themeSource = themeSource;
         root.dataset.highContrast = forcedColors ? "true" : "false";
+        root.dataset.reducedTransparency =
+          params.get("reducedTransparency") === "true" ? "true" : "false";
         root.dataset.windowMode = windowMode;
+        if (platform) {
+          root.dataset.platform = platform;
+        }
         root.classList.toggle("dark", dark);
         root.classList.toggle("light", !dark);
 

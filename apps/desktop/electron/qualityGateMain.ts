@@ -54,7 +54,7 @@ const PRESENTATION_SLIDE_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
   `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.background}"/><text x="80" y="190" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.foreground}" font-family="sans-serif" font-size="56" font-weight="700">Canvas presentation</text><text x="80" y="270" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.mutedForeground}" font-family="sans-serif" font-size="28">Theme-aware Electron preview</text></svg>`,
 ).toString("base64")}`;
 
-type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
+type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
 type QualityScenario = "first-launch" | "product";
 
 type QualityMainMetrics = {
@@ -62,6 +62,9 @@ type QualityMainMetrics = {
   blockedRequests: string[];
   clientRequestsByMethod: Record<string, number>;
   confirmationRequests: number;
+  diagnosticBundles: number;
+  diagnosticCopies: number;
+  diagnosticReveals: number;
   filesystemRequests: number;
   missingAssetRequests: number;
   mobileForgetRequests: number;
@@ -122,6 +125,9 @@ const qualityScenario = parseQualityScenario(process.env.COWORK_QUALITY_SCENARIO
 const contentWidth = parseDimension(process.env.COWORK_QUALITY_WIDTH, 1240);
 const contentHeight = parseDimension(process.env.COWORK_QUALITY_HEIGHT, 820);
 const startupDelayMs = parseDelay(process.env.COWORK_QUALITY_STARTUP_DELAY_MS);
+const appearanceDelayMs = parseDelay(process.env.COWORK_QUALITY_APPEARANCE_DELAY_MS);
+const reconnectDelayMs = parseDelay(process.env.COWORK_QUALITY_RECONNECT_DELAY_MS);
+let remainingStartupFailures = parseCount(process.env.COWORK_QUALITY_STARTUP_FAILURES);
 const holdBootstrap = process.env.COWORK_QUALITY_HOLD_BOOTSTRAP === "1";
 const captureReadyFile = process.env.COWORK_QUALITY_CAPTURE_READY_FILE?.trim() ?? "";
 const userDataPath =
@@ -134,7 +140,8 @@ app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("force-color-profile", "srgb");
 app.commandLine.appendSwitch("disable-lcd-text");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
-nativeTheme.themeSource = qualityMode === "dark" ? "dark" : "light";
+nativeTheme.themeSource =
+  qualityMode === "system" ? "system" : qualityMode === "dark" ? "dark" : "light";
 process.env.COWORK_IS_PACKAGED = "false";
 process.env.COWORK_DESKTOP_QUALITY_GATE = "1";
 process.env.COWORK_CRASH_REPORTS_ENABLED = "false";
@@ -178,6 +185,9 @@ let metrics: QualityMainMetrics = {
   blockedRequests: [],
   clientRequestsByMethod: {},
   confirmationRequests: 0,
+  diagnosticBundles: 0,
+  diagnosticCopies: 0,
+  diagnosticReveals: 0,
   filesystemRequests: 0,
   missingAssetRequests: 0,
   mobileForgetRequests: 0,
@@ -233,6 +243,9 @@ globalThis.__coworkQualityGateMain = {
       blockedRequests: [],
       clientRequestsByMethod: {},
       confirmationRequests: 0,
+      diagnosticBundles: 0,
+      diagnosticCopies: 0,
+      diagnosticReveals: 0,
       filesystemRequests: 0,
       missingAssetRequests: 0,
       mobileForgetRequests: 0,
@@ -252,6 +265,7 @@ globalThis.__coworkQualityGateMain = {
 function parseQualityMode(value: string | undefined): QualityMode {
   switch (value) {
     case "dark":
+    case "system":
     case "reduced-motion":
     case "forced-colors":
       return value;
@@ -272,6 +286,11 @@ function parseDimension(value: string | undefined, fallback: number): number {
 function parseDelay(value: string | undefined): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 10_000 ? Math.floor(parsed) : 0;
+}
+
+function parseCount(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 10 ? parsed : 0;
 }
 
 function createPersistedState(scenario: QualityScenario): PersistedState {
@@ -385,11 +404,11 @@ function createPersistedState(scenario: QualityScenario): PersistedState {
 }
 
 function createAppearance(): SystemAppearance {
-  const dark = qualityMode === "dark";
+  const dark = qualityMode === "dark" || qualityMode === "system";
   const forcedColors = qualityMode === "forced-colors";
   return {
     platform: qualityPlatform,
-    themeSource: dark ? "dark" : "light",
+    themeSource: qualityMode === "system" ? "system" : dark ? "dark" : "light",
     shouldUseDarkColors: dark,
     shouldUseDarkColorsForSystemIntegratedUI: dark,
     shouldUseHighContrastColors: forcedColors,
@@ -1373,12 +1392,20 @@ async function startMockServer(): Promise<void> {
       if (shouldHoldCanvasLoadingResponse(message.method, params)) {
         return;
       }
-      socket.send(
-        JSON.stringify({
-          id: message.id,
-          result: jsonRpcResult(message.method, params),
-        }),
-      );
+      const response = JSON.stringify({
+        id: message.id,
+        result: jsonRpcResult(message.method, params),
+      });
+      const sendResponse = () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(response);
+        }
+      };
+      if (message.method === "thread/resume" && reconnectDelayMs > 0) {
+        setTimeout(sendResponse, reconnectDelayMs);
+      } else {
+        sendResponse();
+      }
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -1504,8 +1531,15 @@ async function loadWindow(
   options?: { threadId?: string; path?: string },
 ): Promise<void> {
   const isMain = mode === "main";
+  const appearance = createAppearance();
   const query = {
     qualityMode,
+    platform: appearance.platform,
+    themeSource: appearance.themeSource,
+    resolvedTheme: appearance.shouldUseDarkColors ? "dark" : "light",
+    highContrast:
+      appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false",
+    reducedTransparency: appearance.prefersReducedTransparency ? "true" : "false",
     ...(mode === "main" ? {} : { window: mode }),
     ...(options?.threadId ? { threadId: options.threadId } : {}),
     ...(options?.path ? { path: options.path } : {}),
@@ -1529,10 +1563,11 @@ async function createWindow(
   deferLoad = false,
 ): Promise<Electron.BrowserWindow> {
   const isMain = mode === "main";
+  const appearance = createAppearance();
   const backgroundColor =
     mode === "canvas"
-      ? getCanvasNativeBackgroundColor(options?.path ?? "", qualityMode === "dark")
-      : desktopShellBackgroundColor(qualityMode === "dark");
+      ? getCanvasNativeBackgroundColor(options?.path ?? "", appearance.shouldUseDarkColors)
+      : desktopShellBackgroundColor(appearance.shouldUseDarkColors);
   const win = new BrowserWindow({
     title:
       mode === "quick-chat" ? "Cowork Quick Chat" : mode === "canvas" ? "Cowork Canvas" : "Cowork",
@@ -1593,6 +1628,10 @@ async function handleIpc(
         await bootstrapBarrier;
       }
       await delay(startupDelayMs);
+      if (remainingStartupFailures > 0) {
+        remainingStartupFailures -= 1;
+        throw new Error("Quality fixture could not restore the saved workspace.");
+      }
       return structuredClone(persistedState);
     case DESKTOP_IPC_CHANNELS.saveState:
       metrics.stateSaves += 1;
@@ -1601,6 +1640,8 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getUpdateState:
       return createDefaultUpdaterState("1.2.21", false);
     case DESKTOP_IPC_CHANNELS.getSystemAppearance:
+      await delay(appearanceDelayMs);
+      return createAppearance();
     case DESKTOP_IPC_CHANNELS.setWindowAppearance:
       return createAppearance();
     case DESKTOP_IPC_CHANNELS.getPlatform:
@@ -1641,6 +1682,7 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getTelemetryStatus:
       return telemetryStatus();
     case DESKTOP_IPC_CHANNELS.createDiagnosticsBundle:
+      metrics.diagnosticBundles += 1;
       return {
         path: path.join(userDataPath, "quality-diagnostics.json"),
         createdAt: FIXED_NOW,
@@ -1648,6 +1690,12 @@ async function handleIpc(
         uploadConfigured: false,
         uploadEnabled: false,
       };
+    case DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle:
+      metrics.diagnosticReveals += 1;
+      return undefined;
+    case DESKTOP_IPC_CHANNELS.copyText:
+      metrics.diagnosticCopies += 1;
+      return undefined;
     case DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle:
       return {
         uploaded: false,

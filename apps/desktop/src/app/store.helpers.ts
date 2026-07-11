@@ -225,6 +225,7 @@ export type TaskLifecycleRequest = {
 };
 
 export type BootstrapPhase = "idle" | "loading" | "ready" | "error";
+export type BootstrapStage = "restoring-workspace" | "checking-services" | "reconnecting-sessions";
 export type AbortableActionOptions = {
   signal?: AbortSignal;
 };
@@ -232,6 +233,7 @@ export type AbortableActionOptions = {
 export type AppStoreState = {
   ready: boolean;
   bootstrapPhase: BootstrapPhase;
+  bootstrapStage: BootstrapStage | null;
   startupError: string | null;
   view: ViewId;
 
@@ -381,6 +383,7 @@ export type AppStoreState = {
       clientMessageId?: string;
     },
   ) => Promise<boolean>;
+  reconnectThreadWithFeedback: (threadId: string) => Promise<OperationResult<void>>;
   renameThread: (threadId: string, newTitle: string) => void;
 
   sendMessage: (

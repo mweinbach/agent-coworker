@@ -1,10 +1,10 @@
+import { SESSION_FEED_ITEM_LIMIT } from "./feedRetention";
 import type { SessionFeedItem, SessionSnapshot } from "./sessionSnapshot";
 import { isToolInputDigest, type ToolInputDigest } from "./toolInputDigest";
 import { TOOL_RETRY_TURN_ANNOTATION_TYPE } from "./toolRetry";
 
 const TOOL_RETRY_METADATA_ANNOTATION_TYPE = "cowork.toolRetryMetadata";
 const TOOL_RETRY_METADATA_VERSION = 1;
-export const MAX_PERSISTED_TOOL_RETRY_METADATA = 256;
 
 type ToolRetryMetadataEntry = {
   itemId: string;
@@ -55,7 +55,7 @@ function entriesFromFeed(feed: SessionFeedItem[]): ToolRetryMetadataEntry[] {
       (item): item is Extract<SessionFeedItem, { kind: "tool" }> =>
         item.kind === "tool" && (item.inputDigest !== undefined || item.retryOf !== undefined),
     )
-    .slice(-MAX_PERSISTED_TOOL_RETRY_METADATA)
+    .slice(-SESSION_FEED_ITEM_LIMIT)
     .map((item) => ({
       itemId: item.id,
       ...(item.inputDigest ? { inputDigest: item.inputDigest } : {}),
@@ -72,15 +72,35 @@ function withoutMetadataAnnotations(
 export function hydrateToolRetrySnapshotMetadata(snapshot: SessionSnapshot): SessionSnapshot {
   const next = structuredClone(snapshot);
   const metadataByItemId = new Map<string, ToolRetryMetadataEntry>();
-  for (const item of next.feed) {
-    if (item.kind !== "message" || !item.annotations) continue;
-    for (const annotation of item.annotations) {
-      if (!isMetadataAnnotation(annotation) || !Array.isArray(annotation.entries)) continue;
-      for (const value of annotation.entries.slice(-MAX_PERSISTED_TOOL_RETRY_METADATA)) {
+  let remainingMetadataEntries = SESSION_FEED_ITEM_LIMIT;
+  for (let itemIndex = next.feed.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = next.feed[itemIndex];
+    if (item?.kind !== "message" || !item.annotations) continue;
+    for (
+      let annotationIndex = item.annotations.length - 1;
+      annotationIndex >= 0 && remainingMetadataEntries > 0;
+      annotationIndex -= 1
+    ) {
+      const annotation = item.annotations[annotationIndex];
+      if (!annotation || !isMetadataAnnotation(annotation) || !Array.isArray(annotation.entries)) {
+        continue;
+      }
+      for (
+        let entryIndex = annotation.entries.length - 1;
+        entryIndex >= 0 && remainingMetadataEntries > 0;
+        entryIndex -= 1
+      ) {
+        remainingMetadataEntries -= 1;
+        const value = annotation.entries[entryIndex];
         const entry = parseEntry(value);
-        if (entry) metadataByItemId.set(entry.itemId, entry);
+        if (entry && !metadataByItemId.has(entry.itemId)) {
+          metadataByItemId.set(entry.itemId, entry);
+        }
       }
     }
+  }
+  for (const item of next.feed) {
+    if (item.kind !== "message" || !item.annotations) continue;
     const annotations = withoutMetadataAnnotations(item.annotations);
     if (annotations.length > 0) {
       item.annotations = annotations;

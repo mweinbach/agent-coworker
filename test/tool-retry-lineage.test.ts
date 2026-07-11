@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
+import { SESSION_FEED_ITEM_LIMIT } from "../src/shared/feedRetention";
 import { type SessionFeedItem, sessionSnapshotSchema } from "../src/shared/sessionSnapshot";
 import { sameToolInputDigest } from "../src/shared/toolInputDigest";
 import { digestToolInput } from "../src/shared/toolInputDigestHasher";
@@ -30,6 +31,43 @@ const failedTool = (
   result: { error: "failed" },
   ...(digestToolInput(name, args) ? { inputDigest: digestToolInput(name, args) ?? undefined } : {}),
 });
+
+function snapshotWithFeed(feed: SessionFeedItem[]) {
+  return sessionSnapshotSchema.parse({
+    sessionId: "session",
+    title: "Retry",
+    titleSource: "default",
+    titleModel: null,
+    provider: "anthropic",
+    model: "model",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: null,
+    nickname: null,
+    taskType: null,
+    targetPaths: null,
+    profile: null,
+    requestedModel: null,
+    effectiveModel: null,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: null,
+    createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    messageCount: 0,
+    lastEventSeq: 0,
+    feed,
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+  });
+}
 
 describe("explicit tool retry lineage", () => {
   test("classifies structured, denied, and legacy skill failures consistently", () => {
@@ -222,71 +260,38 @@ describe("explicit tool retry lineage", () => {
   test("uses a rollback-safe annotation sidecar that survives an old strict read-write", () => {
     const inputDigest = digestToolInput("bash", { command: "bun test" });
     if (!inputDigest) throw new Error("expected input digest");
-    const snapshot = sessionSnapshotSchema.parse({
-      sessionId: "session",
-      title: "Retry",
-      titleSource: "default",
-      titleModel: null,
-      provider: "anthropic",
-      model: "model",
-      sessionKind: "root",
-      parentSessionId: null,
-      role: null,
-      mode: null,
-      depth: null,
-      nickname: null,
-      taskType: null,
-      targetPaths: null,
-      profile: null,
-      requestedModel: null,
-      effectiveModel: null,
-      requestedReasoningEffort: null,
-      effectiveReasoningEffort: null,
-      executionState: null,
-      lastMessagePreview: null,
-      createdAt: "2026-07-10T00:00:00.000Z",
-      updatedAt: "2026-07-10T00:00:00.000Z",
-      messageCount: 0,
-      lastEventSeq: 0,
-      feed: [
-        {
-          id: "user",
-          kind: "message",
-          role: "user",
-          ts: "2026-07-10T00:00:00.000Z",
-          text: "Run tests",
-        },
-        failedTool("failure"),
-        {
-          id: "retry-turn",
-          kind: "message",
-          role: "user",
-          ts: "2026-07-10T00:00:00.500Z",
-          text: "Retry the failed step.",
-          annotations: [
-            toolRetryTurnAnnotation({
-              targets: [{ itemId: "failure", inputDigest }],
-            }),
-          ],
-        },
-        {
-          id: "replacement",
-          kind: "tool",
-          ts: "2026-07-10T00:00:01.000Z",
-          name: "bash",
-          state: "output-available",
-          args: { command: "bun test" },
-          retryOf: "failure",
-          inputDigest,
-        },
-      ],
-      agents: [],
-      todos: [],
-      sessionUsage: null,
-      lastTurnUsage: null,
-      hasPendingAsk: false,
-      hasPendingApproval: false,
-    });
+    const snapshot = snapshotWithFeed([
+      {
+        id: "user",
+        kind: "message",
+        role: "user",
+        ts: "2026-07-10T00:00:00.000Z",
+        text: "Run tests",
+      },
+      failedTool("failure"),
+      {
+        id: "retry-turn",
+        kind: "message",
+        role: "user",
+        ts: "2026-07-10T00:00:00.500Z",
+        text: "Retry the failed step.",
+        annotations: [
+          toolRetryTurnAnnotation({
+            targets: [{ itemId: "failure", inputDigest }],
+          }),
+        ],
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2026-07-10T00:00:01.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        retryOf: "failure",
+        inputDigest,
+      },
+    ]);
     const encoded = encodeToolRetrySnapshotMetadata(snapshot);
     const encodedTools = encoded.feed.filter((item) => item.kind === "tool");
     expect(encodedTools.every((item) => !("retryOf" in item) && !("inputDigest" in item))).toBe(
@@ -337,5 +342,55 @@ describe("explicit tool retry lineage", () => {
       inputDigest,
     });
     expect(hydrated.feed.some((item) => item.id === "retry-turn")).toBe(false);
+  });
+
+  test("preserves recovered lineage across restart through the retained 2,000-item feed", () => {
+    const inputDigest = digestToolInput("bash", { command: "bun test" });
+    if (!inputDigest) throw new Error("expected input digest");
+    const laterCalls: SessionFeedItem[] = Array.from(
+      { length: SESSION_FEED_ITEM_LIMIT - 3 },
+      (_, index) => ({
+        id: `later-${index}`,
+        kind: "tool",
+        ts: "2026-07-10T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: `echo ${index}` },
+        inputDigest: digestToolInput("bash", { command: `echo ${index}` }) ?? undefined,
+      }),
+    );
+    const snapshot = snapshotWithFeed([
+      {
+        id: "user",
+        kind: "message",
+        role: "user",
+        ts: "2026-07-10T00:00:00.000Z",
+        text: "Run tests",
+      },
+      failedTool("failure"),
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2026-07-10T00:00:01.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        retryOf: "failure",
+        inputDigest,
+      },
+      ...laterCalls,
+    ]);
+
+    const restarted = hydrateToolRetrySnapshotMetadata(
+      sessionSnapshotSchema.parse(
+        JSON.parse(JSON.stringify(encodeToolRetrySnapshotMetadata(snapshot))),
+      ),
+    );
+
+    expect(restarted.feed.find((item) => item.id === "replacement")).toMatchObject({
+      retryOf: "failure",
+      inputDigest,
+    });
+    expect(recoveredToolItemIds(restarted.feed)).toContain("failure");
   });
 });

@@ -484,6 +484,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   liveStartedAt?: string | null;
   onRetry?: () => Promise<boolean>;
   retryDisabled?: boolean;
+  retryUnavailableReason?: string;
 }) {
   const liveNowMsProp = props.liveNowMs;
   const [nowMs, setNowMs] = useState(() => liveNowMsProp ?? Date.now());
@@ -607,6 +608,13 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
               {retrying ? "Retrying" : "Retry"}
             </Button>
+          ) : hasUnrecoveredIssue && props.retryUnavailableReason ? (
+            <span
+              className="max-w-48 text-right text-[10px] leading-tight text-muted-foreground"
+              data-slot="activity-retry-unavailable"
+            >
+              {props.retryUnavailableReason}
+            </span>
           ) : null}
         </div>
 

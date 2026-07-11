@@ -21,7 +21,10 @@ import {
   resolveSandboxApprovalThreadTarget,
 } from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
-import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
+import {
+  type FileAttachmentInput,
+  workspaceSupportsToolRetryLineage,
+} from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 import {
   appendAttachmentSkippedNotes,
@@ -768,6 +771,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     async (toolItemIds: string[]): Promise<boolean> => {
       if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
       if (toolItemIds.length === 0) return false;
+      if (!workspaceSupportsToolRetryLineage(thread.workspaceId)) return false;
       const draftBeforeRetry = useAppStore.getState().composerText;
       const accepted = await sendMessage(
         HIDDEN_RETRY_TURN_PROMPT,
@@ -799,6 +803,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const hydrating =
     rt?.hydrating === true ||
     (bootstrapPhase === "loading" && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
+  const supportsToolRetryLineage =
+    workspace !== null && workspaceSupportsToolRetryLineage(workspace.id);
+  const retryUnavailableReason =
+    !supportsToolRetryLineage &&
+    !hydrating &&
+    !transcriptOnly &&
+    thread.status === "active" &&
+    workspace !== null
+      ? "Exact retry isn’t available with this server."
+      : undefined;
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
   const modelSelectorDisabled =
     !threadModelConfig ||
@@ -855,7 +869,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
           onSelectThread={selectApprovalThread}
-          onRetryFailedTurn={retryFailedTurn}
+          onRetryFailedTurn={supportsToolRetryLineage ? retryFailedTurn : undefined}
+          retryUnavailableReason={retryUnavailableReason}
           retryFailedTurnDisabled={
             busy || inputDisabled || hydrating || transcriptOnly || pendingTurnStart !== null
           }

@@ -110,11 +110,13 @@ function setupChatViewJsdom() {
 }
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
   beforeEach(async () => {
     await useAppStore.getState().drainBootstrap();
+    RUNTIME.jsonRpcSockets.clear();
     Object.assign(globalThis, { [DESKTOP_API_OVERRIDE_KEY]: desktopApiMock });
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({
@@ -128,6 +130,7 @@ describe("desktop chat view stability", () => {
   });
 
   afterEach(() => {
+    RUNTIME.jsonRpcSockets.clear();
     clearJsonRpcSocketOverride();
     Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
@@ -1239,6 +1242,131 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("explains unavailable exact retry without sending against a legacy server", async () => {
+    const originalSendMessage = useAppStore.getState().sendMessage;
+    const sendMessage = mock(async () => true);
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      supportsToolRetryLineage: false,
+    } as never);
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      bootstrapPhase: "ready",
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:12.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 2,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: "ws://legacy",
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "failed-tool",
+              kind: "tool",
+              ts: "2026-03-12T00:00:00.000Z",
+              completedAt: "2026-03-12T00:00:12.000Z",
+              name: "read",
+              state: "output-error",
+              args: { filePath: "/tmp/missing" },
+              result: { error: "missing file" },
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+      sendMessage,
+    } as never);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.querySelector('[data-slot="activity-retry-unavailable"]')?.textContent).toBe(
+        "Exact retry isn’t available with this server.",
+      );
+      const retryButtons = Array.from(container.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(retryButtons).toHaveLength(0);
+      expect(container.textContent).not.toContain("Disconnected");
+      expect(container.textContent).not.toContain("Reconnect");
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      await act(async () => {
+        RUNTIME.jsonRpcSockets.set("ws-1", {
+          supportsToolRetryLineage: true,
+        } as never);
+        useAppStore.setState({ composerText: "Keep this draft" });
+      });
+      const retryButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(retryButton).toBeDefined();
+
+      RUNTIME.jsonRpcSockets.set("ws-1", {
+        supportsToolRetryLineage: false,
+      } as never);
+      await act(async () => {
+        retryButton?.click();
+        await Promise.resolve();
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composerText).toBe("Keep this draft");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState({ sendMessage: originalSendMessage });
       harness.restore();
     }
   });

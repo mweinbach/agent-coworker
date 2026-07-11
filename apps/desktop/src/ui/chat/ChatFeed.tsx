@@ -257,6 +257,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   onSelectThread?: (threadId: string) => void;
   onRetryFailedTurn?: (toolItemIds: string[]) => Promise<boolean>;
   retryFailedTurnDisabled?: boolean;
+  retryUnavailableReason?: string;
 }) {
   const {
     transcriptOnly,
@@ -279,6 +280,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     onSelectThread,
     onRetryFailedTurn,
     retryFailedTurnDisabled,
+    retryUnavailableReason,
   } = props;
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
@@ -455,6 +457,11 @@ export const ChatFeed = memo(function ChatFeed(props: {
                                 : undefined
                             }
                             retryDisabled={retryFailedTurnDisabled}
+                            retryUnavailableReason={
+                              item.id === retryableActivityGroupId
+                                ? retryUnavailableReason
+                                : undefined
+                            }
                           />
                         </InlineErrorBoundary>
                       ) : (

@@ -255,6 +255,77 @@ describe("DirectoryListingCoordinator", () => {
     ).toBe(sibling);
     expect(reads).toBe(3);
   });
+
+  test("clears one workspace subtree without retaining stale entry identities", async () => {
+    let reads = 0;
+    const coordinator = new DirectoryListingCoordinator<Entry>({
+      isEntryEqual: entriesEqual,
+      readDirectory: async ({ path }) => {
+        reads += 1;
+        return [{ path: `${path}/file.ts`, size: reads }];
+      },
+    });
+    const scopedInput = {
+      workspaceId: "workspace-a",
+      path: "/repo/src",
+      includeHidden: false,
+    };
+    const siblingInput = {
+      workspaceId: "workspace-a",
+      path: "/repo/packages",
+      includeHidden: false,
+    };
+    const otherWorkspaceInput = {
+      workspaceId: "workspace-b",
+      path: "/repo/src",
+      includeHidden: false,
+    };
+
+    const firstScoped = await coordinator.read(scopedInput);
+    const sibling = await coordinator.read(siblingInput);
+    const otherWorkspace = await coordinator.read(otherWorkspaceInput);
+    coordinator.clearScope({
+      workspaceId: scopedInput.workspaceId,
+      path: scopedInput.path,
+      recursive: true,
+    });
+
+    const revalidatedScoped = await coordinator.read(scopedInput);
+    expect(revalidatedScoped).not.toBe(firstScoped);
+    expect(await coordinator.read(siblingInput)).toBe(sibling);
+    expect(await coordinator.read(otherWorkspaceInput)).toBe(otherWorkspace);
+    expect(reads).toBe(4);
+  });
+
+  test("rejects an active read when its scope is cleared and serializes revalidation", async () => {
+    const requests: Array<ReturnType<typeof deferred<Entry[]>>> = [];
+    const coordinator = new DirectoryListingCoordinator<Entry>({
+      readDirectory: async () => {
+        const pending = deferred<Entry[]>();
+        requests.push(pending);
+        return await pending.promise;
+      },
+    });
+    const input = {
+      workspaceId: "workspace-a",
+      path: "/repo",
+      includeHidden: false,
+    };
+
+    const stale = coordinator.read(input);
+    coordinator.clearScope({ workspaceId: input.workspaceId, path: input.path });
+    const latest = coordinator.read(input);
+    expect(requests).toHaveLength(1);
+
+    requests[0]?.resolve([{ path: "/repo/stale.ts", size: 1 }]);
+    await expect(stale).rejects.toBeInstanceOf(StaleDirectoryRequestError);
+    await Promise.resolve();
+    expect(requests).toHaveLength(2);
+
+    requests[1]?.resolve([{ path: "/repo/current.ts", size: 2 }]);
+    await expect(latest).resolves.toEqual([{ path: "/repo/current.ts", size: 2 }]);
+    expect(coordinator.getDiagnostics().maxConcurrentReads).toBe(1);
+  });
 });
 
 describe("workspace file change invalidation", () => {

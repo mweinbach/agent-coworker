@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { settleQualityPage } from "../assertions";
 import budgets from "../budgets.json" with { type: "json" };
 import { expect, type QualityDeltaBurstPath, test } from "../fixtures";
@@ -231,14 +233,69 @@ test("1,000-message transcript stays inside publication and render budgets", asy
   });
 });
 
-test("1,000-file tree stays inside filesystem, publication, and render budgets", async ({
+test("file explorer source does not synchronously read layout", async () => {
+  const source = await readFile(
+    new URL("../../src/ui/file-explorer/WorkspaceFileExplorer.tsx", import.meta.url),
+    "utf8",
+  );
+  expect(source).not.toMatch(
+    /\b(?:getBoundingClientRect|getClientRects|getComputedStyle|getTransitionSizes|useAutoAnimate|useLayoutEffect|offset(?:Width|Height|Top|Left)|client(?:Width|Height|Top|Left)|scroll(?:Width|Height|Top|Left))\b/,
+  );
+});
+
+test("1,000-entry nested file tree stays inside expansion and invalidation budgets", async ({
   quality,
 }, testInfo) => {
   const { electronApp, page } = quality;
   const fileRows = page.locator('[role="treeitem"]');
+  const rootFileRows = page.locator('[role="treeitem"][aria-level="1"]');
   const changedRow = page.locator('[data-file-row-key="/quality/project/fixture-0002.ts"]');
-  await expect(fileRows).toHaveCount(1_000);
+  const nestedDirectory = page.locator('[data-file-row-key="/quality/project/src/components"]');
+  await expect(rootFileRows).toHaveCount(1_000);
+  await quality.enableNestedFileTree();
+  await expect(page.getByRole("button", { name: "Expand src" })).toBeVisible();
+  await expect(rootFileRows).toHaveCount(1_000);
+
+  await settleQualityPage(page);
+  await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
+  await page.evaluate(() => {
+    window.__coworkQualityGate?.resetMetrics();
+  });
+  const expansionStartedAt = performance.now();
+  await page.getByRole("button", { name: "Expand src" }).click();
+  await expect(nestedDirectory).toBeVisible();
+  const expansionLatencyMs = performance.now() - expansionStartedAt;
+  await settleQualityPage(page);
+  const expansionRendererMetrics = await page.evaluate(() => {
+    if (!window.__coworkQualityGate) {
+      throw new Error("Quality gate runtime is unavailable");
+    }
+    return window.__coworkQualityGate.getMetrics();
+  });
+  const expansionMainMetrics = await quality.getMainMetrics();
+  expect(expansionLatencyMs).toBeLessThanOrEqual(budgets.fileTree.expansionLatencyMs);
+  expect(expansionMainMetrics.filesystemRequests).toBe(
+    budgets.fileTree.expansionFilesystemRequests,
+  );
+  expect(expansionRendererMetrics.reactCommits).toBeGreaterThan(0);
+  expect(expansionRendererMetrics.reactCommits).toBeLessThanOrEqual(
+    budgets.fileTree.expansionReactCommits,
+  );
+  expect(expansionRendererMetrics.fileExplorerRowRenders).toBeGreaterThan(0);
+  expect(expansionRendererMetrics.fileExplorerRowRenders).toBeLessThanOrEqual(
+    budgets.fileTree.expansionFileExplorerRowRenders,
+  );
+  await expect(rootFileRows).toHaveCount(1_000);
+  await expect(fileRows).toHaveCount(1_005);
+
   const samples = [];
+  samples.push({
+    expansion: {
+      latencyMs: expansionLatencyMs,
+      main: expansionMainMetrics,
+      renderer: expansionRendererMetrics,
+    },
+  });
   for (let runId = 1; runId <= 3; runId += 1) {
     await settleQualityPage(page);
     await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
@@ -247,7 +304,8 @@ test("1,000-file tree stays inside filesystem, publication, and render budgets",
     });
     await quality.emitFileChange(runId);
     await expect(changedRow).toContainText(`${513 + runId} B`);
-    await expect(fileRows).toHaveCount(1_000);
+    await expect(rootFileRows).toHaveCount(1_000);
+    await expect(fileRows).toHaveCount(1_005);
     await settleQualityPage(page);
     const rendererMetrics = await page.evaluate(() => {
       if (!window.__coworkQualityGate) {

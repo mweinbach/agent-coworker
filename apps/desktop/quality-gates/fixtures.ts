@@ -62,6 +62,7 @@ export type QualityHarness = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): Promise<QualityDeltaBurstDescriptor>;
+  enableNestedFileTree(): Promise<void>;
   emitFileChange(runId: number): Promise<void>;
   emitInteractionQueue(): Promise<void>;
   emitLongTranscript(count: number, runId: number): Promise<string>;
@@ -475,6 +476,15 @@ async function launchQualityHarness(
           },
           { count, path, runId },
         ),
+      enableNestedFileTree: async () => {
+        await electronApp.evaluate(() => {
+          const control = globalThis.__coworkQualityGateMain;
+          if (!control) {
+            throw new Error("Quality-gate main control is unavailable");
+          }
+          control.enableNestedFileTree();
+        });
+      },
       emitFileChange: async (runId) => {
         await electronApp.evaluate((_electron, revision) => {
           const control = globalThis.__coworkQualityGateMain;

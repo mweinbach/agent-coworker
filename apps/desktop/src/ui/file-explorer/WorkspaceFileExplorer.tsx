@@ -1,6 +1,3 @@
-import type { AutoAnimationPlugin } from "@formkit/auto-animate";
-import { getTransitionSizes } from "@formkit/auto-animate";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
 import {
   ChevronRightIcon,
   FileIcon,
@@ -15,6 +12,7 @@ import type { ExplorerEntry } from "../../app/types";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import {
+  clearDirectoryListingScope,
   confirmAction,
   invalidateDirectoryListing,
   isStaleDirectoryListingError,
@@ -30,72 +28,34 @@ import { recordDesktopRenderMetric } from "../renderDiagnostics";
 export type WorkspaceFileExplorerProps = {
   workspaceId: string;
   className?: string;
+  commands?: WorkspaceFileExplorerCommands;
 };
 
-const AUTO_REFRESH_INTERVAL_MS = 5000;
+export type WorkspaceFileExplorerCommands = {
+  clearDirectoryListingScope: typeof clearDirectoryListingScope;
+  invalidateDirectoryListing: typeof invalidateDirectoryListing;
+  isStaleDirectoryListingError: typeof isStaleDirectoryListingError;
+  listDirectory: typeof listDirectory;
+  onWorkspaceFileChanged: typeof onWorkspaceFileChanged;
+  unwatchWorkspaceDirectory: typeof unwatchWorkspaceDirectory;
+  watchWorkspaceDirectory: typeof watchWorkspaceDirectory;
+};
+
+const DEFAULT_EXPLORER_COMMANDS: WorkspaceFileExplorerCommands = {
+  clearDirectoryListingScope,
+  invalidateDirectoryListing,
+  isStaleDirectoryListingError,
+  listDirectory,
+  onWorkspaceFileChanged,
+  unwatchWorkspaceDirectory,
+  watchWorkspaceDirectory,
+};
+
+const FALLBACK_REFRESH_INTERVAL_MS = 5_000;
+const WATCH_REVALIDATION_INTERVAL_MS = 30_000;
 const FILE_EXPLORER_CONTROL_SELECTOR = "[data-file-explorer-control='true']";
 /** Two clicks on the same folder within this window open the native folder instead of toggling twice. */
 const FOLDER_DOUBLE_CLICK_MS = 320;
-
-/** Add/remove/move keyframes for file tree rows (AutoAnimate plugin). */
-const fileExplorerTreeAnimate: AutoAnimationPlugin = (el, action, coordA, coordB) => {
-  const moveMs = 300;
-
-  if (action === "add") {
-    return new KeyframeEffect(
-      el,
-      [
-        { opacity: 0, transform: "translateY(-3px) scale(0.99)" },
-        { opacity: 1, transform: "translateY(0) scale(1)" },
-      ],
-      { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-    );
-  }
-
-  if (action === "remove") {
-    return new KeyframeEffect(
-      el,
-      [
-        { opacity: 1, transform: "scale(1)" },
-        { opacity: 0, transform: "scale(0.96)" },
-      ],
-      { duration: 240, easing: "ease-out", fill: "both" },
-    );
-  }
-
-  if (action === "remain" && coordA && coordB) {
-    const oldCoords = coordA;
-    const newCoords = coordB;
-    let deltaLeft = oldCoords.left - newCoords.left;
-    let deltaTop = oldCoords.top - newCoords.top;
-    const deltaRight = oldCoords.left + oldCoords.width - (newCoords.left + newCoords.width);
-    const deltaBottom = oldCoords.top + oldCoords.height - (newCoords.top + newCoords.height);
-    if (deltaBottom === 0) deltaTop = 0;
-    if (deltaRight === 0) deltaLeft = 0;
-    const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(el, oldCoords, newCoords);
-    const start: Record<string, string> = {
-      transform: `translate(${deltaLeft}px, ${deltaTop}px)`,
-    };
-    const end: Record<string, string> = {
-      transform: "translate(0, 0)",
-    };
-    if (widthFrom !== widthTo) {
-      start.width = `${widthFrom}px`;
-      end.width = `${widthTo}px`;
-    }
-    if (heightFrom !== heightTo) {
-      start.height = `${heightFrom}px`;
-      end.height = `${heightTo}px`;
-    }
-    return new KeyframeEffect(el, [start, end], {
-      duration: moveMs,
-      easing: "ease-out",
-      fill: "both",
-    });
-  }
-
-  return new KeyframeEffect(el, [{ opacity: 1 }, { opacity: 1 }], { duration: 0 });
-};
 
 type DirectorySnapshot = {
   entries: ExplorerEntry[];
@@ -107,9 +67,6 @@ type DirectorySnapshot = {
 
 /** In-memory listing cache per workspace root so revisiting a workspace is instant (no blank tree). */
 const explorerDirectorySessionByScope = new Map<string, Record<string, DirectorySnapshot>>();
-/** Idle prefetch is intentionally bounded so expansion work cannot fan out across large trees. */
-const PREFETCH_DIRECTORY_BUDGET = 8;
-const PREFETCH_CONCURRENCY = 4;
 
 function explorerScopeKey(workspaceId: string, rootPath: string): string {
   return `${workspaceId}:${normalizeExplorerPath(rootPath)}`;
@@ -126,23 +83,6 @@ function prepareDirectorySessionSnapshot(
     next[path] = { ...snapshot, loading: false };
   }
   return changed ? next : data;
-}
-
-async function runPool<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
-  if (items.length === 0) return;
-  const queue = items.slice();
-  const worker = async () => {
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (item !== undefined) await fn(item);
-    }
-  };
-  const n = Math.min(concurrency, items.length);
-  await Promise.all(Array.from({ length: n }, () => worker()));
 }
 
 type DirectorySnapshotSummary = Pick<DirectorySnapshot, "error" | "fingerprint">;
@@ -227,15 +167,6 @@ function isExplorerPathWithin(candidatePath: string, ancestorPath: string): bool
   }
   const prefix = ancestorPath.endsWith("/") ? ancestorPath : `${ancestorPath}/`;
   return candidatePath.startsWith(prefix);
-}
-
-function scheduleIdleWork(work: () => void): () => void {
-  if (typeof window.requestIdleCallback === "function") {
-    const handle = window.requestIdleCallback(work, { timeout: 250 });
-    return () => window.cancelIdleCallback(handle);
-  }
-  const handle = window.setTimeout(work, 0);
-  return () => window.clearTimeout(handle);
 }
 
 function shouldSuppressExplorerEntry(entry: ExplorerEntry, showHiddenFiles: boolean): boolean {
@@ -583,6 +514,7 @@ const ExplorerTreeRowView = memo(
 export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   workspaceId,
   className,
+  commands = DEFAULT_EXPLORER_COMMANDS,
 }: WorkspaceFileExplorerProps) {
   const workspace = useAppStore((s) => s.workspaces.find((w) => w.id === workspaceId) ?? null);
   const workspacePath = workspace?.path ?? null;
@@ -634,13 +566,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const rootSnapshot = directoryByPath[rootPath];
   const rootLabel = formatPathLabel(rootPath);
-  const [autoAnimateRef] = useAutoAnimate(fileExplorerTreeAnimate);
-  const setTreeListEl = useCallback(
-    (node: HTMLDivElement | null) => {
-      autoAnimateRef(node);
-    },
-    [autoAnimateRef],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -694,7 +619,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       });
 
       try {
-        const listed = await listDirectory({
+        const listed = await commands.listDirectory({
           workspaceId,
           path: targetPath,
           includeHidden: showHiddenFiles,
@@ -734,7 +659,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         if (
           !mountedRef.current ||
           scopeRef.current !== requestScope ||
-          isStaleDirectoryListingError(error)
+          commands.isStaleDirectoryListingError(error)
         ) {
           return;
         }
@@ -759,7 +684,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         });
       }
     },
-    [showHiddenFiles, workspaceId],
+    [commands, showHiddenFiles, workspaceId],
   );
 
   const refreshExpandedDirectories = useCallback(
@@ -784,7 +709,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
           if (invalidate) {
             for (const path of paths) {
-              invalidateDirectoryListing({ workspaceId, path });
+              commands.invalidateDirectoryListing({ workspaceId, path });
             }
           }
           invalidate = false;
@@ -796,7 +721,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         syncInFlightRef.current = false;
       }
     },
-    [loadDirectory, workspaceId],
+    [commands, loadDirectory, workspaceId],
   );
 
   const toggleDirectory = useCallback(
@@ -853,6 +778,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     scopeRef.current = scope;
 
     const normalizedRoot = normalizeExplorerPath(rootPath);
+    commands.clearDirectoryListingScope({
+      workspaceId,
+      path: normalizedRoot,
+      recursive: true,
+    });
     const cached = explorerDirectorySessionByScope.get(scope);
     const nextMap = cached ?? {};
     setDirectoryByPath(nextMap);
@@ -869,7 +799,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         void loadDirectory(rootPath).catch(() => {});
       }
     }
-  }, [contextSidebarCollapsed, loadDirectory, rootPath, selectFile, workspaceId]);
+  }, [commands, contextSidebarCollapsed, loadDirectory, rootPath, selectFile, workspaceId]);
 
   useEffect(() => {
     return () => {
@@ -884,49 +814,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, []);
 
   useEffect(() => {
-    if (
-      !rootPath ||
-      contextSidebarCollapsed ||
-      document.visibilityState !== "visible" ||
-      !rootSnapshot ||
-      rootSnapshot.loading ||
-      rootSnapshot.error
-    ) {
+    if (!rootPath || contextSidebarCollapsed) {
+      setWatchSupported(null);
       return;
     }
-    let cancelled = false;
-    const childDirectories = rootSnapshot.entries
-      .filter((entry) => entry.isDirectory)
-      .slice(0, PREFETCH_DIRECTORY_BUDGET)
-      .map((entry) => normalizeExplorerPath(entry.path));
-    const cancelIdleWork = scheduleIdleWork(() => {
-      void runPool(childDirectories, PREFETCH_CONCURRENCY, async (directoryPath) => {
-        if (cancelled || !explorerActiveRef.current) return;
-        const p = normalizeExplorerPath(directoryPath);
-        const snap = directoryByPathRef.current[p];
-        if (snap?.updatedAt != null && !snap.error) return;
-        await loadDirectory(p, { silent: true });
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      cancelIdleWork();
-    };
-  }, [
-    contextSidebarCollapsed,
-    loadDirectory,
-    rootPath,
-    rootSnapshot?.entries,
-    rootSnapshot?.error,
-    rootSnapshot?.loading,
-  ]);
-
-  useEffect(() => {
-    if (!rootPath) return;
     let subscribed = true;
     setWatchSupported(null);
-    const stopListening = onWorkspaceFileChanged((event) => {
+    const stopListening = commands.onWorkspaceFileChanged((event) => {
       if (
         event.workspaceId !== workspaceId ||
         normalizeExplorerPath(event.rootPath) !== rootPathRef.current
@@ -985,7 +879,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         ),
       );
     });
-    void watchWorkspaceDirectory({ workspaceId, rootPath })
+    void commands
+      .watchWorkspaceDirectory({ workspaceId, rootPath })
       .then((supported) => {
         if (subscribed) {
           setWatchSupported(supported);
@@ -1000,13 +895,14 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     return () => {
       subscribed = false;
       stopListening();
-      void unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => {});
+      commands.clearDirectoryListingScope({ workspaceId, path: rootPath, recursive: true });
+      void commands.unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => {});
     };
-  }, [loadDirectory, rootPath, workspaceId]);
+  }, [commands, contextSidebarCollapsed, loadDirectory, rootPath, workspaceId]);
 
   useEffect(() => {
     if (!rootPath || contextSidebarCollapsed) return;
-    void refreshExpandedDirectories();
+    void refreshExpandedDirectories({ invalidate: true });
   }, [contextSidebarCollapsed, rootPath, refreshExpandedDirectories, showHiddenFiles]);
 
   useEffect(() => {
@@ -1015,7 +911,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, [contextSidebarCollapsed, refreshExpandedDirectories, refreshSignal, rootPath]);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed || watchSupported !== false) return;
+    if (!rootPath || contextSidebarCollapsed) return;
+    const intervalMs =
+      watchSupported === true ? WATCH_REVALIDATION_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS;
     const interval = window.setInterval(() => {
       if (
         !shouldAutoRefreshExplorer(
@@ -1027,7 +925,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         return;
       }
       void refreshExpandedDirectories({ invalidate: true });
-    }, AUTO_REFRESH_INTERVAL_MS);
+    }, intervalMs);
 
     return () => window.clearInterval(interval);
   }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath, watchSupported]);
@@ -1036,11 +934,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     if (!rootPath || contextSidebarCollapsed) return;
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        void refreshExpandedDirectories({ invalidate: watchSupported === false });
+        void refreshExpandedDirectories({ invalidate: true });
       }
     };
     const onFocus = () => {
-      void refreshExpandedDirectories({ invalidate: watchSupported === false });
+      void refreshExpandedDirectories({ invalidate: true });
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -1050,7 +948,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath, watchSupported]);
+  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath]);
 
   const openEntryMenu = useCallback(
     async (entry: ExplorerEntry) => {
@@ -1241,12 +1139,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
         ) : (
-          <div
-            ref={setTreeListEl}
-            role="tree"
-            aria-label={`Workspace files for ${rootLabel}`}
-            className="space-y-0.5"
-          >
+          <div role="tree" aria-label={`Workspace files for ${rootLabel}`} className="space-y-0.5">
             {treeRows.map((row) => (
               <ExplorerTreeRowView
                 key={explorerRowDomKey(row)}

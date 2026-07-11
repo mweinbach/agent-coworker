@@ -99,6 +99,7 @@ type QualityMainControl = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): QualityDeltaBurstDescriptor;
+  enableNestedFileTree(): void;
   emitFileChange(runId: number): void;
   emitInteractionQueue(): void;
   emitLongTranscript(count: number, runId: number): string;
@@ -150,6 +151,7 @@ let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 let explorerRevision = 0;
+let nestedExplorerFixture = false;
 const researchRecords = new Map<string, ResearchRecord>();
 const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
@@ -199,6 +201,17 @@ globalThis.__coworkQualityGateMain = {
     emitCompletion();
   },
   emitDeltaBurst: (count, runId, path) => emitDeltaBurst(count, runId, path),
+  enableNestedFileTree: () => {
+    nestedExplorerFixture = true;
+    mainWindow?.webContents.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, {
+      workspaceId: PROJECT_WORKSPACE_ID,
+      rootPath: "/quality/project",
+      kind: "modify",
+      changedPaths: ["/quality/project"],
+      affectedDirectoryPaths: ["/quality/project"],
+      invalidatedSubtreePaths: [],
+    });
+  },
   emitFileChange: (runId) => {
     explorerRevision = runId;
     mainWindow?.webContents.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, {
@@ -443,21 +456,102 @@ function createPlatformChrome(): PlatformChromeInfo {
   };
 }
 
-function createExplorerEntries(revision = 0): ExplorerEntry[] {
-  return Array.from({ length: 1_000 }, (_, index) => {
-    const fileNumber = String(index + 1).padStart(4, "0");
-    return {
-      name: index === 0 ? "quality-gate-report.md" : `fixture-${fileNumber}.ts`,
-      path:
-        index === 0
-          ? "/quality/project/quality-gate-report.md"
-          : `/quality/project/fixture-${fileNumber}.ts`,
+function createExplorerEntries(path: string, revision = 0): ExplorerEntry[] {
+  const modifiedAtMs = Date.parse(FIXED_NOW);
+  if (!nestedExplorerFixture) {
+    if (path !== "/quality/project") {
+      return [];
+    }
+    return Array.from({ length: 1_000 }, (_, index) => {
+      const fileNumber = String(index + 1).padStart(4, "0");
+      return {
+        name: index === 0 ? "quality-gate-report.md" : `fixture-${fileNumber}.ts`,
+        path:
+          index === 0
+            ? "/quality/project/quality-gate-report.md"
+            : `/quality/project/fixture-${fileNumber}.ts`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 512 + index + (index === 1 ? revision : 0),
+        modifiedAtMs,
+      };
+    });
+  }
+  if (path === "/quality/project/src") {
+    return [
+      {
+        name: "components",
+        path: "/quality/project/src/components",
+        isDirectory: true,
+        isHidden: false,
+        sizeBytes: null,
+        modifiedAtMs,
+      },
+      ...["index.ts", "state.ts", "watcher.ts", "workspace.ts"].map((name, index) => ({
+        name,
+        path: `/quality/project/src/${name}`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 1_024 + index,
+        modifiedAtMs,
+      })),
+    ];
+  }
+  if (path === "/quality/project/src/components") {
+    return ["ExplorerRow.tsx", "FileTree.tsx", "TreeStatus.tsx"].map((name, index) => ({
+      name,
+      path: `/quality/project/src/components/${name}`,
       isDirectory: false,
       isHidden: false,
-      sizeBytes: 512 + index + (index === 1 ? revision : 0),
-      modifiedAtMs: Date.parse(FIXED_NOW),
-    };
-  });
+      sizeBytes: 2_048 + index,
+      modifiedAtMs,
+    }));
+  }
+  if (path !== "/quality/project") {
+    return [];
+  }
+
+  return [
+    {
+      name: "src",
+      path: "/quality/project/src",
+      isDirectory: true,
+      isHidden: false,
+      sizeBytes: null,
+      modifiedAtMs,
+    },
+    {
+      name: "quality-gate-report.md",
+      path: "/quality/project/quality-gate-report.md",
+      isDirectory: false,
+      isHidden: false,
+      sizeBytes: 512,
+      modifiedAtMs,
+    },
+    ...Array.from({ length: 998 }, (_, index) => {
+      const fileNumber = String(index + 2).padStart(4, "0");
+      return {
+        name: `fixture-${fileNumber}.ts`,
+        path: `/quality/project/fixture-${fileNumber}.ts`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 513 + index + (index === 0 ? revision : 0),
+        modifiedAtMs,
+      };
+    }),
+  ];
+}
+
+function directoryPathFromIpcInput(input: unknown): string {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "path" in input &&
+    typeof input.path === "string"
+  ) {
+    return input.path.replace(/\\/g, "/").replace(/\/+$/, "");
+  }
+  return "";
 }
 
 const hydratedTranscript = {
@@ -1625,7 +1719,7 @@ async function handleIpc(
       return [];
     case DESKTOP_IPC_CHANNELS.listDirectory:
       metrics.filesystemRequests += 1;
-      return createExplorerEntries(explorerRevision);
+      return createExplorerEntries(directoryPathFromIpcInput(input), explorerRevision);
     case DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory:
       return true;
     case DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory:

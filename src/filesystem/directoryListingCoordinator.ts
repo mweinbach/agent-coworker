@@ -252,11 +252,35 @@ export class DirectoryListingCoordinator<Entry> {
     }
   }
 
+  clearScope(input: DirectoryListingInvalidation): void {
+    const normalizedPath = normalizeDirectoryListingPath(input.path);
+    for (const [key, slot] of this.slots) {
+      const separator = key.indexOf("\0");
+      const workspaceId = key.slice(0, separator);
+      const path = key.slice(separator + 1);
+      const pathMatches =
+        path === normalizedPath ||
+        (input.recursive === true && isSameOrDescendantPath(path, normalizedPath));
+      if (workspaceId !== input.workspaceId || !pathMatches) {
+        continue;
+      }
+      this.advanceGeneration(slot);
+      slot.lastEntries = undefined;
+      if (!slot.active && !slot.queueTail) {
+        this.slots.delete(key);
+      }
+    }
+  }
+
   clearWorkspace(workspaceId: string): void {
     const prefix = `${workspaceId}\0`;
-    for (const key of this.slots.keys()) {
+    for (const [key, slot] of this.slots) {
       if (key.startsWith(prefix)) {
-        this.slots.delete(key);
+        this.advanceGeneration(slot);
+        slot.lastEntries = undefined;
+        if (!slot.active && !slot.queueTail) {
+          this.slots.delete(key);
+        }
       }
     }
   }

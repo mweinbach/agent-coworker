@@ -177,6 +177,7 @@ export function createDesktopCommandsMock(
     showCanvasWindow: async () => {},
     showQuickChatWindow: async (_opts?: { threadId?: string; newThread?: boolean }) => {},
     listDirectory: async () => [],
+    clearDirectoryListingScope: () => {},
     invalidateDirectoryListing: () => {},
     invalidateWorkspaceFileChange: () => {},
     isStaleDirectoryListingError: () => false,

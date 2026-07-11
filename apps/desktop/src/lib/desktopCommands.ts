@@ -276,6 +276,14 @@ export function invalidateDirectoryListing(input: {
   directoryListingCoordinator.invalidate(input);
 }
 
+export function clearDirectoryListingScope(input: {
+  workspaceId: string;
+  path: string;
+  recursive?: boolean;
+}): void {
+  directoryListingCoordinator.clearScope(input);
+}
+
 export function invalidateWorkspaceFileChange(event: WorkspaceFileChangeEvent): void {
   for (const path of event.affectedDirectoryPaths) {
     directoryListingCoordinator.invalidate({

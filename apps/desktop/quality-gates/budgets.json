@@ -15,6 +15,10 @@
     "unrelatedSidebarRowRenders": 6
   },
   "fileTree": {
+    "expansionFileExplorerRowRenders": 8,
+    "expansionFilesystemRequests": 1,
+    "expansionLatencyMs": 1000,
+    "expansionReactCommits": 6,
     "fileExplorerRowRenders": 1,
     "filesystemRequests": 1,
     "reactCommits": 6,

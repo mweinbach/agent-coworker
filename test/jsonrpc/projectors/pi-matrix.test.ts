@@ -170,5 +170,102 @@ describe("JSON-RPC projectors", () => {
       ]);
       expect(new Set(journalFinalTools.map((event) => event.payload?.item?.id)).size).toBe(2);
     });
+
+    test(`projectors coalesce PI tool deltas and apply final errors for ${provider}`, () => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const emissions: Array<{ eventType: string; payload: any }> = [];
+      const live = createJsonRpcNotificationProjector({
+        threadId: sessionId,
+        send: (message) => outbound.push(message as { method: string; params?: any }),
+      });
+      const journal = createThreadJournalNotificationProjector({
+        threadId: sessionId,
+        emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+      });
+
+      for (const projector of [live, journal] as const) {
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          busy: true,
+          turnId,
+          cause: "user_message",
+        });
+        projector.handle(
+          piChunk(provider, model, "tool_input_start", {
+            id: "tool_call_final_error",
+            toolName: "bash",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_final_error",
+            delta: '{"command":"bun ',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_final_error",
+            delta: 'test"}',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_end", {
+            id: "tool_call_final_error",
+            toolName: "bash",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_result", {
+            toolCallId: "tool_call_final_error",
+            toolName: "bash",
+            output: { exitCode: 0 },
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_error", {
+            toolCallId: "tool_call_final_error",
+            toolName: "bash",
+            error: "provider rejected final output",
+          }),
+        );
+      }
+
+      const liveCompletedTools = outbound
+        .filter((message) => message.method === "item/completed")
+        .map((message) => message.params?.item)
+        .filter(
+          (item) =>
+            item?.type === "toolCall" &&
+            (item.state === "output-available" || item.state === "output-error"),
+        );
+      expect(liveCompletedTools.map((item) => item.state)).toEqual([
+        "output-available",
+        "output-error",
+      ]);
+      expect(new Set(liveCompletedTools.map((item) => item.id)).size).toBe(1);
+      expect(liveCompletedTools.at(-1)).toMatchObject({
+        args: { command: "bun test" },
+        result: { error: "provider rejected final output" },
+      });
+
+      const journalCompletedTools = emissions
+        .filter((event) => event.eventType === "item/completed")
+        .map((event) => event.payload?.item)
+        .filter(
+          (item) =>
+            item?.type === "toolCall" &&
+            (item.state === "output-available" || item.state === "output-error"),
+        );
+      expect(journalCompletedTools.map((item) => item.state)).toEqual([
+        "output-available",
+        "output-error",
+      ]);
+      expect(new Set(journalCompletedTools.map((item) => item.id)).size).toBe(1);
+      expect(journalCompletedTools.at(-1)).toMatchObject({
+        args: { command: "bun test" },
+        result: { error: "provider rejected final output" },
+      });
+    });
   }
 });

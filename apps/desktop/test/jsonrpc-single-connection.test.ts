@@ -459,7 +459,7 @@ function seedActiveThreadState() {
         sessionId: "jsonrpc-thread-1",
       },
     },
-    composerText: "",
+    composerDraftsByKey: {},
   } as any);
 }
 
@@ -538,7 +538,7 @@ describe("desktop JSON-RPC single connection path", () => {
       providerAuthMethodsByProvider: {},
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
-      composerText: "",
+      composerDraftsByKey: {},
       injectContext: false,
       developerMode: false,
       showHiddenFiles: false,
@@ -888,7 +888,7 @@ describe("desktop JSON-RPC single connection path", () => {
       code: "internal_error",
       source: "protocol",
     });
-    expect(useAppStore.getState().composerText).toBe("");
+    expect(useAppStore.getState().composerDraftsByKey).toEqual({});
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
   });
 
@@ -1204,7 +1204,7 @@ describe("desktop JSON-RPC single connection path", () => {
           feed: [],
         },
       },
-      composerText: "",
+      composerDraftsByKey: {},
     } as any);
 
     const attachment = {

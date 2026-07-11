@@ -62,10 +62,12 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
   publications (plus filesystem requests for the file-tree probe), then remain below the reviewed
   upper budgets in `budgets.json`; wall-clock timing is intentionally not used.
 
-The profiling budgets were calibrated over nine Linux samples per scenario: delta bursts recorded
-2,006–2,007 commits, long transcripts 1,576–1,594 commits, and file trees two commits with one
-filesystem request. The checked limits retain CI scheduling headroom without allowing a zero-value
-or inactive probe to pass.
+The delta-burst probe also budgets content publications, feed and row renders, streaming/full
+Markdown transitions, feed derivation size, and unrelated sidebar-row renders. The long-transcript
+probe budgets both derivation size and mounted rows. Completion is released by an explicit harness
+handshake after the live-stream state is observed, so slower hosts cannot skip the streaming phase.
+The checked limits retain CI scheduling headroom without allowing a zero-value or inactive probe to
+pass.
 
 ## Failure diagnostics
 

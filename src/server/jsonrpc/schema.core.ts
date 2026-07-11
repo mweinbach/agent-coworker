@@ -14,6 +14,7 @@ const jsonRpcInitializeParamsSchema = z
     capabilities: z
       .object({
         experimentalApi: z.boolean().optional(),
+        toolRetryLineage: z.boolean().optional(),
         optOutNotificationMethods: z.array(nonEmptyTrimmedStringSchema).optional(),
       })
       .strict()
@@ -41,6 +42,7 @@ export const jsonRpcCoreResultSchemas = {
       capabilities: z
         .object({
           experimentalApi: z.boolean(),
+          toolRetryLineage: z.boolean().optional(),
         })
         .strict(),
       transport: z

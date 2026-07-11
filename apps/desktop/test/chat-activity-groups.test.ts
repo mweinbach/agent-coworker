@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import type { FeedItem } from "../src/app/types";
 import {
   buildChatRenderItems,
+  latestRetryableActivityGroupId,
   shouldShowWorkingPlaceholder,
   summarizeActivityGroup,
+  unresolvedToolFailureIds,
 } from "../src/ui/chat/activityGroups";
 
 describe("desktop chat activity groups", () => {
@@ -51,7 +53,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2], feed[3]] },
+      {
+        kind: "activity-group",
+        id: "activity-r1",
+        items: [feed[1], feed[2], feed[3]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[4] },
     ]);
   });
@@ -90,7 +97,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-t1", items: [feed[1]] },
+      {
+        kind: "activity-group",
+        id: "activity-t1",
+        items: [feed[1]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[2] },
       { kind: "feed-item", item: feed[3] },
     ]);
@@ -125,7 +137,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r1", items: [feed[1], feed[2]] },
+      {
+        kind: "activity-group",
+        id: "activity-r1",
+        items: [feed[1], feed[2]],
+        recoveredToolIds: [],
+      },
       { kind: "feed-item", item: feed[3] },
     ]);
   });
@@ -150,7 +167,12 @@ describe("desktop chat activity groups", () => {
 
     expect(buildChatRenderItems(feed)).toEqual([
       { kind: "feed-item", item: feed[0] },
-      { kind: "activity-group", id: "activity-r-pending", items: [feed[1]] },
+      {
+        kind: "activity-group",
+        id: "activity-r-pending",
+        items: [feed[1]],
+        recoveredToolIds: [],
+      },
     ]);
   });
 
@@ -307,7 +329,7 @@ describe("desktop chat activity groups", () => {
     expect(summary.statusLabel).toBe("Needs review");
   });
 
-  test("summary hides recovered tool failures from the user-facing trace", () => {
+  test("summary preserves a failure after later same-tool success without retry lineage", () => {
     const summary = summarizeActivityGroup([
       {
         id: "r1",
@@ -344,17 +366,18 @@ describe("desktop chat activity groups", () => {
       },
     ]);
 
-    expect(summary.status).toBe("done");
-    expect(summary.statusLabel).toBe("Done");
-    expect(summary.entries).toHaveLength(3);
-    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["r1", "t-edit", "t-success"]);
-    expect(
-      summary.entries.some((entry) => entry.kind === "tool" && entry.item.state === "output-error"),
-    ).toBe(false);
-    expect(summary.toolCount).toBe(2);
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "r1",
+      "t-failed",
+      "t-edit",
+      "t-success",
+    ]);
+    expect(summary.toolCount).toBe(3);
   });
 
-  test("summary keeps a failed skill lookup when a different tool succeeds", () => {
+  test("summary preserves a failed skill lookup when an unrelated tool succeeds", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t-skill",
@@ -381,7 +404,6 @@ describe("desktop chat activity groups", () => {
       },
     ]);
 
-    // Unrelated later tools must not hide earlier skill failures.
     expect(summary.status).toBe("issue");
     expect(summary.entries.map((entry) => entry.item.id)).toEqual([
       "t-skill",
@@ -413,6 +435,30 @@ describe("desktop chat activity groups", () => {
     );
   });
 
+  test("summary keeps denied tools in issue state ahead of pending approval", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t-denied",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-denied",
+        result: { denied: true },
+      },
+      {
+        id: "t-approval",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "approval-requested",
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.statusLabel).toBe("Issue");
+    expect(summary.entries).toHaveLength(2);
+  });
+
   test("summary collapses adjacent tool lifecycle updates into one trace row", () => {
     const summary = summarizeActivityGroup([
       {
@@ -424,7 +470,7 @@ describe("desktop chat activity groups", () => {
         args: { path: "model.py" },
       },
       {
-        id: "t2",
+        id: "t1",
         kind: "tool",
         ts: "2024-01-01T00:00:03.000Z",
         name: "read",
@@ -441,7 +487,7 @@ describe("desktop chat activity groups", () => {
       state: "output-available",
       args: { path: "model.py" },
       result: { chars: 655 },
-      sourceIds: ["t1", "t2"],
+      sourceIds: ["t1"],
     });
   });
 
@@ -472,7 +518,7 @@ describe("desktop chat activity groups", () => {
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary merges adjacent duplicate completed tool rows with identical args and result", () => {
+  test("summary preserves repeated completed tools without shared lifecycle identity", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -495,11 +541,11 @@ describe("desktop chat activity groups", () => {
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
-    expect(toolEntries).toHaveLength(1);
-    expect(toolEntries[0]?.item.sourceIds).toEqual(["t1", "t2"]);
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary merges a generic completed row with a richer adjacent completed row for the same tool", () => {
+  test("summary preserves richer completed rows with distinct lifecycle identities", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -520,18 +566,11 @@ describe("desktop chat activity groups", () => {
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
-    expect(toolEntries).toHaveLength(1);
-    expect(toolEntries[0]?.item).toMatchObject({
-      id: "t1",
-      name: "todoWrite",
-      state: "output-available",
-      args: { count: 4 },
-      result: { count: 4 },
-      sourceIds: ["t1", "t2"],
-    });
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
   });
 
-  test("summary merges a verbose string result with a compact summary result for the same tool call", () => {
+  test("summary preserves compact completed rows with distinct lifecycle identities", () => {
     const summary = summarizeActivityGroup([
       {
         id: "t1",
@@ -554,14 +593,40 @@ describe("desktop chat activity groups", () => {
     ]);
 
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
-    expect(toolEntries).toHaveLength(1);
-    expect(toolEntries[0]?.item).toMatchObject({
-      id: "t1",
-      name: "read",
-      state: "output-available",
-      args: { filePath: "model.py", offset: 1, limit: 20 },
-      result: { chars: 18 },
-      sourceIds: ["t1", "t2"],
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
+  });
+
+  test("summary applies an authoritative final error to the same stable call id", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { exitCode: 0 },
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "provider rejected final output" },
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.entries).toHaveLength(1);
+    expect(summary.entries[0]).toMatchObject({
+      kind: "tool",
+      item: {
+        id: "t1",
+        state: "output-error",
+        result: { error: "provider rejected final output" },
+        sourceIds: ["t1"],
+      },
     });
   });
 
@@ -687,6 +752,202 @@ describe("desktop chat activity groups", () => {
     const toolEntries = summary.entries.filter((entry) => entry.kind === "tool");
     expect(toolEntries).toHaveLength(2);
     expect(toolEntries.map((entry) => entry.item.sourceIds)).toEqual([["t1"], ["t2"]]);
+  });
+
+  test("explicit successful retry keeps both calls visible and resolves the targeted failure", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test" },
+        result: { error: "failed" },
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        result: { exitCode: 0 },
+        retryOf: "failed",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.recoveredToolIds).toEqual(["failed"]);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual(["failed", "replacement"]);
+  });
+
+  test("a later successful attempt recovers failed descendants in the same retry chain", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "original",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "failed-retry",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed again" },
+        retryOf: "original",
+      },
+      {
+        id: "successful-retry",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        result: { ok: true },
+        retryOf: "original",
+      },
+    ]);
+
+    expect(summary.status).toBe("done");
+    expect(summary.recoveredToolIds).toEqual(["original", "failed-retry"]);
+    expect(summary.entries.map((entry) => entry.item.id)).toEqual([
+      "original",
+      "failed-retry",
+      "successful-retry",
+    ]);
+  });
+
+  test("one successful retry leaves another failure unresolved", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "failed-one",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test one" },
+      },
+      {
+        id: "failed-two",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test two" },
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test one" },
+        retryOf: "failed-one",
+      },
+    ]);
+
+    expect(summary.status).toBe("issue");
+    expect(summary.recoveredToolIds).toEqual(["failed-one"]);
+  });
+
+  test("projects recovery across turn boundaries without deleting either call", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        args: { command: "bun test" },
+      },
+      {
+        id: "assistant-boundary",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "The command failed.",
+      },
+      {
+        id: "retry-turn",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:03.000Z",
+        text: "Retry it.",
+      },
+      {
+        id: "replacement",
+        kind: "tool",
+        ts: "2024-01-01T00:00:04.000Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "bun test" },
+        retryOf: "failed",
+      },
+    ];
+
+    const groups = buildChatRenderItems(feed).filter(
+      (
+        item,
+      ): item is Extract<
+        ReturnType<typeof buildChatRenderItems>[number],
+        { kind: "activity-group" }
+      > => item.kind === "activity-group",
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.recoveredToolIds).toEqual(["failed"]);
+    expect(summarizeActivityGroup(groups[0]!.items, groups[0]!.recoveredToolIds).status).toBe(
+      "done",
+    );
+    expect(unresolvedToolFailureIds(groups[0]!.items, groups[0]!.recoveredToolIds)).toEqual([]);
+    expect(groups[0]?.items.map((item) => item.id)).toEqual(["failed"]);
+    expect(groups[1]?.items.map((item) => item.id)).toEqual(["replacement"]);
+  });
+
+  test("targets the latest unresolved group past a trailing assistant explanation", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "user",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "Run the tests.",
+      },
+      {
+        id: "failed",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "bash",
+        state: "output-error",
+        result: { error: "failed" },
+      },
+      {
+        id: "explanation",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "The test command failed.",
+      },
+    ];
+
+    expect(latestRetryableActivityGroupId(buildChatRenderItems(feed))).toBe("activity-failed");
+    expect(
+      latestRetryableActivityGroupId(
+        buildChatRenderItems([
+          ...feed,
+          {
+            id: "new-user-turn",
+            kind: "message",
+            role: "user",
+            ts: "2024-01-01T00:00:03.000Z",
+            text: "Do something else.",
+          },
+        ]),
+      ),
+    ).toBeNull();
   });
 });
 

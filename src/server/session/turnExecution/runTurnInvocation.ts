@@ -1,3 +1,9 @@
+import { isFailedToolOutcome, type ToolRetryIntent } from "../../../shared/toolRetry";
+import {
+  createToolRetryAttemptTracker,
+  type ToolCallMetadata,
+} from "../../../shared/toolRetryAttempts";
+import { createRawToolRetryEventTracker } from "../../../shared/toolRetryRawEvents";
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
@@ -17,6 +23,24 @@ type TurnStreamTracker = {
   firstOutputObserved: boolean;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function rawToolKey(part: Record<string, unknown>): string | undefined {
+  return asNonEmptyString(part.toolCallId) ?? asNonEmptyString(part.id);
+}
+
+function rawToolName(part: Record<string, unknown>): string {
+  return asNonEmptyString(part.toolName) ?? "tool";
+}
+
 export type RunTurnInvocationDeps = {
   context: SessionContext;
   turnId: string;
@@ -30,6 +54,7 @@ export type RunTurnInvocationDeps = {
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   setAcceptingSteers: (accepting: boolean) => void;
   allowThreadManagementTools?: boolean;
+  toolRetryIntent?: ToolRetryIntent;
 };
 
 export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
@@ -46,7 +71,11 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     onAdvancedMemoryChanged,
     setAcceptingSteers,
     allowThreadManagementTools,
+    toolRetryIntent,
   } = deps;
+  const toolRetryTracker = createToolRetryAttemptTracker(toolRetryIntent);
+  const rawToolRetryTracker = createRawToolRetryEventTracker(toolRetryTracker);
+  const rawBackedToolKeys = new Set<string>();
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const abortSignal = context.state.abortController?.signal;
@@ -289,7 +318,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       onModelRawEvent: async (rawEvent) => {
         if (isTurnAborted()) return;
         const index = tracker.rawStreamEventIndex++;
-        const eventPayload = {
+        const baseEventPayload = {
           type: "model_stream_raw" as const,
           sessionId: context.id,
           turnId,
@@ -299,6 +328,14 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           format: rawEvent.format,
           normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
           event: rawEvent.event,
+        };
+        const rawTracking = rawToolRetryTracker.track(baseEventPayload);
+        for (const toolKey of rawTracking.toolKeys) {
+          rawBackedToolKeys.add(toolKey);
+        }
+        const eventPayload = {
+          ...baseEventPayload,
+          ...(rawTracking.metadata.length > 0 ? { toolCallMetadata: rawTracking.metadata } : {}),
         };
         context.emit(eventPayload);
         await context.deps.sessionDb?.persistModelStreamChunk({
@@ -320,6 +357,32 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           setAcceptingSteers(tracker.startedStepCount < context.state.maxSteps);
         }
 
+        const rawRecord = asRecord(rawPart);
+        const rawType = asNonEmptyString(rawRecord?.type);
+        const toolKey = rawRecord ? rawToolKey(rawRecord) : undefined;
+        const toolName = rawRecord ? rawToolName(rawRecord) : "tool";
+        let toolMetadata: ToolCallMetadata | null = null;
+        if (toolKey && rawType === "tool-input-start" && !rawBackedToolKeys.has(toolKey)) {
+          toolRetryTracker.start(toolKey, toolName);
+        } else if (toolKey && rawType === "tool-input-delta" && !rawBackedToolKeys.has(toolKey)) {
+          toolRetryTracker.appendInput(
+            toolKey,
+            typeof rawRecord?.delta === "string" ? rawRecord.delta : "",
+          );
+        } else if (toolKey && rawType === "tool-input-end" && !rawBackedToolKeys.has(toolKey)) {
+          toolMetadata = toolRetryTracker.finalizeBuffered(toolKey, toolName);
+        } else if (toolKey && rawType === "tool-call" && !rawBackedToolKeys.has(toolKey)) {
+          toolMetadata = toolRetryTracker.finalize(toolKey, toolName, rawRecord?.input);
+        } else if (toolKey && rawType === "tool-result") {
+          const output = rawRecord?.output;
+          toolRetryTracker.complete(
+            toolKey,
+            !isFailedToolOutcome(toolName, "output-available", output),
+          );
+        } else if (toolKey && (rawType === "tool-error" || rawType === "tool-output-denied")) {
+          toolRetryTracker.complete(toolKey, false);
+        }
+
         const partIndex = tracker.streamPartIndex++;
         const normalized = normalizeModelStreamPart(rawPart, {
           provider: context.state.config.provider,
@@ -327,6 +390,12 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           fallbackIdSeed: turnId,
           rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
         });
+        if (toolMetadata) {
+          normalized.part.inputDigest = toolMetadata.inputDigest;
+          if (toolMetadata.retryOf !== undefined) {
+            normalized.part.retryOf = toolMetadata.retryOf;
+          }
+        }
         if (normalized.partType === "error") {
           tracker.lastStreamError = normalized.part.error;
         }

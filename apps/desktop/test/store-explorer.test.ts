@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { registerCanvasDocumentTransitionHandler } from "../src/lib/canvasDocumentLifecycle";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
@@ -212,5 +213,43 @@ describe("store explorer actions", () => {
 
     expect(useAppStore.getState().filePreview).toBeNull();
     expect(openPathMock).toHaveBeenCalledWith({ path: archivePath });
+  });
+
+  test("keeps the current Canvas path when its transition cannot finish saving", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    const nextPath = `${rootPath}/next.md`;
+    useAppStore.setState({ filePreview: { path: currentPath } });
+    const unregister = registerCanvasDocumentTransitionHandler(async (requestedPath) => {
+      expect(requestedPath).toBe(nextPath);
+      return false;
+    });
+
+    try {
+      expect(await useAppStore.getState().openFilePreview({ path: nextPath })).toBe(false);
+      expect(useAppStore.getState().filePreview).toEqual({ path: currentPath });
+    } finally {
+      unregister();
+    }
+  });
+
+  test("closes Canvas only after its transition handler completes", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    useAppStore.setState({ filePreview: { path: currentPath }, isCanvasMaximized: true });
+    let transitionFinished = false;
+    const unregister = registerCanvasDocumentTransitionHandler(async (requestedPath) => {
+      expect(requestedPath).toBeNull();
+      await Promise.resolve();
+      transitionFinished = true;
+      return true;
+    });
+
+    try {
+      expect(await useAppStore.getState().closeFilePreview()).toBe(true);
+      expect(transitionFinished).toBe(true);
+      expect(useAppStore.getState().filePreview).toBeNull();
+      expect(useAppStore.getState().isCanvasMaximized).toBe(false);
+    } finally {
+      unregister();
+    }
   });
 });

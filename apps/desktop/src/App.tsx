@@ -7,6 +7,7 @@ import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
 import { Button } from "./components/ui/button";
+import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   confirmAction,
@@ -15,8 +16,10 @@ import {
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
+  onWindowCloseRequested,
   onWorkspaceServerExited,
   onWorkspaceServerStartupProgress,
+  resolveWindowCloseRequest,
   setWindowAppearance,
   showCanvasWindow,
   showNotification,
@@ -486,6 +489,26 @@ export default function App() {
       handleWorkspaceServerExited(event);
     });
   }, [handleWorkspaceServerExited, windowMode]);
+
+  useEffect(
+    () =>
+      onWindowCloseRequested((request) => {
+        void (async () => {
+          let canClose = false;
+          try {
+            canClose = await requestCanvasDocumentTransition(null);
+          } catch {
+            canClose = false;
+          } finally {
+            await resolveWindowCloseRequest({
+              requestId: request.requestId,
+              canClose,
+            }).catch(() => {});
+          }
+        })();
+      }),
+    [],
+  );
 
   useEffect(() => {
     const documentElement = document.documentElement;

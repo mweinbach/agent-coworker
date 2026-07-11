@@ -71,7 +71,7 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
   return (
     <View style={{ gap: 4 }}>
       <Pressable
-        onPress={() => setExpanded(!expanded)}
+        onPress={isLong ? () => setExpanded(!expanded) : undefined}
         accessibilityRole={isLong ? "button" : undefined}
         accessibilityLabel={
           isLong ? `${expanded ? "Collapse" : "Expand"} ${label.toLowerCase()}` : undefined

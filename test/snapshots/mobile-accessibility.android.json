@@ -1,0 +1,382 @@
+{
+  "accessibility": {
+    "approvalBusyControls": [
+      {
+        "role": "button",
+        "label": "Approving command",
+        "minHeight": 48,
+        "state": {
+          "busy": true,
+          "disabled": true
+        }
+      },
+      {
+        "role": "button",
+        "label": "Decline command",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": true
+        }
+      }
+    ],
+    "initialControls": [
+      {
+        "role": "image",
+        "label": "QR code scanner camera"
+      },
+      {
+        "role": "header",
+        "label": "Pairing key"
+      },
+      {
+        "role": "textbox",
+        "label": "Pairing key",
+        "hint": "Paste the pairing key from Cowork Desktop",
+        "minHeight": 88
+      },
+      {
+        "role": "button",
+        "label": "Connect with pasted key",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": true
+        }
+      },
+      {
+        "role": "textbox",
+        "label": "Message",
+        "hint": "Enter a message",
+        "minHeight": 48,
+        "state": {
+          "disabled": false
+        }
+      },
+      {
+        "role": "button",
+        "label": "Stop turn",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": false
+        }
+      },
+      {
+        "role": "group",
+        "label": "Dangerous command. rm temp.txt. Clean generated files",
+        "live": "assertive",
+        "state": {
+          "busy": false
+        }
+      },
+      {
+        "role": "button",
+        "label": "Approve command",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": false
+        }
+      },
+      {
+        "role": "button",
+        "label": "Decline command",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": false
+        }
+      },
+      {
+        "role": "switch",
+        "label": "Show debug messages",
+        "hint": "Include system and observability lines in chat transcripts.",
+        "minHeight": 48,
+        "state": {
+          "checked": true
+        }
+      },
+      {
+        "role": "button",
+        "label": "Expand reasoning",
+        "minHeight": 48,
+        "state": {
+          "expanded": false
+        }
+      },
+      {
+        "role": "group",
+        "label": "Status: done"
+      },
+      {
+        "role": "button",
+        "label": "Expand arguments",
+        "minHeight": 48,
+        "state": {
+          "expanded": false
+        }
+      },
+      {
+        "role": "header",
+        "label": "Sources"
+      },
+      {
+        "role": "group",
+        "label": "1 sources"
+      },
+      {
+        "role": "link",
+        "label": "Example documentation, example.com",
+        "hint": "Opens this source in your browser",
+        "minHeight": 48
+      }
+    ],
+    "initialTextScaling": [
+      {
+        "scale": 2,
+        "text": "Point your camera at the QR code shown in Cowork Desktop under Remote Access."
+      },
+      {
+        "scale": 2,
+        "text": "Pairing key"
+      },
+      {
+        "scale": 2,
+        "text": "Connect with pasted key"
+      },
+      {
+        "scale": 2,
+        "text": "Copy the pairing key from Cowork Desktop under Remote Access, then paste it here if you cannot scan the QR code."
+      },
+      {
+        "scale": 2,
+        "text": "Review this change"
+      },
+      {
+        "scale": 2,
+        "text": "Dangerous command"
+      },
+      {
+        "scale": 2,
+        "text": "rm temp.txt"
+      },
+      {
+        "scale": 2,
+        "text": "Clean generated files"
+      },
+      {
+        "scale": 2,
+        "text": "Approve"
+      },
+      {
+        "scale": 2,
+        "text": "Decline"
+      },
+      {
+        "scale": 2,
+        "text": "Show debug messages"
+      },
+      {
+        "scale": 2,
+        "text": "Include system and observability lines in chat transcripts."
+      },
+      {
+        "scale": 2,
+        "text": "Reasoning"
+      },
+      {
+        "scale": 2,
+        "text": "expand"
+      },
+      {
+        "scale": 2,
+        "text": "First line Second line Third line..."
+      },
+      {
+        "scale": 2,
+        "text": "bash"
+      },
+      {
+        "scale": 2,
+        "text": "done"
+      },
+      {
+        "scale": 2,
+        "text": "Arguments"
+      },
+      {
+        "scale": 2,
+        "text": "expand"
+      },
+      {
+        "scale": 2,
+        "text": "{ \"command\": \"bun test\", \"cwd\": \"/workspace\", ..."
+      },
+      {
+        "scale": 2,
+        "text": "Result"
+      },
+      {
+        "scale": 2,
+        "text": "{ \"ok\": true }"
+      },
+      {
+        "scale": 2,
+        "text": "Sources"
+      },
+      {
+        "scale": 2,
+        "text": "1"
+      },
+      {
+        "scale": 2,
+        "text": "Example documentation"
+      },
+      {
+        "scale": 2,
+        "text": "example.com"
+      }
+    ],
+    "rejectionBusyControls": [
+      {
+        "role": "button",
+        "label": "Approve command",
+        "minHeight": 48,
+        "state": {
+          "busy": false,
+          "disabled": true
+        }
+      },
+      {
+        "role": "button",
+        "label": "Declining command",
+        "minHeight": 48,
+        "state": {
+          "busy": true,
+          "disabled": true
+        }
+      }
+    ]
+  },
+  "motion": {
+    "reducedMotionTransform": null,
+    "standardMotionTransform": "[{\"scale\":0.985}]"
+  },
+  "navigation": {
+    "backBehavior": "history",
+    "deepLinks": {
+      "/threads": {
+        "route": "(chats)",
+        "screen": "threads/index"
+      },
+      "/thread/[id]": {
+        "route": "(chats)",
+        "screen": "thread/[id]"
+      },
+      "/settings": {
+        "route": "(settings)",
+        "screen": "settings/index"
+      },
+      "/settings/mcp": {
+        "route": "(settings)",
+        "screen": "settings/mcp"
+      },
+      "/settings/providers": {
+        "route": "(settings)",
+        "screen": "settings/providers"
+      },
+      "/settings/usage": {
+        "route": "(settings)",
+        "screen": "settings/usage"
+      },
+      "/skills": {
+        "route": "(skills)",
+        "screen": "skills/index"
+      },
+      "/workspace": {
+        "route": "(workspace)",
+        "screen": "workspace/index"
+      },
+      "/workspace/backups": {
+        "route": "(workspace)",
+        "screen": "workspace/backups"
+      },
+      "/workspace/general": {
+        "route": "(workspace)",
+        "screen": "workspace/general"
+      },
+      "/workspace/memory": {
+        "route": "(workspace)",
+        "screen": "workspace/memory"
+      }
+    },
+    "initialTab": "(chats)",
+    "scenario": {
+      "activeAfterStackBack": "(workspace)",
+      "activeAfterTabBack": "(settings)",
+      "preservedBeforeBack": {
+        "(chats)": ["threads/index"],
+        "(settings)": ["settings/index", "settings/providers"],
+        "(skills)": ["skills/index"],
+        "(workspace)": ["workspace/index", "workspace/general"]
+      },
+      "stateAfterBack": {
+        "(chats)": ["threads/index"],
+        "(settings)": ["settings/index", "settings/providers"],
+        "(skills)": ["skills/index"],
+        "(workspace)": ["workspace/index"]
+      }
+    },
+    "stacks": {
+      "(chats)": ["threads/index", "thread/[id]"],
+      "(settings)": ["settings/index", "settings/providers", "settings/mcp", "settings/usage"],
+      "(skills)": ["skills/index"],
+      "(workspace)": [
+        "workspace/index",
+        "workspace/general",
+        "workspace/memory",
+        "workspace/backups"
+      ]
+    },
+    "tabs": [
+      {
+        "badge": "2",
+        "icon": {
+          "default": "forum",
+          "selected": "forum"
+        },
+        "label": "Chats",
+        "route": "(chats)"
+      },
+      {
+        "badge": null,
+        "icon": {
+          "default": "folder",
+          "selected": "folder"
+        },
+        "label": "Workspace",
+        "route": "(workspace)"
+      },
+      {
+        "badge": null,
+        "icon": {
+          "default": "auto_awesome",
+          "selected": "auto_awesome"
+        },
+        "label": "Skills",
+        "route": "(skills)"
+      },
+      {
+        "badge": null,
+        "icon": {
+          "default": "settings",
+          "selected": "settings"
+        },
+        "label": "Settings",
+        "route": "(settings)"
+      }
+    ]
+  },
+  "platform": "android"
+}

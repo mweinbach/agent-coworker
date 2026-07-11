@@ -283,8 +283,13 @@ export function GroupedSwitchRow({
   const theme = useAppTheme();
 
   return (
-    <View
-      style={{
+    <Pressable
+      accessibilityHint={description}
+      accessibilityLabel={label}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      onPress={() => onValueChange(!value)}
+      style={({ pressed }) => ({
         minHeight: minimumTouchTarget(),
         flexDirection: "row",
         alignItems: "center",
@@ -293,7 +298,8 @@ export function GroupedSwitchRow({
         paddingVertical: 10,
         borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
         borderBottomColor: theme.borderMuted,
-      }}
+        backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+      })}
     >
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
         <Text
@@ -314,14 +320,14 @@ export function GroupedSwitchRow({
         ) : null}
       </View>
       <Switch
-        accessibilityLabel={label}
-        accessibilityRole="switch"
-        accessibilityState={{ checked: value }}
+        accessibilityElementsHidden
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        pointerEvents="none"
         value={value}
-        onValueChange={onValueChange}
         trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
         ios_backgroundColor={theme.surfaceMuted}
       />
-    </View>
+    </Pressable>
   );
 }

@@ -811,12 +811,12 @@ export default function ThreadDetailScreen() {
                     });
                   }}
                   onApprove={() => {
-                    void answerServerRequest(copyPendingServerRequestIdentity(request), {
+                    return answerServerRequest(copyPendingServerRequestIdentity(request), {
                       decision: "accept",
                     });
                   }}
                   onReject={() => {
-                    void answerServerRequest(copyPendingServerRequestIdentity(request), {
+                    return answerServerRequest(copyPendingServerRequestIdentity(request), {
                       decision: "reject",
                     });
                   }}

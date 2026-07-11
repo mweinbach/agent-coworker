@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 import {
   ANDROID_MINIMUM_TOUCH_TARGET,
@@ -12,10 +11,7 @@ import {
   describeComposerCapabilityAvailability,
   resolveComposerCapabilityAvailability,
 } from "../apps/mobile/src/features/cowork/model-capability-availability";
-
-function mobileSource(relativePath: string): string {
-  return readFileSync(new URL(`../apps/mobile/src/${relativePath}`, import.meta.url), "utf8");
-}
+import { pendingInputBadgeValue } from "../apps/mobile/src/features/navigation/mobile-navigation";
 
 describe("mobile accessibility contract", () => {
   test("uses native minimum target sizes and supports 200% Dynamic Type", () => {
@@ -29,43 +25,16 @@ describe("mobile accessibility contract", () => {
   test("skips nonessential layout animation when reduced motion is enabled", () => {
     expect(shouldAnimateLayout(true)).toBe(false);
     expect(shouldAnimateLayout(false)).toBe(true);
-    expect(mobileSource("features/accessibility/mobile-accessibility.ts")).toContain(
-      "if (!shouldAnimateLayout(reducedMotionEnabled))",
-    );
   });
 
-  test("labels core chat controls and exposes busy, disabled, expanded, and live states", () => {
-    const appButton = mobileSource("components/ui/app-button.tsx");
-    const composer = mobileSource("components/ComposerBar.tsx");
-    const pendingRequest = mobileSource("components/thread/pending-request-card.tsx");
-    const activity = mobileSource("components/thread/activity-group-card.tsx");
-    const sources = mobileSource("components/thread/sources-carousel.tsx");
-
-    expect(appButton).toContain('accessibilityRole="button"');
-    expect(appButton).toContain("accessibilityState={{ busy, disabled, expanded }}");
-    expect(composer).toContain(
-      'const actionLabel = isBusy ? (isStopping ? "Stopping turn" : "Stop turn")',
-    );
-    expect(composer).toContain("accessibilityLabel={actionLabel}");
-    expect(composer).toContain("accessibilityState={{");
-    expect(pendingRequest).toContain('accessibilityLiveRegion="assertive"');
-    expect(pendingRequest).toContain('accessibilityLabel="Approve command"');
-    expect(pendingRequest).toContain('accessibilityLabel="Decline command"');
-    expect(activity).toContain("accessibilityState={{ expanded");
-    expect(sources).toContain('accessibilityRole="link"');
-    expect(sources).not.toContain("numberOfLines=");
-  });
-
-  test("announces pairing progress and errors on both platform implementations", () => {
-    for (const platformFile of [
-      "components/pairing/pairing-scan.ios.tsx",
-      "components/pairing/pairing-scan.fallback.tsx",
-    ]) {
-      const source = mobileSource(platformFile);
-      expect(source).toContain("useAccessibilityAnnouncement(");
-      expect(source).toContain('accessibilityLabel="QR code scanner camera"');
-      expect(source).toContain('accessibilityLabel="Pairing key"');
-    }
+  test("bounds pending-input badges without exposing an empty badge", () => {
+    expect(pendingInputBadgeValue({})).toBeUndefined();
+    expect(pendingInputBadgeValue({ ask: {}, empty: null })).toBe("1");
+    expect(
+      pendingInputBadgeValue(
+        Object.fromEntries(Array.from({ length: 105 }, (_, index) => [String(index), {}])),
+      ),
+    ).toBe("99+");
   });
 
   test("reports model and attachment availability without implying unsupported input", () => {

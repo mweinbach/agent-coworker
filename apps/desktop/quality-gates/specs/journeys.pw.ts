@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
@@ -5,6 +8,17 @@ import {
   settleQualityPage,
 } from "../assertions";
 import { expect, test } from "../fixtures";
+import {
+  assertIndependentMentionGeometry,
+  measureIndependentMentionGeometry,
+} from "../mentionGeometry";
+
+const delayedMentionWebfontPath = fileURLToPath(
+  new URL("../../src/assets/fonts/IBMPlexMono-Regular.ttf", import.meta.url),
+);
+const delayedMentionWebfontBase64 = fs
+  .readFile(delayedMentionWebfontPath)
+  .then((contents) => contents.toString("base64"));
 
 for (const mode of ["light", "dark", "system"] as const) {
   test.describe(`first launch ${mode}`, () => {
@@ -428,16 +442,128 @@ test("aborts an external renderer request in the main process", async ({ quality
     .toEqual([proofUrl]);
 });
 
-for (const zoomFactor of [1, 1.25]) {
-  test(`keeps mention geometry inside the viewport at ${zoomFactor}x zoom`, async ({ quality }) => {
+for (const zoom of [
+  { factor: 1, label: "100%" },
+  { factor: 1.5, label: "150%" },
+  { factor: 2, label: "200%" },
+] as const) {
+  test(`keeps mention text, highlight, scroll, and caret picker aligned at ${zoom.label} zoom`, async ({
+    quality,
+  }, testInfo) => {
     const { electronApp, page } = quality;
-    await electronApp.evaluate(({ BrowserWindow }, zoom) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoom);
-    }, zoomFactor);
-    await page.getByRole("combobox", { name: "Message input" }).fill("@");
-    const menu = page.getByRole("listbox");
+    const appliedZoom = await electronApp.evaluate(({ BrowserWindow }, zoomFactor) => {
+      const webContents = BrowserWindow.getAllWindows()[0]?.webContents;
+      if (!webContents) throw new Error("Quality-gate window is missing");
+      webContents.setZoomFactor(zoomFactor);
+      return webContents.getZoomFactor();
+    }, zoom.factor);
+    expect(appliedZoom).toBe(zoom.factor);
+    const composer = page.getByRole("combobox", { name: "Message input" });
+    const delayedFontFamily = `Quality Gate Delayed Mention Mono ${zoom.label}`;
+    await composer.evaluate((textarea, fontFamily) => {
+      textarea.style.fontFamily = `"${fontFamily}", serif`;
+    }, delayedFontFamily);
+    const text = [
+      ...Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Wrapped geometry line ${index + 1} keeps @geometry-audit aligned through the composer.`,
+      ),
+      `${"Long wrapping text ".repeat(8)}use @geometry-audit then @g`,
+    ].join("\n");
+    await composer.fill(text);
+    await composer.focus();
+
+    const menu = page.getByRole("listbox", { name: "Mentions" });
     await expect(menu).toBeVisible();
-    const insideViewport = await menu.evaluate((element) => {
+    await expect(page.getByRole("option", { name: /@geometry-audit/ })).toBeVisible();
+    const beforeWebfont = await measureIndependentMentionGeometry(page);
+    const fontStatus = await composer.evaluate(
+      async (textarea, fixture) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, fixture.delayMs));
+        const face = new FontFace(
+          fixture.fontFamily,
+          `url(data:font/ttf;base64,${fixture.base64}) format("truetype")`,
+          { style: "normal", weight: "400" },
+        );
+        document.fonts.add(face);
+        await face.load();
+        await document.fonts.ready;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        return {
+          computedFamily: getComputedStyle(textarea).fontFamily,
+          loaded: face.status,
+        };
+      },
+      {
+        base64: await delayedMentionWebfontBase64,
+        delayMs: 150,
+        fontFamily: delayedFontFamily,
+      },
+    );
+    expect(fontStatus.loaded).toBe("loaded");
+    expect(fontStatus.computedFamily).toContain(delayedFontFamily);
+    await expect(menu).toBeVisible();
+
+    const { geometry, pixels } = await assertIndependentMentionGeometry(page, testInfo, {
+      attachmentName: `mention-geometry-${zoom.label}`,
+    });
+    expect(
+      Math.abs(geometry.nativeMentionAdvance - beforeWebfont.nativeMentionAdvance),
+      "The delayed webfont fixture must change native text metrics after the picker opens",
+    ).toBeGreaterThan(1);
+    expect(geometry.metricMismatches).toEqual([]);
+    expect(geometry.overlayScrollTop).toBe(geometry.scrollTop);
+    expect(geometry.scrollTop).toBeGreaterThan(0);
+    expect(geometry.highlightStyle.padding).toBe("0px");
+    expect(geometry.highlightStyle.margin).toBe("0px");
+    expect(geometry.highlightStyle.borderWidth).toBe("0px");
+    expect(geometry.highlightStyle.fontWeight).toBe("400");
+    expect(geometry.highlightStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(geometry.activeDescendant).toContain("-skill-geometry-audit");
+    expect(geometry.caretInsideMenuWidth).toBe(true);
+    expect(geometry.pickerGap).not.toBeNull();
+    expect(geometry.pickerGap ?? -1).toBeGreaterThanOrEqual(0);
+    expect(geometry.pickerGap ?? 9).toBeLessThanOrEqual(8);
+    expect(pixels.differentPixels).toBeLessThanOrEqual(pixels.maximumDifferentPixels);
+    if (zoom.factor === 1) {
+      await assertNoSeriousAxeViolations(page, testInfo);
+    }
+
+    await composer.evaluate((textarea) => {
+      textarea.wrap = "off";
+      textarea.style.setProperty("field-sizing", "fixed");
+      textarea.style.flex = "none";
+      textarea.style.maxWidth = "320px";
+      textarea.style.overflowWrap = "normal";
+      textarea.style.whiteSpace = "pre";
+      textarea.style.width = "320px";
+    });
+    await composer.fill(`${"horizontal-geometry-".repeat(24)} @geometry-audit then @g`);
+    await composer.evaluate((textarea) => {
+      textarea.scrollLeft = Math.max(1, textarea.scrollWidth - textarea.clientWidth - 20);
+      textarea.dispatchEvent(new Event("scroll"));
+    });
+    const horizontalScroll = await composer.evaluate((textarea) => {
+      const overlay = textarea.parentElement?.querySelector<HTMLDivElement>(
+        '[data-slot="composer-highlight-overlay"]',
+      );
+      return {
+        overlayScrollLeft: overlay?.scrollLeft ?? -1,
+        scrollLeft: textarea.scrollLeft,
+      };
+    });
+    expect(horizontalScroll.scrollLeft).toBeGreaterThan(0);
+    expect(horizontalScroll.overlayScrollLeft).toBe(horizontalScroll.scrollLeft);
+
+    const screenshot = await page.screenshot();
+    await testInfo.attach(`mention-geometry-${zoom.label}-window`, {
+      body: screenshot,
+      contentType: "image/png",
+    });
+    const finalMenuRect = await menu.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return (
         rect.left >= 0 &&
@@ -446,6 +572,6 @@ for (const zoomFactor of [1, 1.25]) {
         rect.bottom <= window.innerHeight
       );
     });
-    expect(insideViewport).toBe(true);
+    expect(finalMenuRect).toBe(true);
   });
 }

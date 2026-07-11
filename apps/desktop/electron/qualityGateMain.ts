@@ -1082,6 +1082,56 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { thread: qualityThreadRecord(), coworkSnapshot: null };
     case "thread/resume":
       return { thread: qualityThreadRecord() };
+    case "cowork/skills/catalog/read":
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "quality-control",
+          catalog: {
+            installations: [],
+            sources: [],
+            stats: { enabledInstallations: 0, totalInstallations: 0 },
+          },
+          mutationBlocked: false,
+        },
+      };
+    case "cowork/skills/list":
+      return {
+        event: {
+          type: "skills_list",
+          sessionId: "quality-control",
+          skills: [
+            {
+              name: "geometry-audit",
+              path: "/quality/skills/geometry-audit/SKILL.md",
+              source: "built-in",
+              enabled: true,
+              triggers: ["mention geometry"],
+              description: "Checks composer highlight and picker geometry.",
+            },
+            {
+              name: "release-review",
+              path: "/quality/skills/release-review/SKILL.md",
+              source: "project",
+              enabled: true,
+              triggers: ["release"],
+              description: "Reviews deterministic desktop release evidence.",
+            },
+          ],
+        },
+      };
+    case "cowork/plugins/catalog/read":
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "quality-control",
+          catalog: {
+            availablePlugins: [],
+            plugins: [],
+            warnings: [],
+          },
+        },
+      };
     case "research/list":
       return { research: [...researchRecords.values()] };
     case "research/get": {

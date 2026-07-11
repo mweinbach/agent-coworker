@@ -1,3 +1,4 @@
+import { NATIVE_THEME_TOKENS } from "../../src/styles/tokens/native";
 import { settleQualityPage } from "../assertions";
 import { expect, type QualityHarness, type QualityMode, test } from "../fixtures";
 
@@ -34,6 +35,11 @@ async function openCanvasWindow(quality: QualityHarness, path: string) {
       await control.openCanvas(canvasPath);
     }, path);
   });
+}
+
+function hexToRgbCss(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255})`;
 }
 
 for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
@@ -104,6 +110,36 @@ for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
   });
 }
 
+test.describe("Canvas loading and error surfaces", () => {
+  test.use({
+    qualityOptions: {
+      height: 700,
+      mode: "dark",
+      scenario: "product",
+      startupDelayMs: 0,
+      width: 900,
+    },
+  });
+
+  test("renders semantic document loading and error states", async ({ quality }) => {
+    const loadingWindow = await openCanvasWindow(quality, "/quality/project/canvas-loading.md");
+    await expect(loadingWindow.getByText("Reading file...", { exact: true })).toBeVisible();
+    await expect(loadingWindow.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(loadingWindow).toHaveScreenshot("canvas-markdown-loading-dark.png");
+    await loadingWindow.close();
+
+    const errorWindow = await openCanvasWindow(quality, "/quality/project/canvas-error.md");
+    await expect(errorWindow.getByText("Failed to load content", { exact: true })).toBeVisible();
+    await expect(
+      errorWindow.getByText("Quality fixture could not read this document.", { exact: true }),
+    ).toBeVisible();
+    await expect(errorWindow.getByRole("button", { name: "Retry" })).toBeVisible();
+    await settleQualityPage(errorWindow);
+    await expect(errorWindow).toHaveScreenshot("canvas-markdown-error-dark.png");
+    await errorWindow.close();
+  });
+});
+
 test.describe("Canvas live theme changes", () => {
   test.use({
     qualityOptions: {
@@ -134,14 +170,16 @@ test.describe("Canvas live theme changes", () => {
       .poll(async () =>
         canvasWindow.evaluate(() => getComputedStyle(document.body).backgroundColor),
       )
-      .toBe("rgb(42, 49, 32)");
+      .toBe(hexToRgbCss(NATIVE_THEME_TOKENS.canvasDocument.dark.background));
     const nativeBackground = await quality.electronApp.evaluate(({ BrowserWindow }, canvasPath) => {
       const canvas = BrowserWindow.getAllWindows().find((candidate) =>
         candidate.webContents.getURL().includes(encodeURIComponent(canvasPath)),
       );
       return canvas?.getBackgroundColor() ?? "";
     }, path);
-    expect(nativeBackground.toLowerCase()).toContain("2a3120");
+    expect(nativeBackground.toLowerCase()).toContain(
+      NATIVE_THEME_TOKENS.canvasDocument.dark.background.slice(1),
+    );
     await settleQualityPage(canvasWindow);
     await expect(canvasWindow).toHaveScreenshot("canvas-markdown-live-switch-dark.png");
   });

@@ -1,7 +1,9 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
+import type { CaptionSymbolTone } from "../../../src/styles/tokens/native";
 
 export type WindowChromeContext = {
   backgroundColor?: string;
+  captionSymbolTone: CaptionSymbolTone;
   useDarkColors: boolean;
   useMacosNativeGlass: boolean;
 };

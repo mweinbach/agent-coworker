@@ -14,7 +14,10 @@ import {
   PROJECT_THREAD_ID,
 } from "../quality-gates/fixtureData";
 import type { PersistedState } from "../src/app/types";
-import { getCanvasNativeBackgroundColor } from "../src/lib/canvasAppearance";
+import {
+  getCanvasCaptionSymbolTone,
+  getCanvasNativeBackgroundColor,
+} from "../src/lib/canvasAppearance";
 import {
   createDefaultUpdaterState,
   DESKTOP_EVENT_CHANNELS,
@@ -23,6 +26,12 @@ import {
   type PlatformChromeInfo,
   type SystemAppearance,
 } from "../src/lib/desktopApi";
+import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
+import {
+  applySystemAppearanceToWindow,
+  registerWindowAppearanceProfile,
+} from "./services/appearance";
+import { desktopShellBackgroundColor } from "./services/windowAppearancePaint";
 import { getPlatformChrome } from "./services/windowChrome/platformChrome";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -38,7 +47,7 @@ const QUICK_THREAD_ID = "quality-quick-thread";
 const qualityPlatform = hostPlatform();
 const EXTERNAL_NETWORK_PROOF_URL = "https://example.invalid/quality-gate-network-proof";
 const PRESENTATION_SLIDE_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#f8f9f2"/><text x="80" y="190" fill="#232a18" font-family="sans-serif" font-size="56" font-weight="700">Canvas presentation</text><text x="80" y="270" fill="#556041" font-family="sans-serif" font-size="28">Theme-aware Electron preview</text></svg>',
+  `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.background}"/><text x="80" y="190" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.foreground}" font-family="sans-serif" font-size="56" font-weight="700">Canvas presentation</text><text x="80" y="270" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.mutedForeground}" font-family="sans-serif" font-size="28">Theme-aware Electron preview</text></svg>`,
 ).toString("base64")}`;
 
 type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
@@ -389,15 +398,7 @@ function setQualityTheme(theme: "light" | "dark"): void {
     if (win.isDestroyed()) {
       continue;
     }
-    const url = new URL(win.webContents.getURL());
-    if (url.searchParams.get("window") === "canvas") {
-      win.setBackgroundColor(
-        getCanvasNativeBackgroundColor(
-          url.searchParams.get("path") ?? "",
-          appearance.shouldUseDarkColors,
-        ),
-      );
-    }
+    applySystemAppearanceToWindow(win, appearance);
     win.webContents.send(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
   }
 }
@@ -1055,6 +1056,19 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
     case "cowork/workspace/document/open": {
       const filePath =
         typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
+      if (filePath.endsWith("/canvas-error.md")) {
+        return {
+          ok: false,
+          documentId:
+            typeof params.documentId === "string" ? params.documentId : "quality-document-error",
+          generation: typeof params.generation === "number" ? params.generation : 1,
+          path: filePath,
+          error: {
+            kind: "read_error",
+            message: "Quality fixture could not read this document.",
+          },
+        };
+      }
       const isMarkdown = filePath.toLowerCase().endsWith(".md");
       const content = isMarkdown
         ? "# Electron Canvas\n\nSemantic surfaces stay readable while the system theme changes."
@@ -1199,6 +1213,13 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
   }
 }
 
+function shouldHoldCanvasLoadingResponse(method: string, rawParams: unknown): boolean {
+  if (method !== "cowork/workspace/document/open") {
+    return false;
+  }
+  return asRecord(rawParams).path === "/quality/project/canvas-loading.md";
+}
+
 async function startMockServer(): Promise<void> {
   mockServer = new WebSocketServer({
     host: "127.0.0.1",
@@ -1246,10 +1267,14 @@ async function startMockServer(): Promise<void> {
       ) {
         return;
       }
+      const params = "params" in message ? message.params : undefined;
+      if (shouldHoldCanvasLoadingResponse(message.method, params)) {
+        return;
+      }
       socket.send(
         JSON.stringify({
           id: message.id,
-          result: jsonRpcResult(message.method, "params" in message ? message.params : undefined),
+          result: jsonRpcResult(message.method, params),
         }),
       );
     });
@@ -1405,9 +1430,7 @@ async function createWindow(
   const backgroundColor =
     mode === "canvas"
       ? getCanvasNativeBackgroundColor(options?.path ?? "", qualityMode === "dark")
-      : qualityMode === "dark"
-        ? "#1f1d1a"
-        : "#f5f0e5";
+      : desktopShellBackgroundColor(qualityMode === "dark");
   const win = new BrowserWindow({
     title:
       mode === "quick-chat" ? "Cowork Quick Chat" : mode === "canvas" ? "Cowork Canvas" : "Cowork",
@@ -1430,6 +1453,17 @@ async function createWindow(
       devTools: false,
     },
   });
+
+  if (mode === "canvas") {
+    const canvasPath = options?.path ?? "";
+    registerWindowAppearanceProfile(win, {
+      backgroundColor: (useDarkColors) => getCanvasNativeBackgroundColor(canvasPath, useDarkColors),
+      captionSymbolTone: (useDarkColors) => getCanvasCaptionSymbolTone(canvasPath, useDarkColors),
+      useMacosNativeGlass: false,
+      ...(qualityPlatform === "win32" ? { backgroundMaterial: "none" } : {}),
+    });
+    applySystemAppearanceToWindow(win, createAppearance());
+  }
 
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event, url) => {

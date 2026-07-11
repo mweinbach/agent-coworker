@@ -4,9 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type * as Electron from "electron";
+import { hostPlatform } from "../../../src/platform/host";
 import { CloudSyncService } from "../../../src/sync/service";
 import type { PersistedState } from "../src/app/types";
-import { getCanvasNativeBackgroundColor } from "../src/lib/canvasAppearance";
+import {
+  getCanvasCaptionSymbolTone,
+  getCanvasNativeBackgroundColor,
+} from "../src/lib/canvasAppearance";
 import {
   DESKTOP_EVENT_CHANNELS,
   type DesktopMenuCommand,
@@ -622,6 +626,7 @@ function quickChatWindowQuery(opts?: ShowQuickChatWindowInput): Record<string, s
 }
 
 async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron.BrowserWindow> {
+  const platform = hostPlatform();
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
   const useMacosNativeGlass = false;
   const backgroundColor = getCanvasNativeBackgroundColor(opts.path, useDarkColors);
@@ -629,7 +634,8 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     useDarkColors,
     useMacosNativeGlass,
     backgroundColor,
-    ...(process.platform === "win32" ? { backgroundMaterial: "none" as const } : {}),
+    captionSymbolTone: getCanvasCaptionSymbolTone(opts.path, useDarkColors),
+    ...(platform === "win32" ? { backgroundMaterial: "none" as const } : {}),
   };
 
   const win = new BrowserWindow({
@@ -639,7 +645,7 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
     minWidth: 400,
     minHeight: 400,
     ...getInitialWindowAppearanceOptions(appearanceOptions),
-    ...getPlatformBrowserWindowOptions(process.platform, appearanceOptions),
+    ...getPlatformBrowserWindowOptions(platform, appearanceOptions),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -656,14 +662,16 @@ async function createCanvasWindow(opts: ShowCanvasWindowInput): Promise<Electron
   registerWindowAppearanceProfile(win, {
     backgroundColor: (nextUseDarkColors) =>
       getCanvasNativeBackgroundColor(opts.path, nextUseDarkColors),
+    captionSymbolTone: (nextUseDarkColors) =>
+      getCanvasCaptionSymbolTone(opts.path, nextUseDarkColors),
     useMacosNativeGlass,
-    ...(process.platform === "win32" ? { backgroundMaterial: "none" } : {}),
+    ...(platform === "win32" ? { backgroundMaterial: "none" } : {}),
   });
   windowCloseCoordinator.track(win as unknown as NativeCloseWindow);
-  applyPlatformWindowCreated(win, process.platform);
+  applyPlatformWindowCreated(win, platform);
   applyWindowSecurity(win);
   syncWindowAppearance(win, {
-    platform: process.platform,
+    platform,
     ...appearanceOptions,
   });
 

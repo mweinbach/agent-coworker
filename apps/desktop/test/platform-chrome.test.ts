@@ -5,6 +5,7 @@ import {
   getPlatformChrome,
   getTitlebarSymbolColor,
 } from "../electron/services/windowChrome/platformChrome";
+import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
 
 describe("getPlatformChrome", () => {
   test("returns macOS chrome contract", () => {
@@ -120,11 +121,11 @@ describe("getCurrentPlatformChrome", () => {
 });
 
 describe("getTitlebarSymbolColor", () => {
-  test("returns light symbol color for light themes", () => {
-    expect(getTitlebarSymbolColor(false)).toBe("#556041");
+  test("returns the dark caption symbol token", () => {
+    expect(getTitlebarSymbolColor("dark")).toBe(NATIVE_THEME_TOKENS.captionSymbol.dark);
   });
 
-  test("returns dark symbol color for dark themes", () => {
-    expect(getTitlebarSymbolColor(true)).toBe("#eef0dc");
+  test("returns the light caption symbol token", () => {
+    expect(getTitlebarSymbolColor("light")).toBe(NATIVE_THEME_TOKENS.captionSymbol.light);
   });
 });

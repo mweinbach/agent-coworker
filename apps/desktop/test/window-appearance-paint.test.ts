@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   desktopShellBackgroundColor,
   resolveWindowChromePaint,
   windowsBackgroundMaterialForPlatform,
 } from "../electron/services/windowAppearancePaint";
+import { CANVAS_DOCUMENT_COLORS, CANVAS_SPREADSHEET_COLORS } from "../src/lib/canvasAppearance";
+import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
 
 describe("windowsBackgroundMaterialForPlatform", () => {
   test("is only defined on Windows", () => {
@@ -16,8 +17,8 @@ describe("windowsBackgroundMaterialForPlatform", () => {
 
 describe("desktopShellBackgroundColor", () => {
   test("tracks light vs dark shell presets", () => {
-    expect(desktopShellBackgroundColor(false)).toBe("#dfe2cc");
-    expect(desktopShellBackgroundColor(true)).toBe("#171d13");
+    expect(desktopShellBackgroundColor(false)).toBe(NATIVE_THEME_TOKENS.shellSurface.light);
+    expect(desktopShellBackgroundColor(true)).toBe(NATIVE_THEME_TOKENS.shellSurface.dark);
   });
 });
 
@@ -30,7 +31,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#dfe2cc",
+      backgroundColor: NATIVE_THEME_TOKENS.shellSurface.light,
     });
 
     expect(
@@ -40,7 +41,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#171d13",
+      backgroundColor: NATIVE_THEME_TOKENS.shellSurface.dark,
     });
   });
 
@@ -52,7 +53,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#00000000",
+      backgroundColor: NATIVE_THEME_TOKENS.transparentSurface,
     });
   });
 
@@ -64,7 +65,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: false,
       }),
     ).toEqual({
-      backgroundColor: "#171d13",
+      backgroundColor: NATIVE_THEME_TOKENS.shellSurface.dark,
     });
   });
 
@@ -76,7 +77,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#dfe2cc",
+      backgroundColor: NATIVE_THEME_TOKENS.shellSurface.light,
       backgroundMaterial: "tabbed",
     });
   });
@@ -87,10 +88,10 @@ describe("resolveWindowChromePaint", () => {
         platform: "darwin",
         useDarkColors: true,
         useMacosNativeGlass: true,
-        backgroundColor: "#2a3120",
+        backgroundColor: CANVAS_DOCUMENT_COLORS.dark.background,
       }),
     ).toEqual({
-      backgroundColor: "#2a3120",
+      backgroundColor: CANVAS_DOCUMENT_COLORS.dark.background,
     });
 
     expect(
@@ -98,11 +99,11 @@ describe("resolveWindowChromePaint", () => {
         platform: "win32",
         useDarkColors: false,
         useMacosNativeGlass: false,
-        backgroundColor: "#ffffff",
+        backgroundColor: CANVAS_SPREADSHEET_COLORS.background,
         backgroundMaterial: "none",
       }),
     ).toEqual({
-      backgroundColor: "#ffffff",
+      backgroundColor: CANVAS_SPREADSHEET_COLORS.background,
       backgroundMaterial: "none",
     });
   });

@@ -1,22 +1,11 @@
+import { type CaptionSymbolTone, NATIVE_THEME_TOKENS } from "../styles/tokens/native";
 import { getFilePreviewKind } from "./filePreviewKind";
 
 export type CanvasSurfaceKind = "document" | "spreadsheet";
 
-export const CANVAS_DOCUMENT_COLORS = {
-  light: {
-    background: "#f8f9f2",
-    foreground: "#232a18",
-  },
-  dark: {
-    background: "#2a3120",
-    foreground: "#eef0dc",
-  },
-} as const;
+export const CANVAS_DOCUMENT_COLORS = NATIVE_THEME_TOKENS.canvasDocument;
 
-export const CANVAS_SPREADSHEET_COLORS = {
-  background: "#ffffff",
-  foreground: "#24292f",
-} as const;
+export const CANVAS_SPREADSHEET_COLORS = NATIVE_THEME_TOKENS.canvasSpreadsheet;
 
 export function getCanvasSurfaceKind(filePath: string): CanvasSurfaceKind {
   const previewKind = getFilePreviewKind(filePath);
@@ -30,4 +19,14 @@ export function getCanvasNativeBackgroundColor(filePath: string, useDarkColors: 
   return useDarkColors
     ? CANVAS_DOCUMENT_COLORS.dark.background
     : CANVAS_DOCUMENT_COLORS.light.background;
+}
+
+export function getCanvasCaptionSymbolTone(
+  filePath: string,
+  useDarkColors: boolean,
+): CaptionSymbolTone {
+  if (getCanvasSurfaceKind(filePath) === "spreadsheet") {
+    return "dark";
+  }
+  return useDarkColors ? "light" : "dark";
 }

@@ -7,6 +7,7 @@ import { JSDOM } from "jsdom";
 import {
   CANVAS_DOCUMENT_COLORS,
   CANVAS_SPREADSHEET_COLORS,
+  getCanvasCaptionSymbolTone,
   getCanvasNativeBackgroundColor,
   getCanvasSurfaceKind,
 } from "../src/lib/canvasAppearance";
@@ -16,6 +17,7 @@ import {
   RESOLVED_THEME_STORAGE_KEY,
   THEME_SOURCE_STORAGE_KEY,
 } from "../src/lib/themeBootstrap";
+import { getNativeCaptionSymbolColor } from "../src/styles/tokens/native";
 
 function channelToLinear(channel: number): number {
   const value = channel / 255;
@@ -131,6 +133,50 @@ describe("Canvas semantic appearance", () => {
     for (const palette of palettes) {
       expect(contrastRatio(palette.foreground, palette.background)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  test("keeps spreadsheet caption symbols dark and legible in a dark app theme", () => {
+    const spreadsheetTone = getCanvasCaptionSymbolTone("report.xlsx", true);
+    const documentTone = getCanvasCaptionSymbolTone("notes.md", true);
+
+    expect(spreadsheetTone).toBe("dark");
+    expect(documentTone).toBe("light");
+    expect(
+      contrastRatio(
+        getNativeCaptionSymbolColor(spreadsheetTone),
+        CANVAS_SPREADSHEET_COLORS.background,
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(
+        getNativeCaptionSymbolColor(documentTone),
+        CANVAS_DOCUMENT_COLORS.dark.background,
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("keeps native Canvas tokens aligned with renderer semantic tokens", () => {
+    const baseTokens = readFileSync(
+      resolve(import.meta.dir, "../src/styles/tokens/base.css"),
+      "utf8",
+    );
+    const themeBridge = readFileSync(
+      resolve(import.meta.dir, "../src/styles/theme-bridge.css"),
+      "utf8",
+    );
+
+    for (const value of [
+      CANVAS_DOCUMENT_COLORS.light.background,
+      CANVAS_DOCUMENT_COLORS.light.foreground,
+      CANVAS_DOCUMENT_COLORS.dark.background,
+      CANVAS_DOCUMENT_COLORS.dark.foreground,
+      getNativeCaptionSymbolColor("dark"),
+      getNativeCaptionSymbolColor("light"),
+    ]) {
+      expect(baseTokens).toContain(value);
+    }
+    expect(themeBridge).toContain(`--surface-spreadsheet: ${CANVAS_SPREADSHEET_COLORS.background}`);
+    expect(themeBridge).toContain(`--text-spreadsheet: ${CANVAS_SPREADSHEET_COLORS.foreground}`);
   });
 
   test("declares opaque semantic roots and forced-colors fallbacks", () => {

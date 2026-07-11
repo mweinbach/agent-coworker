@@ -24,6 +24,8 @@ import type { McpServerLookup } from "./mcp/McpServerLookup";
 import type { SeededSessionContext } from "./SessionContext";
 import type {
   SendUserMessageOptions,
+  SteerIdempotencyClaim,
+  SteerIdempotencyInput,
   UserMessageIdempotencyClaim,
   UserMessageIdempotencyInput,
 } from "./TurnExecutionManager";
@@ -166,6 +168,14 @@ export class SessionTurnService {
 
   rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
     this.session.rejectUserMessageClaim(claim, message);
+  }
+
+  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
+    return this.session.claimSteer(input);
+  }
+
+  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
+    this.session.rejectSteerClaim(claim, message);
   }
 
   async sendSteerMessage(

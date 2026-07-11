@@ -7,25 +7,19 @@ import {
   MessageSquareIcon,
   PaperclipIcon,
 } from "lucide-react";
-import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildAttachmentDisplayText } from "../../app/attachmentInputs";
 import {
-  type ComposerDraftRevision,
   getComposerDraftAttachmentValidationMessage,
   resolveActiveComposerDraftKey,
   selectActiveComposerDraft,
 } from "../../app/composerDrafts";
+import { selectActiveComposerSubmission } from "../../app/composerSubmission";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
 } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
-import {
-  beginCreationOperationIntent,
-  type CreationOperationPhase,
-  isOperationAbortError,
-} from "../../app/store.helpers/operationIntent";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import {
@@ -47,6 +41,7 @@ import {
   MessageComposerForm,
   MessageComposerRoot,
   MessageComposerStatus,
+  MessageComposerSubmissionNotice,
   MessageComposerSubmit,
   MessageComposerTools,
 } from "../composer/MessageComposer";
@@ -56,25 +51,6 @@ import { ComposerReasoningSelector } from "./ComposerReasoningToggle";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
 
-function creationPhaseLabel(phase: CreationOperationPhase | null): string | null {
-  switch (phase) {
-    case "preparing":
-      return "Preparing your chat...";
-    case "starting-server":
-      return "Starting the project server...";
-    case "processing-attachments":
-      return "Processing attachments...";
-    case "creating":
-      return "Creating your chat...";
-    case null:
-      return null;
-    default: {
-      const exhaustive: never = phase;
-      return exhaustive;
-    }
-  }
-}
-
 export function NewChatLanding() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -83,6 +59,7 @@ export function NewChatLanding() {
     (s) => s.desktopFeatureFlags.workspaceLifecycle !== false,
   );
   const composerDraft = useAppStore(selectActiveComposerDraft);
+  const composerSubmission = useAppStore(selectActiveComposerSubmission);
   const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
   const attachmentIngestionPending = useAppStore(
     (state) => (state.composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0,
@@ -95,7 +72,9 @@ export function NewChatLanding() {
   const setComposerDraftModel = useAppStore((s) => s.setComposerDraftModel);
   const setComposerDraftReasoningEffort = useAppStore((s) => s.setComposerDraftReasoningEffort);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
-  const newThread = useAppStore((s) => s.newThread);
+  const submitComposerDraft = useAppStore((s) => s.submitComposerDraft);
+  const retryComposerSubmission = useAppStore((s) => s.retryComposerSubmission);
+  const dismissComposerSubmission = useAppStore((s) => s.dismissComposerSubmission);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const setNewChatLandingTarget = useAppStore((s) => s.setNewChatLandingTarget);
   const target = useMemo(
@@ -103,27 +82,11 @@ export function NewChatLanding() {
     [newChatLandingTarget, selectedWorkspaceId, workspaces],
   );
   const [selectorOpen, setSelectorOpen] = useState(false);
-  const [submittingDraftKeys, setSubmittingDraftKeys] = useState<Set<string>>(() => new Set());
-  const [creationPhaseByDraftKey, setCreationPhaseByDraftKey] = useState<
-    Record<string, CreationOperationPhase>
-  >({});
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
-  const submissionControllersRef = useRef<Map<string, AbortController>>(new Map());
-  const submitting = submittingDraftKeys.has(composerDraftKey);
+  const submitting =
+    composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending";
   const composerLocked = submitting || attachmentIngestionPending;
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
-  const creationPhase = creationPhaseByDraftKey[composerDraftKey] ?? null;
-  const setSubmitting = useCallback(
-    (next: boolean) => {
-      setSubmittingDraftKeys((current) => {
-        const updated = new Set(current);
-        if (next) updated.add(composerDraftKey);
-        else updated.delete(composerDraftKey);
-        return updated;
-      });
-    },
-    [composerDraftKey],
-  );
   const setAttachmentPickerError = useCallback(
     (message: string | null) => {
       setAttachmentPickerErrors((current) => {
@@ -138,23 +101,6 @@ export function NewChatLanding() {
     },
     [composerDraftKey],
   );
-  const setCreationPhase = useCallback(
-    (phase: CreationOperationPhase | null) => {
-      setCreationPhaseByDraftKey((current) => {
-        if (phase === null) {
-          if (!(composerDraftKey in current)) return current;
-          const next = { ...current };
-          delete next[composerDraftKey];
-          return next;
-        }
-        return { ...current, [composerDraftKey]: phase };
-      });
-    },
-    [composerDraftKey],
-  );
-  const cancelSubmission = useCallback(() => {
-    submissionControllersRef.current.get(composerDraftKey)?.abort();
-  }, [composerDraftKey]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -277,119 +223,31 @@ export function NewChatLanding() {
     [removeComposerAttachment, setAttachmentPickerError],
   );
 
-  const submitNewChat = useCallback(
-    async (event?: FormEvent<HTMLFormElement>) => {
-      event?.preventDefault();
-      if (!canSubmitNewChat || submitting) {
-        return;
-      }
-      if (
-        (useAppStore.getState().composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0
-      ) {
-        return;
-      }
-
-      const operationIntent = beginCreationOperationIntent();
-      const controller = new AbortController();
-      submissionControllersRef.current.set(composerDraftKey, controller);
-      setSubmitting(true);
-      setAttachmentPickerError(null);
-      setCreationPhase("preparing");
-
-      const submittedTarget = target;
-      const submittedText = composerText;
-      const submittedAttachments = [...pendingAttachments];
-      const submittedModelSelection = modelSelection;
-      const submittedReasoningEffort = reasoningEffort;
-      const draftSubmission: ComposerDraftRevision = {
-        key: composerDraftKey,
-        revision: composerDraft.revision,
-      };
-      const attachmentTitleHint = buildAttachmentDisplayText(
-        submittedAttachments.map((attachment) => ({ filename: attachment.filename })),
-      );
-      const titleHint = submittedText.trim() || attachmentTitleHint || "New chat";
-      const references = extractReferencesFromText(submittedText, mentionCatalog);
-      const referencesArg = references.length > 0 ? references : undefined;
-      const attachmentFiles =
-        submittedAttachments.length > 0
-          ? submittedAttachments.map((attachment) => attachment.file)
-          : undefined;
-
-      try {
-        const ok =
-          submittedTarget.kind === "project"
-            ? await newThread({
-                scope: "project",
-                workspaceId: submittedTarget.workspaceId,
-                firstMessage: submittedText.trim(),
-                titleHint,
-                mode: "session",
-                attachmentFiles,
-                references: referencesArg,
-                provider: submittedModelSelection.provider,
-                model: submittedModelSelection.model,
-                reasoningEffort: submittedReasoningEffort ?? undefined,
-                draftSubmission,
-                intent: operationIntent,
-                signal: controller.signal,
-                onPhase: setCreationPhase,
-              })
-            : await newThread({
-                scope: "oneOff",
-                firstMessage: submittedText.trim(),
-                titleHint,
-                mode: "session",
-                attachmentFiles,
-                references: referencesArg,
-                provider: submittedModelSelection.provider,
-                model: submittedModelSelection.model,
-                reasoningEffort: submittedReasoningEffort ?? undefined,
-                draftSubmission,
-                intent: operationIntent,
-                signal: controller.signal,
-                onPhase: setCreationPhase,
-              });
-
-        if (!ok) {
-          setAttachmentPickerError(
-            controller.signal.aborted
-              ? "Chat creation cancelled. Your draft was preserved."
-              : "Unable to create the chat. Your draft was preserved.",
-          );
-        }
-      } catch (error) {
-        const message = isOperationAbortError(error)
-          ? "Chat creation cancelled. Your draft was preserved."
-          : error instanceof Error
-            ? error.message
-            : String(error);
-        setAttachmentPickerError(message);
-      } finally {
-        if (submissionControllersRef.current.get(composerDraftKey) === controller) {
-          submissionControllersRef.current.delete(composerDraftKey);
-        }
-        setCreationPhase(null);
-        setSubmitting(false);
-      }
-    },
-    [
-      canSubmitNewChat,
-      composerDraft,
-      composerDraftKey,
-      composerText,
-      mentionCatalog,
-      modelSelection,
-      newThread,
-      pendingAttachments,
-      reasoningEffort,
-      setAttachmentPickerError,
-      setCreationPhase,
-      setSubmitting,
-      submitting,
+  const submitNewChat = useCallback(() => {
+    if (!canSubmitNewChat || submitting) return;
+    setAttachmentPickerError(null);
+    submitComposerDraft({
+      kind: "newChat",
       target,
-    ],
-  );
+      provider: modelSelection.provider,
+      model: modelSelection.model,
+      reasoningEffort,
+    });
+  }, [
+    canSubmitNewChat,
+    modelSelection,
+    reasoningEffort,
+    setAttachmentPickerError,
+    submitComposerDraft,
+    submitting,
+    target,
+  ]);
+  const retrySubmission = useCallback(() => {
+    retryComposerSubmission(composerDraftKey);
+  }, [composerDraftKey, retryComposerSubmission]);
+  const dismissSubmission = useCallback(() => {
+    dismissComposerSubmission(composerDraftKey);
+  }, [composerDraftKey, dismissComposerSubmission]);
 
   const addProjectFromSelector = useCallback(async () => {
     setSelectorOpen(false);
@@ -475,9 +333,23 @@ export function NewChatLanding() {
             attachments={pendingAttachments}
             onRemove={removeAttachment}
           />
-          <MessageComposerForm onSubmit={submitNewChat}>
+          <MessageComposerSubmissionNotice
+            submission={composerSubmission}
+            onRetry={retrySubmission}
+            onDismiss={dismissSubmission}
+          />
+          <MessageComposerForm
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitNewChat();
+            }}
+          >
             <MessageComposerStatus>
-              {submitting ? creationPhaseLabel(creationPhase) : null}
+              {composerSubmission?.phase === "preparing"
+                ? "Preparing message…"
+                : submitting
+                  ? "Starting a new chat…"
+                  : null}
             </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
@@ -511,7 +383,7 @@ export function NewChatLanding() {
                     if (isComposing) return;
                     event.preventDefault();
                     if (!canSubmitNewChat || submitting) return;
-                    void submitNewChat();
+                    submitNewChat();
                   } else if (
                     event.key === "Enter" &&
                     (event.metaKey || event.ctrlKey) &&
@@ -660,11 +532,6 @@ export function NewChatLanding() {
                   </>
                 ) : null}
               </MessageComposerTools>
-              {submitting ? (
-                <Button type="button" variant="ghost" size="sm" onClick={cancelSubmission}>
-                  Cancel
-                </Button>
-              ) : null}
               <MessageComposerSubmit
                 status={composerLocked ? "pending" : "ready"}
                 disabled={!canSubmitNewChat || composerLocked}

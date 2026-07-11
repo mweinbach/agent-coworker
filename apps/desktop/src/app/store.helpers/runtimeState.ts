@@ -15,6 +15,7 @@ export type PendingThreadSteer = {
   text: string;
   attachmentSignature?: string;
   expectedTurnId: string;
+  steerRequestId?: string;
   accepted: boolean;
 };
 
@@ -237,11 +238,19 @@ export function hasPendingThreadSteer(threadId: string, clientMessageId: string)
   return RUNTIME.pendingThreadSteers.get(threadId)?.has(clientMessageId) ?? false;
 }
 
-export function markPendingThreadSteerAccepted(threadId: string, clientMessageId: string) {
+export function markPendingThreadSteerAccepted(
+  threadId: string,
+  clientMessageId: string,
+  steerRequestId?: string,
+) {
   const existing = RUNTIME.pendingThreadSteers.get(threadId);
   const steer = existing?.get(clientMessageId);
   if (!existing || !steer) return;
-  existing.set(clientMessageId, { ...steer, accepted: true });
+  existing.set(clientMessageId, {
+    ...steer,
+    ...(steerRequestId ? { steerRequestId } : {}),
+    accepted: true,
+  });
 }
 
 export function clearPendingThreadSteer(threadId: string, clientMessageId: string) {
@@ -411,6 +420,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     activeTurnId: null,
     pendingTurnStart: null,
     pendingSteer: null,
+    interruptPending: false,
     feed: [],
     hydrating: false,
     transcriptOnly: false,

@@ -1,4 +1,5 @@
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
+import type { ComposerSubmission } from "../../app/composerSubmission";
 import type {
   FeedItem,
   SessionUsageSnapshot,
@@ -143,10 +144,11 @@ export function getComposerSubmitState(opts: {
   pendingAttachmentSignature: string;
   pendingTurnStart: ThreadPendingTurnStart | null;
   pendingSteer: ThreadPendingSteer | null;
+  submission: ComposerSubmission | null;
   sessionId: string | null;
   threadStatus: ThreadStatus;
 }): {
-  status: "ready" | "pending" | "streaming";
+  status: "ready" | "pending";
   disabled: boolean;
   mode: "send" | "steer-ready" | "steer-pending";
 } {
@@ -154,27 +156,28 @@ export function getComposerSubmitState(opts: {
   const hasComposerText = composerText.length > 0;
   const hasPendingInput = hasComposerText || opts.hasPendingAttachments;
   const startPending = opts.pendingTurnStart?.status === "sending";
+  const submissionPending =
+    opts.submission?.phase === "preparing" || opts.submission?.phase === "sending";
   const steerPending =
     opts.busy &&
     hasPendingInput &&
     opts.pendingSteer?.status === "sending" &&
-    opts.pendingSteer.text.trim() === composerText;
+    (opts.pendingSteer.submissionId
+      ? opts.pendingSteer.submissionId === opts.submission?.id
+      : opts.pendingSteer.text.trim() === composerText);
   const samePendingAttachments =
-    (opts.pendingSteer?.attachmentSignature ?? "") === opts.pendingAttachmentSignature;
+    opts.pendingSteer?.submissionId && opts.submission?.id
+      ? opts.pendingSteer.submissionId === opts.submission.id
+      : (opts.pendingSteer?.attachmentSignature ?? "") === opts.pendingAttachmentSignature;
 
-  if (opts.busy && !hasPendingInput) {
-    return {
-      status: "streaming",
-      disabled: opts.hasBlockingOverlay || !opts.sessionId || opts.threadStatus !== "active",
-      mode: "send",
-    };
-  }
-
-  if (startPending) {
+  if (startPending || submissionPending) {
     return {
       status: "pending",
       disabled: true,
-      mode: "send",
+      mode:
+        opts.busy && (opts.submission?.delivery === "steer" || steerPending)
+          ? "steer-pending"
+          : "send",
     };
   }
 
@@ -198,22 +201,19 @@ export function composerBusyHint(
   submitState: ReturnType<typeof getComposerSubmitState>,
 ): string | null {
   if (submitState.status === "pending") {
-    return "Sending message. Waiting for the run to start.";
-  }
-  if (submitState.status === "streaming") {
-    return "Type guidance to add, or stop to cancel.";
+    return submitState.mode === "steer-pending"
+      ? "Sending guidance. Stop remains available."
+      : "Sending message. Waiting for the run to start.";
   }
   if (submitState.mode === "steer-pending") {
     return "Guidance sent. Waiting for the current run to accept it.";
   }
   if (submitState.mode === "steer-ready") {
-    return "Add guidance to the current reply (Enter).";
+    return submitState.disabled
+      ? "Stop current response, or type guidance and press Enter to send it."
+      : "Press Enter to send guidance. Stop remains available.";
   }
   return null;
-}
-
-export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
-  return busy ? "steer" : "reject";
 }
 
 /**

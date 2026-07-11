@@ -708,6 +708,12 @@ export async function startJsonRpcTurn(
   });
 }
 
+export type JsonRpcTurnSteerResult = {
+  turnId: string;
+  steerRequestId: string;
+  replayed?: boolean;
+};
+
 export async function steerJsonRpcTurn(
   get: StoreGet,
   set: StoreSet | undefined,
@@ -718,7 +724,7 @@ export async function steerJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
   references?: TurnReference[],
-): Promise<unknown> {
+): Promise<JsonRpcTurnSteerResult> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
     input.push({ type: "text", text });
@@ -742,13 +748,27 @@ export async function steerJsonRpcTurn(
       }
     }
   }
-  return await requestJsonRpc(get, set, workspaceId, "turn/steer", {
+  const result = await requestJsonRpc(get, set, workspaceId, "turn/steer", {
     threadId,
     turnId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(references && references.length > 0 ? { references } : {}),
   });
+  if (
+    !result ||
+    typeof result !== "object" ||
+    typeof (result as Record<string, unknown>).turnId !== "string" ||
+    typeof (result as Record<string, unknown>).steerRequestId !== "string"
+  ) {
+    throw new Error("turn/steer returned an invalid result.");
+  }
+  const record = result as Record<string, unknown>;
+  return {
+    turnId: record.turnId as string,
+    steerRequestId: record.steerRequestId as string,
+    ...(typeof record.replayed === "boolean" ? { replayed: record.replayed } : {}),
+  };
 }
 
 export async function interruptJsonRpcTurn(

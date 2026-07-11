@@ -213,6 +213,7 @@ export function createSocketModule(
                 busySince: null,
                 activeTurnId: null,
                 pendingSteer: null,
+                interruptPending: false,
               },
             },
             threads: s.threads.map((thread) =>
@@ -221,6 +222,7 @@ export function createSocketModule(
           };
         });
         surfaceJsonRpcThreadStartFailure(
+          get,
           set,
           activeThreadId,
           pendingFirstMessage,

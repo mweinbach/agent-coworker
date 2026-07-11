@@ -103,6 +103,18 @@ class MockJsonRpcSocket {
         },
       };
     }
+    if (method === "turn/steer") {
+      const clientMessageId =
+        params &&
+        typeof params === "object" &&
+        typeof (params as Record<string, unknown>).clientMessageId === "string"
+          ? ((params as Record<string, unknown>).clientMessageId as string)
+          : "unkeyed";
+      return {
+        turnId: "turn-1",
+        steerRequestId: `steer-request:${clientMessageId}`,
+      };
+    }
     if (method === "thread/read") {
       return {
         coworkSnapshot: {
@@ -1337,7 +1349,8 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(runtime?.pendingSteer).toMatchObject({
       text: "",
       attachmentSignature: expect.any(String),
-      status: "sending",
+      steerRequestId: expect.any(String),
+      status: "accepted",
     });
   });
 

@@ -1289,8 +1289,12 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       metrics.turnInterruptRequests += 1;
       queueMicrotask(emitCancellation);
       return { status: "interrupting" };
-    case "turn/steer":
+    case "turn/steer": {
       metrics.turnSteerRequests += 1;
+      const steerRequestId =
+        typeof params.clientMessageId === "string"
+          ? `quality-steer:${params.clientMessageId}`
+          : `quality-steer:${crypto.randomUUID()}`;
       queueMicrotask(() => {
         sendNotification("cowork/session/steerAccepted", {
           type: "steer_accepted",
@@ -1301,9 +1305,11 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
           ...(typeof params.clientMessageId === "string"
             ? { clientMessageId: params.clientMessageId }
             : {}),
+          steerRequestId,
         });
       });
-      return { accepted: true };
+      return { turnId: "quality-turn", steerRequestId };
+    }
     default:
       return {};
   }

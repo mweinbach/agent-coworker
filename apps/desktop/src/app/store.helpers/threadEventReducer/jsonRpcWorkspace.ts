@@ -1,4 +1,5 @@
 import type { SessionEvent } from "../../../lib/wsProtocol";
+import { composerDraftKeyForThread } from "../../composerDrafts";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import {
   findThreadIdForJsonRpcNotification,
@@ -297,7 +298,7 @@ export function createJsonRpcWorkspaceModule(
       if (message.method === "item/completed") {
         const item = parseProjectedItem(params.item);
         if (!item) return;
-        applyProjectedCompleted(set, mappedThreadId, item);
+        applyProjectedCompleted(get, set, mappedThreadId, item);
         return;
       }
     });
@@ -353,6 +354,7 @@ export function createJsonRpcWorkspaceModule(
           activeTurnId: null,
           pendingTurnStart: null,
           pendingSteer: null,
+          interruptPending: false,
         };
         const interactions = nextInteractionsByThread[threadId];
         if (interactions?.some((interaction) => interaction.status === "responding")) {
@@ -492,6 +494,31 @@ export function createJsonRpcWorkspaceModule(
       }
       delete nextLatestTodosByThreadId[fromThreadId];
 
+      const fromDraftKey = composerDraftKeyForThread(fromThreadId);
+      const toDraftKey = composerDraftKeyForThread(toThreadId);
+      const nextComposerDraftsByKey = { ...s.composerDraftsByKey };
+      if (nextComposerDraftsByKey[fromDraftKey] && !nextComposerDraftsByKey[toDraftKey]) {
+        nextComposerDraftsByKey[toDraftKey] = nextComposerDraftsByKey[fromDraftKey];
+      }
+      delete nextComposerDraftsByKey[fromDraftKey];
+
+      const nextComposerSubmissionsByKey = { ...s.composerSubmissionsByKey };
+      const migratedSubmission = nextComposerSubmissionsByKey[fromDraftKey];
+      if (migratedSubmission && !nextComposerSubmissionsByKey[toDraftKey]) {
+        nextComposerSubmissionsByKey[toDraftKey] = {
+          ...migratedSubmission,
+          owner: {
+            ...migratedSubmission.owner,
+            key: toDraftKey,
+          },
+          request: {
+            kind: "thread",
+            threadId: toThreadId,
+          },
+        };
+      }
+      delete nextComposerSubmissionsByKey[fromDraftKey];
+
       const nextInteractionsByThread = { ...s.interactionsByThread };
       if (fromThreadId in nextInteractionsByThread) {
         const migrated = nextInteractionsByThread[fromThreadId];
@@ -512,6 +539,8 @@ export function createJsonRpcWorkspaceModule(
         interactionsByThread: nextInteractionsByThread,
         threadRuntimeById: nextThreadRuntimeById,
         latestTodosByThreadId: nextLatestTodosByThreadId,
+        composerDraftsByKey: nextComposerDraftsByKey,
+        composerSubmissionsByKey: nextComposerSubmissionsByKey,
       };
     });
 

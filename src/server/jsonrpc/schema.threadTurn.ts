@@ -371,6 +371,8 @@ export const jsonRpcThreadTurnResultSchemas = {
   "turn/steer": z
     .object({
       turnId: nonEmptyTrimmedStringSchema,
+      steerRequestId: nonEmptyTrimmedStringSchema,
+      replayed: z.boolean().optional(),
     })
     .strict(),
   "turn/interrupt": z.object({}).strict(),

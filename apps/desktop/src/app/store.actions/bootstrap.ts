@@ -773,6 +773,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       selectedTaskId: ui.selectedTaskId,
       composerDraftRevisionFloorByKey: {},
       composerAttachmentIngestionCountByKey: {},
+      composerSubmissionsByKey: {},
       composerDraftsByKey: buildRestoredComposerDrafts(
         state.composerDrafts,
         state.workspaces,
@@ -1080,6 +1081,7 @@ export function createBootstrapActions(
             selectedTaskId: ui.selectedTaskId,
             composerDraftRevisionFloorByKey: {},
             composerAttachmentIngestionCountByKey: {},
+            composerSubmissionsByKey: {},
             composerDraftsByKey: restoredComposerDrafts,
             ...creationDrafts,
             newChatLandingTarget: ui.newChatLandingTarget,

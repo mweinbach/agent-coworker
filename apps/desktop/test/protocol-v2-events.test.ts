@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import { composerDraftKeyForThread, createEmptyComposerDraft } from "../src/app/composerDrafts";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
@@ -1205,6 +1206,103 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(
       state.notifications.some((entry) => entry.detail === "session/internal_error: boom"),
     ).toBe(true);
+  });
+
+  test("a dropped accepted steer fails the exact desktop submission for retry", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const key = composerDraftKeyForThread(threadId);
+    const originalSendMessage = useAppStore.getState().sendMessage;
+    try {
+      act(() => {
+        useAppStore.setState((state) => ({
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [key]: {
+              ...createEmptyComposerDraft("2026-01-01T00:00:00.000Z"),
+              revision: 7,
+              text: "guidance that must remain retryable",
+            },
+          },
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...state.threadRuntimeById[threadId]!,
+              busy: true,
+              activeTurnId: "turn-1",
+            },
+          },
+          sendMessage: mock(async () => true),
+        }));
+      });
+
+      let submitted = false;
+      act(() => {
+        submitted = useAppStore.getState().submitComposerDraft({ kind: "thread", threadId });
+      });
+      expect(submitted).toBe(true);
+      await flushAsyncWork();
+      const submission = useAppStore.getState().composerSubmissionsByKey[key];
+      expect(submission?.phase).toBe("sending");
+      if (!submission) throw new Error("missing composer submission");
+
+      act(() => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...state.threadRuntimeById[threadId]!,
+              pendingSteer: {
+                clientMessageId: submission.clientMessageId,
+                text: submission.prepared?.text ?? submission.draft.text,
+                submissionId: submission.id,
+                status: "sending",
+              },
+            },
+          },
+        }));
+      });
+      socket.notify("cowork/session/steerAccepted", {
+        type: "steer_accepted",
+        sessionId,
+        turnId: "turn-1",
+        text: submission.prepared?.text ?? submission.draft.text,
+        clientMessageId: submission.clientMessageId,
+        steerRequestId: "steer-request-1",
+      });
+      await flushAsyncWork();
+      expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+        id: submission.id,
+        phase: "accepted",
+        draft: { revision: 7, text: "guidance that must remain retryable" },
+      });
+
+      socket.notify("item/completed", {
+        threadId: sessionId,
+        turnId: "turn-1",
+        item: {
+          id: "dropped-steer-error",
+          type: "error",
+          source: "session",
+          code: "validation_failed",
+          message: "Active turn ended before pending steers could be accepted.",
+          clientMessageId: submission.clientMessageId,
+          steerRequestId: "steer-request-1",
+        },
+      });
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+        id: submission.id,
+        phase: "failed",
+        error: "Active turn ended before pending steers could be accepted.",
+        draft: { revision: 7, text: "guidance that must remain retryable" },
+      });
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
+    } finally {
+      act(() => {
+        useAppStore.setState({ sendMessage: originalSendMessage });
+      });
+    }
   });
 
   test("server ask requests stay on the request path and answerAsk responds on the shared socket", async () => {

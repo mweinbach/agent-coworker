@@ -12,7 +12,6 @@ import {
   loadOverflowCitationContext,
   reasoningLabelForMode,
   reasoningPreviewText,
-  resolveComposerBusyPolicy,
   resolveCurrentReasoningEffort,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
@@ -272,10 +271,11 @@ describe("desktop reasoning UI helpers", () => {
         pendingAttachmentSignature: "",
         pendingTurnStart: null,
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
-    ).toEqual({ status: "streaming", disabled: false, mode: "send" });
+    ).toEqual({ status: "ready", disabled: true, mode: "steer-ready" });
 
     expect(
       getComposerSubmitState({
@@ -286,10 +286,11 @@ describe("desktop reasoning UI helpers", () => {
         pendingAttachmentSignature: "",
         pendingTurnStart: null,
         pendingSteer: null,
+        submission: null,
         sessionId: null,
         threadStatus: "active",
       }),
-    ).toEqual({ status: "streaming", disabled: true, mode: "send" });
+    ).toEqual({ status: "ready", disabled: true, mode: "steer-ready" });
 
     expect(
       getComposerSubmitState({
@@ -300,6 +301,7 @@ describe("desktop reasoning UI helpers", () => {
         pendingAttachmentSignature: "",
         pendingTurnStart: null,
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -319,6 +321,7 @@ describe("desktop reasoning UI helpers", () => {
           attachmentSignature: "",
           status: "sending",
         },
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -333,6 +336,7 @@ describe("desktop reasoning UI helpers", () => {
         pendingAttachmentSignature: "",
         pendingTurnStart: null,
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -347,6 +351,7 @@ describe("desktop reasoning UI helpers", () => {
         pendingAttachmentSignature: "sig-1",
         pendingTurnStart: null,
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -366,6 +371,7 @@ describe("desktop reasoning UI helpers", () => {
           attachmentSignature: "sig-1",
           status: "sending",
         },
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -385,6 +391,7 @@ describe("desktop reasoning UI helpers", () => {
           status: "sending",
         },
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
@@ -404,26 +411,22 @@ describe("desktop reasoning UI helpers", () => {
           status: "sending",
         },
         pendingSteer: null,
+        submission: null,
         sessionId: "session-1",
         threadStatus: "active",
       }),
     ).toEqual({ status: "pending", disabled: true, mode: "send" });
   });
 
-  test("routes busy composer submits through steer mode", () => {
-    expect(resolveComposerBusyPolicy(true)).toBe("steer");
-    expect(resolveComposerBusyPolicy(false)).toBe("reject");
-  });
-
   test("renders steer-specific composer helper copy", () => {
     expect(composerBusyHint({ status: "pending", disabled: true, mode: "send" })).toBe(
       "Sending message. Waiting for the run to start.",
     );
-    expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe(
-      "Type guidance to add, or stop to cancel.",
+    expect(composerBusyHint({ status: "ready", disabled: true, mode: "steer-ready" })).toBe(
+      "Stop current response, or type guidance and press Enter to send it.",
     );
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe(
-      "Add guidance to the current reply (Enter).",
+      "Press Enter to send guidance. Stop remains available.",
     );
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe(
       "Guidance sent. Waiting for the current run to accept it.",

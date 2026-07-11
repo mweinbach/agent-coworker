@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
 import { areMarkdownRevisionPropsEqual } from "../apps/mobile/src/components/thread/markdown-memo";
+import {
+  ACTIVITY_INLINE_PAGE_SIZE,
+  buildActivityEntryPage,
+  previousActivityPageStart,
+} from "../apps/mobile/src/features/cowork/activityEntryPagination";
 import { buildChatRenderItems } from "../apps/mobile/src/features/cowork/activityGroups";
 import {
   MOBILE_LIST_PERFORMANCE_CONTRACTS,
   MOBILE_LONG_FIXTURE_SIZE,
-  MOBILE_MODEL_MEMORY_BUDGET_BYTES,
   MOBILE_STREAM_PERFORMANCE_BUDGET,
-  maximumScheduledRows,
 } from "../apps/mobile/src/features/cowork/mobilePerformanceContracts";
 import type { SessionFeedItem } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
@@ -67,7 +70,6 @@ describe("mobile long-list performance contracts", () => {
       expect(contract.initialNumToRender).toBeLessThanOrEqual(12);
       expect(contract.maxToRenderPerBatch).toBeLessThanOrEqual(8);
       expect(contract.windowSize).toBeLessThanOrEqual(7);
-      expect(maximumScheduledRows(contract)).toBeLessThanOrEqual(contract.maxScheduledRows);
     }
   });
 
@@ -118,12 +120,10 @@ describe("mobile long-list performance contracts", () => {
     };
     const after = buildThreadDetailList(buildChatRenderItems(updatedFeed), null);
     const changed = changedThreadRows(before, after);
-    const retainedBytes = Buffer.byteLength(JSON.stringify(before));
 
     expect(before).toHaveLength(MOBILE_LONG_FIXTURE_SIZE);
     expect(changed).toEqual([`message-${MOBILE_LONG_FIXTURE_SIZE - 1}`]);
     expect(changed).toHaveLength(MOBILE_STREAM_PERFORMANCE_BUDGET.maxChangedRowsPerDelta);
-    expect(retainedBytes).toBeLessThanOrEqual(MOBILE_MODEL_MEMORY_BUDGET_BYTES.thread);
     expect(chatRenderItemRevision(before[0].data)).toBe(chatRenderItemRevision(after[0].data));
   });
 
@@ -144,7 +144,7 @@ describe("mobile long-list performance contracts", () => {
     expect(invalidated).toBe(1);
   });
 
-  test("a 1,000-row home fixture is flattened for SectionList and stays within memory budget", () => {
+  test("a 1,000-row home fixture is flattened for SectionList", () => {
     const threads = Array.from({ length: MOBILE_LONG_FIXTURE_SIZE }, (_, index) =>
       makeHomeThread(index),
     );
@@ -169,15 +169,34 @@ describe("mobile long-list performance contracts", () => {
       chatsError: null,
       projectErrors: {},
     });
-    const retainedBytes = Buffer.byteLength(JSON.stringify(sections));
 
     expect(sections[0]?.key).toBe("chats");
     expect(sections[0]?.data).toHaveLength(MOBILE_LONG_FIXTURE_SIZE);
     expect(threadHomeListRowCount(sections)).toBe(MOBILE_LONG_FIXTURE_SIZE + 1);
-    expect(retainedBytes).toBeLessThanOrEqual(MOBILE_MODEL_MEMORY_BUDGET_BYTES.home);
   });
 
-  test("Activity has no nested vertical gesture owner and both home contracts use SectionList", async () => {
+  test("all 1,000 Activity entries remain reachable through bounded inline pages", () => {
+    const entries = Array.from({ length: MOBILE_LONG_FIXTURE_SIZE }, (_, index) => ({
+      id: `activity-${index}`,
+    }));
+    const visited = new Set<string>();
+    let page = buildActivityEntryPage(entries, null);
+
+    while (true) {
+      expect(page.entries.length).toBeLessThanOrEqual(ACTIVITY_INLINE_PAGE_SIZE);
+      for (const entry of page.entries) {
+        visited.add(entry.id);
+      }
+      if (page.hiddenBefore === 0) {
+        break;
+      }
+      page = buildActivityEntryPage(entries, previousActivityPageStart(page));
+    }
+
+    expect(visited.size).toBe(MOBILE_LONG_FIXTURE_SIZE);
+  });
+
+  test("Activity has one bounded inline owner and both home contracts use SectionList", async () => {
     const [activitySource, threadSource, homeSource, iosWrapper, androidWrapper] =
       await Promise.all([
         Bun.file("apps/mobile/src/components/thread/activity-group-card.tsx").text(),
@@ -188,8 +207,9 @@ describe("mobile long-list performance contracts", () => {
       ]);
 
     expect(activitySource).not.toMatch(/\b(?:FlatList|SectionList|ScrollView)\b/);
+    expect(activitySource).toContain("buildActivityEntryPage");
     expect(threadSource).toContain("maintainVisibleContentPosition");
-    expect(threadSource).toContain("userGestureActiveRef");
+    expect(threadSource).toContain("programmaticScrollGuardRef");
     expect(threadSource).toContain("new · Jump to latest");
     expect(homeSource).toContain("SectionList");
     expect(homeSource).not.toContain("ScrollView");

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
@@ -26,11 +27,24 @@ import {
   type ThreadDetailListItem,
 } from "@/features/cowork/threadListModel";
 import {
+  beginThreadProgrammaticMomentum,
+  beginThreadProgrammaticScroll,
+  finishThreadProgrammaticScroll,
+  initialThreadProgrammaticScrollGuard,
+  isThreadProgrammaticScrollActive,
+  shouldApplyThreadUserScroll,
+  shouldFinishInstantThreadScroll,
+} from "@/features/cowork/threadProgrammaticScrollGuard";
+import {
   changedThreadRows,
   initialThreadScrollState,
+  measuredThreadDistanceFromBottom,
   reduceThreadScrollState,
   shouldFollowChangedRows,
+  THREAD_NEAR_TAIL_THRESHOLD_PX,
   type ThreadRowRevision,
+  type ThreadScrollEvent,
+  type ThreadScrollMetrics,
 } from "@/features/cowork/threadScrollState";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -109,7 +123,12 @@ export default function ThreadDetailScreen() {
   const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
   const previousRowsRef = useRef<ThreadRowRevision[]>([]);
   const userGestureActiveRef = useRef(false);
-  const initialScrollCompleteRef = useRef(false);
+  const programmaticScrollGuardRef = useRef(initialThreadProgrammaticScrollGuard());
+  const scrollMetricsRef = useRef<ThreadScrollMetrics>({
+    contentHeight: null,
+    offsetY: 0,
+    viewportHeight: null,
+  });
   const forceFollowNextRowsRef = useRef(false);
   const previousFeedMutationRevisionRef = useRef<number | null>(null);
   const scrollThreadIdRef = useRef(threadId);
@@ -132,7 +151,13 @@ export default function ThreadDetailScreen() {
     scrollThreadIdRef.current = threadId;
     scrollStateRef.current = initialState;
     previousRowsRef.current = [];
-    initialScrollCompleteRef.current = false;
+    userGestureActiveRef.current = false;
+    programmaticScrollGuardRef.current = initialThreadProgrammaticScrollGuard();
+    scrollMetricsRef.current = {
+      contentHeight: null,
+      offsetY: 0,
+      viewportHeight: null,
+    };
     forceFollowNextRowsRef.current = false;
     previousFeedMutationRevisionRef.current = null;
     setScrollState(initialState);
@@ -193,6 +218,66 @@ export default function ThreadDetailScreen() {
     [listData],
   );
 
+  const applyScrollEvent = useCallback((event: ThreadScrollEvent) => {
+    const currentScrollState = scrollStateRef.current;
+    const nextScrollState = reduceThreadScrollState(currentScrollState, event);
+    if (nextScrollState === currentScrollState) {
+      return nextScrollState;
+    }
+    scrollStateRef.current = nextScrollState;
+    setScrollState(nextScrollState);
+    return nextScrollState;
+  }, []);
+
+  const beginProgrammaticScrollToEnd = useCallback((animated: boolean) => {
+    programmaticScrollGuardRef.current = beginThreadProgrammaticScroll(animated);
+    listRef.current?.scrollToEnd({ animated });
+  }, []);
+
+  const observeScrollDistance = useCallback(
+    (distanceFromBottom: number) => {
+      applyScrollEvent({
+        type: "position-observed",
+        distanceFromBottom,
+      });
+
+      const guard = programmaticScrollGuardRef.current;
+      if (shouldApplyThreadUserScroll(guard, userGestureActiveRef.current)) {
+        applyScrollEvent({
+          type: "user-scroll",
+          distanceFromBottom,
+        });
+      }
+      if (shouldFinishInstantThreadScroll(guard, distanceFromBottom)) {
+        programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
+      }
+    },
+    [applyScrollEvent],
+  );
+
+  const observeCurrentMetrics = useCallback(
+    (establishUnmeasuredTail: boolean) => {
+      const metrics = scrollMetricsRef.current;
+      if (listData.length === 0) {
+        return;
+      }
+      const distanceFromBottom = measuredThreadDistanceFromBottom(metrics);
+      if (distanceFromBottom === null) {
+        return;
+      }
+      const shouldEstablishTail =
+        establishUnmeasuredTail &&
+        scrollStateRef.current.position === "unmeasured" &&
+        scrollStateRef.current.followTailIntent &&
+        distanceFromBottom > THREAD_NEAR_TAIL_THRESHOLD_PX;
+      observeScrollDistance(distanceFromBottom);
+      if (shouldEstablishTail) {
+        beginProgrammaticScrollToEnd(false);
+      }
+    },
+    [beginProgrammaticScrollToEnd, listData.length, observeScrollDistance],
+  );
+
   useEffect(() => {
     const previousRows = previousRowsRef.current;
     previousRowsRef.current = rowRevisions;
@@ -208,14 +293,10 @@ export default function ThreadDetailScreen() {
     previousFeedMutationRevisionRef.current = feedMutation?.revision ?? null;
 
     const currentScrollState = scrollStateRef.current;
-    const nextScrollState = reduceThreadScrollState(currentScrollState, {
+    applyScrollEvent({
       type: "rows-changed",
       changedKeys,
     });
-    if (nextScrollState !== currentScrollState) {
-      scrollStateRef.current = nextScrollState;
-      setScrollState(nextScrollState);
-    }
 
     const forceFollow = forceFollowNextRowsRef.current;
     forceFollowNextRowsRef.current = false;
@@ -231,47 +312,50 @@ export default function ThreadDetailScreen() {
         turnActive && hasNewFeedMutation && isStreamingMutation,
       )
     ) {
-      listRef.current?.scrollToEnd({ animated: false });
+      beginProgrammaticScrollToEnd(false);
     }
-  }, [feedMutation, rowRevisions, turnActive]);
+  }, [applyScrollEvent, beginProgrammaticScrollToEnd, feedMutation, rowRevisions, turnActive]);
 
-  const updateScrollStateFromUserGesture = useCallback(
+  const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (!userGestureActiveRef.current) {
-        return;
-      }
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      scrollMetricsRef.current = {
+        contentHeight: contentSize.height,
+        offsetY: contentOffset.y,
+        viewportHeight: layoutMeasurement.height,
+      };
       const distanceFromBottom = Math.max(
         0,
         contentSize.height - layoutMeasurement.height - contentOffset.y,
       );
-      const nextScrollState = reduceThreadScrollState(scrollStateRef.current, {
-        type: "user-scroll",
-        distanceFromBottom,
-      });
-      if (nextScrollState === scrollStateRef.current) {
-        return;
-      }
-      scrollStateRef.current = nextScrollState;
-      setScrollState(nextScrollState);
+      observeScrollDistance(distanceFromBottom);
     },
-    [],
+    [observeScrollDistance],
   );
 
-  const scrollToLatest = useCallback((animated = true) => {
-    const nextScrollState = reduceThreadScrollState(scrollStateRef.current, { type: "jump" });
-    scrollStateRef.current = nextScrollState;
-    setScrollState(nextScrollState);
-    listRef.current?.scrollToEnd({ animated });
-  }, []);
+  const scrollToLatest = useCallback(
+    (animated = true) => {
+      applyScrollEvent({ type: "jump" });
+      beginProgrammaticScrollToEnd(animated);
+    },
+    [applyScrollEvent, beginProgrammaticScrollToEnd],
+  );
 
-  const handleContentSizeChange = useCallback(() => {
-    if (initialScrollCompleteRef.current) {
-      return;
-    }
-    initialScrollCompleteRef.current = true;
-    listRef.current?.scrollToEnd({ animated: false });
-  }, []);
+  const handleContentSizeChange = useCallback(
+    (_width: number, height: number) => {
+      scrollMetricsRef.current.contentHeight = height;
+      observeCurrentMetrics(true);
+    },
+    [observeCurrentMetrics],
+  );
+
+  const handleListLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+      observeCurrentMetrics(true);
+    },
+    [observeCurrentMetrics],
+  );
 
   if (!thread) {
     return (
@@ -326,9 +410,7 @@ export default function ThreadDetailScreen() {
       setComposerDraft(activeThread.id, "");
       setActionError((current) => (current?.kind === "send" ? null : current));
       forceFollowNextRowsRef.current = true;
-      const nextScrollState = reduceThreadScrollState(scrollStateRef.current, { type: "jump" });
-      scrollStateRef.current = nextScrollState;
-      setScrollState(nextScrollState);
+      applyScrollEvent({ type: "jump" });
       try {
         await runtimeClient.startTurn(activeThread.id, draft, clientMessageId);
       } catch (error) {
@@ -397,23 +479,33 @@ export default function ThreadDetailScreen() {
           removeClippedSubviews={THREAD_LIST_PERFORMANCE.removeClippedSubviews}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           onScrollBeginDrag={(event) => {
+            programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
             userGestureActiveRef.current = true;
-            updateScrollStateFromUserGesture(event);
+            handleScroll(event);
           }}
-          onScroll={updateScrollStateFromUserGesture}
+          onScroll={handleScroll}
           onScrollEndDrag={(event) => {
-            updateScrollStateFromUserGesture(event);
+            handleScroll(event);
             userGestureActiveRef.current = false;
           }}
           onMomentumScrollBegin={() => {
+            if (isThreadProgrammaticScrollActive(programmaticScrollGuardRef.current)) {
+              programmaticScrollGuardRef.current = beginThreadProgrammaticMomentum(
+                programmaticScrollGuardRef.current,
+              );
+              userGestureActiveRef.current = false;
+              return;
+            }
             userGestureActiveRef.current = true;
           }}
           onMomentumScrollEnd={(event) => {
-            updateScrollStateFromUserGesture(event);
+            handleScroll(event);
+            programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
             userGestureActiveRef.current = false;
           }}
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
+          onLayout={handleListLayout}
           ListHeaderComponent={
             showSessionBadge || actionError || normalizedAgents.length > 0
               ? () => (

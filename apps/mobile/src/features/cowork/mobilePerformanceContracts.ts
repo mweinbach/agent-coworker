@@ -7,10 +7,10 @@ export type MobileListPerformanceContract = {
   updateCellsBatchingPeriod: number;
   windowSize: number;
   removeClippedSubviews: boolean;
-  maxScheduledRows: number;
 };
 
 export const MOBILE_LONG_FIXTURE_SIZE = 1_000;
+export const MOBILE_PROFILED_ROW_WINDOW = 40;
 
 export const MOBILE_STREAM_PERFORMANCE_BUDGET = {
   deltaEvents: MOBILE_LONG_FIXTURE_SIZE,
@@ -19,9 +19,17 @@ export const MOBILE_STREAM_PERFORMANCE_BUDGET = {
   maxNetworkRequests: 0,
 } as const;
 
-export const MOBILE_MODEL_MEMORY_BUDGET_BYTES = {
-  thread: 512_000,
-  home: 768_000,
+export const MOBILE_RUNTIME_PROFILE_BUDGET = {
+  profiledRowWindow: MOBILE_PROFILED_ROW_WINDOW,
+  expectedUpdateCommits: MOBILE_LONG_FIXTURE_SIZE,
+  maxRowRenders: MOBILE_LONG_FIXTURE_SIZE + MOBILE_PROFILED_ROW_WINDOW,
+  frameDurationMs: 1_000 / 60,
+  maxFrameBudgetMisses: 10,
+  maxTotalUpdateCommitDurationMs: 1_500,
+  maxLongFixtureHeapBytes: 96 * 1024 * 1024,
+  maxStreamingHeapBytes: 112 * 1024 * 1024,
+  maxStreamingHeapGrowthBytes: 48 * 1024 * 1024,
+  maxNetworkRequests: 0,
 } as const;
 
 const sharedThreadContract = {
@@ -29,7 +37,6 @@ const sharedThreadContract = {
   maxToRenderPerBatch: 8,
   updateCellsBatchingPeriod: 16,
   windowSize: 7,
-  maxScheduledRows: 80,
 } as const;
 
 const sharedHomeContract = {
@@ -37,7 +44,6 @@ const sharedHomeContract = {
   maxToRenderPerBatch: 8,
   updateCellsBatchingPeriod: 24,
   windowSize: 7,
-  maxScheduledRows: 80,
 } as const;
 
 export const MOBILE_LIST_PERFORMANCE_CONTRACTS: Record<
@@ -71,8 +77,4 @@ export function getMobileListPerformanceContract(
   surface: MobileListSurface,
 ): MobileListPerformanceContract {
   return MOBILE_LIST_PERFORMANCE_CONTRACTS[platform][surface];
-}
-
-export function maximumScheduledRows(contract: MobileListPerformanceContract): number {
-  return contract.initialNumToRender + contract.maxToRenderPerBatch * (contract.windowSize + 1);
 }

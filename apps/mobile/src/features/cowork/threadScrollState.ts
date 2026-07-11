@@ -1,7 +1,11 @@
 export const THREAD_NEAR_TAIL_THRESHOLD_PX = 96;
 
+export type ThreadTailPosition = "unmeasured" | "near-tail" | "away";
+
 export type ThreadScrollState = {
   followTail: boolean;
+  followTailIntent: boolean;
+  position: ThreadTailPosition;
   unseenKeys: string[];
 };
 
@@ -10,7 +14,13 @@ export type ThreadRowRevision = {
   revision: string;
 };
 
-type ThreadScrollEvent =
+export type ThreadScrollMetrics = {
+  contentHeight: number | null;
+  offsetY: number;
+  viewportHeight: number | null;
+};
+
+export type ThreadScrollEvent =
   | {
       type: "user-scroll";
       distanceFromBottom: number;
@@ -20,14 +30,31 @@ type ThreadScrollEvent =
       changedKeys: readonly string[];
     }
   | {
+      type: "position-observed";
+      distanceFromBottom: number;
+    }
+  | {
       type: "jump";
     };
 
 export function initialThreadScrollState(): ThreadScrollState {
   return {
-    followTail: true,
+    followTail: false,
+    followTailIntent: true,
+    position: "unmeasured",
     unseenKeys: [],
   };
+}
+
+export function measuredThreadDistanceFromBottom(metrics: ThreadScrollMetrics): number | null {
+  if (
+    metrics.contentHeight === null ||
+    metrics.viewportHeight === null ||
+    metrics.viewportHeight <= 0
+  ) {
+    return null;
+  }
+  return Math.max(0, metrics.contentHeight - metrics.viewportHeight - metrics.offsetY);
 }
 
 export function reduceThreadScrollState(
@@ -38,14 +65,51 @@ export function reduceThreadScrollState(
     case "user-scroll": {
       const followTail = event.distanceFromBottom <= THREAD_NEAR_TAIL_THRESHOLD_PX;
       if (followTail) {
-        return state.followTail && state.unseenKeys.length === 0
+        return state.followTail &&
+          state.followTailIntent &&
+          state.position === "near-tail" &&
+          state.unseenKeys.length === 0
           ? state
-          : { followTail: true, unseenKeys: [] };
+          : {
+              followTail: true,
+              followTailIntent: true,
+              position: "near-tail",
+              unseenKeys: [],
+            };
       }
-      return state.followTail ? { ...state, followTail: false } : state;
+      return !state.followTail && !state.followTailIntent && state.position === "away"
+        ? state
+        : {
+            ...state,
+            followTail: false,
+            followTailIntent: false,
+            position: "away",
+          };
+    }
+    case "position-observed": {
+      const position: ThreadTailPosition =
+        event.distanceFromBottom <= THREAD_NEAR_TAIL_THRESHOLD_PX ? "near-tail" : "away";
+      const followTail = position === "near-tail" && state.followTailIntent;
+      if (
+        state.followTail === followTail &&
+        state.position === position &&
+        (!followTail || state.unseenKeys.length === 0)
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        followTail,
+        position,
+        unseenKeys: followTail ? [] : state.unseenKeys,
+      };
     }
     case "rows-changed": {
-      if (state.followTail || event.changedKeys.length === 0) {
+      if (
+        state.followTail ||
+        (state.followTailIntent && state.position === "unmeasured") ||
+        event.changedKeys.length === 0
+      ) {
         return state;
       }
       const unseenKeys = new Set(state.unseenKeys);
@@ -61,9 +125,17 @@ export function reduceThreadScrollState(
       };
     }
     case "jump":
-      return state.followTail && state.unseenKeys.length === 0
+      return state.followTail &&
+        state.followTailIntent &&
+        state.position === "near-tail" &&
+        state.unseenKeys.length === 0
         ? state
-        : { followTail: true, unseenKeys: [] };
+        : {
+            followTail: false,
+            followTailIntent: true,
+            position: "unmeasured",
+            unseenKeys: [],
+          };
     default: {
       const exhaustive: never = event;
       return exhaustive;
@@ -76,7 +148,12 @@ export function shouldFollowChangedRows(
   changedKeys: readonly string[],
   turnIsStreaming: boolean,
 ): boolean {
-  return state.followTail && turnIsStreaming && changedKeys.length > 0;
+  return (
+    state.followTailIntent &&
+    state.position !== "unmeasured" &&
+    turnIsStreaming &&
+    changedKeys.length > 0
+  );
 }
 
 export function changedThreadRows(

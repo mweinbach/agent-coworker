@@ -1,6 +1,10 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-
+import {
+  buildActivityEntryPage,
+  nextActivityPageStart,
+  previousActivityPageStart,
+} from "@/features/cowork/activityEntryPagination";
 import type { ActivityFeedItem, ActivityGroupSummary } from "@/features/cowork/activityGroups";
 import {
   activityTimestampMs,
@@ -194,8 +198,80 @@ function ToolStateIndicator({ state }: { state: ToolFeedState }) {
   return <SFSymbol name="clock" size={12} color={theme.primary} />;
 }
 
+type ActivityTimelineEntry = ActivityGroupSummary["entries"][number];
+
+function ActivityTimelineEntryView({
+  entry,
+  isLast,
+  lastReasoningEntryId,
+  live,
+}: {
+  entry: ActivityTimelineEntry;
+  isLast: boolean;
+  lastReasoningEntryId: string | null;
+  live?: boolean;
+}) {
+  const theme = useAppTheme();
+
+  if (entry.kind === "reasoning") {
+    return (
+      <ReasoningTimelineNode
+        text={entry.item.text}
+        isLast={isLast}
+        live={live}
+        isMostRecent={entry.item.id === lastReasoningEntryId}
+      />
+    );
+  }
+
+  const formatting = formatToolCard(
+    entry.item.name,
+    entry.item.args,
+    entry.item.result,
+    entry.item.state,
+  );
+
+  return (
+    <TimelineNode iconName={toolIconName(formatting.title)} isLast={isLast}>
+      <View style={{ gap: 2, paddingTop: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Text
+            selectable
+            style={{
+              color: theme.text,
+              fontSize: 14,
+              fontWeight: "600",
+              lineHeight: 20,
+            }}
+          >
+            {formatting.title}
+          </Text>
+          <ToolStateIndicator state={entry.item.state} />
+        </View>
+        {formatting.subtitle ? (
+          <Text
+            selectable
+            style={{
+              color: theme.textTertiary,
+              fontSize: 12,
+              lineHeight: 17,
+            }}
+          >
+            {formatting.subtitle}
+          </Text>
+        ) : null}
+      </View>
+    </TimelineNode>
+  );
+}
+
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const theme = useAppTheme();
+  const [requestedStartIndex, setRequestedStartIndex] = useState<number | null>(null);
+  const page = useMemo(
+    () => buildActivityEntryPage(summary.entries, requestedStartIndex),
+    [requestedStartIndex, summary.entries],
+  );
 
   const lastReasoningEntryId = useMemo(() => {
     const reasoningEntries = summary.entries.filter((entry) => entry.kind === "reasoning");
@@ -205,66 +281,72 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
   return (
     <View style={{ gap: 0 }}>
-      {summary.entries.map((entry, index) => {
-        const isLast = index === summary.entries.length - 1;
-
-        if (entry.kind === "reasoning") {
-          const isMostRecent = entry.item.id === lastReasoningEntryId;
-          return (
-            <ReasoningTimelineNode
-              key={entry.item.id}
-              text={entry.item.text}
-              isLast={isLast}
-              live={live}
-              isMostRecent={isMostRecent}
-            />
-          );
-        }
-
-        const formatting = formatToolCard(
-          entry.item.name,
-          entry.item.args,
-          entry.item.result,
-          entry.item.state,
-        );
-
-        return (
-          <TimelineNode
-            key={entry.item.id}
-            iconName={toolIconName(formatting.title)}
-            isLast={isLast}
+      {page.totalCount > page.entries.length ? (
+        <View
+          style={{
+            minHeight: 34,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            paddingBottom: 8,
+          }}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show earlier activity"
+            disabled={page.hiddenBefore === 0}
+            onPress={() => setRequestedStartIndex(previousActivityPageStart(page))}
+            hitSlop={8}
           >
-            <View style={{ gap: 2, paddingTop: 1 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Text
-                  selectable
-                  style={{
-                    color: theme.text,
-                    fontSize: 14,
-                    fontWeight: "600",
-                    lineHeight: 20,
-                  }}
-                >
-                  {formatting.title}
-                </Text>
-                <ToolStateIndicator state={entry.item.state} />
-              </View>
-              {formatting.subtitle ? (
-                <Text
-                  selectable
-                  style={{
-                    color: theme.textTertiary,
-                    fontSize: 12,
-                    lineHeight: 17,
-                  }}
-                >
-                  {formatting.subtitle}
-                </Text>
-              ) : null}
-            </View>
-          </TimelineNode>
-        );
-      })}
+            <Text
+              style={{
+                color: page.hiddenBefore > 0 ? theme.primary : theme.textTertiary,
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Earlier
+            </Text>
+          </Pressable>
+          <Text
+            selectable
+            style={{
+              color: theme.textTertiary,
+              fontSize: 11,
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {page.startIndex + 1}–{page.endIndexExclusive} of {page.totalCount}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show newer activity"
+            disabled={page.hiddenAfter === 0}
+            onPress={() => setRequestedStartIndex(nextActivityPageStart(page))}
+            hitSlop={8}
+          >
+            <Text
+              style={{
+                color: page.hiddenAfter > 0 ? theme.primary : theme.textTertiary,
+                fontSize: 12,
+                fontWeight: "600",
+              }}
+            >
+              Newer
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {page.entries.map((entry, index) => (
+        <ActivityTimelineEntryView
+          key={entry.item.id}
+          entry={entry}
+          isLast={index === page.entries.length - 1}
+          lastReasoningEntryId={lastReasoningEntryId}
+          live={live}
+        />
+      ))}
     </View>
   );
 }

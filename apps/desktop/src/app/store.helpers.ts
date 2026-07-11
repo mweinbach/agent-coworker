@@ -56,10 +56,12 @@ import type {
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
+  ComposerDraftAttachment,
   ComposerDraftRevision,
   ComposerDraftRevisionFloor,
   ComposerDraftsByKey,
 } from "./composerDrafts";
+import type { ComposerSubmissionRequest, ComposerSubmissionsByKey } from "./composerSubmission";
 import type { ReasoningEffortValue } from "./openaiCompatibleProviderOptions";
 import { buildContextPreamble, extractUsageStateFromTranscript } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
@@ -279,6 +281,7 @@ export type AppStoreState = {
   composerDraftsByKey: ComposerDraftsByKey;
   composerDraftRevisionFloorByKey: Record<string, ComposerDraftRevisionFloor>;
   composerAttachmentIngestionCountByKey: Record<string, number>;
+  composerSubmissionsByKey: ComposerSubmissionsByKey;
   newChatLandingTarget: NewChatLandingTarget | null;
   injectContext: boolean;
   developerMode: boolean;
@@ -334,10 +337,12 @@ export type AppStoreState = {
     mode?: "draft" | "session";
     attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[];
     attachmentFiles?: File[];
+    draftAttachments?: ComposerDraftAttachment[];
     provider?: ProviderName;
     model?: string;
     reasoningEffort?: ReasoningEffortValue;
     draftSubmission?: ComposerDraftRevision;
+    clientMessageId?: string;
   }) => Promise<boolean>;
   openNewChatLanding: (opts?: {
     defaultTargetKind?: "project" | "oneOff";
@@ -360,6 +365,7 @@ export type AppStoreState = {
       refreshSnapshot?: boolean;
       signal?: AbortSignal;
       draftSubmission?: ComposerDraftRevision;
+      clientMessageId?: string;
     },
   ) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -372,10 +378,17 @@ export type AppStoreState = {
     options?: {
       targetThreadId?: string;
       draftSubmission?: ComposerDraftRevision;
+      clientMessageId?: string;
       retryToolItemIds?: string[];
     },
   ) => Promise<boolean>;
-  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
+  submitComposerDraft: (request: ComposerSubmissionRequest) => boolean;
+  retryComposerSubmission: (key?: string) => boolean;
+  editAcceptedComposerSubmission: (key?: string) => boolean;
+  dismissComposerSubmission: (key?: string) => void;
+  completeComposerSubmission: (owner: ComposerDraftRevision) => void;
+  failComposerSubmission: (submissionId: string, error: unknown) => void;
+  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => boolean;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setThreadReasoningEffort: (

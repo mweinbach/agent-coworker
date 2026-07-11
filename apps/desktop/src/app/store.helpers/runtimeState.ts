@@ -411,6 +411,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     activeTurnId: null,
     pendingTurnStart: null,
     pendingSteer: null,
+    interruptPending: false,
     feed: [],
     hydrating: false,
     transcriptOnly: false,

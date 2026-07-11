@@ -1,4 +1,5 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
+import { findComposerSubmissionById } from "../../../composerSubmission";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
@@ -175,6 +176,7 @@ export function handleLifecycleThreadEvent(
             busySince: resumedBusy ? (rt.busySince ?? ctx.deps.nowIso()) : null,
             activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
             pendingSteer: resumedBusy ? rt.pendingSteer : null,
+            interruptPending: resumedSameLiveTurn ? rt.interruptPending : false,
             transcriptOnly: false,
             draftComposerProvider: null,
             draftComposerModel: null,
@@ -281,6 +283,7 @@ export function handleLifecycleThreadEvent(
             activeTurnId: evt.busy ? (evt.turnId ?? rt.activeTurnId) : null,
             pendingTurnStart: null,
             pendingSteer: evt.busy ? rt.pendingSteer : null,
+            interruptPending: evt.busy ? rt.interruptPending : false,
           },
         },
       };
@@ -305,6 +308,11 @@ export function handleLifecycleThreadEvent(
   if (evt.type === "steer_accepted") {
     if (typeof evt.clientMessageId === "string") {
       markPendingThreadSteerAccepted(threadId, evt.clientMessageId);
+      const pendingSteer = get().threadRuntimeById[threadId]?.pendingSteer;
+      const submissionId =
+        pendingSteer?.clientMessageId === evt.clientMessageId
+          ? pendingSteer.submissionId
+          : undefined;
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         const pendingSteer = rt?.pendingSteer;
@@ -316,12 +324,17 @@ export function handleLifecycleThreadEvent(
               ...rt,
               pendingSteer: {
                 ...pendingSteer,
+                ...(evt.steerRequestId ? { steerRequestId: evt.steerRequestId } : {}),
                 status: "accepted",
               },
             },
           },
         };
       });
+      if (submissionId) {
+        const submission = findComposerSubmissionById(get().composerSubmissionsByKey, submissionId);
+        if (submission) get().completeComposerSubmission(submission.owner);
+      }
     }
     return true;
   }

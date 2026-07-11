@@ -73,6 +73,7 @@ const initialState: AppStoreDataState = {
   composerDraftsByKey: {},
   composerDraftRevisionFloorByKey: {},
   composerAttachmentIngestionCountByKey: {},
+  composerSubmissionsByKey: {},
   newChatLandingTarget: null,
   injectContext: false,
   developerMode: false,

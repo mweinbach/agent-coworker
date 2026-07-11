@@ -157,6 +157,8 @@ export type ThreadPendingSteer = {
   clientMessageId: string;
   text: string;
   attachmentSignature?: string;
+  submissionId?: string;
+  steerRequestId?: string;
   status: "sending" | "accepted";
 };
 
@@ -601,6 +603,7 @@ export type ThreadRuntime = {
   activeTurnId: string | null;
   pendingTurnStart?: ThreadPendingTurnStart | null;
   pendingSteer?: ThreadPendingSteer | null;
+  interruptPending?: boolean;
   feed: FeedItem[];
   hydrating?: boolean;
   transcriptOnly: boolean;

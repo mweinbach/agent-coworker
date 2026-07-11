@@ -63,6 +63,11 @@ export type ResolvedComposerAttachments = {
   skippedNotes: string[];
 };
 
+export type PreparedComposerMessage = {
+  text: string;
+  attachments: FileAttachmentInput[] | undefined;
+};
+
 type DesktopUploadAttempt =
   | { attempted: false }
   | { attempted: true; uploaded: { filename: string; path: string } }
@@ -149,6 +154,36 @@ export async function resolveComposerAttachmentsForWorkspace(
   }
 
   return { attachments: resolvedAttachments, skippedNotes };
+}
+
+/**
+ * Canonical attachment send policy for existing and new chats:
+ * valid files are included, files rejected by a documented upload limit are
+ * represented by an inline note, and infrastructure/read failures reject the
+ * preparation so the revision-owned draft can be retried intact.
+ */
+export async function prepareComposerMessageForWorkspace(
+  get: StoreGet,
+  set: StoreSet,
+  workspaceId: string,
+  text: string,
+  attachments: readonly ComposerAttachmentFile[],
+  options: ResolveComposerAttachmentOptions = {},
+): Promise<PreparedComposerMessage> {
+  if (attachments.length === 0) {
+    return { text, attachments: undefined };
+  }
+  const resolved = await resolveComposerAttachmentsForWorkspace(
+    get,
+    set,
+    workspaceId,
+    attachments,
+    options,
+  );
+  return {
+    text: appendAttachmentSkippedNotes(text, resolved.skippedNotes),
+    attachments: resolved.attachments.length > 0 ? resolved.attachments : undefined,
+  };
 }
 
 async function tryCopyDesktopAttachmentToWorkspaceUploads(

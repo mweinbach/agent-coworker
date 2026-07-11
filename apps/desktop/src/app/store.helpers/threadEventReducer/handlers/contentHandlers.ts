@@ -1,4 +1,5 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
+import { findComposerSubmissionById } from "../../../composerSubmission";
 import {
   mapModelStreamChunk,
   replayModelStreamRawEvent,
@@ -55,6 +56,9 @@ export function handleContentThreadEvent(
   if (evt.type === "user_message") {
     resetLiveModelStreamRuntime(threadId);
     const cmid = typeof evt.clientMessageId === "string" ? evt.clientMessageId : null;
+    const pendingSteer = get().threadRuntimeById[threadId]?.pendingSteer;
+    const acceptedSubmissionId =
+      cmid && pendingSteer?.clientMessageId === cmid ? pendingSteer.submissionId : undefined;
     if (cmid && hasPendingThreadSteer(threadId, cmid)) {
       clearPendingThreadSteer(threadId, cmid);
       set((s) => {
@@ -70,6 +74,13 @@ export function handleContentThreadEvent(
           },
         };
       });
+    }
+    if (acceptedSubmissionId) {
+      const submission = findComposerSubmissionById(
+        get().composerSubmissionsByKey,
+        acceptedSubmissionId,
+      );
+      if (submission) get().completeComposerSubmission(submission.owner);
     }
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -276,10 +287,17 @@ export function handleContentThreadEvent(
         detail: `${evt.source}/${evt.code}: ${evt.message}`,
       }),
     }));
-    if (evt.code === "validation_failed") {
+    const pendingSteer = get().threadRuntimeById[threadId]?.pendingSteer;
+    if (
+      evt.steerRequestId &&
+      pendingSteer?.steerRequestId &&
+      evt.steerRequestId === pendingSteer.steerRequestId
+    ) {
+      const submissionId = pendingSteer.submissionId;
+      if (submissionId) get().failComposerSubmission(submissionId, new Error(evt.message));
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
-        if (!rt?.pendingSteer) return {};
+        if (rt?.pendingSteer?.steerRequestId !== evt.steerRequestId) return {};
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,

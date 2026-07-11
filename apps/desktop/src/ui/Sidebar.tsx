@@ -4,6 +4,7 @@ import {
   ChevronDownIcon,
   ClipboardPlusIcon,
   FolderPlusIcon,
+  MessageCircleQuestionIcon,
   MoreHorizontalIcon,
   PlusIcon,
   Settings2Icon,
@@ -20,8 +21,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { countAllOutstandingInteractions, nextInteractionThreadId } from "../app/interactionQueue";
+import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
 import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
-import { useAppStore } from "../app/store";
+import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
   isOneOffChatWorkspace,
@@ -29,14 +32,10 @@ import {
   type SidebarSectionKey,
   type WorkspaceRecord,
 } from "../app/types";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import {
-  confirmAction,
-  isPackagedDesktopApp,
-  showContextMenu,
-  showNotification,
-} from "../lib/desktopCommands";
+import { confirmAction, isPackagedDesktopApp, showContextMenu } from "../lib/desktopCommands";
 import { resolveNewChatLandingProjectWorkspaceId } from "../lib/newChatLanding";
 import { useDesktopPlatform } from "../lib/useDesktopPlatform";
 import { cn } from "../lib/utils";
@@ -58,6 +57,8 @@ export const Sidebar = memo(function Sidebar() {
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
+  const tasksById = useAppStore((s) => s.tasksById);
+  const interactionsByThread = useAppStore((s) => s.interactionsByThread);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
@@ -76,11 +77,13 @@ export const Sidebar = memo(function Sidebar() {
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const openNewTask = useAppStore((s) => s.openNewTask);
   const selectTask = useAppStore((s) => s.selectTask);
+  const selectTaskThread = useAppStore((s) => s.selectTaskThread);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const generateAdvancedMemoryForThread = useAppStore((s) => s.generateAdvancedMemoryForThread);
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
   const archiveThread = useAppStore((s) => s.archiveThread);
+  const restoreThread = useAppStore((s) => s.restoreThread);
   const openSkills = useAppStore((s) => s.openSkills);
   const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
@@ -89,6 +92,7 @@ export const Sidebar = memo(function Sidebar() {
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [threadSearch, setThreadSearch] = useState("");
+  const interactionCount = countAllOutstandingInteractions(interactionsByThread);
   const {
     expandedWorkspaceSections,
     setExpandedWorkspaceSections,
@@ -253,6 +257,39 @@ export const Sidebar = memo(function Sidebar() {
     },
     [selectThread],
   );
+
+  const handleOpenNextInteraction = useCallback(async () => {
+    const threadId = nextInteractionThreadId(interactionsByThread, selectedThreadId);
+    if (!threadId) return;
+    const thread = threads.find((candidate) => candidate.id === threadId);
+    if (thread?.archived) {
+      await restoreThread(threadId);
+    }
+    const target = resolveInteractionThreadTarget(
+      { selectedThreadId, threads, tasksById },
+      threadId,
+    );
+    if (target?.kind === "task") {
+      if (target.taskThreadId) {
+        await selectTaskThread(target.taskId, target.taskThreadId);
+      } else {
+        await selectTask(target.taskId);
+      }
+      return;
+    }
+    if (target?.kind === "chat") {
+      await selectThread(threadId);
+    }
+  }, [
+    interactionsByThread,
+    restoreThread,
+    selectTask,
+    selectTaskThread,
+    selectThread,
+    selectedThreadId,
+    tasksById,
+    threads,
+  ]);
 
   const handleReorder = useCallback(
     (nextWorkspaces: WorkspaceRecord[]) => {
@@ -436,10 +473,11 @@ export const Sidebar = memo(function Sidebar() {
       });
       if (!confirmed) return;
       await archiveThread(tId);
-      void showNotification({
+      publishForegroundNotification({
+        kind: "info",
         title: "Chat archived",
-        body: `"${tTitle}" was archived. Restore it anytime from Settings → Chats.`,
-      }).catch(() => {});
+        detail: `"${tTitle}" was archived. Restore it anytime from Settings → Chats.`,
+      });
     },
     [archiveThread],
   );
@@ -765,6 +803,25 @@ export const Sidebar = memo(function Sidebar() {
           className="h-8 rounded-lg border-border/55 bg-foreground/[0.03] px-2.5 text-[13px] shadow-none"
         />
       </div>
+      {interactionCount > 0 ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 w-full justify-start rounded-lg px-2.5 text-[13px]"
+          onClick={() => void handleOpenNextInteraction()}
+          aria-label={`Open next chat needing input, ${interactionCount} pending`}
+        >
+          <MessageCircleQuestionIcon data-icon="inline-start" />
+          Needs input
+          <Badge
+            variant="outline"
+            className="ml-auto h-5 min-w-5 justify-center px-1.5 text-[10px]"
+          >
+            {interactionCount}
+          </Badge>
+        </Button>
+      ) : null}
       {tasksEnabled ? (
         <Button
           variant="ghost"

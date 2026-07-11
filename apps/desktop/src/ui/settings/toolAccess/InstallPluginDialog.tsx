@@ -2,6 +2,7 @@ import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { isOneOffChatWorkspace } from "../../../app/types";
 import { Button } from "../../../components/ui/button";
 import {
@@ -12,6 +13,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Textarea } from "../../../components/ui/textarea";
+import { OperationFeedback } from "../../OperationFeedback";
 
 type PluginPreviewScope = "workspace" | "user";
 type PluginPreviewState = NonNullable<
@@ -114,6 +116,9 @@ export function InstallPluginDialog({
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
   const installPlugins = useAppStore((state) => state.installPlugins);
+  const installOperation = useAppStore(
+    (state) => state.operationsByKey[operationKey("plugin", "install")],
+  );
   const anchorWorkspace = useAppStore(
     (state) => state.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
   );
@@ -177,6 +182,9 @@ export function InstallPluginDialog({
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && pluginInstallInFlight) {
+      return;
+    }
     if (!nextOpen && !open) {
       return;
     }
@@ -199,11 +207,9 @@ export function InstallPluginDialog({
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
-    try {
-      await installPlugins(normalizedSourceInput, targetScope);
+    const result = await installPlugins(normalizedSourceInput, targetScope);
+    if (result.ok) {
       handleOpenChange(false);
-    } catch {
-      // Control-session and mutation errors are surfaced via runtime state.
     }
   };
 
@@ -232,6 +238,7 @@ export function InstallPluginDialog({
               className="min-h-24 w-full"
               placeholder="https://github.com/example/codex-plugin-repo"
               value={sourceInput}
+              disabled={pluginInstallInFlight}
               aria-label="Plugin source"
               onChange={(event) => {
                 setSourceInput(event.target.value);
@@ -247,6 +254,7 @@ export function InstallPluginDialog({
                   <Button
                     variant="outline"
                     size="sm"
+                    disabled={pluginInstallInFlight}
                     onClick={() => void handlePreview("workspace")}
                     type="button"
                   >
@@ -256,6 +264,7 @@ export function InstallPluginDialog({
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={pluginInstallInFlight}
                   onClick={() => void handlePreview("user")}
                   type="button"
                 >
@@ -355,6 +364,7 @@ export function InstallPluginDialog({
                 {dialogError}
               </div>
             ) : null}
+            <OperationFeedback operation={installOperation} />
             {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
                 Last attempted target:{" "}

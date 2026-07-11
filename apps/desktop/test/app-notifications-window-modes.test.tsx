@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -23,15 +23,20 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
+const { CommandPalette } = await import("../src/ui/CommandPalette");
+const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 
 const defaultStoreState = useAppStore.getState();
 
-function seedReadyState() {
+function seedReadyState(audience: "foreground" | "background" = "foreground") {
   useAppStore.setState({
     ...useAppStore.getState(),
     ready: true,
     bootstrapPhase: "ready",
     startupError: null,
+    filePreview: null,
+    lmStudioStartModal: null,
+    onboardingVisible: false,
     workspaces: [],
     threads: [],
     notifications: [
@@ -40,7 +45,8 @@ function seedReadyState() {
         kind: "info",
         title: "Heads up",
         detail: "Popup test",
-        createdAt: "2026-04-30T00:00:00.000Z",
+        ts: "2026-04-30T00:00:00.000Z",
+        audience,
       },
     ],
   });
@@ -54,7 +60,6 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
-    promptModal: null,
     view: "task",
     workspaces: [
       {
@@ -115,14 +120,19 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
         latestCheckpoint: null,
       },
     } as never,
-    sandboxApprovalsByThread: {
+    interactionsByThread: {
       "task-session-1": [
         {
+          kind: "approval",
+          approvalKind: "sandbox",
           requestId: "approval-1",
           command: "curl https://example.com",
-          reason: "The OS sandbox blocked network access for this command.",
+          dangerous: true,
+          reasonCode: "sandbox_denied_escalation",
+          detail: "The OS sandbox blocked network access for this command.",
           category: "network",
           receivedSequence: 1,
+          status: "pending",
         },
       ],
     },
@@ -135,7 +145,7 @@ function seedDisconnectedChatState(hydrating: boolean) {
   useAppStore.setState({
     ...useAppStore.getState(),
     ready: true,
-    bootstrapPending: false,
+    bootstrapPhase: "ready",
     startupError: null,
     view: "chat",
     workspaces: [
@@ -179,6 +189,57 @@ function seedDisconnectedChatState(hydrating: boolean) {
   } as never);
 }
 
+function seedBusyChatState(cancelThread: () => void) {
+  const now = "2026-04-30T00:00:00.000Z";
+  useAppStore.setState({
+    ...useAppStore.getState(),
+    ready: true,
+    bootstrapPhase: "ready",
+    startupError: null,
+    onboardingVisible: false,
+    filePreview: null,
+    view: "chat",
+    workspaces: [
+      {
+        id: "ws-1",
+        name: "Project",
+        path: "/tmp/workspace",
+        createdAt: now,
+        lastOpenedAt: now,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    selectedWorkspaceId: "ws-1",
+    selectedThreadId: "chat-session-1",
+    threads: [
+      {
+        id: "chat-session-1",
+        workspaceId: "ws-1",
+        title: "Busy chat",
+        createdAt: now,
+        lastMessageAt: now,
+        status: "active",
+        sessionId: "chat-session-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+        draft: false,
+      },
+    ],
+    threadRuntimeById: {
+      "chat-session-1": {
+        sessionId: "chat-session-1",
+        connected: true,
+        hydrating: false,
+        busy: true,
+        feed: [],
+      },
+    },
+    cancelThread,
+  } as never);
+}
+
 describe("app window-mode notification routing", () => {
   beforeEach(() => {
     showNotification.mockClear();
@@ -195,6 +256,29 @@ describe("app window-mode notification routing", () => {
         dom.window.history.replaceState({}, "", "http://localhost/?window=quick-chat");
       },
     });
+
+    try {
+      seedReadyState("background");
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      expect(showNotification).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("main window keeps foreground notifications in-app", async () => {
+    const harness = setupJsdom();
 
     try {
       seedReadyState();
@@ -216,11 +300,19 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("main window still forwards new notifications to the OS", async () => {
+  test("main window forwards background notifications while unfocused", async () => {
     const harness = setupJsdom();
 
     try {
-      seedReadyState();
+      Object.defineProperty(harness.dom.window.document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      Object.defineProperty(harness.dom.window.document, "hasFocus", {
+        configurable: true,
+        value: () => false,
+      });
+      seedReadyState("background");
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
@@ -233,6 +325,37 @@ describe("app window-mode notification routing", () => {
         title: "Heads up",
         body: "Popup test",
       });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("main window keeps background notifications in-app while focused", async () => {
+    const harness = setupJsdom();
+
+    try {
+      Object.defineProperty(harness.dom.window.document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      Object.defineProperty(harness.dom.window.document, "hasFocus", {
+        configurable: true,
+        value: () => true,
+      });
+      seedReadyState("background");
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(App));
+      });
+
+      expect(showNotification).not.toHaveBeenCalled();
 
       await act(async () => {
         root.unmount();
@@ -282,7 +405,7 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("Escape dismisses pending sandbox approvals for terminal task threads", async () => {
+  test("bare Escape does not deny inline sandbox approvals", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});
     let root: ReturnType<typeof createRoot> | null = null;
@@ -303,13 +426,217 @@ describe("app window-mode notification routing", () => {
         );
       });
 
-      expect(dismissPrompt).toHaveBeenCalledTimes(1);
+      expect(dismissPrompt).not.toHaveBeenCalled();
     } finally {
       if (root) {
         await act(async () => {
           root?.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("busy run plus command palette dismisses only the palette", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      function BusyCommandPalette() {
+        const [open, setOpen] = useState(true);
+        return createElement(
+          OverlayStackProvider,
+          null,
+          createElement(CommandPalette, { open, onOpenChange: setOpen }),
+        );
+      }
+
+      await act(async () => root?.render(createElement(BusyCommandPalette)));
+      const commandInput = harness.dom.window.document.querySelector('[data-slot="command-input"]');
+      if (!(commandInput instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing command palette input");
+      }
+      await act(async () => {
+        commandInput.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).toBeNull();
+      expect(cancelThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("busy run plus file preview dismisses only the preview", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    const closeFilePreview = mock(async () => {
+      useAppStore.setState({ filePreview: null });
+      return true;
+    });
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      useAppStore.setState({
+        filePreview: { path: "/tmp/escape-test.txt" },
+        closeFilePreview,
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => root?.render(createElement(App)));
+      const preview = harness.dom.window.document.querySelector('[data-slot="dialog-content"]');
+      if (!(preview instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing file preview");
+      }
+
+      await act(async () => {
+        preview.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+
+      expect(closeFilePreview).toHaveBeenCalledTimes(1);
+      expect(cancelThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("queued asks ignore composing, editable, and bare Escape until explicitly answered", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    const answerAsk = mock(() => true);
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      useAppStore.setState({
+        answerAsk,
+        interactionsByThread: {
+          "chat-session-1": [
+            {
+              kind: "ask",
+              requestId: "ask-editable",
+              receivedSequence: 1,
+              status: "pending",
+              question: "Continue editing?",
+              options: [],
+            },
+          ],
+        },
+      } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => root?.render(createElement(App)));
+      const input = harness.dom.window.document.querySelector('input[aria-label="Answer"]');
+      if (!(input instanceof harness.dom.window.HTMLInputElement)) {
+        throw new Error("missing queued ask input");
+      }
+      input.focus();
+
+      for (const isComposing of [true, false]) {
+        const editableEscape = new harness.dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        });
+        Object.defineProperty(editableEscape, "isComposing", { value: isComposing });
+        await act(async () => {
+          input.dispatchEvent(editableEscape);
+        });
+      }
+
+      input.blur();
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+
+      expect(answerAsk).not.toHaveBeenCalled();
+      expect(cancelThread).not.toHaveBeenCalled();
+      const skip = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Skip",
+      );
+      if (!skip) throw new Error("missing queued ask Skip action");
+      await act(async () => {
+        skip.click();
+      });
+      expect(answerAsk).toHaveBeenCalledTimes(1);
+      expect(answerAsk).toHaveBeenCalledWith("chat-session-1", "ask-editable", "[skipped]");
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("bare Escape never stops a busy run while Control+Period does", async () => {
+    const harness = setupJsdom();
+    const cancelThread = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedBusyChatState(cancelThread);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => root?.render(createElement(App)));
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+      expect(cancelThread).not.toHaveBeenCalled();
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            ctrlKey: true,
+            key: ".",
+          }),
+        );
+      });
+      expect(cancelThread).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) await act(async () => root?.unmount());
       harness.restore();
     }
   });
@@ -359,7 +686,7 @@ describe("app window-mode notification routing", () => {
     try {
       seedTerminalTaskApprovalState(() => {});
       useAppStore.setState({
-        sandboxApprovalsByThread: {},
+        interactionsByThread: {},
         threadRuntimeById: {
           "task-session-1": {
             wsUrl: null,
@@ -414,7 +741,7 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("Escape dismisses pending sandbox approvals while settings overlays task", async () => {
+  test("Escape closes settings without denying an inline task approval", async () => {
     const harness = setupJsdom();
     const dismissPrompt = mock(() => {});
     const closeSettings = mock(() => {});
@@ -441,8 +768,8 @@ describe("app window-mode notification routing", () => {
         );
       });
 
-      expect(dismissPrompt).toHaveBeenCalledTimes(1);
-      expect(closeSettings).not.toHaveBeenCalled();
+      expect(dismissPrompt).not.toHaveBeenCalled();
+      expect(closeSettings).toHaveBeenCalledTimes(1);
     } finally {
       if (root) {
         await act(async () => {
@@ -453,9 +780,13 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("Escape with an open dialog closes just the dialog, not settings", async () => {
+  test("Escape honors composing settings overlays before closing settings", async () => {
     const harness = setupJsdom();
     const closeSettings = mock(() => {});
+    const closeFilePreview = mock(async () => {
+      useAppStore.setState({ filePreview: null });
+      return true;
+    });
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
@@ -463,7 +794,10 @@ describe("app window-mode notification routing", () => {
       useAppStore.setState({
         view: "settings",
         lastNonSettingsView: "chat",
+        settingsPage: "models",
         closeSettings,
+        filePreview: { path: "/tmp/settings-overlay-test.txt" },
+        closeFilePreview,
       } as never);
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -473,34 +807,55 @@ describe("app window-mode notification routing", () => {
         root.render(createElement(App));
       });
 
-      // Simulate an open modal surface (e.g. the Manage models dialog).
-      const overlay = harness.dom.window.document.createElement("div");
-      overlay.setAttribute("role", "dialog");
-      overlay.setAttribute("data-state", "open");
-      harness.dom.window.document.body.appendChild(overlay);
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            harness.dom.window.requestAnimationFrame(() => resolve());
+          }),
+      );
+      const settingsDialog = harness.dom.window.document.querySelector(
+        '[data-slot="dialog-content"][data-state="open"]',
+      );
+      if (!(settingsDialog instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing settings dialog");
+      }
+      const composingEscape = new harness.dom.window.KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+      Object.defineProperty(composingEscape, "isComposing", { value: true });
+      await act(async () => {
+        settingsDialog.dispatchEvent(composingEscape);
+      });
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).not.toBeNull();
+      expect(closeSettings).not.toHaveBeenCalled();
+      expect(closeFilePreview).not.toHaveBeenCalled();
 
       await act(async () => {
-        harness.dom.window.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        settingsDialog.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
         );
-      });
-      expect(closeSettings).not.toHaveBeenCalled();
-
-      // A dismissing Radix layer consumes the event; settings must stay put
-      // even after the layer has already unmounted.
-      overlay.remove();
-      await act(async () => {
-        const consumed = new harness.dom.window.KeyboardEvent("keydown", {
-          bubbles: true,
-          cancelable: true,
-          key: "Escape",
+        await new Promise<void>((resolve) => {
+          harness.dom.window.requestAnimationFrame(() => resolve());
         });
-        consumed.preventDefault();
-        harness.dom.window.dispatchEvent(consumed);
       });
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).toBeNull();
       expect(closeSettings).not.toHaveBeenCalled();
+      expect(closeFilePreview).toHaveBeenCalledTimes(1);
 
-      // With no overlay left, Escape closes settings as before.
       await act(async () => {
         harness.dom.window.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),

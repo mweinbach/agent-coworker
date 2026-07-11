@@ -3,12 +3,14 @@ import { useEffect, useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { marketplaceRemovePendingKey } from "../../../app/store.actions/marketplaces";
+import { operationKey } from "../../../app/store.helpers";
 import type { MarketplacesListEntry } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { confirmAction } from "../../../lib/desktopCommands";
 import type { PluginCatalogEntry } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { EntityIcon, SettingsSection } from "../SettingsPrimitives";
 import { matchesQuery, NoMatchesState, pluginIcon, skillIcon } from "./catalogShared";
 import { MarketplaceDetailDialog } from "./MarketplaceDetailDialog";
@@ -79,6 +81,7 @@ export function AvailableSkillsGrid({
 }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const installSkills = useAppStore((s) => s.installSkills);
+  const installOperation = useAppStore((s) => s.operationsByKey[operationKey("skill", "install")]);
 
   const skillsCatalog = runtime?.skillsCatalog ?? null;
   const skillsLoading = runtime?.skillCatalogLoading ?? false;
@@ -98,7 +101,9 @@ export function AvailableSkillsGrid({
     );
   }, [availableSkills, normalizedQuery]);
 
-  const installPending = Object.keys(skillPendingKeys).some((key) => key.startsWith("install:"));
+  const installPending =
+    Object.keys(skillPendingKeys).some((key) => key.startsWith("install:")) ||
+    installOperation?.status === "pending";
 
   if (skillsLoading && skillsCatalog === null) {
     return <CardGridSkeleton />;
@@ -114,23 +119,24 @@ export function AvailableSkillsGrid({
     return <NoMatchesState query={filterQuery.trim()} />;
   }
   return (
-    <div className="grid gap-3 px-4 py-3.5 sm:grid-cols-2 xl:grid-cols-3">
-      {visibleSkills.map((skill) => (
-        <MarketplaceCard
-          key={skill.id}
-          icon={skillIcon(skill)}
-          name={skill.interface?.displayName || skill.displayName}
-          kindLine={`Skill${skill.category ? ` · ${skill.category}` : ""}`}
-          description={skill.interface?.shortDescription || skill.description}
-          installDisabled={installPending}
-          onInstall={() =>
-            void installSkills(skill.installSource, "global").catch(() => {
-              // Failures surface via the `skillMutationError` banner in the tab shell.
-            })
-          }
-        />
-      ))}
-    </div>
+    <>
+      <OperationFeedback operation={installOperation} className="mx-4 mt-3.5" />
+      <div className="grid gap-3 px-4 py-3.5 sm:grid-cols-2 xl:grid-cols-3">
+        {visibleSkills.map((skill) => (
+          <MarketplaceCard
+            key={skill.id}
+            icon={skillIcon(skill)}
+            name={skill.interface?.displayName || skill.displayName}
+            kindLine={`Skill${skill.category ? ` · ${skill.category}` : ""}`}
+            description={skill.interface?.shortDescription || skill.description}
+            installDisabled={installPending}
+            onInstall={() => {
+              void installSkills(skill.installSource, "global").catch(() => undefined);
+            }}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -148,6 +154,7 @@ export function AvailablePluginsSection({
 }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const installPlugins = useAppStore((s) => s.installPlugins);
+  const installOperation = useAppStore((s) => s.operationsByKey[operationKey("plugin", "install")]);
 
   const pluginsCatalog = runtime?.pluginsCatalog ?? null;
   const pluginPendingKeys = runtime?.pluginMutationPendingKeys ?? {};
@@ -171,9 +178,9 @@ export function AvailablePluginsSection({
     );
   }, [availablePlugins, normalizedQuery]);
 
-  const installPending = Object.keys(pluginPendingKeys).some((key) =>
-    key.startsWith("plugin:install:"),
-  );
+  const installPending =
+    Object.keys(pluginPendingKeys).some((key) => key.startsWith("plugin:install:")) ||
+    installOperation?.status === "pending";
 
   if (visiblePlugins.length === 0) {
     return null;
@@ -184,6 +191,7 @@ export function AvailablePluginsSection({
       title="Available from marketplaces"
       description="Plugins available to install from your marketplaces."
     >
+      <OperationFeedback operation={installOperation} className="mx-4 mt-3.5" />
       <div className="grid gap-3 px-4 py-3.5 sm:grid-cols-2 xl:grid-cols-3">
         {visiblePlugins.map((plugin: MarketplacePluginEntry) => (
           <MarketplaceCard
@@ -193,11 +201,9 @@ export function AvailablePluginsSection({
             kindLine={`Plugin${plugin.marketplace.category ? ` · ${plugin.marketplace.category}` : ""}`}
             description={plugin.interface?.shortDescription || plugin.description}
             installDisabled={installPending}
-            onInstall={() =>
-              void installPlugins(plugin.installSource, "user").catch(() => {
-                // Failures surface via the `pluginMutationError` banner in the tab shell.
-              })
-            }
+            onInstall={() => {
+              void installPlugins(plugin.installSource, "user").catch(() => undefined);
+            }}
           />
         ))}
       </div>
@@ -223,6 +229,7 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
   const removeMarketplace = useAppStore((s) => s.removeMarketplace);
   const selectMarketplace = useAppStore((s) => s.selectMarketplace);
   const dismissMarketplaceMutationError = useAppStore((s) => s.dismissMarketplaceMutationError);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   // The sources list is only served by `cowork/marketplaces/read`; available
   // items keep coming from the plugin/skill catalogs loaded by the tab shell.
@@ -268,15 +275,17 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
       ) : (
         marketplaces.map((entry) => {
           const displayName = entry.displayName || entry.repo;
+          const removeOperation = operationsByKey[operationKey("marketplace", "remove", entry.id)];
           const removePending =
-            marketplacePendingKeys[marketplaceRemovePendingKey(entry.id)] === true;
+            marketplacePendingKeys[marketplaceRemovePendingKey(entry.id)] === true ||
+            removeOperation?.status === "pending";
           return (
             <div
               key={entry.id}
               className={
                 entry.fetchError
-                  ? "flex items-center gap-3 bg-destructive/5 px-4 py-3 transition-colors hover:bg-destructive/10"
-                  : "flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
+                  ? "flex flex-wrap items-center gap-3 bg-destructive/5 px-4 py-3 transition-colors hover:bg-destructive/10"
+                  : "flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
               }
             >
               <button
@@ -328,13 +337,14 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
                       defaultAction: "cancel",
                     });
                     if (confirmed) {
-                      void removeMarketplace(entry.id);
+                      void removeMarketplace(entry.id).catch(() => undefined);
                     }
                   }}
                 >
                   <Trash2Icon />
                 </Button>
               ) : null}
+              <OperationFeedback operation={removeOperation} className="basis-full" />
             </div>
           );
         })

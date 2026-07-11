@@ -24,6 +24,7 @@ export function reportSpreadsheetBackgroundSaveFailure(filePath: string, message
       kind: "error",
       title: "Spreadsheet save failed",
       detail: `${fileName} could not save before closing. ${message}`,
+      audience: "background",
     }),
   }));
 }

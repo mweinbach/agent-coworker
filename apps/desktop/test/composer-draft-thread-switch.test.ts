@@ -9,7 +9,7 @@ import {
   MAX_PERSISTED_COMPOSER_DRAFT_ATTACHMENT_BYTES,
   selectActiveComposerDraft,
 } from "../src/app/composerDrafts";
-import { syncDesktopStateCacheNow } from "../src/app/store.helpers/persistence";
+import { persistNow, syncDesktopStateCacheNow } from "../src/app/store.helpers/persistence";
 import { createComposerAttachmentFile } from "../src/lib/composerAttachments";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
@@ -23,6 +23,14 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe("composer draft clear after send", () => {
@@ -106,6 +114,7 @@ describe("composer draft clear after send", () => {
       },
       composerDraftRevisionFloorByKey: {},
       composerAttachmentIngestionCountByKey: {},
+      composerSubmissionsByKey: {},
       taskSummariesByWorkspaceId: {
         "ws-1": [],
       },
@@ -113,10 +122,11 @@ describe("composer draft clear after send", () => {
     } as never);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     RUNTIME.jsonRpcSockets.delete("ws-1");
     RUNTIME.composerAttachmentIngestionTail = null;
     useAppStore.setState(snapshot, true);
+    await persistNow(useAppStore.getState);
     Reflect.deleteProperty(globalThis, DESKTOP_API_OVERRIDE_KEY);
   });
 
@@ -322,6 +332,565 @@ describe("composer draft clear after send", () => {
     ).toBe(true);
     await flushAsyncWork();
     expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
+  });
+
+  test("reuses the accepted turn idempotency key after an asynchronous send failure", async () => {
+    const turnStartParams: unknown[] = [];
+    let turnStartAttempts = 0;
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request: async (method: string, params: unknown) => {
+        if (method !== "turn/start") return {};
+        turnStartParams.push(params);
+        turnStartAttempts += 1;
+        if (turnStartAttempts === 1) throw new Error("response lost");
+        return { turn: { id: "turn-a", threadId: "thread-a", status: "inProgress", items: [] } };
+      },
+    } as never);
+    const key = composerDraftKeyForThread("thread-a");
+
+    expect(
+      useAppStore.getState().submitComposerDraft({ kind: "thread", threadId: "thread-a" }),
+    ).toBe(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "failed",
+      error: "response lost",
+      prepared: { text: "send from A" },
+    });
+
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
+    await flushAsyncWork();
+    expect(turnStartParams).toHaveLength(2);
+    expect(turnStartParams[1]).toEqual(turnStartParams[0]);
+    expect(turnStartParams[0]).toMatchObject({
+      threadId: "session-a",
+      clientMessageId: expect.any(String),
+      input: [{ type: "text", text: "send from A" }],
+    });
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toBeUndefined();
+    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
+  });
+
+  test("claims rapid submits once and retries the exact prepared revision with one client id", async () => {
+    const key = composerDraftKeyForThread("thread-a");
+    const bytes = new Uint8Array([1, 2, 3]);
+    const readFile = mock(async () => bytes.buffer);
+    const file = {
+      name: "evidence.txt",
+      type: "text/plain",
+      size: bytes.byteLength,
+      lastModified: 7,
+      arrayBuffer: readFile,
+    } as File;
+    useAppStore.setState((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [key]: {
+          ...state.composerDraftsByKey[key]!,
+          revision: 7,
+          text: "original revision",
+          attachments: [
+            {
+              filename: file.name,
+              mimeType: file.type,
+              size: file.size,
+              lastModified: file.lastModified,
+              file,
+              signature: "evidence",
+              contentBase64: "AQID",
+            },
+          ],
+        },
+      },
+    }));
+
+    const firstResult = deferred<boolean>();
+    const secondResult = deferred<boolean>();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const attempts: Array<{
+      text: string;
+      attachments: unknown;
+      clientMessageId: string | undefined;
+    }> = [];
+    useAppStore.setState({
+      sendMessage: mock(
+        async (
+          text: string,
+          _busyPolicy?: "reject" | "steer",
+          attachments?: unknown,
+          _references?: unknown,
+          options?: {
+            draftSubmission?: { key: string; revision: number; submissionId?: string };
+            clientMessageId?: string;
+          },
+        ) => {
+          attempts.push({ text, attachments, clientMessageId: options?.clientMessageId });
+          if (attempts.length === 1) {
+            firstStarted.resolve();
+            return await firstResult.promise;
+          }
+          secondStarted.resolve();
+          const accepted = await secondResult.promise;
+          if (accepted && options?.draftSubmission) {
+            useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+          }
+          return accepted;
+        },
+      ),
+    } as never);
+
+    const request = { kind: "thread" as const, threadId: "thread-a" };
+    expect(useAppStore.getState().submitComposerDraft(request)).toBe(true);
+    expect(useAppStore.getState().submitComposerDraft(request)).toBe(false);
+    await firstStarted.promise;
+
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "sending",
+      draft: { revision: 7, text: "original revision" },
+      prepared: {
+        text: "original revision",
+        attachments: [{ filename: "evidence.txt", contentBase64: "AQID" }],
+      },
+    });
+    useAppStore.getState().setComposerText("newer revision");
+    useAppStore.getState().removeComposerAttachment(0);
+
+    firstResult.resolve(false);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "failed",
+      draft: {
+        revision: 7,
+        text: "original revision",
+        attachments: [{ filename: "evidence.txt" }],
+      },
+    });
+    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
+      text: "newer revision",
+      attachments: [],
+    });
+
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(false);
+    await secondStarted.promise;
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts[0]?.clientMessageId).toBeTruthy();
+
+    secondResult.resolve(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toBeUndefined();
+    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
+      text: "newer revision",
+      attachments: [],
+    });
+  });
+
+  test("claims New Chat once and retries its exact revision without replacing later edits", async () => {
+    const target = { kind: "project" as const, workspaceId: "ws-1" };
+    const key = composerDraftKeyForNewChatTarget(target);
+    const file = new File(["new-chat"], "brief.txt", {
+      type: "text/plain",
+      lastModified: 8,
+    });
+    const attempts: Array<{
+      firstMessage?: string;
+      clientMessageId?: string;
+      draftAttachments?: Array<{ filename: string; contentBase64: string }>;
+      draftSubmission?: { key: string; revision: number; submissionId?: string };
+    }> = [];
+    useAppStore.setState((state) => ({
+      selectedThreadId: null,
+      newChatLandingTarget: target,
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [key]: {
+          ...createEmptyComposerDraft("2026-01-01T00:00:00.000Z"),
+          revision: 3,
+          text: "start exact new chat",
+          attachments: [
+            {
+              filename: file.name,
+              mimeType: file.type,
+              size: file.size,
+              lastModified: file.lastModified,
+              file,
+              signature: "new-chat-brief",
+              contentBase64: "bmV3LWNoYXQ=",
+            },
+          ],
+        },
+      },
+      newThread: mock(async (options) => {
+        attempts.push(options ?? {});
+        if (attempts.length === 1) return false;
+        if (options?.draftSubmission) {
+          useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+        }
+        return true;
+      }),
+    }));
+
+    const request = {
+      kind: "newChat" as const,
+      target,
+      provider: "openai" as const,
+      model: "gpt-5.4",
+      reasoningEffort: "high" as const,
+    };
+    expect(useAppStore.getState().submitComposerDraft(request)).toBe(true);
+    expect(useAppStore.getState().submitComposerDraft(request)).toBe(false);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "failed",
+      draft: {
+        revision: 3,
+        text: "start exact new chat",
+        attachments: [{ filename: "brief.txt", contentBase64: "bmV3LWNoYXQ=" }],
+      },
+    });
+
+    useAppStore.getState().setComposerText("keep newer New Chat edit");
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
+    await flushAsyncWork();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts[0]).toMatchObject({
+      firstMessage: "start exact new chat",
+      clientMessageId: expect.any(String),
+      draftAttachments: [{ filename: "brief.txt", contentBase64: "bmV3LWNoYXQ=" }],
+      draftSubmission: {
+        key,
+        revision: 3,
+        submissionId: expect.any(String),
+      },
+    });
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toBeUndefined();
+    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("keep newer New Chat edit");
+  });
+
+  test("keeps a preparation failure retryable without replacing later draft edits", async () => {
+    const key = composerDraftKeyForThread("thread-a");
+    let reads = 0;
+    const file = {
+      name: "flaky.txt",
+      type: "text/plain",
+      size: 3,
+      lastModified: 9,
+      async arrayBuffer() {
+        reads += 1;
+        if (reads === 1) throw new Error("disk read failed");
+        return new Uint8Array([4, 5, 6]).buffer;
+      },
+    } as File;
+    useAppStore.setState(((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [key]: {
+          ...state.composerDraftsByKey[key]!,
+          revision: 11,
+          text: "retry this exact draft",
+          attachments: [
+            {
+              filename: file.name,
+              mimeType: file.type,
+              size: file.size,
+              lastModified: file.lastModified,
+              file,
+              signature: "flaky",
+              contentBase64: "BAUG",
+            },
+          ],
+        },
+      },
+      sendMessage: mock(
+        async (
+          text: string,
+          _busyPolicy?: "reject" | "steer",
+          attachments?: unknown,
+          _references?: unknown,
+          options?: {
+            draftSubmission?: { key: string; revision: number; submissionId?: string };
+            clientMessageId?: string;
+          },
+        ) => {
+          expect(text).toBe("retry this exact draft");
+          expect(attachments).toEqual([
+            { filename: "flaky.txt", contentBase64: "BAUG", mimeType: "text/plain" },
+          ]);
+          if (options?.draftSubmission) {
+            useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+          }
+          return true;
+        },
+      ),
+    })) as never);
+
+    expect(
+      useAppStore.getState().submitComposerDraft({ kind: "thread", threadId: "thread-a" }),
+    ).toBe(true);
+    await flushAsyncWork();
+    const failed = useAppStore.getState().composerSubmissionsByKey[key];
+    expect(failed).toMatchObject({
+      phase: "failed",
+      error: "disk read failed",
+      prepared: null,
+      draft: { revision: 11, text: "retry this exact draft" },
+    });
+
+    useAppStore.getState().setComposerText("keep this later edit");
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
+    await flushAsyncWork();
+
+    expect(reads).toBe(2);
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toBeUndefined();
+    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("keep this later edit");
+  });
+
+  test("makes steer rejection retryable and restores accepted guidance without overwriting edits", async () => {
+    const key = composerDraftKeyForThread("thread-a");
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-a": {
+          ...state.threadRuntimeById["thread-a"]!,
+          busy: true,
+          activeTurnId: "turn-a",
+        },
+      },
+    }));
+    const firstResult = deferred<boolean>();
+    const firstStarted = deferred<void>();
+    let attempt = 0;
+    useAppStore.setState({
+      sendMessage: mock(
+        async (
+          _text: string,
+          busyPolicy?: "reject" | "steer",
+          _attachments?: unknown,
+          _references?: unknown,
+          options?: {
+            draftSubmission?: { key: string; revision: number; submissionId?: string };
+          },
+        ) => {
+          attempt += 1;
+          expect(busyPolicy).toBe("steer");
+          if (attempt === 1) {
+            firstStarted.resolve();
+            return await firstResult.promise;
+          }
+          if (options?.draftSubmission) {
+            useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+          }
+          return true;
+        },
+      ),
+    } as never);
+
+    expect(
+      useAppStore.getState().submitComposerDraft({ kind: "thread", threadId: "thread-a" }),
+    ).toBe(true);
+    await firstStarted.promise;
+    firstResult.resolve(false);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "failed",
+      delivery: "steer",
+    });
+
+    expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+      phase: "accepted",
+      delivery: "steer",
+      draft: { text: "send from A" },
+    });
+    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("");
+
+    useAppStore.getState().setComposerText("do not overwrite this");
+    expect(useAppStore.getState().editAcceptedComposerSubmission(key)).toBe(false);
+    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("do not overwrite this");
+    expect(useAppStore.getState().discardComposerDraft(key)).toBe(true);
+    expect(useAppStore.getState().editAcceptedComposerSubmission(key)).toBe(true);
+    expect(useAppStore.getState().composerDraftsByKey[key]?.text).toBe("send from A");
+  });
+
+  test("keeps accepted steer attachment previews owned until edit restores them", async () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = mock(() => {});
+    URL.revokeObjectURL = revokeObjectURL;
+    const key = composerDraftKeyForThread("thread-a");
+    const file = new File(["preview"], "diagram.png", {
+      type: "image/png",
+      lastModified: 12,
+    });
+    const sendResult = deferred<boolean>();
+
+    try {
+      useAppStore.setState(
+        (state) =>
+          ({
+            threadRuntimeById: {
+              ...state.threadRuntimeById,
+              "thread-a": {
+                ...state.threadRuntimeById["thread-a"]!,
+                busy: true,
+                activeTurnId: "turn-a",
+              },
+            },
+            composerDraftsByKey: {
+              ...state.composerDraftsByKey,
+              [key]: {
+                ...state.composerDraftsByKey[key]!,
+                revision: 4,
+                text: "",
+                attachments: [
+                  {
+                    filename: file.name,
+                    mimeType: file.type,
+                    size: file.size,
+                    lastModified: file.lastModified,
+                    file,
+                    previewUrl: "blob:accepted-steer-preview",
+                    signature: "diagram",
+                    contentBase64: "cHJldmlldw==",
+                  },
+                ],
+              },
+            },
+            sendMessage: mock(
+              async (
+                _text: string,
+                busyPolicy?: "reject" | "steer",
+                _attachments?: unknown,
+                _references?: unknown,
+                options?: {
+                  draftSubmission?: { key: string; revision: number; submissionId?: string };
+                },
+              ) => {
+                expect(busyPolicy).toBe("steer");
+                const accepted = await sendResult.promise;
+                if (accepted && options?.draftSubmission) {
+                  useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+                }
+                return accepted;
+              },
+            ),
+          }) as never,
+      );
+
+      expect(
+        useAppStore.getState().submitComposerDraft({ kind: "thread", threadId: "thread-a" }),
+      ).toBe(true);
+      await flushAsyncWork();
+      useAppStore.getState().removeComposerAttachment(0);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+
+      sendResult.resolve(true);
+      await flushAsyncWork();
+      expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
+        phase: "accepted",
+        draft: { attachments: [{ previewUrl: "blob:accepted-steer-preview" }] },
+      });
+      useAppStore.getState().setComposerDraftModel("openai", "gpt-5.4");
+      expect(useAppStore.getState().editAcceptedComposerSubmission(key)).toBe(false);
+      expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+      expect(useAppStore.getState().discardComposerDraft(key)).toBe(true);
+      expect(useAppStore.getState().editAcceptedComposerSubmission(key)).toBe(true);
+      expect(useAppStore.getState().composerDraftsByKey[key]?.attachments).toHaveLength(1);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+
+      expect(useAppStore.getState().discardComposerDraft(key)).toBe(true);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:accepted-steer-preview");
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  test("claims one interrupt until the busy turn settles", async () => {
+    const interruptResult = deferred<void>();
+    const interruptStarted = deferred<void>();
+    const request = mock(async (method: string) => {
+      expect(method).toBe("turn/interrupt");
+      interruptStarted.resolve();
+      await interruptResult.promise;
+      return {};
+    });
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request,
+    } as never);
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-a": {
+          ...state.threadRuntimeById["thread-a"]!,
+          busy: true,
+          activeTurnId: "turn-a",
+          interruptPending: false,
+        },
+      },
+    }));
+
+    expect(useAppStore.getState().cancelThread("thread-a")).toBe(true);
+    expect(useAppStore.getState().cancelThread("thread-a")).toBe(false);
+    await interruptStarted.promise;
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().threadRuntimeById["thread-a"]?.interruptPending).toBe(true);
+
+    interruptResult.resolve();
+    await flushAsyncWork();
+    expect(useAppStore.getState().threadRuntimeById["thread-a"]?.interruptPending).toBe(true);
+  });
+
+  test("releases a failed interrupt claim so Stop can retry", async () => {
+    let attempts = 0;
+    const request = mock(async (method: string) => {
+      expect(method).toBe("turn/interrupt");
+      attempts += 1;
+      if (attempts === 1) throw new Error("interrupt transport failed");
+      return {};
+    });
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request,
+    } as never);
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-a": {
+          ...state.threadRuntimeById["thread-a"]!,
+          busy: true,
+          activeTurnId: "turn-a",
+          interruptPending: false,
+        },
+      },
+    }));
+
+    expect(useAppStore.getState().cancelThread("thread-a")).toBe(true);
+    await flushAsyncWork();
+    expect(useAppStore.getState().threadRuntimeById["thread-a"]?.interruptPending).toBe(false);
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      title: "Unable to stop response",
+      detail: "interrupt transport failed",
+    });
+
+    expect(useAppStore.getState().cancelThread("thread-a")).toBe(true);
+    await flushAsyncWork();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().threadRuntimeById["thread-a"]?.interruptPending).toBe(true);
   });
 
   test("preserves exact attachments across switches and revokes only on removal", async () => {

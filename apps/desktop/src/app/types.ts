@@ -46,6 +46,7 @@ import type {
   TurnReference,
 } from "../lib/wsProtocol";
 import type { ComposerDraftRevision, PersistedComposerDrafts } from "./composerDrafts";
+import type { PersistedCreationDrafts } from "./creationDrafts";
 import type {
   ReasoningEffortValue,
   WorkspaceProviderOptions,
@@ -157,6 +158,8 @@ export type ThreadPendingSteer = {
   clientMessageId: string;
   text: string;
   attachmentSignature?: string;
+  submissionId?: string;
+  steerRequestId?: string;
   status: "sending" | "accepted";
 };
 
@@ -394,6 +397,7 @@ export type PersistedState = {
   providerUiState?: PersistedProviderUiState;
   onboarding?: PersistedOnboardingState;
   composerDrafts?: PersistedComposerDrafts;
+  creationDrafts?: PersistedCreationDrafts;
 };
 
 type TranscriptDirection = "server" | "client";
@@ -601,6 +605,7 @@ export type ThreadRuntime = {
   activeTurnId: string | null;
   pendingTurnStart?: ThreadPendingTurnStart | null;
   pendingSteer?: ThreadPendingSteer | null;
+  interruptPending?: boolean;
   feed: FeedItem[];
   hydrating?: boolean;
   transcriptOnly: boolean;
@@ -618,37 +623,34 @@ export type HydratedTranscriptSnapshot = {
   lastTurnUsage: TurnUsageSnapshot | null;
 };
 
-export type AskPrompt = {
+export type InteractionStatus = "pending" | "responding" | "failed" | "resolved";
+
+type InteractionBase = {
   requestId: string;
-  question: string;
-  options?: string[];
+  receivedSequence: number;
+  status: InteractionStatus;
+  error?: string;
 };
 
-export type ApprovalPrompt = {
-  requestId: string;
+export type AskInteraction = InteractionBase & {
+  kind: "ask";
+  question: string;
+  options?: string[];
+  response?: string;
+};
+
+export type ApprovalInteraction = InteractionBase & {
+  kind: "approval";
+  approvalKind: "manual" | "sandbox";
   command: string;
   dangerous: boolean;
   reasonCode: ApprovalRiskCode;
-};
-
-/**
- * A pending sandbox-denial escalation rendered inline in the chat feed (not the
- * modal): the OS sandbox blocked a command and the agent is asking whether to
- * re-run it with full access. `detail`/`category` come from the harness so the
- * inline card can explain why the command was blocked.
- */
-export type SandboxApprovalPrompt = {
-  requestId: string;
-  command: string;
-  receivedSequence?: number;
   detail?: string;
   category?: "filesystem" | "network";
+  response?: boolean;
 };
 
-export type PromptModalState =
-  | { kind: "ask"; threadId: string; prompt: AskPrompt }
-  | { kind: "approval"; threadId: string; prompt: ApprovalPrompt }
-  | null;
+export type ChatInteraction = AskInteraction | ApprovalInteraction;
 
 /**
  * Modal offering to start a local LM Studio server after `turn/start` was
@@ -674,10 +676,53 @@ export type LmStudioStartModalState = {
   } | null;
 };
 
+export type OperationErrorCode = "duplicate" | "invalid_input" | "not_connected" | "request_failed";
+
+export type OperationError = {
+  code: OperationErrorCode;
+  message: string;
+  retryable: boolean;
+  repairAction?: string;
+};
+
+export type OperationResult<T = void> =
+  | { ok: true; value: T }
+  | { ok: false; error: OperationError };
+
+export type OperationState =
+  | {
+      status: "pending";
+      key: string;
+      label: string;
+      startedAt: string;
+      error: null;
+    }
+  | {
+      status: "success";
+      key: string;
+      label: string;
+      startedAt: string;
+      finishedAt: string;
+      error: null;
+    }
+  | {
+      status: "error";
+      key: string;
+      label: string;
+      startedAt: string;
+      finishedAt: string;
+      error: OperationError;
+    };
+
 export type Notification = {
   id: string;
   ts: string;
   kind: "info" | "error";
   title: string;
   detail?: string;
+  /**
+   * Only background outcomes may be mirrored to the operating system. Missing
+   * values are treated as foreground so old callers fail closed.
+   */
+  audience?: "foreground" | "background";
 };

@@ -18,8 +18,9 @@ export function ComposerMentionMenu(props: {
   query?: string;
   onSelect: (item: MentionItem) => void;
   onHover: (index: number) => void;
+  zIndex?: number;
 }) {
-  const { id, activeOptionIdPrefix, items, activeIndex, query, onSelect, onHover } = props;
+  const { id, activeOptionIdPrefix, items, activeIndex, query, onSelect, onHover, zIndex } = props;
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const optionIdPrefix = activeOptionIdPrefix ?? id ?? "composer-mention";
 
@@ -38,6 +39,7 @@ export function ComposerMentionMenu(props: {
         role="listbox"
         aria-busy="false"
         className="absolute bottom-full left-0 z-50 mb-2 w-[24rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-md"
+        style={{ zIndex }}
       >
         <div className="p-2 text-xs text-muted-foreground">
           {trimmed ? `No skills or plugins match “${trimmed}”.` : "No skills or plugins available."}
@@ -54,6 +56,7 @@ export function ComposerMentionMenu(props: {
       data-slot="composer-mention-menu"
       role="listbox"
       className="absolute bottom-full left-0 z-50 mb-2 w-[24rem] max-w-[92vw] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-md"
+      style={{ zIndex }}
     >
       <div className="max-h-64 overflow-y-auto p-1">
         {items.map((item, index) => {

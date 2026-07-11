@@ -2,6 +2,7 @@ import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { isOneOffChatWorkspace } from "../../../app/types";
 import { Button } from "../../../components/ui/button";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../../components/ui/dialog";
 import { Textarea } from "../../../components/ui/textarea";
 import type { SkillMutationTargetScope } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 
 type SkillPreviewState = NonNullable<
   ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedSkillPreview"]
@@ -121,6 +123,9 @@ export function InstallSkillDialog({
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const previewSkillInstall = useAppStore((s) => s.previewSkillInstall);
   const installSkills = useAppStore((s) => s.installSkills);
+  const installOperation = useAppStore(
+    (state) => state.operationsByKey[operationKey("skill", "install")],
+  );
   const anchorWorkspace = useAppStore(
     (s) => s.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,
   );
@@ -187,6 +192,9 @@ export function InstallSkillDialog({
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && skillInstallInFlight) {
+      return;
+    }
     if (!nextOpen && !open) {
       return;
     }
@@ -209,11 +217,9 @@ export function InstallSkillDialog({
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
     setLastMutationTargetScope(targetScope);
-    try {
-      await installSkills(normalizedSourceInput, targetScope);
+    const result = await installSkills(normalizedSourceInput, targetScope);
+    if (result.ok) {
       handleOpenChange(false);
-    } catch {
-      // Server failures surface as `skillMutationError` above; connection/superseded errors reject here.
     }
   };
 
@@ -242,6 +248,7 @@ export function InstallSkillDialog({
               className="min-h-24 w-full"
               placeholder="https://skills.sh/example/skills/imagegen"
               value={sourceInput}
+              disabled={skillInstallInFlight}
               aria-label="Skill source"
               onChange={(event) => {
                 setSourceInput(event.target.value);
@@ -257,6 +264,7 @@ export function InstallSkillDialog({
                   <Button
                     variant="outline"
                     size="sm"
+                    disabled={skillInstallInFlight}
                     onClick={() => void handlePreview("project")}
                     type="button"
                   >
@@ -266,6 +274,7 @@ export function InstallSkillDialog({
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={skillInstallInFlight}
                   onClick={() => void handlePreview("global")}
                   type="button"
                 >
@@ -364,6 +373,7 @@ export function InstallSkillDialog({
                 {dialogError}
               </div>
             ) : null}
+            <OperationFeedback operation={installOperation} />
             {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
                 Last attempted target: {skillTargetLabel(lastMutationTargetScope)}.

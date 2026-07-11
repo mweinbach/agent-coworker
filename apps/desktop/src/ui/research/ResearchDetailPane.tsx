@@ -9,6 +9,7 @@ import {
 import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 
+import { operationKey } from "../../app/store.helpers";
 import type { ResearchDetail } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -16,6 +17,8 @@ import { formatRelativeAge } from "../../lib/time";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { OperationFeedback } from "../OperationFeedback";
+import { useOverlayOwner } from "../OverlayStack";
 import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
@@ -105,17 +108,27 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const approveResearchPlan = useAppStore((s) => s.approveResearchPlan);
   const refineResearchPlan = useAppStore((s) => s.refineResearchPlan);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
   const prefersReducedMotion = usePrefersReducedMotion();
   const sourcesPanelId = useId();
   const detailBodyRef = useRef<HTMLDivElement | null>(null);
+  const sourcesTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineInput, setRefineInput] = useState("");
   const [planActionLoading, setPlanActionLoading] = useState(false);
   const detailBodyWidth = useElementWidth(detailBodyRef);
+  const sourcesOverlay =
+    detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
+  const sourcesOwner = useOverlayOwner({
+    active: sourcesOpen && sourcesOverlay && (research?.sources.length ?? 0) > 0,
+    label: "Research sources",
+    onDismiss: () => setSourcesOpen(false),
+    restoreFocus: () => sourcesTriggerRef.current,
+  });
 
   if (!research) {
     return (
@@ -126,13 +139,20 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   }
 
   const exportPending = exportPendingIds.includes(research.id);
+  const planOperations = [
+    operationsByKey[operationKey("research", "approve-plan", research.id)],
+    operationsByKey[operationKey("research", "refine-plan", research.id)],
+    operationsByKey[operationKey("research", "cancel", research.id)],
+  ].filter((operation) => operation !== undefined);
+  const planOperation =
+    planOperations.find((operation) => operation.status === "pending") ??
+    planOperations.find((operation) => operation.status === "error");
+  const operationPending = planOperation?.status === "pending";
   const startedAgo = formatRelativeAge(research.createdAt);
   const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
   const showSourcesPanel = sourcesOpen && sourceCount > 0;
-  const sourcesOverlay =
-    detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
   const sourcesPanelStyle = {
     "--research-sources-panel-width": RESEARCH_SOURCES_PANEL_WIDTH,
     flexBasis: sourcesOverlay
@@ -194,6 +214,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
             {sourceCount > 0 ? (
               <Button
+                ref={sourcesTriggerRef}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -227,6 +248,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 size="sm"
                 variant="outline"
                 type="button"
+                disabled={operationPending}
                 onClick={() => void cancelResearch(research.id)}
               >
                 Cancel
@@ -256,7 +278,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                       <Button
                         size="sm"
                         className="gap-1.5 rounded-full"
-                        disabled={planActionLoading}
+                        disabled={planActionLoading || operationPending}
                         onClick={() => {
                           setPlanActionLoading(true);
                           void approveResearchPlan(research.id).finally(() =>
@@ -271,7 +293,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         size="sm"
                         variant="outline"
                         className="gap-1.5 rounded-full"
-                        disabled={planActionLoading}
+                        disabled={planActionLoading || operationPending}
                         onClick={() => setRefineOpen(true)}
                       >
                         <PencilIcon className="h-3.5 w-3.5" />
@@ -285,20 +307,26 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         rows={3}
                         placeholder="What would you like to change about the plan?"
                         value={refineInput}
+                        disabled={planActionLoading || operationPending}
                         onChange={(e) => setRefineInput(e.target.value)}
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button
                           size="sm"
                           className="gap-1.5 rounded-full"
-                          disabled={planActionLoading || !refineInput.trim()}
+                          disabled={planActionLoading || operationPending || !refineInput.trim()}
                           onClick={() => {
                             setPlanActionLoading(true);
-                            void refineResearchPlan(research.id, refineInput.trim()).finally(() => {
-                              setPlanActionLoading(false);
-                              setRefineOpen(false);
-                              setRefineInput("");
-                            });
+                            void refineResearchPlan(research.id, refineInput.trim())
+                              .then((result) => {
+                                if (result.ok) {
+                                  setRefineOpen(false);
+                                  setRefineInput("");
+                                }
+                              })
+                              .finally(() => {
+                                setPlanActionLoading(false);
+                              });
                           }}
                         >
                           Submit Refinement
@@ -306,7 +334,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={planActionLoading}
+                          disabled={planActionLoading || operationPending}
                           onClick={() => {
                             setRefineOpen(false);
                             setRefineInput("");
@@ -319,6 +347,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   )}
                 </div>
               ) : null}
+              <OperationFeedback operation={planOperation} />
 
               {running ? (
                 <ResearchReasoningStream
@@ -338,6 +367,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           {sourceCount > 0 ? (
             <aside
               id={sourcesPanelId}
+              role={sourcesOverlay ? "dialog" : undefined}
               data-sources-presentation={sourcesOverlay ? "overlay" : "inline"}
               className={cn(
                 "min-h-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color,transform] ease-out",
@@ -352,7 +382,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               )}
               aria-label="Sources"
               aria-hidden={!showSourcesPanel}
-              style={sourcesPanelStyle}
+              style={{
+                ...sourcesPanelStyle,
+                zIndex: sourcesOverlay ? sourcesOwner?.zIndex : sourcesPanelStyle.zIndex,
+              }}
             >
               <div
                 className="flex h-full min-h-0 min-w-0 flex-col"
@@ -384,17 +417,18 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
   const [expanded, setExpanded] = useState(false);
   const prefersReducedMotion = usePrefersReducedMotion();
   const composerShellRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const followUpOwner = useOverlayOwner({
+    active: expanded,
+    label: "Research follow-up",
+    onDismiss: () => setExpanded(false),
+    restoreFocus: () => triggerRef.current,
+  });
 
   useEffect(() => {
     if (!expanded) {
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setExpanded(false);
-      }
-    };
 
     const onPointerDown = (event: MouseEvent) => {
       const shell = composerShellRef.current;
@@ -407,10 +441,8 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
       setExpanded(false);
     };
 
-    document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onPointerDown);
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("mousedown", onPointerDown);
     };
   }, [expanded]);
@@ -420,18 +452,28 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
 
   return (
-    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-start">
+    <div
+      className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-start"
+      style={{ zIndex: followUpOwner?.zIndex }}
+    >
       <AnimatePresence mode="popLayout" initial={false}>
         {expanded ? (
           <motion.div
             key="composer"
             ref={composerShellRef}
+            role="dialog"
+            aria-label="Research follow-up"
             layout
             className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
             transition={springTransition}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                followUpOwner?.handleEscape(event);
+              }
+            }}
           >
             <ResearchFollowUpComposer
               parentResearchId={parentResearchId}
@@ -453,6 +495,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
             whileTap={prefersReducedMotion ? undefined : { scale: 0.94 }}
           >
             <Button
+              ref={triggerRef}
               type="button"
               size="icon"
               onClick={() => setExpanded(true)}

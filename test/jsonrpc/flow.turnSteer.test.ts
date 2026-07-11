@@ -119,6 +119,87 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/steer replays one accepted steer after the original response is lost", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    let runTurnCalls = 0;
+    let latestMessages: Array<{ role: string; content: unknown }> = [];
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: { messages: Array<{ role: string; content: unknown }> }) => {
+          runTurnCalls += 1;
+          latestMessages = params.messages;
+          if (runTurnCalls === 1) await releaseTurn.promise;
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        }) as never,
+      }),
+    );
+
+    try {
+      const firstRpc = await connectJsonRpc(url);
+      const started = await firstRpc.sendRequest("thread/start", { cwd: tmpDir });
+      await firstRpc.waitFor((message) => message.method === "thread/started");
+      const threadId = started.result.thread.id;
+      const turnStart = await firstRpc.sendRequest("turn/start", {
+        threadId,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+      const steerParams = {
+        threadId,
+        turnId,
+        input: [{ type: "text", text: "keep going exactly once" }],
+        clientMessageId: "lost-response-steer",
+      };
+
+      firstRpc.ws.send(
+        JSON.stringify({
+          id: "discarded-response",
+          method: "turn/steer",
+          params: steerParams,
+        }),
+      );
+      const accepted = await firstRpc.waitFor(
+        (message) =>
+          message.method === "cowork/session/steerAccepted" &&
+          message.params.clientMessageId === steerParams.clientMessageId,
+      );
+      expect(accepted.params.steerRequestId).toBeString();
+      firstRpc.close();
+
+      const retryRpc = await connectJsonRpc(url);
+      await retryRpc.sendRequest("thread/resume", { threadId });
+      const replay = await retryRpc.sendRequest("turn/steer", steerParams);
+      expect(replay.result).toEqual({
+        turnId,
+        steerRequestId: accepted.params.steerRequestId,
+        replayed: true,
+      });
+
+      const conflict = await retryRpc.sendRequest("turn/steer", {
+        ...steerParams,
+        input: [{ type: "text", text: "different payload" }],
+      });
+      expect(conflict.error?.message).toContain("clientMessageId conflict");
+
+      releaseTurn.resolve();
+      await retryRpc.waitFor((message) => message.method === "turn/completed");
+      expect(runTurnCalls).toBe(2);
+      expect(
+        latestMessages.filter(
+          (message) => message.role === "user" && message.content === "keep going exactly once",
+        ),
+      ).toHaveLength(1);
+      retryRpc.close();
+    } finally {
+      releaseTurn.resolve();
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/steer correlates concurrent live ACKs to the originating request", async () => {
     const tmpDir = await makeTmpProject();
     const handlerReady = Promise.withResolvers<void>();

@@ -219,33 +219,77 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
-      const steerRequestId = crypto.randomUUID();
-      const outcome = await context.events.capture(
-        binding,
-        () =>
-          runtime.turns.sendSteerMessage(
-            text,
-            expectedTurnId,
-            clientMessageId,
-            attachments.length > 0 ? attachments : undefined,
-            orderedParts,
-            references,
-            steerRequestId,
-          ),
-        (event): event is JsonRpcTurnSteerOutcome => {
-          if (event.sessionId !== runtime.id) return false;
-          if (event.type === "steer_accepted") {
-            return event.turnId === expectedTurnId && event.steerRequestId === steerRequestId;
-          }
-          return context.utils.isSessionError(event) && event.steerRequestId === steerRequestId;
-        },
-      );
+      let idempotencyClaim: ReturnType<typeof runtime.turns.claimSteer>;
+      try {
+        idempotencyClaim = runtime.turns.claimSteer({
+          text,
+          expectedTurnId,
+          clientMessageId,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          inputParts: orderedParts,
+          references,
+        });
+      } catch (error) {
+        if (!(error instanceof IdempotencyConflictError)) throw error;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: `turn/steer clientMessageId conflict: ${error.message}`,
+        });
+        return;
+      }
+      if (idempotencyClaim?.kind === "replay") {
+        const replay = await idempotencyClaim.outcome;
+        if (replay.status === "rejected") {
+          context.jsonrpc.sendError(ws, message.id, {
+            code: JSONRPC_ERROR_CODES.invalidRequest,
+            message: replay.message,
+          });
+          return;
+        }
+        context.jsonrpc.sendResult(ws, message.id, {
+          turnId: replay.value.turnId,
+          steerRequestId: replay.value.steerRequestId,
+          replayed: true,
+        });
+        return;
+      }
+      const steerRequestId = idempotencyClaim?.steerRequestId ?? crypto.randomUUID();
+      const outcome = await context.events
+        .capture(
+          binding,
+          () =>
+            runtime.turns.sendSteerMessage(
+              text,
+              expectedTurnId,
+              clientMessageId,
+              attachments.length > 0 ? attachments : undefined,
+              orderedParts,
+              references,
+              steerRequestId,
+            ),
+          (event): event is JsonRpcTurnSteerOutcome => {
+            if (event.sessionId !== runtime.id) return false;
+            if (event.type === "steer_accepted") {
+              return event.turnId === expectedTurnId && event.steerRequestId === steerRequestId;
+            }
+            return context.utils.isSessionError(event) && event.steerRequestId === steerRequestId;
+          },
+        )
+        .catch((error: unknown) => {
+          runtime.turns.rejectSteerClaim(
+            idempotencyClaim,
+            error instanceof Error ? error.message : "The original steer request was not accepted.",
+          );
+          throw error;
+        });
       if (outcome.type === "error") {
+        runtime.turns.rejectSteerClaim(idempotencyClaim, outcome.message);
         sendSessionMutationError(context, ws, message.id, outcome);
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, {
         turnId: outcome.turnId,
+        steerRequestId,
       });
     },
 

@@ -16,6 +16,7 @@ export type ConversationProjectionState = {
   activeTurnId: string | null;
   lastUserMessageText: string | null;
   lastUserMessageClientMessageId: string | null;
+  lastUserMessageSteerRequestId: string | null;
   lastUserMessageAnnotations: Array<Record<string, unknown>> | null;
   activeAssistantByTurn: Map<string, BufferedAssistantState>;
   assistantOccurrenceByTurn: Map<string, number>;
@@ -39,6 +40,7 @@ export function createConversationProjectionState(
     activeTurnId: opts.initialActiveTurnId ?? null,
     lastUserMessageText: null,
     lastUserMessageClientMessageId: null,
+    lastUserMessageSteerRequestId: null,
     lastUserMessageAnnotations: null,
     activeAssistantByTurn: new Map(),
     assistantOccurrenceByTurn: new Map(),

@@ -1,7 +1,9 @@
 import { type MouseEvent, memo, type RefObject } from "react";
 import { composerDraftKeyForThread, hasComposerDraftContent } from "../../app/composerDrafts";
+import { countOutstandingInteractions } from "../../app/interactionQueue";
 import { useAppStore } from "../../app/store";
 import type { ThreadRecord } from "../../app/types";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -59,6 +61,9 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
   const hasDraft = useAppStore((state) =>
     hasComposerDraftContent(state.composerDraftsByKey[composerDraftKeyForThread(thread.id)]),
   );
+  const interactionCount = useAppStore((state) =>
+    countOutstandingInteractions(state.interactionsByThread[thread.id]),
+  );
 
   if (isEditing) {
     return (
@@ -108,7 +113,15 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         </span>
 
         <span className="relative flex shrink-0 items-center gap-2 pl-2 min-w-8 justify-end">
-          {busy ? (
+          {interactionCount > 0 ? (
+            <Badge
+              variant="secondary"
+              className="h-5 min-w-5 justify-center px-1.5 text-[10px]"
+              aria-label={`${interactionCount} pending ${interactionCount === 1 ? "interaction" : "interactions"}`}
+            >
+              {interactionCount}
+            </Badge>
+          ) : busy ? (
             <span
               className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
               aria-hidden="true"

@@ -34,6 +34,7 @@ import {
   type WebSearchModeValue,
 } from "../../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers/operations";
 import type { PersistedProviderStatus } from "../../../app/types";
 import {
   isOneOffChatWorkspace,
@@ -77,6 +78,7 @@ import {
 import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
@@ -762,6 +764,13 @@ export function WorkspaceUserProfileCard({
   const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const operation = useAppStore(
+    (state) =>
+      state.operationsByKey[
+        operationKey("workspace-defaults", workspace.id, scopedToTarget ? "target" : "settings")
+      ],
+  );
+  const operationPending = operation?.status === "pending";
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -808,12 +817,12 @@ export function WorkspaceUserProfileCard({
     draft.details !== currentProfile.details;
 
   const handleSave = async () => {
-    if (!isDirty) return;
+    if (!isDirty || operationPending) return;
     setSaving(true);
     setSaveSuccess(false);
 
     try {
-      await updateWorkspaceDefaults(
+      const result = await updateWorkspaceDefaults(
         workspace.id,
         {
           userName: draft.userName.trim(),
@@ -825,6 +834,9 @@ export function WorkspaceUserProfileCard({
         },
         scopedToTarget ? { scope: "target" } : undefined,
       );
+      if (result && typeof result === "object" && "ok" in result && result.ok === false) {
+        return;
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } finally {
@@ -845,6 +857,7 @@ export function WorkspaceUserProfileCard({
             autoComplete="off"
             placeholder="Name used in prompt context"
             value={draft.userName}
+            disabled={saving || operationPending}
             onChange={(event) => {
               setDraft((current) => ({
                 ...current,
@@ -862,6 +875,7 @@ export function WorkspaceUserProfileCard({
             className="min-h-24"
             placeholder="Role, team, domain, or responsibilities"
             value={draft.work}
+            disabled={saving || operationPending}
             onChange={(event) => {
               setDraft((current) => ({
                 ...current,
@@ -879,6 +893,7 @@ export function WorkspaceUserProfileCard({
             className="min-h-24"
             placeholder="Behavior instructions the agent should follow"
             value={draft.instructions}
+            disabled={saving || operationPending}
             onChange={(event) => {
               setDraft((current) => ({
                 ...current,
@@ -896,6 +911,7 @@ export function WorkspaceUserProfileCard({
             className="min-h-24"
             placeholder="Personal or project details the agent should remember"
             value={draft.details}
+            disabled={saving || operationPending}
             onChange={(event) => {
               setDraft((current) => ({
                 ...current,
@@ -907,8 +923,8 @@ export function WorkspaceUserProfileCard({
         </div>
 
         <div className="flex items-center gap-3 pt-2">
-          <Button onClick={handleSave} disabled={!isDirty || saving}>
-            {saving ? "Saving..." : "Save changes"}
+          <Button onClick={handleSave} disabled={!isDirty || saving || operationPending}>
+            {saving || operationPending ? "Saving..." : "Save changes"}
           </Button>
           {saveSuccess && (
             <span className="text-sm text-success" role="status" aria-live="polite">
@@ -916,6 +932,7 @@ export function WorkspaceUserProfileCard({
             </span>
           )}
         </div>
+        <OperationFeedback operation={operation} />
       </div>
     </SettingsSection>
   );
@@ -934,6 +951,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerDefaultModelByProvider = useAppStore((s) => s.providerDefaultModelByProvider);
   const providerUiState = useAppStore((s) => s.providerUiState);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
   const setPerWorkspaceSettings = useAppStore((s) => s.setPerWorkspaceSettings);
@@ -1096,6 +1114,9 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
   const visibleTab: "general" | "models" | "profile" =
     surface === "models" ? "models" : surface === "profile" ? "profile" : "general";
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
+  const workspaceDefaultsOperation = ws
+    ? operationsByKey[operationKey("workspace-defaults", ws.id, "settings")]
+    : undefined;
   const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1129,6 +1150,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
         </Card>
       ) : (
         <>
+          <OperationFeedback operation={workspaceDefaultsOperation} />
           <div
             className={cn(
               "space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300",

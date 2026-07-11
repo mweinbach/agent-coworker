@@ -4,8 +4,10 @@ import {
   ensureServerRunning,
   makeId,
   nowIso,
+  operationKey,
   pushNotification,
   requestJsonRpcControlEvent,
+  runAcknowledgedOperation,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
@@ -75,28 +77,30 @@ export function createOpenAiNativeConnectorActions(
     },
 
     setOpenAiNativeConnectorEnabled: async (workspaceId, connectorId, enabled) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
-      const errorDetail: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/connectors/openai-native/setEnabled",
-        { cwd, connectorId, enabled },
-        errorDetail,
-      );
-      if (ok) return;
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Connector setting failed",
-          detail: errorDetail.message ?? `Unable to update ${connectorId}.`,
-        }),
-      }));
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("connector", "enabled", workspaceId, connectorId),
+        label: "Update OpenAI connector",
+        errorTitle: "Connector setting not saved",
+        errorMessage: `Unable to update ${connectorId}.`,
+        repairAction: "Verify the connector is accessible in ChatGPT, then retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/connectors/openai-native/setEnabled",
+            { cwd, connectorId, enabled },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(errorDetail.message?.trim() || `Unable to update ${connectorId}.`);
+          }
+        },
+      });
     },
   };
 }

@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { useAppStore } from "../src/app/store";
+import {
+  WorkspaceFileExplorer,
+  type WorkspaceFileExplorerCommands,
+} from "../src/ui/file-explorer/WorkspaceFileExplorer";
 import { setupJsdom } from "./jsdomHarness";
 
 class MockResizeObserver {
@@ -32,15 +36,21 @@ let listDirectoryImpl = async ({ path }: { path: string }) => {
 };
 
 const listDirectoryMock = mock(async (args: { path: string }) => listDirectoryImpl(args));
-
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    listDirectory: listDirectoryMock,
-  }),
-);
-
-const { useAppStore } = await import("../src/app/store");
-const { WorkspaceFileExplorer } = await import("../src/ui/file-explorer/WorkspaceFileExplorer");
+const clearDirectoryListingScopeMock = mock(() => {});
+const invalidateDirectoryListingMock = mock(() => {});
+const isStaleDirectoryListingErrorMock = mock(() => false);
+const watchWorkspaceDirectoryMock = mock(async () => true);
+const unwatchWorkspaceDirectoryMock = mock(async () => {});
+const onWorkspaceFileChangedMock = mock(() => () => {});
+const explorerCommands: WorkspaceFileExplorerCommands = {
+  clearDirectoryListingScope: clearDirectoryListingScopeMock,
+  invalidateDirectoryListing: invalidateDirectoryListingMock,
+  isStaleDirectoryListingError: isStaleDirectoryListingErrorMock,
+  listDirectory: listDirectoryMock,
+  onWorkspaceFileChanged: onWorkspaceFileChangedMock,
+  unwatchWorkspaceDirectory: unwatchWorkspaceDirectoryMock,
+  watchWorkspaceDirectory: watchWorkspaceDirectoryMock,
+};
 
 function resetAppStore() {
   const state = useAppStore.getState();
@@ -74,6 +84,7 @@ function resetAppStore() {
     },
     workspaceExplorerRefreshById: {},
     showHiddenFiles: false,
+    contextSidebarCollapsed: false,
   } as any);
 }
 
@@ -93,6 +104,13 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function unmountExplorer(root: Root | null): Promise<void> {
+  if (!root) return;
+  await act(async () => {
+    root.unmount();
+  });
+}
+
 describe("workspace file explorer UI", () => {
   beforeEach(() => {
     rootEntries = [makeFileEntry("README.md", 1700000000000)];
@@ -100,7 +118,13 @@ describe("workspace file explorer UI", () => {
       if (path === rootPath) return rootEntries;
       return [];
     };
+    clearDirectoryListingScopeMock.mockClear();
+    invalidateDirectoryListingMock.mockClear();
+    isStaleDirectoryListingErrorMock.mockClear();
     listDirectoryMock.mockClear();
+    onWorkspaceFileChangedMock.mockClear();
+    unwatchWorkspaceDirectoryMock.mockClear();
+    watchWorkspaceDirectoryMock.mockClear();
     resetAppStore();
   });
 
@@ -109,14 +133,17 @@ describe("workspace file explorer UI", () => {
       includeAnimationFrame: true,
       extraGlobals: { ResizeObserver: MockResizeObserver },
     });
+    let root: Root | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
+        root.render(
+          createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+        );
         await flushUi();
       });
 
@@ -128,11 +155,8 @@ describe("workspace file explorer UI", () => {
       expect(className).toContain("group-hover:opacity-100");
       expect(className).toContain("group-focus-within:opacity-100");
       expect(className).toContain("focus-visible:opacity-100");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      await unmountExplorer(root);
       harness.restore();
     }
   });
@@ -142,14 +166,17 @@ describe("workspace file explorer UI", () => {
       includeAnimationFrame: true,
       extraGlobals: { ResizeObserver: MockResizeObserver },
     });
+    let root: Root | null = null;
 
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
+        root.render(
+          createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+        );
         await flushUi();
       });
 
@@ -173,11 +200,8 @@ describe("workspace file explorer UI", () => {
 
       expect(container.textContent).toContain("preview_latency_review.md");
       expect(listDirectoryMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      await unmountExplorer(root);
       harness.restore();
     }
   });
@@ -189,14 +213,17 @@ describe("workspace file explorer UI", () => {
         includeAnimationFrame: true,
         extraGlobals: { ResizeObserver: MockResizeObserver },
       });
+      let root: Root | null = null;
 
       try {
         const container = harness.dom.window.document.getElementById("root");
         if (!container) throw new Error("missing root");
-        const root = createRoot(container);
+        root = createRoot(container);
 
         await act(async () => {
-          root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
+          root.render(
+            createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+          );
           await flushUi();
         });
 
@@ -248,11 +275,97 @@ describe("workspace file explorer UI", () => {
 
         expect(container.textContent).toContain("preview_latency_review.md");
         expect(refreshCallCount).toBeGreaterThanOrEqual(2);
+      } finally {
+        await unmountExplorer(root);
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
+    "revalidates files changed while a collapsed explorer watcher is stopped",
+    async () => {
+      const harness = setupJsdom({
+        includeAnimationFrame: true,
+        extraGlobals: { ResizeObserver: MockResizeObserver },
+      });
+      let root: Root | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
 
         await act(async () => {
-          root.unmount();
+          root.render(
+            createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+          );
+          await flushUi();
         });
+        expect(container.textContent).toContain("README.md");
+        expect(watchWorkspaceDirectoryMock).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          useAppStore.setState({ contextSidebarCollapsed: true });
+          await flushUi();
+        });
+        expect(unwatchWorkspaceDirectoryMock).toHaveBeenCalledTimes(1);
+        expect(clearDirectoryListingScopeMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+        rootEntries = [
+          ...rootEntries,
+          makeFileEntry("changed_while_watcher_stopped.md", 1700000002000, 1024),
+        ];
+        await act(async () => {
+          useAppStore.setState({ contextSidebarCollapsed: false });
+          await flushUi();
+        });
+
+        expect(container.textContent).toContain("changed_while_watcher_stopped.md");
+        expect(watchWorkspaceDirectoryMock).toHaveBeenCalledTimes(2);
+        expect(listDirectoryMock.mock.calls.length).toBeGreaterThanOrEqual(2);
       } finally {
+        await unmountExplorer(root);
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
+    "focus revalidation keeps a successful watcher from becoming permanently stale",
+    async () => {
+      const harness = setupJsdom({
+        includeAnimationFrame: true,
+        extraGlobals: { ResizeObserver: MockResizeObserver },
+      });
+      let root: Root | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+
+        await act(async () => {
+          root.render(
+            createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+          );
+          await flushUi();
+        });
+        expect(watchWorkspaceDirectoryMock).toHaveBeenCalledTimes(1);
+
+        rootEntries = [
+          ...rootEntries,
+          makeFileEntry("missed_watcher_event.md", 1700000003000, 1536),
+        ];
+        await act(async () => {
+          harness.dom.window.dispatchEvent(new harness.dom.window.Event("focus"));
+          await flushUi();
+        });
+
+        expect(container.textContent).toContain("missed_watcher_event.md");
+        expect(listDirectoryMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        await unmountExplorer(root);
         harness.restore();
       }
     },

@@ -5,8 +5,11 @@ import { useAppStore } from "../../app/store";
 import { isStandardChatThread } from "../../app/threadFilters";
 import { workspaceLabelForThread } from "../../app/workspaceDisplayTargets";
 import { Button } from "../../components/ui/button";
+import { Spinner } from "../../components/ui/spinner";
 import { showMainWindow, showQuickChatWindow, windowClose } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
+import { StartupRecovery } from "../recovery/StartupRecovery";
+import { startupStagePresentation } from "../recovery/startupPresentation";
 
 type MenuBarUtilityShellProps = {
   init: () => Promise<void>;
@@ -15,8 +18,11 @@ type MenuBarUtilityShellProps = {
 };
 
 export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilityShellProps) {
+  const bootstrapLoading = useAppStore((s) => s.bootstrapPhase === "loading");
+  const bootstrapStage = useAppStore((s) => s.bootstrapStage);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
+  const startupPresentation = startupStagePresentation(bootstrapStage);
 
   const recentThreads = useMemo(
     () =>
@@ -51,16 +57,22 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {!ready ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-5 text-sm font-medium text-muted-foreground">
-              Starting menu bar tools…
-            </div>
-          ) : startupError ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
-              <div className="max-w-sm text-sm text-muted-foreground">{startupError}</div>
-              <Button type="button" variant="outline" onClick={() => void init()}>
-                Retry
-              </Button>
+          {startupError ? (
+            <StartupRecovery
+              detail={startupError}
+              init={init}
+              retrying={bootstrapLoading}
+              presentation="page"
+            />
+          ) : !ready ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-5 text-center text-sm text-muted-foreground"
+            >
+              <Spinner className="size-4" aria-hidden="true" />
+              <span className="font-medium text-foreground">{startupPresentation.title}</span>
+              <span className="text-xs">{startupPresentation.detail}</span>
             </div>
           ) : (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">

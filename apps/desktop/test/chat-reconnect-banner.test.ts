@@ -4,7 +4,7 @@ import { shouldShowReconnectBanner } from "../src/ui/chat/chatLogic";
 const disconnectedSession = {
   conversationVisible: true,
   threadId: "thread-1",
-  threadStatus: "active" as const,
+  threadStatus: "disconnected" as const,
   transcriptOnly: false,
   connected: false,
   sessionId: "session-1",
@@ -17,6 +17,9 @@ describe("desktop reconnect banner", () => {
   test("shows only for a disconnected live session", () => {
     expect(shouldShowReconnectBanner(disconnectedSession)).toBe(true);
     expect(shouldShowReconnectBanner({ ...disconnectedSession, connected: true })).toBe(false);
+    expect(shouldShowReconnectBanner({ ...disconnectedSession, threadStatus: "active" })).toBe(
+      false,
+    );
   });
 
   test("stays hidden for drafts, transcript views, hydration, and startup", () => {

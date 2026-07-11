@@ -811,13 +811,15 @@ describe("desktop chat view stability", () => {
       });
 
       await act(async () => {
-        feed.dispatchEvent(new harness.dom.window.WheelEvent("wheel", { bubbles: true }));
+        feed.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
         feed.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
 
       const scrollButton = container.querySelector(
-        '[aria-label="Scroll to end"]',
+        '[aria-label="Jump to latest"]',
       ) as HTMLButtonElement | null;
       expect(scrollButton).not.toBeNull();
       // Positioned above the absolute composer (overlay height 220 + 9px gap).

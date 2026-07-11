@@ -150,6 +150,9 @@ jobs:
         with:
           cache-scope: windows-smoke-${{ matrix.arch }}
 
+      - name: Native first-paint smoke
+        run: bun run desktop:quality:native-first-paint
+
       - name: Windows sandbox helper enforcement
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -227,6 +230,9 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+
+      - name: Native first-paint smoke
+        run: bun run desktop:quality:native-first-paint
 
       - name: macOS sandbox and runtime enforcement
         run: >

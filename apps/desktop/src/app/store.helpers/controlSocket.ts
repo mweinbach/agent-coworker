@@ -1,3 +1,5 @@
+import { previewFileChangeEventSchema } from "../../lib/desktopSchemas";
+import { workspaceFileChangeEvents } from "../../lib/filePreviewResource";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import {
   mergeWorkspaceProviderOptionsPreservingSearchSettings,
@@ -542,6 +544,21 @@ export function createControlSocketHelpers(
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
     const routerCleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
       if (message.kind !== "notification") {
+        return;
+      }
+      if (message.method === "cowork/workspace/fileChanged") {
+        const params =
+          typeof message.params === "object" && message.params !== null
+            ? (message.params as Record<string, unknown>)
+            : {};
+        const parsed = previewFileChangeEventSchema.safeParse({
+          kind: params.kind,
+          path: params.path,
+          version: params.version,
+        });
+        if (parsed.success) {
+          workspaceFileChangeEvents.publish(parsed.data);
+        }
         return;
       }
       if (message.method === "workspace/listChanged") {

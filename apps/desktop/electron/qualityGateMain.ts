@@ -54,7 +54,7 @@ const PRESENTATION_SLIDE_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
   `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.background}"/><text x="80" y="190" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.foreground}" font-family="sans-serif" font-size="56" font-weight="700">Canvas presentation</text><text x="80" y="270" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.mutedForeground}" font-family="sans-serif" font-size="28">Theme-aware Electron preview</text></svg>`,
 ).toString("base64")}`;
 
-type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
+type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
 type QualityScenario = "first-launch" | "product";
 
 type QualityMainMetrics = {
@@ -62,6 +62,9 @@ type QualityMainMetrics = {
   blockedRequests: string[];
   clientRequestsByMethod: Record<string, number>;
   confirmationRequests: number;
+  diagnosticBundles: number;
+  diagnosticCopies: number;
+  diagnosticReveals: number;
   filesystemRequests: number;
   missingAssetRequests: number;
   mobileForgetRequests: number;
@@ -99,6 +102,8 @@ type QualityMainControl = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): QualityDeltaBurstDescriptor;
+  enableNestedFileTree(): void;
+  emitFileChange(runId: number): void;
   emitInteractionQueue(): void;
   emitLongTranscript(count: number, runId: number): string;
   emitStreamingActivity(): void;
@@ -122,6 +127,9 @@ const qualityScenario = parseQualityScenario(process.env.COWORK_QUALITY_SCENARIO
 const contentWidth = parseDimension(process.env.COWORK_QUALITY_WIDTH, 1240);
 const contentHeight = parseDimension(process.env.COWORK_QUALITY_HEIGHT, 820);
 const startupDelayMs = parseDelay(process.env.COWORK_QUALITY_STARTUP_DELAY_MS);
+const appearanceDelayMs = parseDelay(process.env.COWORK_QUALITY_APPEARANCE_DELAY_MS);
+const reconnectDelayMs = parseDelay(process.env.COWORK_QUALITY_RECONNECT_DELAY_MS);
+let remainingStartupFailures = parseCount(process.env.COWORK_QUALITY_STARTUP_FAILURES);
 const holdBootstrap = process.env.COWORK_QUALITY_HOLD_BOOTSTRAP === "1";
 const captureReadyFile = process.env.COWORK_QUALITY_CAPTURE_READY_FILE?.trim() ?? "";
 const userDataPath =
@@ -134,7 +142,8 @@ app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("force-color-profile", "srgb");
 app.commandLine.appendSwitch("disable-lcd-text");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
-nativeTheme.themeSource = qualityMode === "dark" ? "dark" : "light";
+nativeTheme.themeSource =
+  qualityMode === "system" ? "system" : qualityMode === "dark" ? "dark" : "light";
 process.env.COWORK_IS_PACKAGED = "false";
 process.env.COWORK_DESKTOP_QUALITY_GATE = "1";
 process.env.COWORK_CRASH_REPORTS_ENABLED = "false";
@@ -148,6 +157,8 @@ let mockServerUrl = "";
 let rendererServer: HttpServer | null = null;
 let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
+let explorerRevision = 0;
+let nestedExplorerFixture = false;
 const researchRecords = new Map<string, ResearchRecord>();
 const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
@@ -178,6 +189,9 @@ let metrics: QualityMainMetrics = {
   blockedRequests: [],
   clientRequestsByMethod: {},
   confirmationRequests: 0,
+  diagnosticBundles: 0,
+  diagnosticCopies: 0,
+  diagnosticReveals: 0,
   filesystemRequests: 0,
   missingAssetRequests: 0,
   mobileForgetRequests: 0,
@@ -197,6 +211,28 @@ globalThis.__coworkQualityGateMain = {
     emitCompletion();
   },
   emitDeltaBurst: (count, runId, path) => emitDeltaBurst(count, runId, path),
+  enableNestedFileTree: () => {
+    nestedExplorerFixture = true;
+    mainWindow?.webContents.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, {
+      workspaceId: PROJECT_WORKSPACE_ID,
+      rootPath: "/quality/project",
+      kind: "modify",
+      changedPaths: ["/quality/project"],
+      affectedDirectoryPaths: ["/quality/project"],
+      invalidatedSubtreePaths: [],
+    });
+  },
+  emitFileChange: (runId) => {
+    explorerRevision = runId;
+    mainWindow?.webContents.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, {
+      workspaceId: PROJECT_WORKSPACE_ID,
+      rootPath: "/quality/project",
+      kind: "modify",
+      changedPaths: ["/quality/project/fixture-0002.ts"],
+      affectedDirectoryPaths: ["/quality/project"],
+      invalidatedSubtreePaths: [],
+    });
+  },
   emitInteractionQueue: () => {
     emitInteractionQueue();
   },
@@ -233,6 +269,9 @@ globalThis.__coworkQualityGateMain = {
       blockedRequests: [],
       clientRequestsByMethod: {},
       confirmationRequests: 0,
+      diagnosticBundles: 0,
+      diagnosticCopies: 0,
+      diagnosticReveals: 0,
       filesystemRequests: 0,
       missingAssetRequests: 0,
       mobileForgetRequests: 0,
@@ -252,6 +291,7 @@ globalThis.__coworkQualityGateMain = {
 function parseQualityMode(value: string | undefined): QualityMode {
   switch (value) {
     case "dark":
+    case "system":
     case "reduced-motion":
     case "forced-colors":
       return value;
@@ -272,6 +312,11 @@ function parseDimension(value: string | undefined, fallback: number): number {
 function parseDelay(value: string | undefined): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 10_000 ? Math.floor(parsed) : 0;
+}
+
+function parseCount(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 10 ? parsed : 0;
 }
 
 function createPersistedState(scenario: QualityScenario): PersistedState {
@@ -385,11 +430,11 @@ function createPersistedState(scenario: QualityScenario): PersistedState {
 }
 
 function createAppearance(): SystemAppearance {
-  const dark = qualityMode === "dark";
+  const dark = qualityMode === "dark" || qualityMode === "system";
   const forcedColors = qualityMode === "forced-colors";
   return {
     platform: qualityPlatform,
-    themeSource: dark ? "dark" : "light",
+    themeSource: qualityMode === "system" ? "system" : dark ? "dark" : "light",
     shouldUseDarkColors: dark,
     shouldUseDarkColorsForSystemIntegratedUI: dark,
     shouldUseHighContrastColors: forcedColors,
@@ -430,24 +475,104 @@ function createPlatformChrome(): PlatformChromeInfo {
   };
 }
 
-function createExplorerEntries(): ExplorerEntry[] {
-  return Array.from({ length: 1_000 }, (_, index) => {
-    const fileNumber = String(index + 1).padStart(4, "0");
-    return {
-      name: index === 0 ? "quality-gate-report.md" : `fixture-${fileNumber}.ts`,
-      path:
-        index === 0
-          ? "/quality/project/quality-gate-report.md"
-          : `/quality/project/fixture-${fileNumber}.ts`,
+function createExplorerEntries(path: string, revision = 0): ExplorerEntry[] {
+  const modifiedAtMs = Date.parse(FIXED_NOW);
+  if (!nestedExplorerFixture) {
+    if (path !== "/quality/project") {
+      return [];
+    }
+    return Array.from({ length: 1_000 }, (_, index) => {
+      const fileNumber = String(index + 1).padStart(4, "0");
+      return {
+        name: index === 0 ? "quality-gate-report.md" : `fixture-${fileNumber}.ts`,
+        path:
+          index === 0
+            ? "/quality/project/quality-gate-report.md"
+            : `/quality/project/fixture-${fileNumber}.ts`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 512 + index + (index === 1 ? revision : 0),
+        modifiedAtMs,
+      };
+    });
+  }
+  if (path === "/quality/project/src") {
+    return [
+      {
+        name: "components",
+        path: "/quality/project/src/components",
+        isDirectory: true,
+        isHidden: false,
+        sizeBytes: null,
+        modifiedAtMs,
+      },
+      ...["index.ts", "state.ts", "watcher.ts", "workspace.ts"].map((name, index) => ({
+        name,
+        path: `/quality/project/src/${name}`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 1_024 + index,
+        modifiedAtMs,
+      })),
+    ];
+  }
+  if (path === "/quality/project/src/components") {
+    return ["ExplorerRow.tsx", "FileTree.tsx", "TreeStatus.tsx"].map((name, index) => ({
+      name,
+      path: `/quality/project/src/components/${name}`,
       isDirectory: false,
       isHidden: false,
-      sizeBytes: 512 + index,
-      modifiedAtMs: Date.parse(FIXED_NOW),
-    };
-  });
+      sizeBytes: 2_048 + index,
+      modifiedAtMs,
+    }));
+  }
+  if (path !== "/quality/project") {
+    return [];
+  }
+
+  return [
+    {
+      name: "src",
+      path: "/quality/project/src",
+      isDirectory: true,
+      isHidden: false,
+      sizeBytes: null,
+      modifiedAtMs,
+    },
+    {
+      name: "quality-gate-report.md",
+      path: "/quality/project/quality-gate-report.md",
+      isDirectory: false,
+      isHidden: false,
+      sizeBytes: 512,
+      modifiedAtMs,
+    },
+    ...Array.from({ length: 998 }, (_, index) => {
+      const fileNumber = String(index + 2).padStart(4, "0");
+      return {
+        name: `fixture-${fileNumber}.ts`,
+        path: `/quality/project/fixture-${fileNumber}.ts`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 513 + index + (index === 0 ? revision : 0),
+        modifiedAtMs,
+      };
+    }),
+  ];
 }
 
-const explorerEntries = createExplorerEntries();
+function directoryPathFromIpcInput(input: unknown): string {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "path" in input &&
+    typeof input.path === "string"
+  ) {
+    return input.path.replace(/\\/g, "/").replace(/\/+$/, "");
+  }
+  return "";
+}
+
 const hydratedTranscript = {
   feed: [
     {
@@ -1063,6 +1188,56 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { thread: qualityThreadRecord(), coworkSnapshot: null };
     case "thread/resume":
       return { thread: qualityThreadRecord() };
+    case "cowork/skills/catalog/read":
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "quality-control",
+          catalog: {
+            installations: [],
+            sources: [],
+            stats: { enabledInstallations: 0, totalInstallations: 0 },
+          },
+          mutationBlocked: false,
+        },
+      };
+    case "cowork/skills/list":
+      return {
+        event: {
+          type: "skills_list",
+          sessionId: "quality-control",
+          skills: [
+            {
+              name: "geometry-audit",
+              path: "/quality/skills/geometry-audit/SKILL.md",
+              source: "built-in",
+              enabled: true,
+              triggers: ["mention geometry"],
+              description: "Checks composer highlight and picker geometry.",
+            },
+            {
+              name: "release-review",
+              path: "/quality/skills/release-review/SKILL.md",
+              source: "project",
+              enabled: true,
+              triggers: ["release"],
+              description: "Reviews deterministic desktop release evidence.",
+            },
+          ],
+        },
+      };
+    case "cowork/plugins/catalog/read":
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "quality-control",
+          catalog: {
+            availablePlugins: [],
+            plugins: [],
+            warnings: [],
+          },
+        },
+      };
     case "research/list":
       return { research: [...researchRecords.values()] };
     case "research/get": {
@@ -1264,9 +1439,13 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
           fingerprint: "sha256:quality-spreadsheet",
         },
       };
-    case "cowork/workspace/presentation/preview":
+    case "cowork/workspace/presentation/preview": {
+      const filePath =
+        typeof params.path === "string" ? params.path : "/quality/project/presentation.pptx";
       return {
         ok: true,
+        dependencies: [filePath],
+        path: filePath,
         slides: [
           {
             slideIndex: 0,
@@ -1275,7 +1454,14 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
             pngBase64: PRESENTATION_SLIDE_DATA_URL,
           },
         ],
+        version: {
+          modifiedAtMs: Date.parse(FIXED_NOW),
+          changeTimeMs: Date.parse(FIXED_NOW),
+          size: 128,
+          fingerprint: "sha256:quality-presentation",
+        },
       };
+    }
     case "task/list":
       return { tasks: [createQualityTaskFixture()] };
     case "task/read":
@@ -1373,12 +1559,20 @@ async function startMockServer(): Promise<void> {
       if (shouldHoldCanvasLoadingResponse(message.method, params)) {
         return;
       }
-      socket.send(
-        JSON.stringify({
-          id: message.id,
-          result: jsonRpcResult(message.method, params),
-        }),
-      );
+      const response = JSON.stringify({
+        id: message.id,
+        result: jsonRpcResult(message.method, params),
+      });
+      const sendResponse = () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(response);
+        }
+      };
+      if (message.method === "thread/resume" && reconnectDelayMs > 0) {
+        setTimeout(sendResponse, reconnectDelayMs);
+      } else {
+        sendResponse();
+      }
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -1504,8 +1698,15 @@ async function loadWindow(
   options?: { threadId?: string; path?: string },
 ): Promise<void> {
   const isMain = mode === "main";
+  const appearance = createAppearance();
   const query = {
     qualityMode,
+    platform: appearance.platform,
+    themeSource: appearance.themeSource,
+    resolvedTheme: appearance.shouldUseDarkColors ? "dark" : "light",
+    highContrast:
+      appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false",
+    reducedTransparency: appearance.prefersReducedTransparency ? "true" : "false",
     ...(mode === "main" ? {} : { window: mode }),
     ...(options?.threadId ? { threadId: options.threadId } : {}),
     ...(options?.path ? { path: options.path } : {}),
@@ -1529,10 +1730,11 @@ async function createWindow(
   deferLoad = false,
 ): Promise<Electron.BrowserWindow> {
   const isMain = mode === "main";
+  const appearance = createAppearance();
   const backgroundColor =
     mode === "canvas"
-      ? getCanvasNativeBackgroundColor(options?.path ?? "", qualityMode === "dark")
-      : desktopShellBackgroundColor(qualityMode === "dark");
+      ? getCanvasNativeBackgroundColor(options?.path ?? "", appearance.shouldUseDarkColors)
+      : desktopShellBackgroundColor(appearance.shouldUseDarkColors);
   const win = new BrowserWindow({
     title:
       mode === "quick-chat" ? "Cowork Quick Chat" : mode === "canvas" ? "Cowork Canvas" : "Cowork",
@@ -1593,6 +1795,10 @@ async function handleIpc(
         await bootstrapBarrier;
       }
       await delay(startupDelayMs);
+      if (remainingStartupFailures > 0) {
+        remainingStartupFailures -= 1;
+        throw new Error("Quality fixture could not restore the saved workspace.");
+      }
       return structuredClone(persistedState);
     case DESKTOP_IPC_CHANNELS.saveState:
       metrics.stateSaves += 1;
@@ -1601,6 +1807,8 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getUpdateState:
       return createDefaultUpdaterState("1.2.21", false);
     case DESKTOP_IPC_CHANNELS.getSystemAppearance:
+      await delay(appearanceDelayMs);
+      return createAppearance();
     case DESKTOP_IPC_CHANNELS.setWindowAppearance:
       return createAppearance();
     case DESKTOP_IPC_CHANNELS.getPlatform:
@@ -1613,7 +1821,11 @@ async function handleIpc(
       return [];
     case DESKTOP_IPC_CHANNELS.listDirectory:
       metrics.filesystemRequests += 1;
-      return structuredClone(explorerEntries);
+      return createExplorerEntries(directoryPathFromIpcInput(input), explorerRevision);
+    case DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory:
+      return true;
+    case DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory:
+      return undefined;
     case DESKTOP_IPC_CHANNELS.readFile:
       metrics.filesystemRequests += 1;
       return {
@@ -1641,6 +1853,7 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getTelemetryStatus:
       return telemetryStatus();
     case DESKTOP_IPC_CHANNELS.createDiagnosticsBundle:
+      metrics.diagnosticBundles += 1;
       return {
         path: path.join(userDataPath, "quality-diagnostics.json"),
         createdAt: FIXED_NOW,
@@ -1648,6 +1861,12 @@ async function handleIpc(
         uploadConfigured: false,
         uploadEnabled: false,
       };
+    case DESKTOP_IPC_CHANNELS.revealDiagnosticsBundle:
+      metrics.diagnosticReveals += 1;
+      return undefined;
+    case DESKTOP_IPC_CHANNELS.copyText:
+      metrics.diagnosticCopies += 1;
+      return undefined;
     case DESKTOP_IPC_CHANNELS.uploadDiagnosticsBundle:
       return {
         uploaded: false,

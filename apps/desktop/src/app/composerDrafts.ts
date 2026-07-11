@@ -229,6 +229,25 @@ export function serializeComposerDrafts(drafts: ComposerDraftsByKey): PersistedC
   );
 }
 
+export function mergeComposerDraftsByRevision(
+  persistedDrafts: ComposerDraftsByKey,
+  inMemoryDrafts: ComposerDraftsByKey,
+): ComposerDraftsByKey {
+  const merged = { ...persistedDrafts };
+  for (const [key, inMemoryDraft] of Object.entries(inMemoryDrafts)) {
+    const persistedDraft = merged[key];
+    if (
+      !persistedDraft ||
+      inMemoryDraft.generation > persistedDraft.generation ||
+      (inMemoryDraft.generation === persistedDraft.generation &&
+        inMemoryDraft.revision > persistedDraft.revision)
+    ) {
+      merged[key] = inMemoryDraft;
+    }
+  }
+  return merged;
+}
+
 export function sanitizePersistedComposerDrafts(value: unknown): PersistedComposerDrafts {
   if (!isRecord(value)) return {};
   const drafts: PersistedComposerDrafts = {};

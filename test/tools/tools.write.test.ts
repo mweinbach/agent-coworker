@@ -1,3 +1,5 @@
+import { WorkspaceFileChangeMonitor } from "../../src/server/runtime/WorkspaceFileChangeMonitor";
+import type { WorkspaceFileChangeEvent } from "../../src/shared/fileVersion";
 import {
   afterEach,
   bashInternal,
@@ -36,6 +38,41 @@ import {
 } from "./tools.harness";
 
 describe("write tool", () => {
+  test("emits a workspace change when an agent write updates a file", async () => {
+    const dir = await tmpDir();
+    const events: WorkspaceFileChangeEvent[] = [];
+    const monitor = new WorkspaceFileChangeMonitor({
+      cwd: dir,
+      debounceMs: 5,
+      onChange: (event) => {
+        events.push(event);
+      },
+    });
+    const tool = createWriteTool(makeCtx(dir)) as unknown as {
+      execute(input: { filePath: string; content: string }): Promise<string>;
+    };
+    const filePath = path.join(dir, "agent-write.txt");
+
+    try {
+      await tool.execute({ filePath, content: "agent content" });
+      const startedAt = Date.now();
+      while (
+        !events.some((event) => event.kind === "changed" && event.path === filePath) &&
+        Date.now() - startedAt < 2_000
+      ) {
+        await Bun.sleep(10);
+      }
+
+      expect(events).toContainEqual({
+        kind: "changed",
+        path: filePath,
+        version: expect.objectContaining({ size: "agent content".length }),
+      });
+    } finally {
+      monitor.stop();
+    }
+  });
+
   test("creates file with content", async () => {
     const dir = await tmpDir();
     const t: any = createWriteTool(makeCtx(dir));

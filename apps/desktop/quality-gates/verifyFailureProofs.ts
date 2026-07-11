@@ -12,7 +12,7 @@ const proofRoot = path.join(qualityGateRoot, "proof-artifacts");
 type FailureProof = {
   expectedFailureOutput: RegExp;
   marker: string;
-  name: "axe" | "renderer" | "visual";
+  name: "axe" | "mention-geometry" | "renderer" | "visual";
   requiredArtifacts: Array<{ description: string; matches(path: string): boolean }>;
 };
 
@@ -32,6 +32,30 @@ const proofs: FailureProof[] = [
       },
       { description: "failure screenshot", matches: (entry) => entry.endsWith(".png") },
       { description: "failure video", matches: (entry) => entry.endsWith(".webm") },
+    ],
+  },
+  {
+    name: "mention-geometry",
+    marker: "intentional-quality-gate-mention-geometry-failure",
+    expectedFailureOutput:
+      /Independent mention geometry drift:.*highlight=4.*pixel mismatch \d+ > 24/s,
+    requiredArtifacts: [
+      {
+        description: "independent geometry metrics",
+        matches: (entry) => entry.endsWith("-metrics.json"),
+      },
+      {
+        description: "independent geometry pixel diff",
+        matches: (entry) => entry.endsWith("-diff.png"),
+      },
+      {
+        description: "independent geometry actual screenshot",
+        matches: (entry) => entry.endsWith("-actual.png"),
+      },
+      {
+        description: "independent geometry reference screenshot",
+        matches: (entry) => entry.endsWith("-reference.png"),
+      },
     ],
   },
   {

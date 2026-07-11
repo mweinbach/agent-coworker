@@ -290,10 +290,32 @@ async function readWebBytes(
     throw new Error((await response.text()) || `Request failed (${response.status})`);
   }
   const buffer = await response.arrayBuffer();
+  const encodedPath = response.headers.get("x-cowork-file-path");
+  const modifiedAtMs = Number(response.headers.get("x-cowork-file-modified-at"));
+  const changeTimeMs = Number(response.headers.get("x-cowork-file-change-time"));
+  const size = Number(response.headers.get("x-cowork-file-size"));
+  const fingerprint = response.headers.get("x-cowork-file-fingerprint");
+  if (
+    !encodedPath ||
+    !Number.isFinite(modifiedAtMs) ||
+    !Number.isFinite(changeTimeMs) ||
+    !Number.isSafeInteger(size) ||
+    size < 0 ||
+    !fingerprint
+  ) {
+    throw new Error("Preview response did not include valid file-version metadata.");
+  }
   return {
+    path: decodeURIComponent(encodedPath),
     bytes: new Uint8Array(buffer),
     byteLength: Number(response.headers.get("x-cowork-byte-length") ?? buffer.byteLength),
     truncated: response.headers.get("x-cowork-truncated") === "1",
+    version: {
+      modifiedAtMs,
+      changeTimeMs,
+      size,
+      fingerprint,
+    },
   };
 }
 
@@ -705,6 +727,12 @@ export function createWebAdapter(): DesktopApi {
       });
     },
 
+    async watchWorkspaceDirectory(): Promise<boolean> {
+      return false;
+    },
+
+    async unwatchWorkspaceDirectory(): Promise<void> {},
+
     async readFile(opts): Promise<{ content: string }> {
       return await readWebJson<{ content: string }>("/cowork/fs/read", { path: opts.path });
     },
@@ -913,6 +941,14 @@ export function createWebAdapter(): DesktopApi {
     },
 
     onMobileRelayStateChanged(): () => void {
+      return () => {};
+    },
+
+    onPreviewFileChanged(): () => void {
+      return () => {};
+    },
+
+    onWorkspaceFileChanged(): () => void {
       return () => {};
     },
   };

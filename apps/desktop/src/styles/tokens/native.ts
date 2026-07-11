@@ -10,7 +10,7 @@ export type CaptionSymbolTone = "dark" | "light";
 export const NATIVE_THEME_TOKENS = {
   transparentSurface: "#00000000",
   shellSurface: {
-    light: "#dfe2cc",
+    light: "#dde1ca",
     dark: "#171d13",
   },
   canvasDocument: {

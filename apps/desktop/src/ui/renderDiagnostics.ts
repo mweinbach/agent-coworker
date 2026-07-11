@@ -3,6 +3,7 @@ export type DesktopRenderMetric =
   | "desktop-markdown"
   | "feed-derivation"
   | "feed-row"
+  | "file-explorer-row"
   | "sidebar-thread-row"
   | "streaming-markdown";
 

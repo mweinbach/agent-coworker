@@ -24,42 +24,52 @@ const MOCK_UPDATE_STATE = {
 };
 
 const openPathMock = mock(async () => {});
+const staleDirectoryError = new Error("stale directory generation");
+const invalidateDirectoryListingMock = mock(
+  (_input: { workspaceId: string; path: string; recursive?: boolean }) => {},
+);
+const isStaleDirectoryListingErrorMock = mock((error: unknown) => error === staleDirectoryError);
+const listDirectoryMock = mock(
+  async ({ path, includeHidden }: { path: string; includeHidden?: boolean }) => {
+    const entries = [
+      {
+        name: "file1.txt",
+        path: `${path}/file1.txt`,
+        isDirectory: false,
+        isHidden: false,
+        sizeBytes: 10,
+        modifiedAtMs: 1000,
+      },
+      {
+        name: "dir1",
+        path: `${path}/dir1`,
+        isDirectory: true,
+        isHidden: false,
+        sizeBytes: null,
+        modifiedAtMs: 1000,
+      },
+      {
+        name: ".hidden",
+        path: `${path}/.hidden`,
+        isDirectory: false,
+        isHidden: true,
+        sizeBytes: 10,
+        modifiedAtMs: 1000,
+      },
+    ];
+    if (!includeHidden) return entries.filter((entry) => !entry.isHidden);
+    return entries;
+  },
+);
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     appendTranscriptBatch: async () => {},
     appendTranscriptEvent: async () => {},
     deleteTranscript: async () => {},
-    listDirectory: async ({ path, includeHidden }: { path: string; includeHidden?: boolean }) => {
-      const entries = [
-        {
-          name: "file1.txt",
-          path: `${path}/file1.txt`,
-          isDirectory: false,
-          isHidden: false,
-          sizeBytes: 10,
-          modifiedAtMs: 1000,
-        },
-        {
-          name: "dir1",
-          path: `${path}/dir1`,
-          isDirectory: true,
-          isHidden: false,
-          sizeBytes: null,
-          modifiedAtMs: 1000,
-        },
-        {
-          name: ".hidden",
-          path: `${path}/.hidden`,
-          isDirectory: false,
-          isHidden: true,
-          sizeBytes: 10,
-          modifiedAtMs: 1000,
-        },
-      ];
-      if (!includeHidden) return entries.filter((e) => !e.isHidden);
-      return entries;
-    },
+    listDirectory: listDirectoryMock,
+    invalidateDirectoryListing: invalidateDirectoryListingMock,
+    isStaleDirectoryListingError: isStaleDirectoryListingErrorMock,
     loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
     pickWorkspaceDirectory: async () => null,
     readTranscript: async () => [],
@@ -135,6 +145,9 @@ describe("store explorer actions", () => {
       },
     });
     openPathMock.mockClear();
+    invalidateDirectoryListingMock.mockClear();
+    isStaleDirectoryListingErrorMock.mockClear();
+    listDirectoryMock.mockClear();
   });
 
   test("navigateWorkspaceFiles loads entries without hidden files by default", async () => {
@@ -161,6 +174,34 @@ describe("store explorer actions", () => {
     explorer = useAppStore.getState().workspaceExplorerById[wsId];
     expect(explorer?.entries.length).toBe(3);
     expect(explorer?.entries.some((e) => e.isHidden)).toBe(true);
+  });
+
+  test("refreshWorkspaceFiles invalidates the current path before reloading", async () => {
+    await useAppStore.getState().navigateWorkspaceFiles(wsId, `${rootPath}/dir1`);
+    invalidateDirectoryListingMock.mockClear();
+
+    await useAppStore.getState().refreshWorkspaceFiles(wsId);
+
+    expect(invalidateDirectoryListingMock).toHaveBeenCalledWith({
+      workspaceId: wsId,
+      path: `${rootPath}/dir1`,
+    });
+  });
+
+  test("stale directory generations do not surface as explorer errors", async () => {
+    await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath);
+    listDirectoryMock.mockImplementationOnce(async () => {
+      throw staleDirectoryError;
+    });
+
+    await useAppStore.getState().refreshWorkspaceFiles(wsId);
+
+    expect(useAppStore.getState().workspaceExplorerById[wsId]).toMatchObject({
+      entries: expect.any(Array),
+      error: null,
+      loading: false,
+    });
+    expect(isStaleDirectoryListingErrorMock).toHaveBeenCalledWith(staleDirectoryError);
   });
 
   test("navigateWorkspaceFilesUp stops at root", async () => {

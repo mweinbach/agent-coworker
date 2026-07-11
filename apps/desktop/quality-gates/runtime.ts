@@ -1,4 +1,4 @@
-import type { ProfilerOnRenderCallback } from "react";
+import { type ProfilerOnRenderCallback, useEffect, useState } from "react";
 import type { ResearchRecord } from "../../../src/server/research/types";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
 import { useAppStore } from "../src/app/store";
@@ -24,6 +24,8 @@ export type QualityGateMetrics = {
   contentPublications: number;
   desktopMarkdownRenders: number;
   feedRowRenders: number;
+  fileExplorerRowRenders: number;
+  fileExplorerRowRendersById: Record<string, number>;
   maxFeedDerivationItems: number;
   reactCommits: number;
   sidebarThreadRowRendersById: Record<string, number>;
@@ -42,6 +44,7 @@ export type QualityGateRuntime = {
   resetFeed(): void;
   resetMetrics(): void;
   showDisconnect(): void;
+  showCrashFallback(): void;
   showFilePreview(): void;
   showReconnect(): void;
   showResearch(state: "empty" | "completed" | "follow-up"): Promise<void>;
@@ -61,6 +64,8 @@ let metrics: QualityGateMetrics = {
   contentPublications: 0,
   desktopMarkdownRenders: 0,
   feedRowRenders: 0,
+  fileExplorerRowRenders: 0,
+  fileExplorerRowRendersById: {},
   maxFeedDerivationItems: 0,
   reactCommits: 0,
   sidebarThreadRowRendersById: {},
@@ -68,6 +73,22 @@ let metrics: QualityGateMetrics = {
   streamingMarkdownRenders: 0,
 };
 let installed = false;
+const crashListeners = new Set<() => void>();
+
+export function QualityCrashProbe() {
+  const [shouldCrash, setShouldCrash] = useState(false);
+  useEffect(() => {
+    const trigger = () => setShouldCrash(true);
+    crashListeners.add(trigger);
+    return () => {
+      crashListeners.delete(trigger);
+    };
+  }, []);
+  if (shouldCrash) {
+    throw new Error("Deterministic quality-gate renderer crash.");
+  }
+  return null;
+}
 
 function selectedThreadId(): string {
   return useAppStore.getState().selectedThreadId ?? PROJECT_THREAD_ID;
@@ -176,6 +197,13 @@ function recordRenderMetric(event: DesktopRenderMetricEvent): void {
     case "feed-row":
       metrics.feedRowRenders += 1;
       return;
+    case "file-explorer-row":
+      metrics.fileExplorerRowRenders += 1;
+      if (event.id) {
+        metrics.fileExplorerRowRendersById[event.id] =
+          (metrics.fileExplorerRowRendersById[event.id] ?? 0) + 1;
+      }
+      return;
     case "sidebar-thread-row": {
       if (!event.id) return;
       metrics.sidebarThreadRowRendersById[event.id] =
@@ -270,6 +298,8 @@ export function installQualityGateRuntime(): void {
         contentPublications: 0,
         desktopMarkdownRenders: 0,
         feedRowRenders: 0,
+        fileExplorerRowRenders: 0,
+        fileExplorerRowRendersById: {},
         maxFeedDerivationItems: 0,
         reactCommits: 0,
         sidebarThreadRowRendersById: {},
@@ -277,11 +307,16 @@ export function installQualityGateRuntime(): void {
         streamingMarkdownRenders: 0,
       };
     },
+    showCrashFallback: () => {
+      for (const listener of crashListeners) {
+        listener();
+      }
+    },
     showDisconnect: () => {
       const threadId = selectedThreadId();
       useAppStore.setState((state) => ({
         threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "active" as const } : thread,
+          thread.id === threadId ? { ...thread, status: "disconnected" as const } : thread,
         ),
         threadRuntimeById: {
           ...state.threadRuntimeById,

@@ -2,6 +2,7 @@ import {
   type ComposerDraft,
   createEmptyComposerDraft,
   hydrateComposerDrafts,
+  mergeComposerDraftsByRevision,
   type PersistedComposerDraft,
   serializeComposerDrafts,
 } from "./composerDrafts";
@@ -140,6 +141,38 @@ export function hydrateCreationDrafts(value: unknown): HydratedCreationDrafts {
     researchCreationError,
     taskCreationDraft,
     taskCreationError,
+  };
+}
+
+export function mergeCreationDraftsByRevision(
+  persistedDrafts: HydratedCreationDrafts,
+  inMemoryDrafts: HydratedCreationDrafts,
+): HydratedCreationDrafts {
+  const researchCreationDraft = mergeComposerDraftsByRevision(
+    { [RESEARCH_DRAFT_KEY]: persistedDrafts.researchCreationDraft },
+    { [RESEARCH_DRAFT_KEY]: inMemoryDrafts.researchCreationDraft },
+  )[RESEARCH_DRAFT_KEY];
+  const taskCreationDraft =
+    inMemoryDrafts.taskCreationDraft.revision > persistedDrafts.taskCreationDraft.revision
+      ? inMemoryDrafts.taskCreationDraft
+      : persistedDrafts.taskCreationDraft;
+  const researchCreationError =
+    researchCreationDraft === inMemoryDrafts.researchCreationDraft
+      ? inMemoryDrafts.researchCreationError
+      : persistedDrafts.researchCreationError;
+  const taskCreationError =
+    taskCreationDraft === inMemoryDrafts.taskCreationDraft
+      ? inMemoryDrafts.taskCreationError
+      : persistedDrafts.taskCreationError;
+  return {
+    researchCreationDraft,
+    researchCreationError:
+      researchCreationError?.revision === researchCreationDraft?.revision
+        ? researchCreationError
+        : null,
+    taskCreationDraft,
+    taskCreationError:
+      taskCreationError?.revision === taskCreationDraft.revision ? taskCreationError : null,
   };
 }
 

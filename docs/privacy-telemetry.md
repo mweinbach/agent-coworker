@@ -12,6 +12,7 @@ All network telemetry and cloud sync share the resolver in `src/telemetry/config
 | Anonymous product analytics | Off | `productAnalyticsEnabled` | Optional PostHog product event counts. |
 | AI trace diagnostics | Off | `aiTraceTelemetryEnabled` | Optional Langfuse model/turn/tool timing traces. |
 | Include prompts and responses in AI traces | Off | `aiTracePayloadsEnabled` | Full Langfuse payload capture. Only works when AI trace diagnostics is enabled. |
+| Diagnostics upload | Off | `diagnosticsUploadEnabled` | Permits a separately confirmed upload of a locally created, redacted diagnostics bundle. |
 
 ## Status Labels
 
@@ -22,10 +23,11 @@ The desktop Privacy & Telemetry page shows resolver-backed network telemetry sta
 | Crash reports | `Disabled`, `Not configured`, `Enabled` |
 | Product analytics | `Disabled`, `Not configured`, `Enabled` |
 | AI traces | `Disabled`, `Metadata only`, `Full payload`, `Not configured` |
+| Diagnostics upload | `Disabled`, `Local only`, `Upload configured` |
 
 When `COWORK_DISABLE_NETWORK_TELEMETRY=1`, the page also shows a global kill switch message.
 
-The page does not expose diagnostic-upload or cloud-sync controls/status rows. Diagnostic bundles remain local unless initiated from diagnostics tooling, and cloud sync is managed by its own hidden/self-hosted configuration path.
+The page exposes diagnostic-upload permission and status. Enabling permission does not create or upload a bundle; bundle creation and upload remain separate user actions, and upload requires another explicit confirmation. Cloud sync is managed by its own hidden/self-hosted configuration path.
 
 ## Packaging Modes
 
@@ -52,19 +54,27 @@ The page does not expose diagnostic-upload or cloud-sync controls/status rows. D
 
 Existing local-dev and sidecar envs are still honored when policy allows them: `COWORK_CRASH_REPORTS_ENABLED`, `COWORK_PRODUCT_ANALYTICS_ENABLED`, `AGENT_OBSERVABILITY_ENABLED`, `AGENT_OBSERVABILITY_RECORD_INPUTS`, `AGENT_OBSERVABILITY_RECORD_OUTPUTS`, `AGENT_OBSERVABILITY_RECORD_PAYLOADS`, `COWORK_CLOUD_SYNC_ENABLED`, and `COWORK_CLOUD_SYNC_TOKEN`.
 
-## Data Never Collected
+## Data handling boundaries
 
-Crash reports and product analytics must never collect prompts, model responses, transcripts, file contents, shell commands, stdout/stderr, local filenames, repo names, workspace paths, provider auth, MCP credentials, API keys, tokens, cookies, email addresses, local usernames, or machine names.
+Product analytics events use fixed names and numeric/boolean feature state; they do not include prompts, model responses, transcripts, file contents, shell commands, stdout/stderr, local filenames, repo names, workspace paths, auth, credentials, email addresses, local usernames, or machine names.
+
+Crash reports are limited to scrubbed error data and the technical fields listed below. The scrubber removes payload- and credential-keyed fields, request bodies, and unsafe automatic breadcrumbs; redacts known local paths, email addresses, credential-bearing URLs, and common token shapes; and filters labeled prompts, responses, commands, and secrets in free-form errors. Unlabeled arbitrary error text cannot be classified perfectly, so callers must not deliberately place user or model content in errors.
 
 Diagnostics bundles are local unless the user explicitly uploads them. The bundle redactor removes home/workspace paths, secret-like fields, emails, JSON bodies, prompts, completions, stdout/stderr, oversized strings, and local paths.
 
-AI traces are metadata-only unless both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true. Full payload traces can include prompts, responses, commands, logs, file paths or names, and other content, so the full payload toggle stays off by default.
+AI traces are metadata-only unless both `aiTraceTelemetryEnabled` and `aiTracePayloadsEnabled` are true. Full payload traces can include system prompts, messages, responses, tool inputs and outputs, commands, logs, file paths or names, and other content. Secret-keyed option fields are redacted, but credentials typed into message content or returned by a model or tool may still be included. The full-payload toggle stays off by default, requires an in-app acknowledgment to enable, and applies when each workspace server next starts.
 
 Cloud sync is not telemetry. V1 sync may only emit a sanitized settings snapshot and must not sync threads, transcripts, prompts, completions, shell output, files, auth, tokens, local paths, repo names, diagnostics bundles, or analytics identity.
 
+## Retention and disabling
+
+Cowork does not set or enforce retention for data received by configured Sentry, PostHog, Langfuse/OpenTelemetry, or diagnostics-support endpoints. Their operators control retention. Turning a setting off stops future collection by that path but does not delete data already received by an external destination. AI trace changes apply when each workspace server next starts.
+
+Diagnostics bundles are written under the app user-data directory and remain local until the user explicitly uploads or deletes them. Enabling upload permission alone never creates or sends a bundle. The configured support endpoint controls retention after an upload.
+
 ## Event Schemas
 
-Crash reports may include sanitized error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
+Crash reports may include scrubbed error names/messages, stack traces, component tags, release/app version, environment, platform, architecture, and packaged/dev mode. Sentry session replay, tracing, structured logs, user identification, and AI instrumentation are disabled for crash reporting.
 
 Product analytics event names are fixed in `src/telemetry/productAnalytics.ts`:
 

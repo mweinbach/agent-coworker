@@ -120,7 +120,7 @@ const {
 const { __internal: jsonRpcSocketInternal } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
-const defaultStoreState = useAppStore.getState();
+const defaultStoreState = useAppStore.getInitialState();
 
 class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
@@ -501,7 +501,7 @@ describe("App JSON-RPC shutdown disposal", () => {
         root?.render(createElement(StrictMode, null, createElement(App)));
       });
       await act(async () => {
-        await waitForCondition(() => bootstrapSelectThreadCalls === 1);
+        await useAppStore.getState().drainBootstrap();
       });
 
       expect(bootstrapLoadStateCalls).toBe(1);

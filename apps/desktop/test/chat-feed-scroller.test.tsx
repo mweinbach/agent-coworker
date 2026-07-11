@@ -166,7 +166,7 @@ function renderFeed(
       desktopBasePath: null,
       latestRemovedSurfaceItemId: null,
       REMOVEDUIEnabled: false,
-      composerOverlayHeight: 200,
+      bottomOffset: 200,
       interactions: [],
       onAnswerAsk: () => true,
       onAnswerApproval: () => true,
@@ -233,18 +233,6 @@ describe("desktop chat message scroller", () => {
         '[data-slot="message-scroller-viewport"]',
       ) as HTMLElement | null;
       expect(viewport?.scrollTop).toBe(536);
-      expect(container.querySelector('[data-message-id="user-1"]')?.dataset.scrollAnchor).toBe(
-        "true",
-      );
-      expect(container.querySelector('[data-message-id="user-2"]')?.dataset.scrollAnchor).toBe(
-        "true",
-      );
-      expect(container.querySelector('[data-message-id="assistant-2"]')?.dataset.scrollAnchor).toBe(
-        "false",
-      );
-      expect(container.querySelector('[data-slot="message-scroller-button"]')?.style.bottom).toBe(
-        "209px",
-      );
 
       await act(async () => root.unmount());
     } finally {
@@ -283,9 +271,7 @@ describe("desktop chat message scroller", () => {
         '[data-slot="message-scroller-viewport"]',
       ) as HTMLElement | null;
       expect(viewport?.scrollTop).toBe(536);
-      expect(container.querySelector('[data-message-id="user-2"]')?.dataset.scrollAnchor).toBe(
-        "true",
-      );
+      expect(container.querySelector('[data-message-id="user-2"]')).not.toBeNull();
 
       await act(async () => root.unmount());
     } finally {
@@ -377,6 +363,38 @@ describe("desktop chat message scroller", () => {
     }
   });
 
+  test("reserves the composer offset once when the working placeholder is visible", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["status:working-placeholder", 40],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed([message("user-1", "user", "Question")], "thread-a", false, {
+            bottomOffset: 220,
+            showWorkingPlaceholder: true,
+          }),
+        );
+      });
+
+      const reservedSpaces = container.querySelectorAll('[data-slot="message-bar-reserved-space"]');
+      expect(reservedSpaces).toHaveLength(1);
+      expect((reservedSpaces[0] as HTMLElement).style.height).toBe("220px");
+      expect(container.querySelectorAll('[data-slot="working-placeholder"]')).toHaveLength(1);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("follows streaming at the live edge, stops after user scroll, and resumes after scroll-to-end", async () => {
     const heights = new Map([
       ["user-1", 60],
@@ -428,9 +446,9 @@ describe("desktop chat message scroller", () => {
       expect(viewport.scrollTop).toBe(100);
 
       const scrollToEnd = container.querySelector(
-        '[aria-label="Scroll to end"]',
+        '[aria-label="Jump to latest"]',
       ) as HTMLButtonElement | null;
-      expect(scrollToEnd?.dataset.active).toBe("true");
+      expect(scrollToEnd).not.toBeNull();
       await act(async () => {
         scrollToEnd?.click();
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -562,6 +580,348 @@ describe("desktop chat message scroller", () => {
       expect(viewportB).not.toBe(viewportA);
       if (!viewportB) throw new Error("missing viewport");
       await waitForScrollTop(viewportB, 136);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("restores the exact per-thread anchor and offset across A → B → A hydration", async () => {
+    const heights = new Map([
+      ["user-a-1", 100],
+      ["assistant-a-1", 400],
+      ["user-a-2", 100],
+      ["assistant-a-2", 600],
+      ["user-b", 100],
+      ["assistant-b", 500],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const threadA = [
+        message("user-a-1", "user", "A1"),
+        message("assistant-a-1", "assistant", "Answer A1"),
+        message("user-a-2", "user", "A2"),
+        message("assistant-a-2", "assistant", "Answer A2"),
+      ];
+
+      await act(async () => {
+        root.render(renderFeed(threadA, "thread-a"));
+      });
+      const viewportA = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewportA) throw new Error("missing thread A viewport");
+
+      viewportA.scrollTop = 520;
+      await act(async () => {
+        viewportA.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewportA.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      expect(viewportA.dataset.scrollMode).toBe("detached");
+      expect(
+        container.querySelector('[data-message-id="user-a-2"]')?.getBoundingClientRect().top,
+      ).toBe(-20);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [message("user-b", "user", "B"), message("assistant-b", "assistant", "Answer B")],
+            "thread-b",
+          ),
+        );
+      });
+      await act(async () => {
+        root.render(renderFeed([], "thread-a", true));
+      });
+      await act(async () => {
+        root.render(renderFeed(threadA, "thread-a"));
+      });
+
+      const restoredViewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(restoredViewport?.scrollTop).toBe(520);
+      expect(
+        container.querySelector('[data-message-id="user-a-2"]')?.getBoundingClientRect().top,
+      ).toBe(-20);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("preserves a detached reading anchor through dynamic row height changes", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 400],
+      ["user-2", 100],
+      ["assistant-2", 600],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("user-1", "user", "First"),
+              message("assistant-1", "assistant", "First answer"),
+              message("user-2", "user", "Second"),
+              message("assistant-2", "assistant", "Second answer"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+
+      viewport.scrollTop = 520;
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      expect(
+        container.querySelector('[data-message-id="user-2"]')?.getBoundingClientRect().top,
+      ).toBe(-20);
+
+      heights.set("assistant-1", 600);
+      await act(async () => {
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(viewport.scrollTop).toBe(720);
+      expect(
+        container.querySelector('[data-message-id="user-2"]')?.getBoundingClientRect().top,
+      ).toBe(-20);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("preserves a detached anchor when the progressive feed window shifts", async () => {
+    const heights = new Map([
+      ["status:show-older", 1_000],
+      ["old-user", 100],
+      ["old-assistant", 100],
+      ["anchor-user", 100],
+      ["anchor-assistant", 600],
+      ["new-user", 100],
+      ["new-assistant", 200],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const initialItems = [
+        message("old-user", "user", "Old question"),
+        message("old-assistant", "assistant", "Old answer"),
+        message("anchor-user", "user", "Reading anchor"),
+        message("anchor-assistant", "assistant", "Anchor answer"),
+      ];
+
+      await act(async () => {
+        root.render(
+          renderFeed(initialItems, "thread-a", false, {
+            hiddenFeedItemCount: 10,
+          }),
+        );
+      });
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+      viewport.scrollTop = 1_250;
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      expect(
+        container.querySelector('[data-message-id="anchor-user"]')?.getBoundingClientRect().top,
+      ).toBe(-50);
+
+      heights.set("status:show-older", 1_240);
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("anchor-user", "user", "Reading anchor"),
+              message("anchor-assistant", "assistant", "Anchor answer"),
+              message("new-user", "user", "New question"),
+              message("new-assistant", "assistant", "New answer"),
+            ],
+            "thread-a",
+            false,
+            { hiddenFeedItemCount: 12 },
+          ),
+        );
+      });
+
+      expect(viewport.scrollTop).toBe(1_290);
+      expect(
+        container.querySelector('[data-message-id="anchor-user"]')?.getBoundingClientRect().top,
+      ).toBe(-50);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("shows and clears a visible new-message count while follow-tail is detached", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 700],
+      ["assistant-2", 200],
+      ["assistant-3", 200],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const initialItems = [
+        message("user-1", "user", "Question"),
+        message("assistant-1", "assistant", "Answer"),
+      ];
+
+      await act(async () => {
+        root.render(renderFeed(initialItems, "thread-a"));
+      });
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+      viewport.scrollTop = 100;
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      expect(viewport.dataset.scrollMode).toBe("detached");
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              ...initialItems,
+              message("assistant-2", "assistant", "New answer"),
+              message("assistant-3", "assistant", "Another answer"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+
+      const jumpButton = container.querySelector(
+        '[aria-label="2 new messages. Jump to latest"]',
+      ) as HTMLButtonElement | null;
+      expect(jumpButton).not.toBeNull();
+      expect(jumpButton?.textContent).toContain("2 new messages");
+      expect(viewport.scrollTop).toBe(100);
+
+      await act(async () => {
+        jumpButton?.click();
+      });
+      expect(container.querySelector('[aria-label="2 new messages. Jump to latest"]')).toBeNull();
+      expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("keeps a detached viewport and Activity shell stable when a turn completes", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 700],
+      ["activity-tool-1", 180],
+    ]);
+    const harness = setupScroller(heights);
+    const activity: ChatRenderItem = {
+      kind: "activity-group",
+      id: "activity-tool-1",
+      recoveredToolIds: [],
+      items: [
+        {
+          id: "tool-1",
+          kind: "tool",
+          ts: "2026-06-26T12:00:01.000Z",
+          completedAt: "2026-06-26T12:00:02.000Z",
+          name: "read",
+          state: "output-available",
+          result: { ok: true },
+        },
+      ],
+    };
+    const items = [
+      message("user-1", "user", "Question"),
+      message("assistant-1", "assistant", "Answer"),
+      activity,
+    ];
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(items, "thread-a", false, {
+            liveActivityGroupId: "activity-tool-1",
+          }),
+        );
+      });
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      const activityShell = container.querySelector(
+        '[data-message-id="activity-tool-1"]',
+      )?.firstElementChild;
+      if (!viewport) throw new Error("missing viewport");
+      viewport.scrollTop = 100;
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      await act(async () => {
+        root.render(renderFeed(items, "thread-a", false, { liveActivityGroupId: null }));
+      });
+
+      expect(viewport.scrollTop).toBe(100);
+      expect(
+        container.querySelector('[data-message-id="activity-tool-1"]')?.firstElementChild,
+      ).toBe(activityShell);
+      expect(container.textContent).toContain("Worked for");
 
       await act(async () => root.unmount());
     } finally {

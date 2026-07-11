@@ -1,5 +1,22 @@
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon } from "lucide-react";
-import { memo, type UIEvent, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  AlertTriangleIcon,
+  ArrowDownIcon,
+  LoaderCircleIcon,
+  MessageSquareIcon,
+} from "lucide-react";
+import {
+  type KeyboardEvent,
+  memo,
+  type ReactNode,
+  type UIEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type WheelEvent,
+} from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import type { ChatInteraction } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -14,13 +31,10 @@ import {
 import { Marker, MarkerContent } from "../../components/ui/marker";
 import {
   MessageScroller,
-  MessageScrollerButton,
   MessageScrollerContent,
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-  useMessageScroller,
-  useMessageScrollerVisibility,
 } from "../../components/ui/message-scroller";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
@@ -32,6 +46,14 @@ import {
 } from "./activityGroups";
 import { FeedRow } from "./FeedRow";
 import { InteractionCard } from "./InteractionCard";
+import {
+  captureScrollAnchor,
+  countNewIds,
+  isNearScrollEnd,
+  restoreScrollAnchor,
+  type ScrollAnchorPosition,
+  scrollViewportToEnd,
+} from "./scrollOwnership";
 
 const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
 /** Expand when within this many px of the top of the scrollable content. */
@@ -163,70 +185,315 @@ function DaySeparatorRow(props: { label: string }) {
   );
 }
 
-function InitialTurnRestore({
-  messageId,
-  threadId,
-  hydrating,
-}: {
-  messageId: string | null;
-  threadId?: string | null;
-  hydrating: boolean;
-}) {
-  const { scrollToMessage } = useMessageScroller();
-  const visibility = useMessageScrollerVisibility();
-  const visibilityRef = useRef(visibility);
-  visibilityRef.current = visibility;
-  // Only restore scroll once per thread open / hydrate cycle — not on every new user turn.
-  const restoredForKeyRef = useRef<string | null>(null);
+type TranscriptScrollMode = "anchored" | "detached" | "following";
 
-  useEffect(() => {
-    if (!messageId || hydrating) return;
-    const restoreKey = `${threadId ?? "no-thread"}:${messageId}`;
-    if (restoredForKeyRef.current === restoreKey) return;
-    // First restore for this thread id, or first restore after hydrate completed.
-    const threadKey = threadId ?? "no-thread";
-    const alreadyRestoredThread = restoredForKeyRef.current?.startsWith(`${threadKey}:`);
-    if (alreadyRestoredThread && restoredForKeyRef.current !== null) {
-      // A later user turn while already open — let autoScroll own the viewport.
+type TranscriptScrollSnapshot = {
+  mode: TranscriptScrollMode;
+  position: ScrollAnchorPosition | null;
+};
+
+const TRANSCRIPT_RESTORE_OFFSET_PX = 64;
+const DETACH_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
+
+function TranscriptScroller(props: {
+  bottomOffset: number;
+  children: ReactNode;
+  hydrating: boolean;
+  itemIds: string[];
+  lastUserTurnId: string | null;
+  memory: Map<string, TranscriptScrollSnapshot>;
+  onViewportScroll: (event: UIEvent<HTMLDivElement>) => void;
+  threadId: string;
+}) {
+  const {
+    bottomOffset,
+    children,
+    hydrating,
+    itemIds,
+    lastUserTurnId,
+    memory,
+    onViewportScroll,
+    threadId,
+  } = props;
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const initialSnapshot = memory.get(threadId);
+  const [mode, setMode] = useState<TranscriptScrollMode>(
+    () => initialSnapshot?.mode ?? "following",
+  );
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const modeRef = useRef(mode);
+  const restoredRef = useRef(false);
+  const previousItemIdsRef = useRef(itemIds);
+  const previousLastUserTurnIdRef = useRef(lastUserTurnId);
+  const programmaticScrollRef = useRef(false);
+  const clearProgrammaticFrameRef = useRef<number | null>(null);
+  modeRef.current = mode;
+
+  const setScrollMode = useCallback((nextMode: TranscriptScrollMode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+  }, []);
+
+  const markProgrammaticScroll = useCallback(() => {
+    programmaticScrollRef.current = true;
+    if (clearProgrammaticFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
+    }
+    clearProgrammaticFrameRef.current = window.requestAnimationFrame(() => {
+      clearProgrammaticFrameRef.current = null;
+      programmaticScrollRef.current = false;
+    });
+  }, []);
+
+  const persistSnapshot = useCallback(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content || !restoredRef.current) return;
+    memory.set(threadId, {
+      mode: modeRef.current,
+      position: captureScrollAnchor(viewport, content),
+    });
+  }, [memory, threadId]);
+
+  const restorePosition = useCallback(
+    (position: ScrollAnchorPosition): boolean => {
+      const viewport = viewportRef.current;
+      const content = contentRef.current;
+      if (!viewport || !content) return false;
+      markProgrammaticScroll();
+      return restoreScrollAnchor(viewport, content, position);
+    },
+    [markProgrammaticScroll],
+  );
+
+  const jumpToLatest = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    markProgrammaticScroll();
+    scrollViewportToEnd(viewport);
+    setScrollMode("following");
+    setNewMessageCount(0);
+    persistSnapshot();
+  }, [markProgrammaticScroll, persistSnapshot, setScrollMode]);
+
+  useLayoutEffect(() => {
+    if (hydrating || restoredRef.current) return;
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    const saved = memory.get(threadId);
+    let restored = false;
+    if (saved?.position) {
+      restored = restorePosition(saved.position);
+      if (restored) setScrollMode(saved.mode);
+    }
+    if (!restored && lastUserTurnId) {
+      restored = restorePosition({
+        anchorId: lastUserTurnId,
+        offset: TRANSCRIPT_RESTORE_OFFSET_PX,
+      });
+      if (restored) {
+        setScrollMode(isNearScrollEnd(viewport) ? "following" : "anchored");
+      }
+    }
+    if (!restored) {
+      markProgrammaticScroll();
+      scrollViewportToEnd(viewport);
+      setScrollMode("following");
+    }
+    restoredRef.current = true;
+    persistSnapshot();
+
+    // The shadcn primitive applies its default position in a parent layout
+    // effect. Reapply in the same browser task so the owned position wins
+    // before paint without a hydration-completion jump.
+    queueMicrotask(() => {
+      const current = memory.get(threadId)?.position;
+      if (current) restorePosition(current);
+    });
+  }, [
+    hydrating,
+    lastUserTurnId,
+    markProgrammaticScroll,
+    memory,
+    persistSnapshot,
+    restorePosition,
+    setScrollMode,
+    threadId,
+  ]);
+
+  useLayoutEffect(() => {
+    return () => {
+      persistSnapshot();
+      if (clearProgrammaticFrameRef.current !== null) {
+        window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
+      }
+    };
+  }, [persistSnapshot]);
+
+  useLayoutEffect(() => {
+    if (
+      hydrating ||
+      itemIds.length === 0 ||
+      !restoredRef.current ||
+      modeRef.current === "following"
+    ) {
       return;
     }
-    let cancelled = false;
+    const saved = memory.get(threadId)?.position;
+    if (!saved) return;
+    restorePosition(saved);
+    persistSnapshot();
+  }, [hydrating, itemIds, memory, persistSnapshot, restorePosition, threadId]);
 
-    const nextFrame = () =>
-      new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => resolve());
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    let resizeFrame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        if (!restoredRef.current || hydrating) return;
+        const viewport = viewportRef.current;
+        if (!viewport) return;
+        if (modeRef.current === "following") {
+          markProgrammaticScroll();
+          scrollViewportToEnd(viewport);
+        } else {
+          const saved = memory.get(threadId)?.position;
+          if (saved) restorePosition(saved);
+        }
+        persistSnapshot();
       });
-
-    const restoreAfterLayout = async () => {
-      try {
-        await document.fonts.ready;
-      } catch {
-        // Font readiness is only a layout hint; the frame checks below still apply.
-      }
-      await nextFrame();
-      await nextFrame();
-      if (cancelled) return;
-
-      const currentVisibility = visibilityRef.current;
-      if (currentVisibility.currentAnchorId === messageId) {
-        restoredForKeyRef.current = restoreKey;
-        return;
-      }
-      scrollToMessage(messageId, {
-        align: "start",
-        behavior: "auto",
-        scrollMargin: 64,
-      });
-      restoredForKeyRef.current = restoreKey;
-    };
-
-    void restoreAfterLayout();
+    });
+    observer.observe(content);
     return () => {
-      cancelled = true;
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      observer.disconnect();
     };
-  }, [hydrating, messageId, scrollToMessage, threadId]);
+  }, [hydrating, markProgrammaticScroll, memory, persistSnapshot, restorePosition, threadId]);
 
-  return null;
+  useEffect(() => {
+    const previousIds = previousItemIdsRef.current;
+    const addedCount = countNewIds(previousIds, itemIds);
+    previousItemIdsRef.current = itemIds;
+    if (addedCount > 0 && modeRef.current === "detached") {
+      setNewMessageCount((current) => current + addedCount);
+    }
+
+    const previousLastUserTurnId = previousLastUserTurnIdRef.current;
+    previousLastUserTurnIdRef.current = lastUserTurnId;
+    if (
+      restoredRef.current &&
+      modeRef.current === "anchored" &&
+      lastUserTurnId &&
+      previousLastUserTurnId !== lastUserTurnId
+    ) {
+      restorePosition({
+        anchorId: lastUserTurnId,
+        offset: TRANSCRIPT_RESTORE_OFFSET_PX,
+      });
+      persistSnapshot();
+    }
+  }, [itemIds, lastUserTurnId, persistSnapshot, restorePosition]);
+
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const viewport = event.currentTarget;
+      if (isNearScrollEnd(viewport)) {
+        if (!programmaticScrollRef.current || modeRef.current === "following") {
+          setScrollMode("following");
+          setNewMessageCount(0);
+        }
+      } else if (!programmaticScrollRef.current && modeRef.current === "following") {
+        setScrollMode("detached");
+      }
+      persistSnapshot();
+      onViewportScroll(event);
+    },
+    [onViewportScroll, persistSnapshot, setScrollMode],
+  );
+
+  const detachFromTail = useCallback(() => {
+    programmaticScrollRef.current = false;
+    if (clearProgrammaticFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
+      clearProgrammaticFrameRef.current = null;
+    }
+    setScrollMode("detached");
+  }, [setScrollMode]);
+
+  const handleWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (event.deltaY < 0) {
+        detachFromTail();
+      }
+    },
+    [detachFromTail],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (DETACH_KEYS.has(event.key)) detachFromTail();
+    },
+    [detachFromTail],
+  );
+
+  const handleTouchMove = useCallback(() => {
+    detachFromTail();
+  }, [detachFromTail]);
+
+  return (
+    <MessageScroller className="min-h-0 flex-1">
+      <MessageScrollerViewport
+        ref={viewportRef}
+        aria-label="Conversation messages"
+        className="[overflow-anchor:none]"
+        data-scroll-mode={mode}
+        preserveScrollOnPrepend={false}
+        onKeyDown={handleKeyDown}
+        onScroll={handleScroll}
+        onTouchMove={handleTouchMove}
+        onWheel={handleWheel}
+      >
+        <MessageScrollerContent
+          ref={contentRef}
+          className="mx-auto w-full max-w-3xl gap-3.5 px-4 py-5 pt-6"
+        >
+          {children}
+        </MessageScrollerContent>
+      </MessageScrollerViewport>
+      {mode === "detached" ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="absolute inset-s-1/2 z-10 -translate-x-1/2 gap-2 border border-border bg-background text-foreground shadow-md hover:bg-muted rtl:translate-x-1/2"
+          style={{ bottom: bottomOffset + SCROLL_BUTTON_BOTTOM_GAP_PX }}
+          aria-label={
+            newMessageCount > 0
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}. Jump to latest`
+              : "Jump to latest"
+          }
+          aria-live="polite"
+          onClick={jumpToLatest}
+        >
+          <ArrowDownIcon data-icon="inline-start" />
+          <span>
+            {newMessageCount > 0
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`
+              : "Jump to latest"}
+          </span>
+          {newMessageCount > 0 ? (
+            <span className="text-muted-foreground">Jump to latest</span>
+          ) : null}
+        </Button>
+      ) : null}
+    </MessageScroller>
+  );
 }
 
 export const ChatFeed = memo(function ChatFeed(props: {
@@ -243,7 +510,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
 
-  composerOverlayHeight: number;
+  bottomOffset: number;
   interactions: VisibleInteraction[];
   onAnswerAsk: (threadId: string, requestId: string, answer: string) => boolean;
   onAnswerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
@@ -271,7 +538,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
-    composerOverlayHeight,
+    bottomOffset,
     interactions,
     onAnswerAsk,
     onAnswerApproval,
@@ -290,6 +557,17 @@ export const ChatFeed = memo(function ChatFeed(props: {
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);
   const retryableActivityGroupId = latestRetryableActivityGroupId(renderItems);
   const feedListEntries = useMemo(() => buildFeedListEntries(renderItems), [renderItems]);
+  const scrollMemoryRef = useRef(new Map<string, TranscriptScrollSnapshot>());
+  const scrollItemIds = useMemo(
+    () => [
+      ...renderItems.map((item) => (item.kind === "activity-group" ? item.id : item.item.id)),
+      ...interactions.map(
+        ({ threadId, interaction }) => `interaction:${threadId}:${interaction.requestId}`,
+      ),
+    ],
+    [interactions, renderItems],
+  );
+  const threadId = selectedThreadId ?? "no-thread";
 
   const handleViewportScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
@@ -303,198 +581,166 @@ export const ChatFeed = memo(function ChatFeed(props: {
   );
 
   return (
-    <MessageScrollerProvider
-      key={selectedThreadId ?? "no-thread"}
-      autoScroll
-      defaultScrollPosition="last-anchor"
-      scrollPreviousItemPeek={64}
-    >
-      <InitialTurnRestore
-        messageId={lastUserTurnId}
-        threadId={selectedThreadId}
+    <MessageScrollerProvider key={threadId} autoScroll={false} defaultScrollPosition="start">
+      <TranscriptScroller
+        bottomOffset={bottomOffset}
         hydrating={hydrating}
-      />
-      <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport
-          aria-label="Conversation messages"
-          preserveScrollOnPrepend
-          onScroll={handleViewportScroll}
-        >
-          <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3.5 px-4 py-5 pt-6">
-            {transcriptOnly ? (
-              <MessageScrollerItem messageId="status:transcript-only">
-                <Card className="border-border/70 bg-muted/30">
-                  <CardContent className="flex items-start gap-3 p-3">
-                    <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
-                    <div>
-                      <div className="font-semibold">Transcript view</div>
-                      <div className="text-sm text-muted-foreground">
-                        Sending a message will continue in a new chat.
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+        itemIds={scrollItemIds}
+        lastUserTurnId={lastUserTurnId}
+        memory={scrollMemoryRef.current}
+        onViewportScroll={handleViewportScroll}
+        threadId={threadId}
+      >
+        {transcriptOnly ? (
+          <MessageScrollerItem messageId="status:transcript-only">
+            <Card className="border-border/70 bg-muted/30">
+              <CardContent className="flex items-start gap-3 p-3">
+                <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
+                <div>
+                  <div className="font-semibold">Transcript view</div>
+                  <div className="text-sm text-muted-foreground">
+                    Sending a message will continue in a new chat.
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </MessageScrollerItem>
+        ) : null}
+
+        {visibleFeedLength === 0 ? (
+          <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
+            <Empty className="min-h-72 border border-border/55 bg-background/24">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  {hydrating ? (
+                    <LoaderCircleIcon className="animate-spin" />
+                  ) : (
+                    <MessageSquareIcon />
+                  )}
+                </EmptyMedia>
+                <EmptyTitle>
+                  {hydrating ? "Loading chat" : disconnected ? "Disconnected" : "No messages yet"}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {hydrating
+                    ? "Restoring messages and reconnecting the session."
+                    : disconnected
+                      ? "Reconnect from the banner above to continue."
+                      : "Send a message to start."}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </MessageScrollerItem>
+        ) : (
+          <>
+            {hiddenFeedItemCount > 0 ? (
+              <MessageScrollerItem messageId="status:show-older">
+                <div
+                  aria-hidden="true"
+                  className="flex flex-col items-center gap-2 py-1"
+                  data-slot="feed-window-spacer"
+                  style={{
+                    minHeight: Math.min(hiddenFeedItemCount * FEED_ESTIMATED_ROW_HEIGHT_PX, 2_400),
+                  }}
+                >
+                  <Button type="button" variant="outline" size="sm" onClick={onShowAllOlderFeed}>
+                    Show {hiddenFeedItemCount} older messages
+                  </Button>
+                </div>
               </MessageScrollerItem>
             ) : null}
-
-            {visibleFeedLength === 0 ? (
-              <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
-                <Empty className="min-h-72 border border-border/55 bg-background/24">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      {hydrating ? (
-                        <LoaderCircleIcon className="animate-spin" />
-                      ) : (
-                        <MessageSquareIcon />
-                      )}
-                    </EmptyMedia>
-                    <EmptyTitle>
-                      {hydrating
-                        ? "Loading chat"
-                        : disconnected
-                          ? "Disconnected"
-                          : "No messages yet"}
-                    </EmptyTitle>
-                    <EmptyDescription>
-                      {hydrating
-                        ? "Restoring messages and reconnecting the session."
-                        : disconnected
-                          ? "Reconnect from the banner above to continue."
-                          : "Send a message to start."}
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              </MessageScrollerItem>
-            ) : (
-              <>
-                {hiddenFeedItemCount > 0 ? (
-                  <MessageScrollerItem messageId="status:show-older">
-                    <div
-                      aria-hidden="true"
-                      className="flex flex-col items-center gap-2 py-1"
-                      data-slot="feed-window-spacer"
-                      style={{
-                        minHeight: Math.min(
-                          hiddenFeedItemCount * FEED_ESTIMATED_ROW_HEIGHT_PX,
-                          2_400,
-                        ),
-                      }}
-                    >
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={onShowAllOlderFeed}
-                      >
-                        Show {hiddenFeedItemCount} older messages
-                      </Button>
-                    </div>
+            {feedListEntries.map((entry) => {
+              if (entry.kind === "day-separator") {
+                return (
+                  <MessageScrollerItem key={entry.id} messageId={entry.id}>
+                    <DaySeparatorRow label={entry.label} />
                   </MessageScrollerItem>
-                ) : null}
-                {feedListEntries.map((entry) => {
-                  if (entry.kind === "day-separator") {
-                    return (
-                      <MessageScrollerItem key={entry.id} messageId={entry.id}>
-                        <DaySeparatorRow label={entry.label} />
-                      </MessageScrollerItem>
-                    );
-                  }
+                );
+              }
 
-                  const item = entry.item;
-                  const messageId = item.kind === "activity-group" ? item.id : item.item.id;
-                  return (
-                    <MessageScrollerItem
-                      key={messageId}
-                      messageId={messageId}
-                      scrollAnchor={isVisibleUserTurn(item)}
+              const item = entry.item;
+              const messageId = item.kind === "activity-group" ? item.id : item.item.id;
+              return (
+                <MessageScrollerItem key={messageId} messageId={messageId}>
+                  {item.kind === "activity-group" ? (
+                    <InlineErrorBoundary label="This activity couldn't be rendered.">
+                      <ActivityGroupCard
+                        items={item.items}
+                        recoveredToolIds={item.recoveredToolIds}
+                        live={item.id === liveActivityGroupId}
+                        liveStartedAt={liveStartedAt}
+                        onRetry={
+                          item.id === retryableActivityGroupId && onRetryFailedTurn
+                            ? () =>
+                                onRetryFailedTurn(
+                                  unresolvedToolFailureIds(item.items, item.recoveredToolIds),
+                                )
+                            : undefined
+                        }
+                        retryDisabled={retryFailedTurnDisabled}
+                        retryUnavailableReason={
+                          item.id === retryableActivityGroupId ? retryUnavailableReason : undefined
+                        }
+                      />
+                    </InlineErrorBoundary>
+                  ) : (
+                    <InlineErrorBoundary
+                      label={`This message couldn't be rendered (${item.item.kind}).`}
                     >
-                      {item.kind === "activity-group" ? (
-                        <InlineErrorBoundary label="This activity couldn't be rendered.">
-                          <ActivityGroupCard
-                            items={item.items}
-                            recoveredToolIds={item.recoveredToolIds}
-                            live={item.id === liveActivityGroupId}
-                            liveStartedAt={liveStartedAt}
-                            onRetry={
-                              item.id === retryableActivityGroupId && onRetryFailedTurn
-                                ? () =>
-                                    onRetryFailedTurn(
-                                      unresolvedToolFailureIds(item.items, item.recoveredToolIds),
-                                    )
-                                : undefined
-                            }
-                            retryDisabled={retryFailedTurnDisabled}
-                            retryUnavailableReason={
-                              item.id === retryableActivityGroupId
-                                ? retryUnavailableReason
-                                : undefined
-                            }
-                          />
-                        </InlineErrorBoundary>
-                      ) : (
-                        <InlineErrorBoundary
-                          label={`This message couldn't be rendered (${item.item.kind}).`}
-                        >
-                          <FeedRow
-                            item={item.item}
-                            citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
-                            citationSources={citationSourcesByMessageId.get(item.item.id)}
-                            desktopBasePath={desktopBasePath}
-                            isStreaming={
-                              item.item.kind === "message" &&
-                              item.item.role === "assistant" &&
-                              item.item.id === streamingAssistantMessageId
-                            }
-                          />
-                        </InlineErrorBoundary>
-                      )}
-                    </MessageScrollerItem>
-                  );
-                })}
-              </>
-            )}
+                      <FeedRow
+                        item={item.item}
+                        citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
+                        citationSources={citationSourcesByMessageId.get(item.item.id)}
+                        desktopBasePath={desktopBasePath}
+                        isStreaming={
+                          item.item.kind === "message" &&
+                          item.item.role === "assistant" &&
+                          item.item.id === streamingAssistantMessageId
+                        }
+                      />
+                    </InlineErrorBoundary>
+                  )}
+                </MessageScrollerItem>
+              );
+            })}
+          </>
+        )}
 
-            {showWorkingPlaceholder ? (
-              <MessageScrollerItem messageId="status:working-placeholder">
-                <WorkingPlaceholderRow />
-              </MessageScrollerItem>
-            ) : null}
+        {showWorkingPlaceholder ? (
+          <MessageScrollerItem messageId="status:working-placeholder">
+            <WorkingPlaceholderRow />
+          </MessageScrollerItem>
+        ) : null}
 
-            {interactions.map(({ threadId, interaction }, index) => (
-              <MessageScrollerItem
-                key={`${threadId}:${interaction.requestId}`}
-                messageId={`interaction:${threadId}:${interaction.requestId}`}
-              >
-                <InteractionCard
-                  threadId={threadId}
-                  interaction={interaction}
-                  position={index + 1}
-                  total={interactions.length}
-                  onAnswerAsk={onAnswerAsk}
-                  onAnswerApproval={onAnswerApproval}
-                  onRetry={onRetryInteraction}
-                  selectedThreadId={selectedThreadId}
-                  threadTitle={threadTitleById?.get(threadId)}
-                  onSelectThread={onSelectThread}
-                />
-              </MessageScrollerItem>
-            ))}
+        {interactions.map(({ threadId, interaction }, index) => (
+          <MessageScrollerItem
+            key={`${threadId}:${interaction.requestId}`}
+            messageId={`interaction:${threadId}:${interaction.requestId}`}
+          >
+            <InteractionCard
+              threadId={threadId}
+              interaction={interaction}
+              position={index + 1}
+              total={interactions.length}
+              onAnswerAsk={onAnswerAsk}
+              onAnswerApproval={onAnswerApproval}
+              onRetry={onRetryInteraction}
+              selectedThreadId={selectedThreadId}
+              threadTitle={threadTitleById?.get(threadId)}
+              onSelectThread={onSelectThread}
+            />
+          </MessageScrollerItem>
+        ))}
 
-            <MessageScrollerItem>
-              <div
-                aria-hidden="true"
-                className="shrink-0"
-                data-slot="message-bar-reserved-space"
-                style={{ height: composerOverlayHeight }}
-              />
-            </MessageScrollerItem>
-          </MessageScrollerContent>
-        </MessageScrollerViewport>
-        <MessageScrollerButton
-          aria-label="Scroll to end"
-          style={{ bottom: composerOverlayHeight + SCROLL_BUTTON_BOTTOM_GAP_PX }}
-        />
-      </MessageScroller>
+        <MessageScrollerItem>
+          <div
+            aria-hidden="true"
+            className="shrink-0"
+            data-slot="message-bar-reserved-space"
+            style={{ height: bottomOffset }}
+          />
+        </MessageScrollerItem>
+      </TranscriptScroller>
     </MessageScrollerProvider>
   );
 });

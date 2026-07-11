@@ -37,6 +37,7 @@ import { ChatComposer } from "./chat/ChatComposer";
 import { ChatFeed, type VisibleInteraction } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
+import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
   composerBusyHint,
   countActiveChildAgents,
@@ -217,7 +218,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   overflowCitationSourcesRef.current = overflowCitationSourcesByMessageId;
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
-  const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
+  const [transcriptBottomOffset, setTranscriptBottomOffset] = useState(composerOverlayMinHeight);
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
   const preparingAttachments = composerSubmission?.phase === "preparing";
   const setAttachmentPickerError = useCallback(
@@ -288,17 +289,24 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }, []);
   useLayoutEffect(() => {
     const el = messageBarOverlayElement;
-    if (!el) {
-      // Source-task lock bar is in-flow (not absolute), so the feed must not
-      // also reserve overlay space — that double-counts bottom chrome.
-      setComposerOverlayHeight(sourceTask && !readOnlyNotice ? 0 : composerOverlayMinHeight);
+    const chrome = sourceTask && !readOnlyNotice ? "in-flow" : "overlay";
+    if (chrome === "in-flow" || !el) {
+      setTranscriptBottomOffset(
+        resolveChatBottomOffset({
+          chrome,
+          minimumOverlayHeight: composerOverlayMinHeight,
+        }),
+      );
       return;
     }
 
     const updateHeight = () => {
-      const measuredHeight = Math.ceil(el.getBoundingClientRect().height);
-      const nextHeight = Math.max(composerOverlayMinHeight, measuredHeight);
-      setComposerOverlayHeight((current) => (current === nextHeight ? current : nextHeight));
+      const nextHeight = resolveChatBottomOffset({
+        chrome,
+        measuredOverlayHeight: el.getBoundingClientRect().height,
+        minimumOverlayHeight: composerOverlayMinHeight,
+      });
+      setTranscriptBottomOffset((current) => (current === nextHeight ? current : nextHeight));
     };
 
     updateHeight();
@@ -801,7 +809,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           citationUrlsByMessageId={citationUrlsByMessageId}
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}
-          composerOverlayHeight={composerOverlayHeight}
+          bottomOffset={transcriptBottomOffset}
           interactions={interactions}
           onAnswerAsk={answerAsk}
           onAnswerApproval={answerApproval}

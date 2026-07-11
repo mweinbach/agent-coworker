@@ -86,11 +86,13 @@ function DialogContent({
   children,
   showCloseButton = true,
   preventEditableEscapeDismissal = false,
+  overlayClassName,
   forceMount,
   onEscapeKeyDown,
   style,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  overlayClassName?: string;
   preventEditableEscapeDismissal?: boolean;
   showCloseButton?: boolean;
 }) {
@@ -99,7 +101,7 @@ function DialogContent({
 
   return (
     <DialogPortal data-slot="dialog-portal" forceMount={forceMount}>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         data-overlay-layer-sequence={ownership?.sequence}

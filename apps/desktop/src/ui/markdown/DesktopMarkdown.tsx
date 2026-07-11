@@ -17,7 +17,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import {
@@ -34,7 +33,8 @@ import {
   normalizeDisplayCitationMarkers,
 } from "../../../../../src/shared/displayCitationMarkers";
 import { useAppStore } from "../../app/store";
-import { Button } from "../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { useDocumentIsDark } from "../../lib/documentThemeStore";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
@@ -44,15 +44,12 @@ import {
   isAbsoluteDesktopPath,
 } from "../../lib/mediaProtocol";
 import { cn } from "../../lib/utils";
-import { useOverlayOwner } from "../OverlayStack";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
-const CITATION_POPUP_MARGIN = 16;
-const CITATION_POPUP_GAP = 10;
 const preloadedCitationFaviconUrls = new Set<string>();
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
@@ -109,13 +106,6 @@ type DesktopCitationChipProps = ComponentProps<"cite"> & {
   node?: unknown;
   "data-citation-sources"?: string;
 };
-
-type CitationPopupPosition = {
-  left: number;
-  top: number;
-};
-
-const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -261,33 +251,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function computeCitationPopupPosition(
-  anchorRect: DOMRect,
-  cardRect: DOMRect,
-): CitationPopupPosition {
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const maxLeft = Math.max(
-    CITATION_POPUP_MARGIN,
-    viewportWidth - cardRect.width - CITATION_POPUP_MARGIN,
-  );
-  const preferredLeft = clamp(anchorRect.left, CITATION_POPUP_MARGIN, maxLeft);
-  const belowTop = anchorRect.bottom + CITATION_POPUP_GAP;
-  const aboveTop = anchorRect.top - cardRect.height - CITATION_POPUP_GAP;
-  const maxTop = Math.max(
-    CITATION_POPUP_MARGIN,
-    viewportHeight - cardRect.height - CITATION_POPUP_MARGIN,
-  );
-  const top =
-    belowTop + cardRect.height <= viewportHeight - CITATION_POPUP_MARGIN
-      ? belowTop
-      : aboveTop >= CITATION_POPUP_MARGIN
-        ? aboveTop
-        : clamp(belowTop, CITATION_POPUP_MARGIN, maxTop);
-
-  return { left: preferredLeft, top };
-}
-
 function DesktopCitationChip({
   children,
   className,
@@ -306,19 +269,9 @@ function DesktopCitationChip({
   );
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const rootRef = useRef<HTMLElement | null>(null);
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const cardRef = useRef<HTMLDivElement | null>(null);
   const citationTitleContainerRef = useRef<HTMLDivElement | null>(null);
   const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
-  const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
-  const citationOwner = useOverlayOwner({
-    active: open,
-    label: "Citation sources",
-    onDismiss: () => setOpen(false),
-    restoreFocus: () => buttonRef.current,
-  });
 
   const cancelScheduledHoverClose = () => {
     if (hoverCloseTimerRef.current !== null) {
@@ -429,73 +382,6 @@ function DesktopCitationChip({
     };
   }, [open, activeIndex, currentSource]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        (rootRef.current?.contains(target) || cardRef.current?.contains(target))
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (sources.length <= 1) {
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setActiveIndex((index) => (index + 1) % sources.length);
-      }
-    };
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open, sources.length]);
-
-  useIsomorphicLayoutEffect(() => {
-    if (!open) {
-      setPopupPosition(null);
-      return;
-    }
-
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const updatePosition = () => {
-      const anchor = buttonRef.current;
-      const card = cardRef.current;
-      if (!anchor || !card) {
-        return;
-      }
-      setPopupPosition(
-        computeCitationPopupPosition(anchor.getBoundingClientRect(), card.getBoundingClientRect()),
-      );
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [currentSource, open]);
-
   if (sources.length === 0) {
     return (
       <cite className={cn("ml-2 inline-flex not-italic", className)} {...props}>
@@ -505,113 +391,105 @@ function DesktopCitationChip({
   }
 
   return (
-    <cite
-      ref={rootRef}
-      className={cn("relative ml-2 inline-flex not-italic", className)}
-      onMouseEnter={handleHoverEnter}
-      onMouseLeave={handleHoverLeave}
-      {...props}
-    >
-      <Button
-        ref={buttonRef}
-        type="button"
-        variant="outline"
-        size="sm"
-        className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => {
-          cancelScheduledHoverClose();
-          setOpen((value) => !value);
+    <Popover open={open} onOpenChange={setOpen}>
+      <cite
+        className={cn("relative ml-2 inline-flex not-italic", className)}
+        onMouseEnter={handleHoverEnter}
+        onMouseLeave={handleHoverLeave}
+        onKeyDown={(event) => {
+          if (!open || sources.length <= 1) return;
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            setActiveIndex((index) => (index + 1) % sources.length);
+          }
         }}
+        {...props}
       >
-        {label}
-      </Button>
-      {open && currentSource && currentSourceDisplay && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              ref={cardRef}
-              role="dialog"
-              aria-label="Citation sources"
-              className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
-              style={{
-                ...(popupPosition
-                  ? { left: popupPosition.left, top: popupPosition.top }
-                  : { left: 0, top: 0, visibility: "hidden" }),
-                zIndex: citationOwner?.zIndex,
-              }}
-              onMouseEnter={handleHoverEnter}
-              onMouseLeave={handleHoverLeave}
-            >
-              <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-                  aria-label="Previous source"
-                  disabled={sources.length <= 1}
-                  onClick={() =>
-                    setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
-                  }
-                >
-                  <ChevronLeftIcon data-icon="inline-start" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-                  aria-label="Next source"
-                  disabled={sources.length <= 1}
-                  onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
-                >
-                  <ChevronRightIcon data-icon="inline-start" />
-                </Button>
-                <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-                  {activeIndex + 1}/{sources.length}
-                </div>
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
-                className="w-full cursor-pointer text-left outline-none transition-colors hover:bg-muted/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => {
-                  setOpen(false);
-                  void openExternalCitationSource(currentSource);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setOpen(false);
-                    void openExternalCitationSource(currentSource);
-                  }
-                }}
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
+            onPointerDown={cancelScheduledHoverClose}
+          >
+            {label}
+          </Button>
+        </PopoverTrigger>
+        {currentSource && currentSourceDisplay ? (
+          <PopoverContent
+            align="start"
+            sideOffset={10}
+            aria-label="Citation sources"
+            className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border-border/32 p-0 text-card-foreground"
+            onMouseEnter={handleHoverEnter}
+            onMouseLeave={handleHoverLeave}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+          >
+            <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
+              <AccessibleIconButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                label="Previous source"
+                className="size-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                disabled={sources.length <= 1}
+                onClick={() =>
+                  setActiveIndex((index) => (index - 1 + sources.length) % sources.length)
+                }
               >
-                <div className="flex items-start gap-2.5 px-3 py-2.5">
-                  <CitationFavicon
-                    source={currentSource}
-                    className="mt-0.5 size-5 shrink-0 text-[10px]"
-                  />
-                  <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
-                    <p
-                      ref={citationTitleTextRef}
-                      className="block overflow-hidden text-[0.92rem] font-semibold leading-snug text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
-                    >
-                      {currentSourceDisplay.titleLabel}
-                    </p>
-                    <p className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground">
-                      {currentSourceDisplay.displayUrl ?? currentSourceDisplay.hostLabel}
-                    </p>
-                  </div>
+                <ChevronLeftIcon data-icon="inline-start" />
+              </AccessibleIconButton>
+              <AccessibleIconButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                label="Next source"
+                className="size-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                disabled={sources.length <= 1}
+                onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+              >
+                <ChevronRightIcon data-icon="inline-start" />
+              </AccessibleIconButton>
+              <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                {activeIndex + 1}/{sources.length}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
+              className="h-auto w-full justify-start rounded-none p-0 text-left whitespace-normal hover:bg-muted/[0.06]"
+              onClick={() => {
+                setOpen(false);
+                void openExternalCitationSource(currentSource);
+              }}
+            >
+              <div className="flex items-start gap-2.5 px-3 py-2.5">
+                <CitationFavicon
+                  source={currentSource}
+                  className="mt-0.5 size-5 shrink-0 text-[10px]"
+                />
+                <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
+                  <p
+                    ref={citationTitleTextRef}
+                    className="block overflow-hidden text-[0.92rem] font-semibold leading-snug text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                  >
+                    {currentSourceDisplay.titleLabel}
+                  </p>
+                  <p className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground">
+                    {currentSourceDisplay.displayUrl ?? currentSourceDisplay.hostLabel}
+                  </p>
                 </div>
               </div>
-            </div>,
-            document.body,
-          )
-        : null}
-    </cite>
+            </Button>
+          </PopoverContent>
+        ) : null}
+      </cite>
+    </Popover>
   );
 }
 

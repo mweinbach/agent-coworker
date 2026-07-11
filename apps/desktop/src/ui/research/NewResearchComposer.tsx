@@ -184,6 +184,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
                 draft.revision,
                 error instanceof Error ? error.message : String(error),
               );
+              throw error;
             }
           },
         }}
@@ -200,7 +201,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
             disabled={submitting}
           />
 
-          <MessageComposerStatus aria-live="polite">
+          <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
             {submitting
               ? cancelling
                 ? "Cancelling research…"
@@ -240,6 +241,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
                 setResearchCreationInput(event.target.value);
               }}
               placeholder="Investigate a market, compare vendors, summarize a benchmark run, or draft a cited brief."
+              aria-label="Research request"
               rows={4}
               disabled={submitting}
             />

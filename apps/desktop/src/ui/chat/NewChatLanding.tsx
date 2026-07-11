@@ -34,6 +34,7 @@ import {
   CommandSeparator,
 } from "../../components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { isImeComposing, isPlainEnterWithoutIme } from "../../lib/keyboard";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../../lib/modelChoices";
 import { resolveNewChatLandingTarget } from "../../lib/newChatLanding";
 import {
@@ -466,9 +467,7 @@ export function NewChatLanding() {
         </div>
         <MessageComposerRoot
           className="w-full max-w-[42rem] rounded-[28px] border-border/55 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
-          fileDrop={
-            submitting ? undefined : { onFiles: (files) => void ingestAttachmentFiles(files) }
-          }
+          fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
             attachments={pendingAttachments}
@@ -485,7 +484,7 @@ export function NewChatLanding() {
               submitNewChat();
             }}
           >
-            <MessageComposerStatus aria-live="polite">
+            <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
               {submitting
                 ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
                 : readiness.result?.ready
@@ -498,7 +497,10 @@ export function NewChatLanding() {
             </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
-                <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
+                <div
+                  role="alert"
+                  className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive"
+                >
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
                   <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                     {attachmentPickerError}
@@ -516,16 +518,8 @@ export function NewChatLanding() {
                 textareaClassName="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-                  const isComposing =
-                    event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.metaKey &&
-                    !event.ctrlKey &&
-                    !event.altKey
-                  ) {
-                    if (isComposing) return;
+                  const isComposing = isImeComposing(event.nativeEvent);
+                  if (isPlainEnterWithoutIme(event)) {
                     event.preventDefault();
                     if (!canSubmitNewChat || submitting) return;
                     submitNewChat();

@@ -100,6 +100,7 @@ export function ResearchFollowUpComposer({
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder={placeholder ?? "Ask a follow-up that continues from this report…"}
+              aria-label="Research follow-up"
               rows={2}
               disabled={disabled || submitting}
             />

@@ -93,7 +93,10 @@ export function ResearchView() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {researchListError ? (
-            <div className="mb-2 rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <div
+              role="alert"
+              className="mb-2 rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            >
               {researchListError}
             </div>
           ) : null}

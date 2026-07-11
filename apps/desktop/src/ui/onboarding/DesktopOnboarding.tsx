@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { operationKey } from "../../app/store.helpers";
@@ -8,13 +9,14 @@ import {
   workspaceDisplayLabel,
 } from "../../app/workspaceDisplayTargets";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import {
   Select,
@@ -42,7 +44,6 @@ import { cn } from "../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
 import { OperationFeedback } from "../OperationFeedback";
-import { useOverlayOwner } from "../OverlayStack";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -979,54 +980,6 @@ function FirstThreadStep({
 
 // ── Main Overlay ──
 
-// ── Focus trap hook ──
-
-function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, active: boolean) {
-  useEffect(() => {
-    if (!active) return;
-    const container = containerRef.current;
-    if (!container) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Tab") return;
-      if (!container) return;
-      const focusable = container.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-
-      if (event.shiftKey) {
-        if (document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    }
-
-    container.addEventListener("keydown", handleKeyDown);
-
-    // Auto-focus the first focusable element
-    const first = container.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    if (first) {
-      // Delay to let framer-motion animation settle
-      requestAnimationFrame(() => first.focus());
-    }
-
-    return () => container.removeEventListener("keydown", handleKeyDown);
-  }, [containerRef, active]);
-}
-
 // ── Height-measuring wrapper for smooth step transitions ──
 
 function AnimatedStepContainer({
@@ -1081,8 +1034,13 @@ export function DesktopOnboarding() {
   const workspaces = useAppStore((s) => s.workspaces);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const [dismissPending, setDismissPending] = useState(false);
+  const dismissPendingRef = useRef(false);
 
   const requestDismiss = useCallback(async () => {
+    if (dismissPendingRef.current) return;
+    dismissPendingRef.current = true;
+    setDismissPending(true);
     const hasConnectedProvider =
       providerConnected.length > 0 ||
       Object.values(providerStatusByName).some(
@@ -1100,21 +1058,23 @@ export function DesktopOnboarding() {
         kind: "warning",
         defaultAction: "cancel",
       });
-      if (!confirmed) return;
+      if (!confirmed) {
+        dismissPendingRef.current = false;
+        setDismissPending(false);
+        return;
+      }
     }
     dismiss();
   }, [dismiss, providerConnected.length, providerStatusByName, workspaces.length]);
   const complete = useAppStore((s) => s.completeOnboarding);
   const newThread = useAppStore((s) => s.newThread);
-  const cardRef = useRef<HTMLDivElement>(null);
   const [completionError, setCompletionError] = useState<string | null>(null);
 
-  useFocusTrap(cardRef, visible);
-  const onboardingOwner = useOverlayOwner({
-    active: visible,
-    label: "Onboarding",
-    onDismiss: requestDismiss,
-  });
+  useEffect(() => {
+    if (visible) return;
+    dismissPendingRef.current = false;
+    setDismissPending(false);
+  }, [visible]);
 
   const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
 
@@ -1149,37 +1109,34 @@ export function DesktopOnboarding() {
   if (!visible) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Onboarding"
-      style={{ zIndex: onboardingOwner?.zIndex }}
+    <Dialog
+      open={!dismissPending}
+      onOpenChange={(open) => {
+        if (!open) void requestDismiss();
+      }}
     >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
-
-      {/* Allow native drag strip to remain clickable */}
-      <div className="app-window-drag-strip absolute top-0 left-0 right-0" aria-hidden="true" />
-
-      {/* Card */}
-      <motion.div
-        ref={cardRef}
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2 }}
-        className="app-shadow-overlay relative z-10 w-[min(92vw,520px)] rounded-xl border border-border/80 bg-card p-6"
+      <DialogContent
+        aria-label="Onboarding"
+        className="app-shadow-overlay block w-[min(92vw,520px)] max-w-none rounded-xl border-border/80 bg-card p-6 sm:max-w-none"
+        overlayClassName="bg-background/80 backdrop-blur-sm"
+        preventEditableEscapeDismissal
+        showCloseButton={false}
+        onInteractOutside={(event) => event.preventDefault()}
       >
-        <button
+        <DialogTitle className="sr-only">Onboarding</DialogTitle>
+        <DialogDescription className="sr-only">
+          Set up your workspace, model provider, and first chat.
+        </DialogDescription>
+        <AccessibleIconButton
           type="button"
-          aria-label="Close onboarding"
-          className="absolute right-3 top-3 z-20 flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          label="Close onboarding"
+          size="icon-sm"
+          variant="ghost"
+          className="absolute right-3 top-3 z-20 size-7 rounded-md text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground"
           onClick={() => void requestDismiss()}
         >
-          <span aria-hidden="true" className="text-lg leading-none">
-            ×
-          </span>
-        </button>
+          <XIcon aria-hidden="true" />
+        </AccessibleIconButton>
         <div className="mb-5 flex items-center justify-between">
           <StepIndicator current={step} />
           <span className="text-xs text-muted-foreground">
@@ -1189,7 +1146,10 @@ export function DesktopOnboarding() {
 
         <AnimatedStepContainer step={step}>
           {step === "welcome" && (
-            <WelcomeStep onContinue={() => goTo("workspace")} onDismiss={dismiss} />
+            <WelcomeStep
+              onContinue={() => goTo("workspace")}
+              onDismiss={() => void requestDismiss()}
+            />
           )}
           {step === "workspace" && (
             <WorkspaceStep onContinue={() => goTo("provider")} onBack={() => goTo("welcome")} />
@@ -1204,7 +1164,7 @@ export function DesktopOnboarding() {
             <FirstThreadStep onComplete={handleComplete} error={completionError} />
           )}
         </AnimatedStepContainer>
-      </motion.div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

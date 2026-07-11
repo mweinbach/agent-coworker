@@ -1,5 +1,5 @@
 import { NATIVE_THEME_TOKENS } from "../../src/styles/tokens/native";
-import { settleQualityPage } from "../assertions";
+import { assertNoSeriousAxeViolations, settleQualityPage } from "../assertions";
 import { expect, type QualityHarness, type QualityMode, test } from "../fixtures";
 
 const canvasCases = [
@@ -54,7 +54,9 @@ for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
       },
     });
 
-    test(`renders every Canvas kind with an opaque ${mode} surface`, async ({ quality }) => {
+    test(`renders every Canvas kind with an opaque ${mode} surface`, async ({
+      quality,
+    }, testInfo) => {
       for (const canvasCase of canvasCases) {
         const canvasWindow = await openCanvasWindow(quality, canvasCase.path);
         await expect(canvasWindow.locator("html")).toHaveAttribute(
@@ -101,6 +103,9 @@ for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
           )
           .toBe(true);
         await settleQualityPage(canvasWindow);
+        if (mode === "light" && canvasCase.kind === "markdown") {
+          await assertNoSeriousAxeViolations(canvasWindow, testInfo);
+        }
         await expect(canvasWindow).toHaveScreenshot(
           `canvas-${canvasCase.kind}-${mode satisfies QualityMode}.png`,
         );

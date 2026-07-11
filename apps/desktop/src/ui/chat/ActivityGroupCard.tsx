@@ -693,20 +693,20 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
   if (useCompactElapsedHeader) {
     return (
-      <Collapsible open={expanded} onOpenChange={handleOpenChange}>
-        <div className="flex w-full max-w-3xl items-center gap-1.5">
-          <Marker asChild variant={props.live ? "border" : "separator"}>
-            <CollapsibleTrigger className="group min-w-0 flex-1 pb-2.5 pt-1.5 outline-none before:hidden">
-              {hasUnrecoveredIssue ? (
-                <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
-              ) : null}
-              <MarkerContent
-                className={cn(
-                  "font-mono tracking-tight transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
-                  hasUnrecoveredIssue && "text-destructive/85 group-hover:text-destructive",
-                )}
-              >
-                <span role={props.live ? "status" : undefined}>
+      <>
+        <Collapsible open={expanded} onOpenChange={handleOpenChange}>
+          <div className="flex w-full max-w-3xl items-center gap-1.5">
+            <Marker asChild variant={props.live ? "border" : "separator"}>
+              <CollapsibleTrigger className="group min-w-0 flex-1 pb-2.5 pt-1.5 outline-none before:hidden">
+                {hasUnrecoveredIssue ? (
+                  <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
+                ) : null}
+                <MarkerContent
+                  className={cn(
+                    "font-mono tracking-tight transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                    hasUnrecoveredIssue && "text-destructive/85 group-hover:text-destructive",
+                  )}
+                >
                   {hasUnrecoveredIssue
                     ? displayElapsedLabel
                       ? `Couldn't finish after ${displayElapsedLabel}`
@@ -718,45 +718,55 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                       : displayElapsedLabel
                         ? `Worked for ${displayElapsedLabel}`
                         : "Worked"}
-                </span>
-              </MarkerContent>
-              <ChevronRightIcon
-                className={cn(
-                  "size-3.5 shrink-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90",
-                  hasUnrecoveredIssue ? "text-destructive/60 opacity-60" : "opacity-0",
-                )}
-              />
-            </CollapsibleTrigger>
-          </Marker>
-          {hasUnrecoveredIssue && props.onRetry ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              disabled={props.retryDisabled || retrying}
-              aria-busy={retrying || undefined}
-              onClick={() => void handleRetry()}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
-              {retrying ? "Retrying" : "Retry"}
-            </Button>
-          ) : hasUnrecoveredIssue && props.retryUnavailableReason ? (
-            <span
-              className="max-w-48 text-right text-[10px] leading-tight text-muted-foreground"
-              data-slot="activity-retry-unavailable"
-            >
-              {props.retryUnavailableReason}
-            </span>
-          ) : null}
-        </div>
-
-        <CollapsibleContent className="activity-trace-content max-w-3xl">
-          <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
-            <ActivityTimeline summary={summary} live={props.live} />
+                </MarkerContent>
+                <ChevronRightIcon
+                  className={cn(
+                    "size-3.5 shrink-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90",
+                    hasUnrecoveredIssue ? "text-destructive/60 opacity-60" : "opacity-0",
+                  )}
+                />
+              </CollapsibleTrigger>
+            </Marker>
+            {hasUnrecoveredIssue && props.onRetry ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={props.retryDisabled || retrying}
+                aria-busy={retrying || undefined}
+                onClick={() => void handleRetry()}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
+                {retrying ? "Retrying" : "Retry"}
+              </Button>
+            ) : hasUnrecoveredIssue && props.retryUnavailableReason ? (
+              <span
+                className="max-w-48 text-right text-[10px] leading-tight text-muted-foreground"
+                data-slot="activity-retry-unavailable"
+              >
+                {props.retryUnavailableReason}
+              </span>
+            ) : null}
           </div>
-        </CollapsibleContent>
-      </Collapsible>
+
+          <CollapsibleContent className="activity-trace-content max-w-3xl">
+            <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
+              <ActivityTimeline summary={summary} live={props.live} />
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+        {props.live ? (
+          <span className="sr-only" role="status" aria-live="polite">
+            Cowork is working.
+          </span>
+        ) : null}
+        {hasUnrecoveredIssue ? (
+          <span className="sr-only" role="alert">
+            Cowork could not finish this activity.
+          </span>
+        ) : null}
+      </>
     );
   }
 

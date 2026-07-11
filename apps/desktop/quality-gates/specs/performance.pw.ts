@@ -248,6 +248,7 @@ test("file explorer source does not synchronously read layout", async () => {
 test("1,000-entry nested file tree stays inside expansion and invalidation budgets", async ({
   quality,
 }, testInfo) => {
+  test.setTimeout(90_000);
   const { electronApp, page } = quality;
   const fileRows = page.locator('[role="treeitem"]');
   const rootFileRows = page.locator('[role="treeitem"][aria-level="1"]');

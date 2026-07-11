@@ -59,8 +59,57 @@ import {
 // Keep the floating control inside that fade instead of adding another gap
 // above the measured overlay height.
 const SCROLL_BUTTON_COMPOSER_INSET_PX = 28;
+const COMPLETION_ANNOUNCEMENT_DELAY_MS = 400;
+const COMPLETION_ANNOUNCEMENT_LIFETIME_MS = 4_000;
 /** Expand when within this many px of the top of the scrollable content. */
 const FEED_NEAR_TOP_PX = 160;
+
+const ResponseCompletionAnnouncement = memo(function ResponseCompletionAnnouncement({
+  streamingAssistantMessageId,
+}: {
+  streamingAssistantMessageId: string | null | undefined;
+}) {
+  const previousStreamingAssistantMessageIdRef = useRef(streamingAssistantMessageId);
+  const announcementSequenceRef = useRef(0);
+  const [announcement, setAnnouncement] = useState<{ id: number; message: string } | null>(null);
+
+  useEffect(() => {
+    const previousId = previousStreamingAssistantMessageIdRef.current;
+    previousStreamingAssistantMessageIdRef.current = streamingAssistantMessageId;
+    if (!previousId || previousId === streamingAssistantMessageId) return;
+
+    const timeout = window.setTimeout(() => {
+      announcementSequenceRef.current += 1;
+      setAnnouncement({
+        id: announcementSequenceRef.current,
+        message: "Cowork response complete.",
+      });
+    }, COMPLETION_ANNOUNCEMENT_DELAY_MS);
+    return () => window.clearTimeout(timeout);
+  }, [streamingAssistantMessageId]);
+
+  useEffect(() => {
+    if (!announcement) return;
+    const timeout = window.setTimeout(
+      () => setAnnouncement(null),
+      COMPLETION_ANNOUNCEMENT_LIFETIME_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [announcement]);
+
+  return (
+    <span
+      key={announcement?.id ?? 0}
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-slot="response-completion-announcement"
+    >
+      {announcement?.message}
+    </span>
+  );
+});
 
 export type VisibleInteraction = {
   threadId: string;
@@ -609,6 +658,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
 
   return (
     <MessageScrollerProvider key={threadId} autoScroll={false} defaultScrollPosition="start">
+      <ResponseCompletionAnnouncement streamingAssistantMessageId={streamingAssistantMessageId} />
       <TranscriptScroller
         bottomOffset={bottomOffset}
         hydrating={hydrating}

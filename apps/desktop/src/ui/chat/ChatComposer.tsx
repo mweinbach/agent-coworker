@@ -172,7 +172,10 @@ export function ChatComposer(props: {
             <MessageComposerStatus>{composerHint}</MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
-                <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
+                <div
+                  role="alert"
+                  className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive"
+                >
                   <AlertTriangleIcon className="size-3.5 shrink-0" />
                   <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                     {attachmentPickerError}

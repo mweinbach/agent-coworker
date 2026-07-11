@@ -10,7 +10,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { publishForegroundNotification, useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { isOneOffChatWorkspace } from "../../app/types";
-import { Button } from "../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../components/ui/button";
 import {
   clearDirectoryListingScope,
   confirmAction,
@@ -22,6 +22,7 @@ import {
   unwatchWorkspaceDirectory,
   watchWorkspaceDirectory,
 } from "../../lib/desktopCommands";
+import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
@@ -38,6 +39,7 @@ export type WorkspaceFileExplorerCommands = {
   isStaleDirectoryListingError: typeof isStaleDirectoryListingError;
   listDirectory: typeof listDirectory;
   onWorkspaceFileChanged: typeof onWorkspaceFileChanged;
+  showContextMenu: typeof showContextMenu;
   unwatchWorkspaceDirectory: typeof unwatchWorkspaceDirectory;
   watchWorkspaceDirectory: typeof watchWorkspaceDirectory;
 };
@@ -48,6 +50,7 @@ const DEFAULT_EXPLORER_COMMANDS: WorkspaceFileExplorerCommands = {
   isStaleDirectoryListingError,
   listDirectory,
   onWorkspaceFileChanged,
+  showContextMenu,
   unwatchWorkspaceDirectory,
   watchWorkspaceDirectory,
 };
@@ -289,11 +292,17 @@ function defaultDirectorySnapshot(): DirectorySnapshot {
 type ExplorerTreeRowViewProps = {
   row: ExplorerTreeRow;
   selected: boolean;
+  tabIndex: 0 | -1;
   onContextMenu(event: React.MouseEvent, entry: ExplorerEntry): void;
   onEntryClick(entry: ExplorerEntry): void;
+  onEntryFocus(entry: ExplorerEntry): void;
+  onEntryKeyDown(
+    event: React.KeyboardEvent,
+    row: Extract<ExplorerTreeRow, { kind: "entry" }>,
+  ): void;
   onOpenEntry(entry: ExplorerEntry): void;
   onOpenEntryMenu(entry: ExplorerEntry): void;
-  onSelectEntry(entry: ExplorerEntry): void;
+  onRowRef(path: string, element: HTMLDivElement | null): void;
   onToggleDirectory(path: string): void;
 };
 
@@ -301,11 +310,14 @@ const ExplorerTreeRowView = memo(
   function ExplorerTreeRowView({
     row,
     selected,
+    tabIndex,
     onContextMenu,
     onEntryClick,
+    onEntryFocus,
+    onEntryKeyDown,
     onOpenEntry,
     onOpenEntryMenu,
-    onSelectEntry,
+    onRowRef,
     onToggleDirectory,
   }: ExplorerTreeRowViewProps) {
     recordDesktopRenderMetric("file-explorer-row", explorerRowDomKey(row));
@@ -313,13 +325,16 @@ const ExplorerTreeRowView = memo(
       return (
         <div
           data-file-row-key={explorerRowDomKey(row)}
+          role="none"
           className={cn(
             "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
             row.status === "error" ? "text-destructive" : "text-muted-foreground",
           )}
           style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
         >
-          <span className="truncate">{row.message}</span>
+          <span className="truncate" role={row.status === "error" ? "alert" : "status"}>
+            {row.message}
+          </span>
         </div>
       );
     }
@@ -332,14 +347,15 @@ const ExplorerTreeRowView = memo(
 
     return (
       <div
+        ref={(element) => onRowRef(entry.path, element)}
         data-file-row-key={explorerRowDomKey(row)}
         role="treeitem"
-        tabIndex={0}
+        tabIndex={tabIndex}
         aria-level={depth + 1}
         aria-selected={isDirectory ? false : selected}
         aria-expanded={isDirectory ? row.expanded : undefined}
         className={cn(
-          "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
+          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-[9px] py-0.5 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
           selected
             ? "bg-accent text-accent-foreground"
             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -365,41 +381,19 @@ const ExplorerTreeRowView = memo(
             onEntryClick(entry);
           }
         }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            onOpenEntry(entry);
-            return;
-          }
-          if (event.key === " " || event.key === "Spacebar") {
-            event.preventDefault();
-            if (isDirectory) {
-              onToggleDirectory(entry.path);
-            } else {
-              onSelectEntry(entry);
-            }
-            return;
-          }
-          if (isDirectory && event.key === "ArrowRight" && !row.expanded) {
-            event.preventDefault();
-            onToggleDirectory(entry.path);
-            return;
-          }
-          if (isDirectory && event.key === "ArrowLeft" && row.expanded) {
-            event.preventDefault();
-            onToggleDirectory(entry.path);
-          }
-        }}
+        onFocus={() => onEntryFocus(entry)}
+        onKeyDown={(event) => onEntryKeyDown(event, row)}
         title={entry.path}
       >
         {isDirectory ? (
-          <Button
+          <AccessibleIconButton
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+            tabIndex={-1}
+            label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
             className={cn(
-              "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
+              "size-7 min-w-7 rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
               selected ? "hover:bg-accent-foreground/15" : "hover:bg-muted",
             )}
             data-file-explorer-control="true"
@@ -413,9 +407,9 @@ const ExplorerTreeRowView = memo(
                 row.expanded && "rotate-90",
               )}
             />
-          </Button>
+          </AccessibleIconButton>
         ) : (
-          <span className="inline-block h-[18px] w-[18px]" aria-hidden />
+          <span className="inline-block size-7" aria-hidden />
         )}
 
         {isDirectory ? (
@@ -458,13 +452,14 @@ const ExplorerTreeRowView = memo(
           </div>
         </div>
 
-        <Button
+        <AccessibleIconButton
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label={`More options for ${entry.name}`}
+          tabIndex={-1}
+          label={`More options for ${entry.name}`}
           className={cn(
-            "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
+            "size-7 min-w-7 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
             selected
               ? "opacity-100 hover:bg-accent-foreground/15"
               : "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-muted",
@@ -476,18 +471,21 @@ const ExplorerTreeRowView = memo(
             strokeWidth={1.5}
             className={cn("h-3.25 w-3.25", selected ? "text-link/80" : "text-inherit")}
           />
-        </Button>
+        </AccessibleIconButton>
       </div>
     );
   },
   (previous, next) => {
     if (
       previous.selected !== next.selected ||
+      previous.tabIndex !== next.tabIndex ||
       previous.onContextMenu !== next.onContextMenu ||
       previous.onEntryClick !== next.onEntryClick ||
+      previous.onEntryFocus !== next.onEntryFocus ||
+      previous.onEntryKeyDown !== next.onEntryKeyDown ||
       previous.onOpenEntry !== next.onOpenEntry ||
       previous.onOpenEntryMenu !== next.onOpenEntryMenu ||
-      previous.onSelectEntry !== next.onSelectEntry ||
+      previous.onRowRef !== next.onRowRef ||
       previous.onToggleDirectory !== next.onToggleDirectory ||
       previous.row.kind !== next.row.kind
     ) {
@@ -537,6 +535,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const [directoryByPath, setDirectoryByPath] = useState<Record<string, DirectorySnapshot>>({});
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [watchSupported, setWatchSupported] = useState<boolean | null>(null);
+  const [activeRowPath, setActiveRowPath] = useState<string | null>(null);
 
   const syncInFlightRef = useRef(false);
   const syncQueuedRef = useRef(false);
@@ -550,6 +549,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const directoryByPathRef = useRef<Record<string, DirectorySnapshot>>({});
   /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
   const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
+  const rowElementsRef = useRef(new Map<string, HTMLDivElement>());
   explorerActiveRef.current = explorerActive;
 
   const rootPath = useMemo(() => {
@@ -566,6 +566,31 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     () => buildExplorerRows(rootPath, expandedPaths, directoryByPath, showHiddenFiles),
     [rootPath, expandedPaths, directoryByPath, showHiddenFiles],
   );
+  const entryRows = useMemo(
+    () =>
+      treeRows.filter(
+        (row): row is Extract<ExplorerTreeRow, { kind: "entry" }> => row.kind === "entry",
+      ),
+    [treeRows],
+  );
+  const entryRowsRef = useRef(entryRows);
+  entryRowsRef.current = entryRows;
+  const rovingRowPath = useMemo(() => {
+    if (
+      activeRowPath &&
+      entryRows.some((row) => normalizeExplorerPath(row.entry.path) === activeRowPath)
+    ) {
+      return activeRowPath;
+    }
+    if (
+      selectedPath &&
+      entryRows.some((row) => normalizeExplorerPath(row.entry.path) === selectedPath)
+    ) {
+      return selectedPath;
+    }
+    const firstRow = entryRows[0];
+    return firstRow ? normalizeExplorerPath(firstRow.entry.path) : null;
+  }, [activeRowPath, entryRows, selectedPath]);
 
   const rootSnapshot = directoryByPath[rootPath];
   const rootLabel = formatPathLabel(rootPath);
@@ -778,6 +803,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     }
 
     folderLastClickRef.current = null;
+    rowElementsRef.current.clear();
+    setActiveRowPath(null);
     scopeRef.current = scope;
 
     const normalizedRoot = normalizeExplorerPath(rootPath);
@@ -975,7 +1002,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         { id: "trash", label: "Move to Trash" },
       ];
 
-      const action = await showContextMenu(items);
+      const action = await commands.showContextMenu(items);
       if (!action) return;
 
       if (action === "open") {
@@ -1023,6 +1050,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       copyPath,
       trashPath,
       refreshExpandedDirectories,
+      commands,
     ],
   );
 
@@ -1078,6 +1106,131 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       toggleDirectory(entry.path);
     },
     [handleSelectEntry, openFile, toggleDirectory, workspaceId],
+  );
+
+  const registerRowElement = useCallback((path: string, element: HTMLDivElement | null) => {
+    const normalizedPath = normalizeExplorerPath(path);
+    if (element) {
+      rowElementsRef.current.set(normalizedPath, element);
+    } else {
+      rowElementsRef.current.delete(normalizedPath);
+    }
+  }, []);
+
+  const focusEntryRow = useCallback((index: number) => {
+    const target = entryRowsRef.current[index];
+    if (!target) return;
+    const targetPath = normalizeExplorerPath(target.entry.path);
+    setActiveRowPath(targetPath);
+    requestAnimationFrame(() => rowElementsRef.current.get(targetPath)?.focus());
+  }, []);
+
+  const handleEntryFocus = useCallback((entry: ExplorerEntry) => {
+    setActiveRowPath(normalizeExplorerPath(entry.path));
+  }, []);
+
+  const handleEntryKeyDown = useCallback(
+    (event: React.KeyboardEvent, row: Extract<ExplorerTreeRow, { kind: "entry" }>) => {
+      if (isTreeRowControlTarget(event.target)) return;
+      const currentEntryRows = entryRowsRef.current;
+      const currentPath = normalizeExplorerPath(row.entry.path);
+      const currentIndex = currentEntryRows.findIndex(
+        (candidate) => normalizeExplorerPath(candidate.entry.path) === currentPath,
+      );
+      if (currentIndex < 0) return;
+
+      const focusParent = () => {
+        for (let index = currentIndex - 1; index >= 0; index -= 1) {
+          const candidate = currentEntryRows[index];
+          if (candidate && candidate.depth < row.depth) {
+            focusEntryRow(index);
+            return;
+          }
+        }
+      };
+
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          focusEntryRow(Math.min(currentIndex + 1, currentEntryRows.length - 1));
+          return;
+        case "ArrowUp":
+          event.preventDefault();
+          focusEntryRow(Math.max(currentIndex - 1, 0));
+          return;
+        case "Home":
+          event.preventDefault();
+          focusEntryRow(0);
+          return;
+        case "End":
+          event.preventDefault();
+          focusEntryRow(currentEntryRows.length - 1);
+          return;
+        case "ArrowRight":
+          if (!row.entry.isDirectory) return;
+          event.preventDefault();
+          if (!row.expanded) {
+            toggleDirectory(row.entry.path);
+            return;
+          }
+          if (currentEntryRows[currentIndex + 1]?.depth === row.depth + 1) {
+            focusEntryRow(currentIndex + 1);
+          }
+          return;
+        case "ArrowLeft":
+          event.preventDefault();
+          if (row.entry.isDirectory && row.expanded) {
+            toggleDirectory(row.entry.path);
+          } else {
+            focusParent();
+          }
+          return;
+        case "Enter":
+          event.preventDefault();
+          handleOpenEntry(row.entry);
+          return;
+        case " ":
+        case "Spacebar":
+          event.preventDefault();
+          if (row.entry.isDirectory) {
+            toggleDirectory(row.entry.path);
+          } else {
+            handleSelectEntry(row.entry);
+          }
+          return;
+        case "ContextMenu":
+          event.preventDefault();
+          void openEntryMenu(row.entry);
+          return;
+        case "F10":
+          if (!event.shiftKey) return;
+          event.preventDefault();
+          void openEntryMenu(row.entry);
+          return;
+        default:
+          break;
+      }
+
+      if (
+        event.key.length === 1 &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !isImeComposing(event.nativeEvent)
+      ) {
+        const query = event.key.toLocaleLowerCase();
+        for (let offset = 1; offset <= currentEntryRows.length; offset += 1) {
+          const index = (currentIndex + offset) % currentEntryRows.length;
+          const candidate = currentEntryRows[index];
+          if (candidate?.entry.name.toLocaleLowerCase().startsWith(query)) {
+            event.preventDefault();
+            focusEntryRow(index);
+            return;
+          }
+        }
+      }
+    },
+    [focusEntryRow, handleOpenEntry, handleSelectEntry, openEntryMenu, toggleDirectory],
   );
 
   if (!workspacePath || !rootPath) {
@@ -1138,11 +1291,20 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
         ) : (
-          <div role="tree" aria-label={`Workspace files for ${rootLabel}`} className="space-y-0.5">
+          <div
+            role="tree"
+            aria-label={`Workspace files for ${rootLabel}`}
+            className="flex flex-col gap-0.5"
+          >
             {treeRows.map((row) => (
               <ExplorerTreeRowView
                 key={explorerRowDomKey(row)}
                 row={row}
+                tabIndex={
+                  row.kind === "entry" && normalizeExplorerPath(row.entry.path) === rovingRowPath
+                    ? 0
+                    : -1
+                }
                 selected={
                   row.kind === "entry" &&
                   !row.entry.isDirectory &&
@@ -1150,9 +1312,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                 }
                 onContextMenu={handleContextMenu}
                 onEntryClick={handleEntryClick}
+                onEntryFocus={handleEntryFocus}
+                onEntryKeyDown={handleEntryKeyDown}
                 onOpenEntry={handleOpenEntry}
                 onOpenEntryMenu={openEntryMenu}
-                onSelectEntry={handleSelectEntry}
+                onRowRef={registerRowElement}
                 onToggleDirectory={toggleDirectory}
               />
             ))}

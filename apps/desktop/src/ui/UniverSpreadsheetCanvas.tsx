@@ -50,6 +50,7 @@ import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
+import { isImeComposing } from "../lib/keyboard";
 import { reportSpreadsheetBackgroundSaveFailure } from "../lib/spreadsheetSaveNotifications";
 import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
 import {
@@ -680,7 +681,11 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
   if (loading) {
     return (
-      <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] text-sm text-muted-foreground">
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] text-sm text-muted-foreground"
+      >
         <Loader2Icon className="mr-2 size-4 animate-spin" />
         Loading workbook
       </div>
@@ -690,7 +695,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   if (loadError) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] p-6">
-        <div className="flex max-w-md items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive">
+        <div
+          role="alert"
+          className="flex max-w-md items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"
+        >
           <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
           <span>{loadError}</span>
         </div>
@@ -711,7 +719,11 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           <SaveStateIcon state={saveState} />
           <span className="truncate">{statusLabel}</span>
         </div>
-        {saveError ? <span className="truncate text-xs text-destructive">{saveError}</span> : null}
+        {saveError ? (
+          <span role="alert" className="truncate text-xs text-destructive">
+            {saveError}
+          </span>
+        ) : null}
         {promptError ? (
           <span
             role="alert"
@@ -732,6 +744,12 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             className="h-8 border-border bg-[var(--surface-spreadsheet)] text-sm shadow-none"
             value={promptText}
             onChange={(event) => setPromptText(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && isImeComposing(event.nativeEvent)) {
+                event.preventDefault();
+              }
+            }}
+            aria-label="Spreadsheet prompt"
             placeholder="Ask agent about this selection..."
           />
           <Button type="submit" size="icon" className="size-8" disabled={!promptText.trim()}>

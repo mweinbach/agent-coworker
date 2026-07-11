@@ -34,11 +34,11 @@ function statusClassName(status: ResearchDetail["status"]): string {
       return "border-success/25 bg-success/10 text-foreground";
     case "running":
     case "pending":
-      return "border-primary/25 bg-primary/10 text-primary";
+      return "border-primary/25 bg-primary/10 text-foreground";
     case "cancelled":
-      return "border-warning/25 bg-warning/10 text-warning";
+      return "border-warning/25 bg-warning/10 text-foreground";
     case "failed":
-      return "border-destructive/25 bg-destructive/10 text-destructive";
+      return "border-destructive/25 bg-destructive/10 text-foreground";
     default:
       return "";
   }
@@ -146,6 +146,12 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           <div className="flex min-w-0 flex-1 basis-[26rem] flex-wrap items-center gap-x-4 gap-y-2">
             <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Badge
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                aria-label={`Research status: ${
+                  research.planPending ? "Plan ready" : statusLabel(research.status)
+                }`}
                 className={cn(
                   "shrink-0",
                   research.planPending
@@ -157,7 +163,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               </Badge>
               {running ? (
                 <>
-                  <span className="whitespace-nowrap tabular-nums text-foreground/80">
+                  <span
+                    aria-hidden="true"
+                    className="whitespace-nowrap tabular-nums text-foreground/80"
+                  >
                     {formatElapsed(elapsedMs)}
                   </span>
                   <span aria-hidden="true">·</span>
@@ -233,7 +242,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
             <div className="mx-auto flex max-w-4xl flex-col gap-6">
               {research.error ? (
-                <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                <div
+                  role="alert"
+                  className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                >
                   {research.error}
                 </div>
               ) : null}
@@ -339,7 +351,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           {sourceCount > 0 ? (
             <aside
               id={sourcesPanelId}
-              role={sourcesOverlay ? "dialog" : undefined}
               data-sources-presentation={sourcesOverlay ? "overlay" : "inline"}
               className={cn(
                 "min-h-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color,transform] ease-out",

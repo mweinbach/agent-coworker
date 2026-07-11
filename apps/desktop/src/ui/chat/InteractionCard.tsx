@@ -17,6 +17,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
+import { isEnterWithoutIme } from "../../lib/keyboard";
 import { ASK_SKIP_TOKEN } from "../../lib/wsProtocol";
 
 const ASK_QUESTION_FALLBACK = "The agent needs your input.";
@@ -159,7 +160,7 @@ export function InteractionCard(props: {
                 disabled={busy}
                 onChange={(event) => setFreeText(event.currentTarget.value)}
                 onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
+                  if (!isEnterWithoutIme(event)) return;
                   event.preventDefault();
                   submit(freeText);
                 }}

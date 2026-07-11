@@ -98,6 +98,30 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   await assertNoSeriousAxeViolations(page, testInfo);
 });
 
+test("resolves one queued interaction without disturbing its siblings", async ({ quality }) => {
+  const { page } = quality;
+  await quality.emitInteractionQueue();
+
+  const themeQuestion = page.locator('[data-interaction-id="quality-ask-theme"]');
+  const docsApproval = page.locator('[data-interaction-id="quality-approval-docs"]');
+  const reviewerQuestion = page.locator('[data-interaction-id="quality-ask-reviewer"]');
+  await expect(themeQuestion).toBeVisible();
+  await expect(docsApproval).toBeVisible();
+  await expect(reviewerQuestion).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open next chat needing input, 3 pending" }),
+  ).toBeVisible();
+
+  await themeQuestion.getByRole("button", { name: "Light", exact: true }).click();
+  await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
+  await expect(themeQuestion).toHaveCount(0);
+  await expect(docsApproval).toBeVisible();
+  await expect(reviewerQuestion).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open next chat needing input, 2 pending" }),
+  ).toBeVisible();
+});
+
 test("switches through a draft chat and restores the conversation scroll anchor", async ({
   quality,
 }) => {

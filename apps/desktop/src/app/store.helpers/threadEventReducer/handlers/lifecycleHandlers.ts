@@ -8,7 +8,7 @@ import {
   developerDiagnosticSystemLineFromSessionEvent,
   upsertAgentSummary,
 } from "../../../store.feedMapping";
-import type { ApprovalPrompt, AskPrompt, SandboxApprovalPrompt } from "../../../types";
+import type { ChatInteraction } from "../../../types";
 import {
   clearPendingThreadSteers,
   markPendingThreadSteerAccepted,
@@ -20,7 +20,44 @@ import {
 import { sortAgentSummaries } from "../../threadEventReducerContext";
 import type { HandlerDispatch, HandlerModuleContext } from "./shared";
 
-let sandboxApprovalSequence = 0;
+let interactionSequence = 0;
+
+function upsertInteraction(
+  interactions: readonly ChatInteraction[] | undefined,
+  incoming: ChatInteraction,
+): ChatInteraction[] {
+  const current = interactions ?? [];
+  const existingIndex = current.findIndex(
+    (interaction) => interaction.requestId === incoming.requestId,
+  );
+  if (existingIndex < 0) {
+    return [...current, incoming];
+  }
+  const existing = current[existingIndex];
+  if (!existing || existing.kind !== incoming.kind) {
+    return current.slice();
+  }
+
+  const replacement: ChatInteraction =
+    existing.kind === "ask" && incoming.kind === "ask"
+      ? {
+          ...incoming,
+          receivedSequence: existing.receivedSequence,
+          status: existing.status,
+          ...(existing.response !== undefined ? { response: existing.response } : {}),
+          ...(existing.error ? { error: existing.error } : {}),
+        }
+      : existing.kind === "approval" && incoming.kind === "approval"
+        ? {
+            ...incoming,
+            receivedSequence: existing.receivedSequence,
+            status: existing.status,
+            ...(existing.response !== undefined ? { response: existing.response } : {}),
+            ...(existing.error ? { error: existing.error } : {}),
+          }
+        : existing;
+  return current.map((interaction, index) => (index === existingIndex ? replacement : interaction));
+}
 
 function reasoningEffortFromProviderOptions(
   provider: unknown,
@@ -271,6 +308,10 @@ export function handleLifecycleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
+      const interactions = s.interactionsByThread[threadId];
+      const shouldExpireInteractions =
+        !evt.busy &&
+        interactions?.some((interaction) => interaction.status !== "resolved") === true;
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
@@ -283,6 +324,18 @@ export function handleLifecycleThreadEvent(
             pendingSteer: evt.busy ? rt.pendingSteer : null,
           },
         },
+        ...(shouldExpireInteractions
+          ? {
+              interactionsByThread: {
+                ...s.interactionsByThread,
+                [threadId]: (interactions ?? []).map((interaction) =>
+                  interaction.status === "resolved"
+                    ? interaction
+                    : { ...interaction, status: "resolved" as const },
+                ),
+              },
+            }
+          : {}),
       };
     });
     if (!evt.busy) {
@@ -534,51 +587,42 @@ export function handleLifecycleThreadEvent(
   }
 
   if (evt.type === "ask") {
-    const prompt: AskPrompt = {
+    const interaction: ChatInteraction = {
+      kind: "ask",
       requestId: evt.requestId,
+      receivedSequence: ++interactionSequence,
+      status: "pending",
       question: evt.question,
       options: evt.options,
     };
-    set(() => ({ promptModal: { kind: "ask", threadId, prompt } }));
+    set((state) => ({
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [threadId]: upsertInteraction(state.interactionsByThread[threadId], interaction),
+      },
+    }));
     return true;
   }
 
   if (evt.type === "approval") {
-    // Sandbox-denial escalations render inline in the chat feed (a sandbox-aware
-    // approve/deny on the running command), not the generic centered modal.
-    // Ordinary approvals (requires_manual_review) keep using the modal.
-    if (evt.reasonCode === "sandbox_denied_escalation") {
-      const prompt: SandboxApprovalPrompt = {
-        requestId: evt.requestId,
-        command: evt.command,
-        receivedSequence: ++sandboxApprovalSequence,
-        ...(evt.detail ? { detail: evt.detail } : {}),
-        ...(evt.category ? { category: evt.category } : {}),
-      };
-      set((s) => ({
-        promptModal:
-          s.promptModal?.kind === "approval" && s.promptModal.threadId === threadId
-            ? null
-            : s.promptModal,
-        sandboxApprovalsByThread: {
-          ...s.sandboxApprovalsByThread,
-          [threadId]: [
-            ...(s.sandboxApprovalsByThread[threadId] ?? []).filter(
-              (p) => p.requestId !== prompt.requestId,
-            ),
-            prompt,
-          ],
-        },
-      }));
-      return true;
-    }
-    const prompt: ApprovalPrompt = {
+    const interaction: ChatInteraction = {
+      kind: "approval",
+      approvalKind: evt.reasonCode === "sandbox_denied_escalation" ? "sandbox" : "manual",
       requestId: evt.requestId,
+      receivedSequence: ++interactionSequence,
+      status: "pending",
       command: evt.command,
       dangerous: evt.dangerous,
       reasonCode: evt.reasonCode,
+      ...(evt.detail ? { detail: evt.detail } : {}),
+      ...(evt.category ? { category: evt.category } : {}),
     };
-    set(() => ({ promptModal: { kind: "approval", threadId, prompt } }));
+    set((state) => ({
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [threadId]: upsertInteraction(state.interactionsByThread[threadId], interaction),
+      },
+    }));
     return true;
   }
 

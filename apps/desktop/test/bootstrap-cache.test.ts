@@ -497,7 +497,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     threadRuntimeById: {},
     latestTodosByThreadId: {},
     workspaceExplorerById: {},
-    promptModal: null,
+    interactionsByThread: {},
     notifications: [],
     providerStatusByName: {},
     providerStatusLastUpdatedAt: null,

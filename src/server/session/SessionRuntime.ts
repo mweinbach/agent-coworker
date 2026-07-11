@@ -723,12 +723,12 @@ export class SessionLifecycleService {
     await this.session.deleteSession(targetSessionId);
   }
 
-  handleAskResponse(requestId: string, answer: string): void {
-    this.session.handleAskResponse(requestId, answer);
+  handleAskResponse(requestId: string, answer: string): boolean {
+    return this.session.handleAskResponse(requestId, answer);
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean): void {
-    this.session.handleApprovalResponse(requestId, approved);
+  handleApprovalResponse(requestId: string, approved: boolean): boolean {
+    return this.session.handleApprovalResponse(requestId, approved);
   }
 
   async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {

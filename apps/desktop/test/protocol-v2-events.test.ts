@@ -39,6 +39,7 @@ class MockJsonRpcSocket {
       onClose?: () => void;
       onNotification?: (message: any) => void;
       onServerRequest?: (message: any) => void;
+      onServerResponse?: (message: any) => void;
     },
   ) {
     MockJsonRpcSocket.instances.push(this);
@@ -75,6 +76,15 @@ class MockJsonRpcSocket {
   requestFromServer(id: string | number, method: string, params?: unknown) {
     act(() => {
       this.opts.onServerRequest?.({ id, method, params });
+    });
+  }
+
+  respondFromServer(
+    id: string | number,
+    response: { result?: unknown; error?: { code: number; message: string; data?: unknown } },
+  ) {
+    act(() => {
+      this.opts.onServerResponse?.({ id, ...response });
     });
   }
 }
@@ -262,49 +272,46 @@ describe("desktop JSON-RPC event mapping", () => {
     requestId: string;
     method: string;
     params?: Record<string, unknown>;
-    expectedModal: Record<string, unknown>;
+    expectedInteraction: Record<string, unknown>;
     expectedResponse: Record<string, unknown>;
     answer: () => void;
   }) {
-    const { socket, requestId, method, params, expectedModal, expectedResponse, answer } = args;
-    const openedPromptRequestIds: string[] = [];
-    const unsubscribe = useAppStore.subscribe((state, prevState) => {
-      if (state.promptModal !== prevState.promptModal && state.promptModal?.threadId === threadId) {
-        openedPromptRequestIds.push(state.promptModal.prompt.requestId);
-      }
-    });
+    const { socket, requestId, method, params, expectedInteraction, expectedResponse, answer } =
+      args;
     const feedLengthBefore = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
     const notificationCountBefore = useAppStore.getState().notifications.length;
     const responseCountBefore = socket.responses.length;
 
-    try {
-      socket.requestFromServer(requestId, method, params);
-      await flushAsyncWork();
-      await flushAsyncWork();
+    socket.requestFromServer(requestId, method, params);
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-      expect(openedPromptRequestIds).toEqual([requestId]);
-      expect(useAppStore.getState().promptModal).toMatchObject(expectedModal);
-      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
-        feedLengthBefore,
-      );
-      expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
+    expect(useAppStore.getState().interactionsByThread[threadId]).toContainEqual(
+      expect.objectContaining(expectedInteraction),
+    );
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
+      feedLengthBefore,
+    );
+    expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
 
-      await act(async () => {
-        answer();
-        await Promise.resolve();
-      });
+    await act(async () => {
+      answer();
+      await Promise.resolve();
+    });
 
-      expect(socket.responses.slice(responseCountBefore)).toEqual([
-        { id: requestId, result: expectedResponse },
-      ]);
-      expect(useAppStore.getState().promptModal).toBeNull();
-      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
-        feedLengthBefore,
-      );
-      expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
-    } finally {
-      unsubscribe();
-    }
+    expect(socket.responses.slice(responseCountBefore)).toEqual([
+      { id: requestId, result: expectedResponse },
+    ]);
+    expect(
+      useAppStore
+        .getState()
+        .interactionsByThread[threadId]?.find((interaction) => interaction.requestId === requestId)
+        ?.status,
+    ).toBe("responding");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
+      feedLengthBefore,
+    );
+    expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
   }
 
   beforeEach(() => {
@@ -449,7 +456,7 @@ describe("desktop JSON-RPC event mapping", () => {
         },
         latestTodosByThreadId: {},
         workspaceExplorerById: {},
-        promptModal: null,
+        interactionsByThread: {},
         notifications: [],
         providerStatusByName: {},
         providerStatusLastUpdatedAt: null,
@@ -1214,17 +1221,307 @@ describe("desktop JSON-RPC event mapping", () => {
         question: "Continue?",
         options: ["Yes", "No"],
       },
-      expectedModal: {
+      expectedInteraction: {
         kind: "ask",
-        threadId,
-        prompt: {
-          requestId: "ask-1",
-          question: "Continue?",
-          options: ["Yes", "No"],
-        },
+        requestId: "ask-1",
+        question: "Continue?",
+        options: ["Yes", "No"],
+        status: "pending",
       },
       expectedResponse: { answer: "Yes" },
       answer: () => useAppStore.getState().answerAsk(threadId, "ask-1", "Yes"),
+    });
+  });
+
+  test("queues attributable asks and approvals per thread without overwriting or replay duplicates", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const otherThreadId = `thread-${crypto.randomUUID()}`;
+    const otherSessionId = `session-${crypto.randomUUID()}`;
+    act(() => {
+      useAppStore.setState((state) => ({
+        threads: [
+          ...state.threads,
+          {
+            id: otherThreadId,
+            workspaceId,
+            title: "Other prompt thread",
+            titleSource: "manual",
+            createdAt: "2024-01-01T00:00:03.000Z",
+            lastMessageAt: "2024-01-01T00:00:03.000Z",
+            status: "active",
+            sessionId: otherSessionId,
+            messageCount: 0,
+            lastEventSeq: 0,
+          },
+        ],
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [otherThreadId]: {
+            ...defaultThreadRuntime(),
+            connected: true,
+            wsUrl: "ws://mock",
+            sessionId: otherSessionId,
+          },
+        },
+      }));
+    });
+
+    socket.requestFromServer("ask-current", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Question for current chat?",
+    });
+    socket.requestFromServer("approval-other", "item/commandExecution/requestApproval", {
+      threadId: otherSessionId,
+      command: "rm -rf build",
+      dangerous: true,
+      reason: "requires_manual_review",
+    });
+    socket.requestFromServer("ask-other", "item/tool/requestUserInput", {
+      threadId: otherSessionId,
+      question: "Question for other chat?",
+    });
+    socket.requestFromServer("ask-current", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Question for current chat?",
+    });
+    await flushAsyncWork();
+
+    const interactions = useAppStore.getState().interactionsByThread;
+    expect(interactions[threadId]).toHaveLength(1);
+    expect(interactions[threadId]?.[0]).toMatchObject({
+      kind: "ask",
+      requestId: "ask-current",
+      status: "pending",
+    });
+    expect(interactions[otherThreadId]).toEqual([
+      expect.objectContaining({
+        kind: "approval",
+        requestId: "approval-other",
+        approvalKind: "manual",
+        status: "pending",
+      }),
+      expect.objectContaining({
+        kind: "ask",
+        requestId: "ask-other",
+        status: "pending",
+      }),
+    ]);
+
+    await act(async () => {
+      await useAppStore.getState().archiveThread(otherThreadId);
+    });
+    expect(useAppStore.getState().interactionsByThread[otherThreadId]).toHaveLength(2);
+
+    await act(async () => {
+      await useAppStore.getState().removeThread(otherThreadId);
+    });
+    expect(useAppStore.getState().interactionsByThread[otherThreadId]).toBeUndefined();
+  });
+
+  test("keeps sibling interactions, suppresses duplicate responses, and retains failed responses for retry", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    socket.requestFromServer("ask-first", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "First question?",
+    });
+    socket.requestFromServer("sandbox-second", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "curl https://example.com",
+      dangerous: true,
+      reason: "sandbox_denied_escalation",
+      category: "network",
+    });
+    await flushAsyncWork();
+
+    let firstAnswerAccepted = false;
+    let duplicateAnswerAccepted = false;
+    act(() => {
+      firstAnswerAccepted = useAppStore.getState().answerAsk(threadId, "ask-first", "Answer");
+      duplicateAnswerAccepted = useAppStore
+        .getState()
+        .answerAsk(threadId, "ask-first", "Duplicate");
+    });
+    expect(firstAnswerAccepted).toBe(true);
+    expect(duplicateAnswerAccepted).toBe(false);
+    expect(socket.responses.filter((response) => response.id === "ask-first")).toEqual([
+      { id: "ask-first", result: { answer: "Answer" } },
+    ]);
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ask-first", status: "responding" }),
+      expect.objectContaining({ requestId: "sandbox-second", status: "pending" }),
+    ]);
+
+    socket.notify("serverRequest/resolved", { threadId: sessionId, requestId: "ask-first" });
+    await flushAsyncWork();
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ask-first", status: "resolved" }),
+      expect.objectContaining({ requestId: "sandbox-second", status: "pending" }),
+    ]);
+
+    act(() => {
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
+    });
+    let disconnectedAnswerAccepted = true;
+    act(() => {
+      disconnectedAnswerAccepted = useAppStore
+        .getState()
+        .answerApproval(threadId, "sandbox-second", true);
+    });
+    expect(disconnectedAnswerAccepted).toBe(false);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[1]).toMatchObject({
+      requestId: "sandbox-second",
+      status: "failed",
+      response: true,
+    });
+
+    let retryAccepted = false;
+    act(() => {
+      RUNTIME.jsonRpcSockets.set(workspaceId, socket as never);
+      retryAccepted = useAppStore.getState().retryInteractionResponse(threadId, "sandbox-second");
+    });
+    expect(retryAccepted).toBe(true);
+    expect(socket.responses.filter((response) => response.id === "sandbox-second")).toEqual([
+      { id: "sandbox-second", result: { decision: "accept" } },
+    ]);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[1]).toMatchObject({
+      requestId: "sandbox-second",
+      status: "responding",
+      response: true,
+    });
+  });
+
+  test("routes a response conflict to the exact responding interaction and keeps retry visible", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    socket.requestFromServer("ask-conflict", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Which response should commit?",
+    });
+    socket.requestFromServer("approval-sibling", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "bun run check",
+      dangerous: false,
+      reason: "requires_manual_review",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      expect(useAppStore.getState().answerAsk(threadId, "ask-conflict", "First")).toBe(true);
+    });
+    socket.respondFromServer("ask-conflict", {
+      error: {
+        code: -32602,
+        message: "Conflicting response for resolved interaction: ask-conflict",
+        data: {
+          category: "interaction_response_conflict",
+          requestId: "ask-conflict",
+          threadId: sessionId,
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({
+        requestId: "ask-conflict",
+        status: "failed",
+        error: "Conflicting response for resolved interaction: ask-conflict",
+      }),
+      expect.objectContaining({
+        requestId: "approval-sibling",
+        status: "pending",
+      }),
+    ]);
+    expect(harness?.dom.window.document.body.textContent).toContain(
+      "Conflicting response for resolved interaction: ask-conflict",
+    );
+    expect(harness?.dom.window.document.body.textContent).toContain("Retry");
+
+    act(() => {
+      expect(useAppStore.getState().retryInteractionResponse(threadId, "ask-conflict")).toBe(true);
+    });
+    socket.notify("serverRequest/resolved", {
+      threadId: sessionId,
+      requestId: "ask-conflict",
+      response: { kind: "ask", answer: "First" },
+    });
+    await flushAsyncWork();
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ask-conflict", status: "resolved" }),
+      expect.objectContaining({ requestId: "approval-sibling", status: "pending" }),
+    ]);
+  });
+
+  test("expires every outstanding interaction when its turn ends", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    socket.requestFromServer("ask-expiring", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "This question will expire.",
+    });
+    socket.requestFromServer("approval-expiring", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "bun run check",
+      reason: "requires_manual_review",
+    });
+    await flushAsyncWork();
+
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "turn-expiring", status: "interrupted" },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ask-expiring", status: "resolved" }),
+      expect.objectContaining({ requestId: "approval-expiring", status: "resolved" }),
+    ]);
+  });
+
+  test("reconnect replay preserves a failed response for one-click retry without duplicating it", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    const requestId = "ask-reconnect-retry";
+    socket.requestFromServer(requestId, "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Retry after reconnect?",
+    });
+    await flushAsyncWork();
+
+    await act(async () => {
+      expect(useAppStore.getState().answerAsk(threadId, requestId, "Yes")).toBe(true);
+      socket.close();
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "failed",
+      response: "Yes",
+    });
+
+    socket.requestFromServer(requestId, "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Retry after reconnect?",
+    });
+    await flushAsyncWork();
+    expect(useAppStore.getState().interactionsByThread[threadId]).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "failed",
+      response: "Yes",
+    });
+
+    let retryAccepted = false;
+    act(() => {
+      RUNTIME.jsonRpcSockets.set(workspaceId, socket as never);
+      retryAccepted = useAppStore.getState().retryInteractionResponse(threadId, requestId);
+    });
+    expect(retryAccepted).toBe(true);
+    expect(socket.responses.filter((response) => response.id === requestId)).toEqual([
+      { id: requestId, result: { answer: "Yes" } },
+      { id: requestId, result: { answer: "Yes" } },
+    ]);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: "Yes",
     });
   });
 
@@ -1243,15 +1540,14 @@ describe("desktop JSON-RPC event mapping", () => {
         dangerous: true,
         reason: "requires_manual_review",
       },
-      expectedModal: {
+      expectedInteraction: {
         kind: "approval",
-        threadId,
-        prompt: {
-          requestId: "approval-1",
-          command: "rm -rf build",
-          dangerous: true,
-          reasonCode: "requires_manual_review",
-        },
+        approvalKind: "manual",
+        requestId: "approval-1",
+        command: "rm -rf build",
+        dangerous: true,
+        reasonCode: "requires_manual_review",
+        status: "pending",
       },
       expectedResponse: { decision: "accept" },
       answer: () => useAppStore.getState().answerApproval(threadId, "approval-1", true),
@@ -1276,19 +1572,20 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    // A sandbox escape is an inline, sandbox-aware card — never the centered modal.
-    expect(useAppStore.getState().promptModal).toBeNull();
-    const pending = useAppStore.getState().sandboxApprovalsByThread[threadId] ?? [];
+    const pending = useAppStore.getState().interactionsByThread[threadId] ?? [];
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
+      kind: "approval",
+      approvalKind: "sandbox",
       requestId,
       command: "curl https://example.com",
       detail: "The OS sandbox blocked network access for this command.",
       category: "network",
+      status: "pending",
     });
     // The card actually renders inline in the live ChatView tree (not just store state).
     const bodyText = harness?.dom.window.document.body.textContent ?? "";
-    expect(bodyText).toContain("Blocked by the OS sandbox");
+    expect(bodyText).toContain("Sandbox blocked");
     expect(bodyText).toContain("curl https://example.com");
 
     await act(async () => {
@@ -1296,11 +1593,15 @@ describe("desktop JSON-RPC event mapping", () => {
       await Promise.resolve();
     });
 
-    // Answering resolves on the shared socket and clears the inline prompt.
+    // Answering responds once and leaves the interaction in-flight until the server confirms it.
     expect(socket.responses.slice(responseCountBefore)).toEqual([
       { id: requestId, result: { decision: "accept" } },
     ]);
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: true,
+    });
   });
 
   test("sandbox-denied escalation stays visible and answerable after switching threads", async () => {
@@ -1354,6 +1655,10 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     const body = harness?.dom.window.document.body;
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
     expect(body?.textContent ?? "").toContain("curl https://example.com/off-thread");
     const keepBlockedButton = Array.from(body?.querySelectorAll("button") ?? []).find((button) =>
       button.textContent?.includes("Keep blocked"),
@@ -1371,89 +1676,69 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: false,
+    });
   });
 
-  test("sandbox-denied escalation clears a stale approval modal for the same thread", async () => {
+  test("sandbox and manual approvals coexist in arrival order", async () => {
     const socket = await reconnectThreadAndGetSocket();
-    act(() => {
-      useAppStore.setState({
-        promptModal: {
-          kind: "approval",
-          threadId,
-          prompt: {
-            requestId: "ordinary-approval",
-            command: "rm -rf build",
-            dangerous: true,
-            reasonCode: "requires_manual_review",
-          },
-        },
-      });
+    socket.requestFromServer("ordinary-approval", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "rm -rf build",
+      dangerous: true,
+      reason: "requires_manual_review",
     });
-
     socket.requestFromServer("sandbox-clears-modal", "item/commandExecution/requestApproval", {
       threadId: sessionId,
-      turnId: "turn-1",
-      itemId: "item-sandbox",
       command: "curl https://example.com",
       dangerous: true,
       reason: "sandbox_denied_escalation",
     });
     await flushAsyncWork();
 
-    expect(useAppStore.getState().promptModal).toBeNull();
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({
+        requestId: "ordinary-approval",
+        approvalKind: "manual",
+        status: "pending",
+      }),
+      expect.objectContaining({
+        requestId: "sandbox-clears-modal",
+        approvalKind: "sandbox",
+        status: "pending",
+      }),
+    ]);
   });
 
-  test("answering an inline sandbox approval leaves unrelated modals open", async () => {
+  test("answering a sandbox approval leaves a sibling manual approval pending", async () => {
     const socket = await reconnectThreadAndGetSocket();
     const requestId = "sandbox-unrelated-modal";
-    act(() => {
-      useAppStore.setState({
-        promptModal: {
-          kind: "approval",
-          threadId,
-          prompt: {
-            requestId: "ordinary-approval",
-            command: "rm -rf build",
-            dangerous: true,
-            reasonCode: "requires_manual_review",
-          },
-        },
-      });
+    socket.requestFromServer("ordinary-approval", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "rm -rf build",
+      dangerous: true,
+      reason: "requires_manual_review",
     });
-
     socket.requestFromServer(requestId, "item/commandExecution/requestApproval", {
       threadId: sessionId,
-      turnId: "turn-1",
-      itemId: "item-sandbox",
       command: "curl https://example.com",
       dangerous: true,
       reason: "sandbox_denied_escalation",
     });
     await flushAsyncWork();
-    act(() => {
-      useAppStore.setState({
-        promptModal: {
-          kind: "approval",
-          threadId,
-          prompt: {
-            requestId: "ordinary-approval",
-            command: "rm -rf build",
-            dangerous: true,
-            reasonCode: "requires_manual_review",
-          },
-        },
-      });
-    });
 
     await act(async () => {
       useAppStore.getState().answerApproval(threadId, requestId, false);
       await Promise.resolve();
     });
 
-    expect(useAppStore.getState().promptModal?.prompt.requestId).toBe("ordinary-approval");
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ordinary-approval", status: "pending" }),
+      expect.objectContaining({ requestId, status: "responding", response: false }),
+    ]);
   });
 
   test("dismissPrompt declines the latest inline sandbox approval", async () => {
@@ -1476,7 +1761,11 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: false,
+    });
   });
 
   test("dismissPrompt declines an off-thread inline sandbox approval", async () => {
@@ -1503,7 +1792,11 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: false,
+    });
   });
 
   test("dismissPrompt does not act on task-owned approvals from ordinary chat", async () => {
@@ -1569,7 +1862,10 @@ describe("desktop JSON-RPC event mapping", () => {
       id: requestId,
       result: { decision: "decline" },
     });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
   });
 
   test("dismissPrompt declines selected task approvals while settings overlays task", async () => {
@@ -1619,7 +1915,11 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "responding",
+      response: false,
+    });
   });
 
   test("dismissPrompt keeps task approvals hidden while settings overlays chat", async () => {
@@ -1687,7 +1987,10 @@ describe("desktop JSON-RPC event mapping", () => {
       id: requestId,
       result: { decision: "decline" },
     });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
   });
 
   for (const status of ["completed", "cancelled", "failed"] as const) {
@@ -1737,7 +2040,11 @@ describe("desktop JSON-RPC event mapping", () => {
       });
 
       expect(socket.responses).toContainEqual({ id: requestId, result: { decision: "decline" } });
-      expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+      expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+        requestId,
+        status: "responding",
+        response: false,
+      });
     });
   }
 
@@ -1831,7 +2138,10 @@ describe("desktop JSON-RPC event mapping", () => {
       id: requestId,
       result: { decision: "decline" },
     });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
 
     act(() => {
       useAppStore.setState({
@@ -1850,7 +2160,10 @@ describe("desktop JSON-RPC event mapping", () => {
       id: requestId,
       result: { decision: "decline" },
     });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
   });
 
   test("dismissPrompt declines the latest off-thread inline sandbox approval", async () => {
@@ -1943,8 +2256,15 @@ describe("desktop JSON-RPC event mapping", () => {
       id: firstRequestId,
       result: { decision: "decline" },
     });
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
-    expect(useAppStore.getState().sandboxApprovalsByThread[latestThreadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId: firstRequestId,
+      status: "pending",
+    });
+    expect(useAppStore.getState().interactionsByThread[latestThreadId]?.[0]).toMatchObject({
+      requestId: latestRequestId,
+      status: "responding",
+      response: false,
+    });
   });
 
   test("sandbox approval stays visible when the response cannot be sent", async () => {
@@ -1982,8 +2302,11 @@ describe("desktop JSON-RPC event mapping", () => {
     });
 
     expect(socket.responses).toEqual([]);
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
-    expect(useAppStore.getState().promptModal).toBeNull();
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "failed",
+      response: true,
+    });
   });
 
   test("resolved server requests clear replayed inline sandbox approvals", async () => {
@@ -1999,12 +2322,18 @@ describe("desktop JSON-RPC event mapping", () => {
       reason: "sandbox_denied_escalation",
     });
     await flushAsyncWork();
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(1);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "pending",
+    });
 
     socket.notify("serverRequest/resolved", { threadId: sessionId, requestId });
     await flushAsyncWork();
 
-    expect(useAppStore.getState().sandboxApprovalsByThread[threadId] ?? []).toHaveLength(0);
+    expect(useAppStore.getState().interactionsByThread[threadId]?.[0]).toMatchObject({
+      requestId,
+      status: "resolved",
+    });
   });
 
   test("retired shared JSON-RPC sockets do not route late notifications or server requests after a serverUrl swap", async () => {
@@ -2051,7 +2380,13 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    expect(useAppStore.getState().promptModal).toBeNull();
+    expect(
+      useAppStore
+        .getState()
+        .interactionsByThread[threadId]?.some(
+          (interaction) => interaction.requestId === "ask-stale",
+        ) ?? false,
+    ).toBe(false);
     expect(firstSocket.responses).toEqual([]);
     expect(secondSocket.responses).toEqual([]);
     expect(
@@ -2093,14 +2428,12 @@ describe("desktop JSON-RPC event mapping", () => {
         question: "Continue on replacement?",
         options: ["Yes", "No"],
       },
-      expectedModal: {
+      expectedInteraction: {
         kind: "ask",
-        threadId,
-        prompt: {
-          requestId: "ask-fresh",
-          question: "Continue on replacement?",
-          options: ["Yes", "No"],
-        },
+        requestId: "ask-fresh",
+        question: "Continue on replacement?",
+        options: ["Yes", "No"],
+        status: "pending",
       },
       expectedResponse: { answer: "Yes" },
       answer: () => useAppStore.getState().answerAsk(threadId, "ask-fresh", "Yes"),

@@ -37,7 +37,6 @@ function seedReadyState(audience: "foreground" | "background" = "foreground") {
     filePreview: null,
     lmStudioStartModal: null,
     onboardingVisible: false,
-    promptModal: null,
     workspaces: [],
     threads: [],
     notifications: [
@@ -61,7 +60,6 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
-    promptModal: null,
     view: "task",
     workspaces: [
       {
@@ -122,14 +120,19 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
         latestCheckpoint: null,
       },
     } as never,
-    sandboxApprovalsByThread: {
+    interactionsByThread: {
       "task-session-1": [
         {
+          kind: "approval",
+          approvalKind: "sandbox",
           requestId: "approval-1",
           command: "curl https://example.com",
-          reason: "The OS sandbox blocked network access for this command.",
+          dangerous: true,
+          reasonCode: "sandbox_denied_escalation",
+          detail: "The OS sandbox blocked network access for this command.",
           category: "network",
           receivedSequence: 1,
+          status: "pending",
         },
       ],
     },
@@ -194,7 +197,6 @@ function seedBusyChatState(cancelThread: () => void) {
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
-    promptModal: null,
     filePreview: null,
     view: "chat",
     workspaces: [
@@ -525,100 +527,27 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("busy run plus ask and approval dialogs dismisses one prompt without stopping", async () => {
+  test("queued asks ignore composing, editable, and bare Escape until explicitly answered", async () => {
     const harness = setupJsdom();
     const cancelThread = mock(() => {});
-    const answerAsk = mock(() => {
-      useAppStore.setState({ promptModal: null });
-    });
-    const dismissPrompt = mock(() => {
-      useAppStore.setState({ promptModal: null });
-    });
+    const answerAsk = mock(() => true);
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
       seedBusyChatState(cancelThread);
       useAppStore.setState({
         answerAsk,
-        dismissPrompt,
-        promptModal: {
-          kind: "ask",
-          threadId: "chat-session-1",
-          prompt: {
-            requestId: "ask-1",
-            question: "Continue?",
-            options: ["Yes", "No"],
-          },
-        },
-      } as never);
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      root = createRoot(container);
-
-      await act(async () => root?.render(createElement(App)));
-      await act(async () => {
-        harness.dom.window.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", {
-            bubbles: true,
-            cancelable: true,
-            key: "Escape",
-          }),
-        );
-      });
-      expect(answerAsk).toHaveBeenCalledWith("chat-session-1", "ask-1", "[skipped]");
-
-      await act(async () => {
-        useAppStore.setState({
-          promptModal: {
-            kind: "approval",
-            threadId: "chat-session-1",
-            prompt: {
-              requestId: "approval-1",
-              command: "bun test",
-              dangerous: false,
-              reasonCode: "requires_manual_review",
+        interactionsByThread: {
+          "chat-session-1": [
+            {
+              kind: "ask",
+              requestId: "ask-editable",
+              receivedSequence: 1,
+              status: "pending",
+              question: "Continue editing?",
+              options: [],
             },
-          },
-        } as never);
-      });
-      await act(async () => {
-        harness.dom.window.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", {
-            bubbles: true,
-            cancelable: true,
-            key: "Escape",
-          }),
-        );
-      });
-
-      expect(dismissPrompt).toHaveBeenCalledTimes(1);
-      expect(cancelThread).not.toHaveBeenCalled();
-    } finally {
-      if (root) await act(async () => root?.unmount());
-      harness.restore();
-    }
-  });
-
-  test("composing Escape in the Radix ask input never submits skip", async () => {
-    const harness = setupJsdom();
-    const cancelThread = mock(() => {});
-    const answerAsk = mock(() => {
-      useAppStore.setState({ promptModal: null });
-    });
-    let root: ReturnType<typeof createRoot> | null = null;
-
-    try {
-      seedBusyChatState(cancelThread);
-      useAppStore.setState({
-        answerAsk,
-        promptModal: {
-          kind: "ask",
-          threadId: "chat-session-1",
-          prompt: {
-            requestId: "ask-ime",
-            question: "Continue composing?",
-            options: [],
-          },
+          ],
         },
       } as never);
       const container = harness.dom.window.document.getElementById("root");
@@ -626,85 +555,23 @@ describe("app window-mode notification routing", () => {
       root = createRoot(container);
 
       await act(async () => root?.render(createElement(App)));
-      const input = harness.dom.window.document.querySelector('input[aria-label="Custom answer"]');
+      const input = harness.dom.window.document.querySelector('input[aria-label="Answer"]');
       if (!(input instanceof harness.dom.window.HTMLInputElement)) {
-        throw new Error("missing ask input");
+        throw new Error("missing queued ask input");
       }
       input.focus();
-      const composingEscape = new harness.dom.window.KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Escape",
-      });
-      Object.defineProperty(composingEscape, "isComposing", { value: true });
 
-      await act(async () => {
-        input.dispatchEvent(composingEscape);
-      });
-
-      expect(composingEscape.defaultPrevented).toBe(true);
-      expect(answerAsk).not.toHaveBeenCalled();
-      expect(
-        harness.dom.window.document.querySelector(
-          '[data-slot="dialog-content"][data-state="open"]',
-        ),
-      ).not.toBeNull();
-      expect(cancelThread).not.toHaveBeenCalled();
-    } finally {
-      if (root) await act(async () => root?.unmount());
-      harness.restore();
-    }
-  });
-
-  test("editable Escape is consumed before Radix and a later bare Escape skips once", async () => {
-    const harness = setupJsdom();
-    const cancelThread = mock(() => {});
-    const answerAsk = mock(() => {
-      useAppStore.setState({ promptModal: null });
-    });
-    let root: ReturnType<typeof createRoot> | null = null;
-
-    try {
-      seedBusyChatState(cancelThread);
-      useAppStore.setState({
-        answerAsk,
-        promptModal: {
-          kind: "ask",
-          threadId: "chat-session-1",
-          prompt: {
-            requestId: "ask-editable",
-            question: "Continue editing?",
-            options: [],
-          },
-        },
-      } as never);
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      root = createRoot(container);
-
-      await act(async () => root?.render(createElement(App)));
-      const input = harness.dom.window.document.querySelector('input[aria-label="Custom answer"]');
-      if (!(input instanceof harness.dom.window.HTMLInputElement)) {
-        throw new Error("missing ask input");
+      for (const isComposing of [true, false]) {
+        const editableEscape = new harness.dom.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Escape",
+        });
+        Object.defineProperty(editableEscape, "isComposing", { value: isComposing });
+        await act(async () => {
+          input.dispatchEvent(editableEscape);
+        });
       }
-      input.focus();
-      const editableEscape = new harness.dom.window.KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Escape",
-      });
-
-      await act(async () => {
-        input.dispatchEvent(editableEscape);
-      });
-
-      expect(editableEscape.defaultPrevented).toBe(true);
-      expect(answerAsk).not.toHaveBeenCalled();
-      expect(
-        harness.dom.window.document.querySelector(
-          '[data-slot="dialog-content"][data-state="open"]',
-        ),
-      ).not.toBeNull();
 
       input.blur();
       await act(async () => {
@@ -717,9 +584,17 @@ describe("app window-mode notification routing", () => {
         );
       });
 
+      expect(answerAsk).not.toHaveBeenCalled();
+      expect(cancelThread).not.toHaveBeenCalled();
+      const skip = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Skip",
+      );
+      if (!skip) throw new Error("missing queued ask Skip action");
+      await act(async () => {
+        skip.click();
+      });
       expect(answerAsk).toHaveBeenCalledTimes(1);
       expect(answerAsk).toHaveBeenCalledWith("chat-session-1", "ask-editable", "[skipped]");
-      expect(cancelThread).not.toHaveBeenCalled();
     } finally {
       if (root) await act(async () => root?.unmount());
       harness.restore();
@@ -811,7 +686,7 @@ describe("app window-mode notification routing", () => {
     try {
       seedTerminalTaskApprovalState(() => {});
       useAppStore.setState({
-        sandboxApprovalsByThread: {},
+        interactionsByThread: {},
         threadRuntimeById: {
           "task-session-1": {
             wsUrl: null,
@@ -905,9 +780,13 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("Escape with an approval dialog closes just the dialog, not settings", async () => {
+  test("Escape honors composing settings overlays before closing settings", async () => {
     const harness = setupJsdom();
     const closeSettings = mock(() => {});
+    const closeFilePreview = mock(async () => {
+      useAppStore.setState({ filePreview: null });
+      return true;
+    });
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
@@ -915,17 +794,10 @@ describe("app window-mode notification routing", () => {
       useAppStore.setState({
         view: "settings",
         lastNonSettingsView: "chat",
+        settingsPage: "models",
         closeSettings,
-        promptModal: {
-          kind: "approval",
-          threadId: "thread-1",
-          prompt: {
-            requestId: "approval-1",
-            command: "bun test",
-            dangerous: false,
-            reasonCode: "requires_manual_review",
-          },
-        },
+        filePreview: { path: "/tmp/settings-overlay-test.txt" },
+        closeFilePreview,
       } as never);
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -941,23 +813,48 @@ describe("app window-mode notification routing", () => {
             harness.dom.window.requestAnimationFrame(() => resolve());
           }),
       );
-      const approvalDialog = harness.dom.window.document.querySelector(
+      const settingsDialog = harness.dom.window.document.querySelector(
         '[data-slot="dialog-content"][data-state="open"]',
       );
-      if (!(approvalDialog instanceof harness.dom.window.HTMLElement)) {
-        throw new Error("missing approval dialog");
+      if (!(settingsDialog instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing settings dialog");
       }
+      const composingEscape = new harness.dom.window.KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+      });
+      Object.defineProperty(composingEscape, "isComposing", { value: true });
       await act(async () => {
-        approvalDialog.dispatchEvent(
+        settingsDialog.dispatchEvent(composingEscape);
+      });
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).not.toBeNull();
+      expect(closeSettings).not.toHaveBeenCalled();
+      expect(closeFilePreview).not.toHaveBeenCalled();
+
+      await act(async () => {
+        settingsDialog.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", {
             bubbles: true,
             cancelable: true,
             key: "Escape",
           }),
         );
+        await new Promise<void>((resolve) => {
+          harness.dom.window.requestAnimationFrame(() => resolve());
+        });
       });
-      expect(useAppStore.getState().promptModal).toBeNull();
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).toBeNull();
       expect(closeSettings).not.toHaveBeenCalled();
+      expect(closeFilePreview).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         harness.dom.window.dispatchEvent(

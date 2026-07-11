@@ -526,6 +526,22 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
+Server-initiated interactions use JSON-RPC requests: `item/tool/requestUserInput` for asks and
+`item/commandExecution/requestApproval` for approvals. Each request is independently identified by
+its thread and request ID. Pending interactions replay in their original arrival order after
+`thread/resume`, with the same request IDs; replay does not collapse or replace sibling requests.
+Clients should disable an interaction's response controls after the first send, but keep the item
+until the server emits `serverRequest/resolved`. A local send failure remains retryable with the
+same response, while an invalid response remains pending and may be corrected. The server journals
+each accepted response as a bounded receipt containing the request ID and canonical ask/approval
+result. For five minutes (up to 128 retained receipts), `thread/resume` replays
+`serverRequest/resolved`, including its `response`, so an acknowledgement lost during disconnect
+cannot leave the interaction stuck. Repeating the same response returns that prior resolution;
+reusing the request ID with a different response returns `-32602` with
+`error.data.category: "interaction_response_conflict"` and never changes the committed result. A
+terminal `turn/completed` notification expires any requests that remain outstanding for that turn,
+including requests ended by cancellation or the server-side prompt timeout.
+
 `cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, `cowork/plugins/delete`, `cowork/plugins/checkUpdate`, and `cowork/plugins/update` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
 
 A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>"` on plugin and standalone skill entries. Installed marketplace copies report `installedSourceHash`, `latestSourceHash`, and `updateAvailable` when Cowork can compare the stored install hash with the latest marketplace hash. Updates stay opt-in: clients should offer `cowork/plugins/update` or `cowork/skills/installation/update` only when the catalog or explicit check says an update is available.
@@ -890,6 +906,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice. The result includes `replayHealth: { trusted, snapshotRequired, reason, tailSeq, failedWriteCount, droppedEventCount }`; when `snapshotRequired` is true, clients must treat the stream as discontinuous and call `thread/read` to refresh `coworkSnapshot`.
+- Recent `serverRequest/resolved` notifications replay independently of `afterSeq` for the bounded response-receipt horizon. Their optional `response` is `{ kind: "ask", answer }` or `{ kind: "approval", approved }`; clients may use the request ID alone to settle the exact interaction.
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.

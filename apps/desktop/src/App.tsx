@@ -47,7 +47,6 @@ import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { isEditableEscapeTarget, OverlayStackProvider, useOverlayStack } from "./ui/OverlayStack";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
-import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 import { TranscriptDeliveryRecovery } from "./ui/TranscriptDeliveryRecovery";
@@ -733,7 +732,6 @@ function AppContent() {
           bootstrapLoading={bootstrapPhase === "loading"}
         />
       )}
-      <PromptModal />
       <LmStudioStartDialog />
       {windowMode === "main" ? <FilePreviewModal /> : null}
       {windowMode === "main" ? (

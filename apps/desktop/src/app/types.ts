@@ -620,37 +620,34 @@ export type HydratedTranscriptSnapshot = {
   lastTurnUsage: TurnUsageSnapshot | null;
 };
 
-export type AskPrompt = {
+export type InteractionStatus = "pending" | "responding" | "failed" | "resolved";
+
+type InteractionBase = {
   requestId: string;
-  question: string;
-  options?: string[];
+  receivedSequence: number;
+  status: InteractionStatus;
+  error?: string;
 };
 
-export type ApprovalPrompt = {
-  requestId: string;
+export type AskInteraction = InteractionBase & {
+  kind: "ask";
+  question: string;
+  options?: string[];
+  response?: string;
+};
+
+export type ApprovalInteraction = InteractionBase & {
+  kind: "approval";
+  approvalKind: "manual" | "sandbox";
   command: string;
   dangerous: boolean;
   reasonCode: ApprovalRiskCode;
-};
-
-/**
- * A pending sandbox-denial escalation rendered inline in the chat feed (not the
- * modal): the OS sandbox blocked a command and the agent is asking whether to
- * re-run it with full access. `detail`/`category` come from the harness so the
- * inline card can explain why the command was blocked.
- */
-export type SandboxApprovalPrompt = {
-  requestId: string;
-  command: string;
-  receivedSequence?: number;
   detail?: string;
   category?: "filesystem" | "network";
+  response?: boolean;
 };
 
-export type PromptModalState =
-  | { kind: "ask"; threadId: string; prompt: AskPrompt }
-  | { kind: "approval"; threadId: string; prompt: ApprovalPrompt }
-  | null;
+export type ChatInteraction = AskInteraction | ApprovalInteraction;
 
 /**
  * Modal offering to start a local LM Studio server after `turn/start` was

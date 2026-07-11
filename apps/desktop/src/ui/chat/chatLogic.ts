@@ -137,7 +137,7 @@ export function shouldShowReconnectBanner(opts: {
 
 export function getComposerSubmitState(opts: {
   busy: boolean;
-  hasPromptModal: boolean;
+  hasBlockingOverlay: boolean;
   composerText: string;
   hasPendingAttachments: boolean;
   pendingAttachmentSignature: string;
@@ -165,7 +165,7 @@ export function getComposerSubmitState(opts: {
   if (opts.busy && !hasPendingInput) {
     return {
       status: "streaming",
-      disabled: opts.hasPromptModal || !opts.sessionId || opts.threadStatus !== "active",
+      disabled: opts.hasBlockingOverlay || !opts.sessionId || opts.threadStatus !== "active",
       mode: "send",
     };
   }
@@ -187,7 +187,7 @@ export function getComposerSubmitState(opts: {
           ? "steer-ready"
           : "send",
     disabled:
-      opts.hasPromptModal ||
+      opts.hasBlockingOverlay ||
       !hasPendingInput ||
       (steerPending && samePendingAttachments) ||
       (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),

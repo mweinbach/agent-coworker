@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import type { TaskArtifactDetail, TaskQuestion, TaskRecord } from "../../../src/shared/tasks";
 import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { createTaskActions, type TaskActionDependencies } from "../src/app/store.actions/tasks";
-import type { SandboxApprovalPrompt } from "../src/app/types";
+import type { ChatInteraction } from "../src/app/types";
 import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
@@ -171,13 +171,18 @@ function artifactDetail(): TaskArtifactDetail {
   };
 }
 
-function sandboxApproval(requestId: string, command: string): SandboxApprovalPrompt {
+function sandboxApproval(requestId: string, command: string): ChatInteraction {
   return {
+    kind: "approval",
+    approvalKind: "sandbox",
     requestId,
     command,
-    reason: "The command needs access outside the workspace sandbox.",
+    dangerous: true,
+    reasonCode: "sandbox_denied_escalation",
+    detail: "The command needs access outside the workspace sandbox.",
     category: "filesystem",
     receivedSequence: 1,
+    status: "pending",
   };
 }
 
@@ -1773,7 +1778,7 @@ describe("desktop task mode UI", () => {
               taskThreadId: "task-thread-2",
             },
           ],
-          sandboxApprovalsByThread: {
+          interactionsByThread: {
             "chat-session-1": [sandboxApproval("chat-approval", "echo ordinary-chat")],
             "task-session-2": [sandboxApproval("task-approval", "echo task-only")],
           },

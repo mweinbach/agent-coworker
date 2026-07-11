@@ -99,6 +99,7 @@ type QualityMainControl = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): QualityDeltaBurstDescriptor;
+  emitInteractionQueue(): void;
   emitLongTranscript(count: number, runId: number): string;
   emitStreamingActivity(): void;
   getExternalNetworkProofUrl(): string;
@@ -196,6 +197,9 @@ globalThis.__coworkQualityGateMain = {
     emitCompletion();
   },
   emitDeltaBurst: (count, runId, path) => emitDeltaBurst(count, runId, path),
+  emitInteractionQueue: () => {
+    emitInteractionQueue();
+  },
   emitLongTranscript: (count, runId) => emitLongTranscript(count, runId),
   emitStreamingActivity: () => {
     emitStreamingActivity();
@@ -603,6 +607,36 @@ function sendProjectedItem(
     threadId: PROJECT_THREAD_ID,
     turnId,
     item,
+  });
+}
+
+function emitInteractionQueue(): void {
+  sendServerMessage({
+    id: "quality-ask-theme",
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: PROJECT_THREAD_ID,
+      question: "Which theme should the release walkthrough use?",
+      options: ["Light", "Dark"],
+    },
+  });
+  sendServerMessage({
+    id: "quality-approval-docs",
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: PROJECT_THREAD_ID,
+      command: "bun run docs:check",
+      dangerous: false,
+      reason: "requires_manual_review",
+    },
+  });
+  sendServerMessage({
+    id: "quality-ask-reviewer",
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: PROJECT_THREAD_ID,
+      question: "Who should review the release notes?",
+    },
   });
 }
 

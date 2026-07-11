@@ -63,6 +63,7 @@ function createFeedHarness(threadIds: string[]) {
       ]),
     ),
     latestTodosByThreadId: {},
+    interactionsByThread: {},
     notifications: [],
     workspaceExplorerRefreshById: {},
     refreshWorkspaceFiles: async () => {},

@@ -111,7 +111,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
     threadRuntimeById: {},
     latestTodosByThreadId: {},
     workspaceExplorerById: {},
-    promptModal: null,
+    interactionsByThread: {},
     notifications: [],
     providerStatusByName: {},
     providerStatusLastUpdatedAt: null,
@@ -250,6 +250,81 @@ describe("desktop sidebar", () => {
       harness.restore();
     }
   });
+
+  test.serial(
+    "counts pending interactions per chat and opens the next chat needing input",
+    async () => {
+      const harness = setupSidebarJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+      const selectThread = mock(async () => {});
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+        await act(async () => {
+          resetAppStore({
+            workspaces: [makeWorkspace()],
+            threads: makeThreads(2),
+            selectedWorkspaceId: "ws-1",
+            selectedThreadId: "thread-1",
+            selectThread,
+            interactionsByThread: {
+              "thread-1": [
+                {
+                  kind: "ask",
+                  requestId: "ask-1",
+                  question: "First?",
+                  receivedSequence: 1,
+                  status: "pending",
+                },
+              ],
+              "thread-2": [
+                {
+                  kind: "approval",
+                  approvalKind: "manual",
+                  requestId: "approval-2",
+                  command: "rm -rf build",
+                  dangerous: true,
+                  reasonCode: "requires_manual_review",
+                  receivedSequence: 2,
+                  status: "pending",
+                },
+                {
+                  kind: "ask",
+                  requestId: "ask-3",
+                  question: "Second?",
+                  receivedSequence: 3,
+                  status: "failed",
+                  response: "Retry me",
+                },
+              ],
+            },
+          });
+          root.render(createElement(Sidebar));
+        });
+
+        expect(container.querySelector('[aria-label="1 pending interaction"]')).not.toBeNull();
+        expect(container.querySelector('[aria-label="2 pending interactions"]')).not.toBeNull();
+        const inboxButton = container.querySelector(
+          '[aria-label="Open next chat needing input, 3 pending"]',
+        ) as HTMLButtonElement | null;
+        expect(inboxButton?.textContent).toContain("Needs input");
+        expect(inboxButton?.textContent).toContain("3");
+
+        await act(async () => {
+          inboxButton?.click();
+          await Promise.resolve();
+        });
+        expect(selectThread).toHaveBeenCalledWith("thread-2");
+      } finally {
+        if (root) {
+          await act(async () => root?.unmount());
+        }
+        harness.restore();
+      }
+    },
+  );
 
   test.serial(
     "expands the selected workspace and caps the compact visible thread list",

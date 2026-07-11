@@ -1,8 +1,10 @@
 import { ArchiveIcon, ClockIcon, RotateCcwIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { countOutstandingInteractions } from "../../../app/interactionQueue";
 import { useAppStore } from "../../../app/store";
 import { isStandardChatThread } from "../../../app/threadFilters";
 import { workspaceLabelForThread } from "../../../app/workspaceDisplayTargets";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import {
@@ -32,6 +34,7 @@ export function ArchivedChatsPage() {
   const threads = useAppStore((s) => s.threads);
   const workspaces = useAppStore((s) => s.workspaces);
   const desktopSettings = useAppStore((s) => s.desktopSettings);
+  const interactionsByThread = useAppStore((s) => s.interactionsByThread);
   const restoreThread = useAppStore((s) => s.restoreThread);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const setArchivedChatsAutoDeleteDays = useAppStore((s) => s.setArchivedChatsAutoDeleteDays);
@@ -137,6 +140,9 @@ export function ArchivedChatsPage() {
             </div>
           ) : (
             filteredArchivedThreads.map((thread) => {
+              const interactionCount = countOutstandingInteractions(
+                interactionsByThread[thread.id],
+              );
               const wsName = workspaceLabelForThread(
                 workspaces,
                 thread.workspaceId,
@@ -145,7 +151,14 @@ export function ArchivedChatsPage() {
               return (
                 <SettingsRow
                   key={thread.id}
-                  title={<span className="truncate">{thread.title || "New chat"}</span>}
+                  title={
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{thread.title || "New chat"}</span>
+                      {interactionCount > 0 ? (
+                        <Badge variant="secondary">Needs input · {interactionCount}</Badge>
+                      ) : null}
+                    </span>
+                  }
                   description={
                     <span className="flex items-center gap-2.5">
                       <span>{wsName}</span>

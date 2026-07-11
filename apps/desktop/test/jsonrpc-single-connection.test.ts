@@ -525,7 +525,7 @@ describe("desktop JSON-RPC single connection path", () => {
       threadRuntimeById: {},
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
-      promptModal: null,
+      interactionsByThread: {},
       lmStudioStartModal: null,
       refreshProviderStatus: defaultRefreshProviderStatus,
       notifications: [],

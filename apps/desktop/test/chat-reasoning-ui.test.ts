@@ -266,7 +266,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: true,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -280,7 +280,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: true,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -294,7 +294,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: true,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "tighten scope",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -308,7 +308,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: true,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "tighten scope",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -327,7 +327,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: false,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -341,7 +341,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: false,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: true,
         pendingAttachmentSignature: "sig-1",
@@ -355,7 +355,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: true,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: true,
         pendingAttachmentSignature: "sig-1",
@@ -374,7 +374,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: false,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",
@@ -393,7 +393,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(
       getComposerSubmitState({
         busy: false,
-        hasPromptModal: false,
+        hasBlockingOverlay: false,
         composerText: "follow-up",
         hasPendingAttachments: false,
         pendingAttachmentSignature: "",

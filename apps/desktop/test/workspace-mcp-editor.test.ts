@@ -247,7 +247,7 @@ describe("workspace MCP editor flow", () => {
         threadRuntimeById: {},
         latestTodosByThreadId: {},
         workspaceExplorerById: {},
-        promptModal: null,
+        interactionsByThread: {},
         notifications: [],
         providerStatusByName: {},
         providerStatusLastUpdatedAt: null,

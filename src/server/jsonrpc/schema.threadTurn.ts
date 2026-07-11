@@ -9,6 +9,7 @@ import { projectedItemSchema } from "../../shared/projectedItems";
 import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import { MAX_TOOL_RETRY_TARGETS } from "../../shared/toolRetry";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
+import { serverRequestResponseSchema } from "./serverRequestReceipts";
 
 export const jsonRpcThreadSchema = z
   .object({
@@ -258,6 +259,7 @@ export const jsonRpcThreadTurnNotificationSchemas = {
     .object({
       threadId: nonEmptyTrimmedStringSchema,
       requestId: nonEmptyTrimmedStringSchema,
+      response: serverRequestResponseSchema.optional(),
     })
     .strict(),
 } as const;

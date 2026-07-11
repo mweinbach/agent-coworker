@@ -2,6 +2,7 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -22,6 +23,7 @@ import {
 } from "../../../lib/modelChoices";
 import { displayProviderName } from "../../../lib/providerDisplayNames";
 import type { ProviderName } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 
 type ManageModelsDialogProps = {
   provider: ProviderName | null;
@@ -34,6 +36,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   const resetProviderModelPreferences = useAppStore((s) => s.resetProviderModelPreferences);
   const addCustomProviderModel = useAppStore((s) => s.addCustomProviderModel);
   const deleteCustomProviderModel = useAppStore((s) => s.deleteCustomProviderModel);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const [search, setSearch] = useState("");
   const [customDraft, setCustomDraft] = useState("");
@@ -101,6 +104,15 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     (model) => pendingById[model.id] ?? isCatalogModelEnabled(model),
   ).length;
   const canUseCustomModels = supportsCustomModelIds(provider);
+  const normalizedCustomDraft = customDraft.trim();
+  const addOperation =
+    operationsByKey[
+      operationKey("provider", `model-add:${normalizedCustomDraft || "missing"}`, provider)
+    ];
+  const resetOperation = operationsByKey[operationKey("provider", "models-reset", provider)];
+  const addPending = addOperation?.status === "pending";
+  const resetPending = resetOperation?.status === "pending";
+  const modelMutationPending = Object.keys(pendingById).length > 0;
 
   const isModelChecked = (modelId: string, fallback: boolean) => pendingById[modelId] ?? fallback;
 
@@ -113,6 +125,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   };
 
   const toggleModel = (modelId: string, enabled: boolean) => {
+    if (Object.hasOwn(pendingById, modelId)) return;
     setPendingById((s) => ({ ...s, [modelId]: enabled }));
     // The response carries the refreshed catalog, so once the call settles the
     // optimistic entry is stale either way (applied, rejected, or overridden).
@@ -122,7 +135,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   };
 
   const setAllVisible = (enabled: boolean) => {
-    if (visibleModels.length === 0) return;
+    if (visibleModels.length === 0 || modelMutationPending) return;
     const modelIds = visibleModels.map((model) => model.id);
     setPendingById((s) => ({
       ...s,
@@ -137,6 +150,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
   };
 
   const resetToDefaults = () => {
+    if (resetPending || modelMutationPending) return;
     // Reset discards local intent, so clear optimistic state immediately;
     // otherwise a still-pending toggle would survive the reconcile and show a
     // stale checkbox after the server restores defaults.
@@ -144,19 +158,26 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
     void resetProviderModelPreferences(provider);
   };
 
-  const submitCustomModel = () => {
+  const submitCustomModel = async () => {
     const modelId = customDraft.trim();
-    if (!modelId) return;
-    setCustomDraft("");
-    void addCustomProviderModel(provider, modelId).then((added) => {
-      if (added) return;
-      setCustomDraft((current) => (current === "" ? modelId : current));
-    });
+    if (!modelId || addPending) return;
+    const added = await addCustomProviderModel(provider, modelId);
+    if (added.ok) {
+      setCustomDraft((current) => (current.trim() === modelId ? "" : current));
+    }
   };
 
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-2xl">
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !addPending) onOpenChange(false);
+      }}
+    >
+      <DialogContent
+        aria-busy={addPending}
+        className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-2xl"
+      >
         <DialogHeader className="border-b border-border/50 px-6 py-4">
           <DialogTitle>Manage {providerLabel} models</DialogTitle>
           <DialogDescription>
@@ -173,14 +194,32 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
             onChange={(event) => setSearch(event.currentTarget.value)}
             aria-label={`Search ${providerLabel} models`}
           />
-          <Button type="button" variant="outline" size="sm" onClick={() => setAllVisible(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={modelMutationPending || resetPending}
+            onClick={() => setAllVisible(true)}
+          >
             Enable all
           </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => setAllVisible(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={modelMutationPending || resetPending}
+            onClick={() => setAllVisible(false)}
+          >
             Disable all
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={resetToDefaults}>
-            Reset to defaults
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={modelMutationPending || resetPending}
+            onClick={resetToDefaults}
+          >
+            {resetPending ? "Resetting..." : "Reset to defaults"}
           </Button>
         </div>
 
@@ -194,6 +233,9 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
               {visibleModels.map((model) => {
                 const custom = isCustomCatalogModelEntry(model);
                 const checked = isModelChecked(model.id, isCatalogModelEnabled(model));
+                const togglePending = Object.hasOwn(pendingById, model.id);
+                const deleteOperation =
+                  operationsByKey[operationKey("provider", `model-delete:${model.id}`, provider)];
                 return (
                   <div
                     key={model.id}
@@ -201,6 +243,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
                   >
                     <Checkbox
                       checked={checked}
+                      disabled={togglePending}
                       onCheckedChange={(next) => toggleModel(model.id, next === true)}
                       aria-label={`${checked ? "Disable" : "Enable"} ${model.id}`}
                     />
@@ -226,6 +269,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
                         size="icon"
                         className="size-6 shrink-0 rounded-sm text-muted-foreground hover:text-destructive"
                         aria-label={`Remove custom model ${model.id}`}
+                        disabled={deleteOperation?.status === "pending"}
                         onClick={() => void deleteCustomProviderModel(provider, model.id)}
                       >
                         <Trash2Icon className="size-3" aria-hidden />
@@ -246,19 +290,21 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
               value={customDraft}
               onChange={(event) => setCustomDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && customDraft.trim()) submitCustomModel();
+                if (event.key === "Enter" && customDraft.trim()) void submitCustomModel();
               }}
+              disabled={addPending}
               aria-label={`${providerLabel} custom model ID`}
             />
             <Button
               type="button"
               variant="outline"
-              disabled={!customDraft.trim()}
-              onClick={submitCustomModel}
+              disabled={!customDraft.trim() || addPending}
+              onClick={() => void submitCustomModel()}
             >
               <PlusIcon data-icon="inline-start" />
-              Add
+              {addPending ? "Adding..." : "Add"}
             </Button>
+            <OperationFeedback operation={addOperation} className="basis-full" />
           </div>
         ) : null}
       </DialogContent>

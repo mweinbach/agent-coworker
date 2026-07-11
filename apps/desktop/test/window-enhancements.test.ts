@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { BrowserWindow } from "electron";
-
 import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
@@ -8,6 +7,8 @@ import {
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
 } from "../electron/services/windowEnhancements";
+import { CANVAS_SPREADSHEET_COLORS, getCanvasCaptionSymbolTone } from "../src/lib/canvasAppearance";
+import { getNativeCaptionSymbolColor, NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
 
 function createWindowStub() {
   return {
@@ -73,6 +74,45 @@ describe("getPlatformBrowserWindowOptions", () => {
         height: 48,
       },
     });
+  });
+
+  test("uses dark spreadsheet caption symbols on Windows and Linux in dark mode", () => {
+    const captionSymbolTone = getCanvasCaptionSymbolTone("report.xlsx", true);
+    const symbolColor = getNativeCaptionSymbolColor(captionSymbolTone);
+    const options = {
+      backgroundColor: CANVAS_SPREADSHEET_COLORS.background,
+      captionSymbolTone,
+      useDarkColors: true,
+      useMacosNativeGlass: false,
+    };
+
+    expect(getPlatformBrowserWindowOptions("win32", options).titleBarOverlay).toEqual({
+      color: NATIVE_THEME_TOKENS.transparentSurface,
+      symbolColor,
+      height: 48,
+    });
+    expect(getPlatformBrowserWindowOptions("linux", options).titleBarOverlay).toEqual({
+      color: CANVAS_SPREADSHEET_COLORS.background,
+      symbolColor,
+      height: 48,
+    });
+  });
+
+  test("keeps spreadsheet Canvas opaque with native traffic lights on macOS", () => {
+    const options = getPlatformBrowserWindowOptions("darwin", {
+      backgroundColor: CANVAS_SPREADSHEET_COLORS.background,
+      captionSymbolTone: getCanvasCaptionSymbolTone("report.xlsx", true),
+      useDarkColors: true,
+      useMacosNativeGlass: false,
+    });
+
+    expect(options).toMatchObject({
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: { x: 14, y: 14 },
+      transparent: false,
+    });
+    expect(options.titleBarOverlay).toBeUndefined();
+    expect(options.vibrancy).toBeUndefined();
   });
 
   test("adds native vibrancy options on macOS when glass is enabled", () => {

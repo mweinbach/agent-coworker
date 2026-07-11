@@ -116,6 +116,7 @@ describe("desktop workspaces page", () => {
       providerConnected: [],
       providerDefaultModelByProvider: {},
       providerStatusByName: {},
+      operationsByKey: {},
       ...defaultStoreActions,
     }));
   });

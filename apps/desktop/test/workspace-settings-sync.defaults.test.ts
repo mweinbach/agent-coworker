@@ -375,12 +375,15 @@ describe("workspace settings sync", () => {
     expect(otherOneOff?.yolo).toBe(true);
   });
 
-  test("updateWorkspaceDefaults reports partial apply when the control request fails", async () => {
+  test("updateWorkspaceDefaults rolls back and returns an acknowledged failure", async () => {
     jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
       throw new Error("boom");
     });
+    const previousProviderOptions = useAppStore
+      .getState()
+      .workspaces.find((entry) => entry.id === workspaceId)?.providerOptions;
 
-    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
       providerOptions: {
         "codex-cli": {
           reasoningEffort: "xhigh",
@@ -388,11 +391,22 @@ describe("workspace settings sync", () => {
       },
     });
 
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "Control session is not fully connected yet.",
+        repairAction: "Wait for the workspace connection to finish, then retry.",
+      },
+    });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.providerOptions,
+    ).toEqual(previousProviderOptions);
     const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Workspace settings partially applied");
-    expect(notification?.detail).toBe(
-      "Control session is not fully connected yet. Reopen the workspace settings to retry.",
-    );
+    expect(notification).toMatchObject({
+      title: "Workspace settings not updated",
+      audience: "foreground",
+    });
+    expect(notification?.detail).toContain("Wait for the workspace connection to finish");
   });
 
   test("updateWorkspaceDefaults updates yolo configuration dynamically", async () => {

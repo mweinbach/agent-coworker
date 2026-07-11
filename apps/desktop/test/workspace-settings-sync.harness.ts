@@ -653,7 +653,7 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
       threadRuntimeById: {},
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
-      promptModal: null,
+      interactionsByThread: {},
       notifications: [],
       providerStatusByName: {},
       providerStatusLastUpdatedAt: null,

@@ -868,7 +868,7 @@ describe("MCP servers settings page", () => {
   test("adds a personal connector when only one-off chat workspaces exist", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const requestMcpServers = mock(async () => {});
-    const upsertServer = mock(async () => {});
+    const upsertServer = mock(async () => ({ ok: true as const, value: undefined }));
     let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -972,7 +972,7 @@ describe("MCP servers settings page", () => {
 
   test("adds a project connector when Only this project is selected", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
-    const upsertServer = mock(async () => {});
+    const upsertServer = mock(async () => ({ ok: true as const, value: undefined }));
     let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");

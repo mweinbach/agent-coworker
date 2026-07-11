@@ -11,9 +11,16 @@
  * - Linux: titleBarOverlay/fallback, opaque/translucency-safe
  */
 
+import {
+  type DesktopPlatform,
+  hostPlatform,
+  toDesktopPlatform,
+} from "../../../../../src/platform/host";
 import type { WindowsBackgroundMaterial } from "../../../src/lib/desktopApi";
-
-type DesktopPlatform = "macos" | "windows" | "linux" | "other";
+import {
+  type CaptionSymbolTone,
+  getNativeCaptionSymbolColor,
+} from "../../../src/styles/tokens/native";
 
 export type PlatformChromeContract = {
   /** Platform identifier */
@@ -58,19 +65,6 @@ export type PlatformChromeContract = {
   /** Whether CSS blur should be disabled (to avoid stacking on native materials) */
   disableCssBlur: boolean;
 };
-
-function mapPlatformToDesktop(platform: NodeJS.Platform): DesktopPlatform {
-  switch (platform) {
-    case "darwin":
-      return "macos";
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    default:
-      return "other";
-  }
-}
 
 /**
  * macOS chrome contract.
@@ -173,7 +167,7 @@ const OTHER_CHROME: PlatformChromeContract = {
  * Get the platform chrome contract for a given Node.js platform.
  */
 export function getPlatformChrome(platform: NodeJS.Platform): PlatformChromeContract {
-  const desktopPlatform = mapPlatformToDesktop(platform);
+  const desktopPlatform = toDesktopPlatform(platform);
   switch (desktopPlatform) {
     case "macos":
       return MACOS_CHROME;
@@ -190,15 +184,12 @@ export function getPlatformChrome(platform: NodeJS.Platform): PlatformChromeCont
  * Get the platform chrome contract for the current platform.
  */
 export function getCurrentPlatformChrome(): PlatformChromeContract {
-  return getPlatformChrome(process.platform as NodeJS.Platform);
+  return getPlatformChrome(hostPlatform());
 }
 
-const TITLEBAR_SYMBOL_COLOR_LIGHT = "#556041";
-const TITLEBAR_SYMBOL_COLOR_DARK = "#eef0dc";
-
 /**
- * Get the appropriate symbol color for the current theme.
+ * Resolve the concrete native caption symbol color for a semantic tone.
  */
-export function getTitlebarSymbolColor(useDarkColors: boolean): string {
-  return useDarkColors ? TITLEBAR_SYMBOL_COLOR_DARK : TITLEBAR_SYMBOL_COLOR_LIGHT;
+export function getTitlebarSymbolColor(tone: CaptionSymbolTone): string {
+  return getNativeCaptionSymbolColor(tone);
 }

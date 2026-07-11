@@ -61,7 +61,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.46";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.47";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -312,6 +312,7 @@ export type SessionEvent =
       sessionId: string;
       text: string;
       clientMessageId?: string;
+      steerRequestId?: string;
       turnId?: string;
       idempotencyFingerprint?: string;
       annotations?: Array<Record<string, unknown>>;
@@ -577,6 +578,7 @@ export type SessionEvent =
       code: ServerErrorCode;
       source: ServerErrorSource;
       data?: ServerErrorData;
+      clientMessageId?: string;
       steerRequestId?: string;
     }
   | { type: "pong"; sessionId: string };

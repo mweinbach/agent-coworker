@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
+const windowClose = mock(async () => {});
+
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({ windowClose }));
 
 const { useAppStore } = await import("../src/app/store");
+const { Dialog, DialogContent, DialogDescription, DialogTitle } = await import(
+  "../src/components/ui/dialog"
+);
+const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 const { QuickChatShell } = await import("../src/ui/quickChat/QuickChatShell");
 
 const defaultStoreState = useAppStore.getState();
@@ -63,6 +69,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Pr
 
 describe("quick chat shell", () => {
   beforeEach(() => {
+    windowClose.mockClear();
     resetAppStore();
   });
 
@@ -128,6 +135,77 @@ describe("quick chat shell", () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+
+  test("dismisses a Quick Chat overlay before closing its window", async () => {
+    const harness = setupQuickChatJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      function QuickChatWithDialog() {
+        const [open, setOpen] = useState(true);
+        return createElement(
+          OverlayStackProvider,
+          null,
+          createElement(QuickChatShell, {
+            init: async () => {},
+            ready: false,
+            startupError: null,
+          }),
+          createElement(
+            Dialog,
+            { open, onOpenChange: setOpen },
+            createElement(
+              DialogContent,
+              null,
+              createElement(DialogTitle, null, "Quick Chat dialog"),
+              createElement(DialogDescription, null, "Overlay ownership test"),
+            ),
+          ),
+        );
+      }
+
+      await act(async () => root?.render(createElement(QuickChatWithDialog)));
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+
+      expect(
+        harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"]',
+        ),
+      ).toBeNull();
+      expect(windowClose).not.toHaveBeenCalled();
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+      });
+      expect(windowClose).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) await act(async () => root?.unmount());
       harness.restore();
     }
   });

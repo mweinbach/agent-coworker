@@ -54,19 +54,50 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   await quality.emitStreamingActivity();
   await expect(page.getByText("The quality review is in progress.")).toBeVisible();
   await expect(page.getByText("bun run desktop:quality")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop generating response" })).toBeVisible();
+  const stopButton = page.getByRole("button", { name: "Stop current response" });
+  await expect(stopButton).toBeVisible();
+  await expect(stopButton).toBeEnabled();
+  const composer = page.getByRole("combobox", { name: "Message input" });
+  await composer.focus();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        key: "k",
+      }),
+    );
+  });
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+  await expect(page.getByText("Stop current turn", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("Search chats, workspaces, settings, skills…")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(0);
+
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(0);
   await page.getByRole("button", { name: "Keep blocked" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
 
-  const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Prioritize the accessibility findings.");
   await expect(composer).toHaveValue("Prioritize the accessibility findings.");
-  await page.getByRole("button", { name: "Steer current response" }).click();
+  await page.getByRole("button", { name: "Send guidance to current response" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).turnSteerRequests).toBe(1);
+  await expect(
+    page.getByText("Guidance accepted. Restore it to edit and send as a follow-up."),
+  ).toBeVisible();
+  await expect(stopButton).toBeVisible();
+  await expect(stopButton).toBeEnabled();
+  await page.getByRole("button", { name: "Edit as follow-up" }).click();
+  await expect(composer).toHaveValue("Prioritize the accessibility findings.");
+  await expect(stopButton).toBeEnabled();
 
-  await page.getByRole("button", { name: "Stop generating response" }).click();
+  await stopButton.click();
   await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(1);
-  await expect(page.getByRole("button", { name: "Stop generating response" })).toHaveCount(0);
+  await expect(stopButton).toHaveCount(0);
 
   await quality.emitStreamingActivity();
   await quality.emitCompletion();
@@ -74,6 +105,30 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
     page.getByText("The desktop quality review is complete and ready for release."),
   ).toBeVisible();
   await assertNoSeriousAxeViolations(page, testInfo);
+});
+
+test("resolves one queued interaction without disturbing its siblings", async ({ quality }) => {
+  const { page } = quality;
+  await quality.emitInteractionQueue();
+
+  const themeQuestion = page.locator('[data-interaction-id="quality-ask-theme"]');
+  const docsApproval = page.locator('[data-interaction-id="quality-approval-docs"]');
+  const reviewerQuestion = page.locator('[data-interaction-id="quality-ask-reviewer"]');
+  await expect(themeQuestion).toBeVisible();
+  await expect(docsApproval).toBeVisible();
+  await expect(reviewerQuestion).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open next chat needing input, 3 pending" }),
+  ).toBeVisible();
+
+  await themeQuestion.getByRole("button", { name: "Light", exact: true }).click();
+  await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
+  await expect(themeQuestion).toHaveCount(0);
+  await expect(docsApproval).toBeVisible();
+  await expect(reviewerQuestion).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open next chat needing input, 2 pending" }),
+  ).toBeVisible();
 });
 
 test("switches through a draft chat and restores the conversation scroll anchor", async ({
@@ -126,6 +181,23 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   });
   await expect(quickWindow.getByRole("button", { name: "Open full app" })).toBeVisible();
   await expect(quickWindow.getByRole("group", { name: "Message composer" })).toBeVisible();
+
+  const quickComposer = quickWindow.getByRole("combobox", { name: "Message input" });
+  await quickComposer.fill("@");
+  await expect(quickWindow.getByRole("listbox")).toBeVisible();
+  await expect(quickComposer).toBeFocused();
+  await quickWindow.keyboard.press("Escape");
+  await expect(quickWindow.getByRole("listbox")).toHaveCount(0);
+  await expect(quickComposer).toBeFocused();
+  expect(quickWindow.isClosed()).toBe(false);
+
+  await quickWindow.keyboard.press("Escape");
+  expect(quickWindow.isClosed()).toBe(false);
+
+  const quickWindowClosed = quickWindow.waitForEvent("close");
+  await quickWindow.getByRole("button", { name: "Close quick chat" }).focus();
+  await quickWindow.keyboard.press("Escape");
+  await quickWindowClosed;
 });
 
 test("covers file preview, Canvas popout, and resizers with bounded filesystem work", async ({

@@ -5,8 +5,10 @@ import {
   ensureWorkspaceRuntime,
   makeId,
   nowIso,
+  operationKey,
   pushNotification,
   requestJsonRpcControlEvent,
+  runAcknowledgedOperation,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
@@ -186,67 +188,86 @@ export function createMarketplaceActions(
     readMarketplaceDetail,
 
     addMarketplace: async (sourceInput: string) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) {
-        throw new Error("No workspace selected");
-      }
-      const cwd = workspacePathFor(get, workspaceId);
-      const key = MARKETPLACE_ADD_PENDING_KEY;
-      setMutationPending(set, workspaceId, "marketplace", key);
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/marketplaces/add",
-        { cwd, sourceInput },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to add marketplace.";
-        clearFailedMutationSend(
-          set,
-          workspaceId,
-          key,
-          detail,
-          { marketplaceMutationError: detail },
-          "marketplace",
-        );
-        throw new Error(detail);
-      }
-      // The result already carried the fresh `marketplaces_list`; the server's
-      // follow-up catalog events also clear this key via clearedMutationPendingKeys.
-      clearMutationPending(set, workspaceId, "marketplace", key);
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("marketplace", "add"),
+        label: "Add marketplace",
+        errorTitle: "Marketplace not added",
+        errorMessage: "Unable to add marketplace.",
+        repairAction: "Check the marketplace source and retry.",
+        execute: async () => {
+          const normalizedSource = sourceInput.trim();
+          if (!normalizedSource) throw new Error("Enter a marketplace source.");
+          const workspaceId = managementWorkspaceIdFor(get);
+          if (!workspaceId) throw new Error("Select a workspace first.");
+          const cwd = workspacePathFor(get, workspaceId);
+          const key = MARKETPLACE_ADD_PENDING_KEY;
+          setMutationPending(set, workspaceId, "marketplace", key);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/marketplaces/add",
+            { cwd, sourceInput: normalizedSource },
+            rpcError,
+          );
+          if (!ok) {
+            const detail = rpcError.message?.trim() || "Unable to add marketplace.";
+            clearFailedMutationSend(
+              set,
+              workspaceId,
+              key,
+              detail,
+              { marketplaceMutationError: detail },
+              "marketplace",
+              false,
+            );
+            throw new Error(detail);
+          }
+          // The result already carried the fresh `marketplaces_list`; the server's
+          // follow-up catalog events also clear this key via clearedMutationPendingKeys.
+          clearMutationPending(set, workspaceId, "marketplace", key);
+        },
+      });
     },
 
     removeMarketplace: async (id: string) => {
-      const workspaceId = managementWorkspaceIdFor(get);
-      if (!workspaceId) return;
-      const cwd = workspacePathFor(get, workspaceId);
-      const key = marketplaceRemovePendingKey(id);
-      setMutationPending(set, workspaceId, "marketplace", key);
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/marketplaces/remove",
-        { cwd, id },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to remove marketplace.";
-        clearFailedMutationSend(
-          set,
-          workspaceId,
-          key,
-          detail,
-          { marketplaceMutationError: detail },
-          "marketplace",
-        );
-        return;
-      }
-      clearMutationPending(set, workspaceId, "marketplace", key);
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("marketplace", "remove", id),
+        label: "Remove marketplace",
+        errorTitle: "Marketplace not removed",
+        errorMessage: "Unable to remove marketplace.",
+        execute: async () => {
+          const workspaceId = managementWorkspaceIdFor(get);
+          if (!workspaceId) throw new Error("Select a workspace first.");
+          const cwd = workspacePathFor(get, workspaceId);
+          const key = marketplaceRemovePendingKey(id);
+          setMutationPending(set, workspaceId, "marketplace", key);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/marketplaces/remove",
+            { cwd, id },
+            rpcError,
+          );
+          if (!ok) {
+            const detail = rpcError.message?.trim() || "Unable to remove marketplace.";
+            clearFailedMutationSend(
+              set,
+              workspaceId,
+              key,
+              detail,
+              { marketplaceMutationError: detail },
+              "marketplace",
+              false,
+            );
+            throw new Error(detail);
+          }
+          clearMutationPending(set, workspaceId, "marketplace", key);
+        },
+      });
     },
 
     dismissMarketplaceMutationError: (targetWorkspaceId?: string) => {

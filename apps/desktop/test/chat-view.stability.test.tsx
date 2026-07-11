@@ -137,7 +137,7 @@ describe("desktop chat view stability", () => {
     setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({
       bootstrapPhase: "ready",
-      promptModal: null,
+      interactionsByThread: {},
       filePreview: null,
       selectedTaskId: null,
       tasksById: {},
@@ -145,6 +145,7 @@ describe("desktop chat view stability", () => {
       composerDraftsByKey: {},
       composerDraftRevisionFloorByKey: {},
       composerAttachmentIngestionCountByKey: {},
+      composerSubmissionsByKey: {},
       newChatLandingTarget: null,
     });
   });
@@ -1528,7 +1529,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("busy composer stays editable and swaps between stop and send based on draft text", async () => {
+  test("busy composer keeps independent Stop and guidance controls during inline approval", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -1597,24 +1598,53 @@ describe("desktop chat view stability", () => {
 
       const textarea = container.querySelector("textarea");
       expect(textarea?.hasAttribute("disabled")).toBe(false);
-      const stopButton = container.querySelector('[aria-label="Stop generating response"]');
+      const stopButton = container.querySelector('[aria-label="Stop current response"]');
       expect(stopButton).not.toBeNull();
       expect(stopButton?.className).toContain("bg-destructive");
       const statusRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(statusRow).not.toBeNull();
-      expect(statusRow?.textContent).toContain("Type guidance to add, or stop to cancel.");
+      expect(statusRow?.textContent).toContain(
+        "Stop current response, or type guidance and press Enter to send it.",
+      );
 
       await act(async () => {
         useAppStore.getState().setComposerText("tighten scope");
       });
 
-      // Stop remains available while typing a steer (audit P0).
-      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
-      const steerButton = container.querySelector('[aria-label="Steer current response"]');
-      expect(steerButton).not.toBeNull();
-      expect(steerButton?.className).toContain("bg-warning");
+      await act(async () => {
+        useAppStore.setState({
+          interactionsByThread: {
+            "thread-1": [
+              {
+                kind: "approval",
+                approvalKind: "manual",
+                requestId: "approval-while-busy",
+                command: "rm -rf build",
+                dangerous: true,
+                reasonCode: "requires_manual_review",
+                receivedSequence: 1,
+                status: "pending",
+              },
+            ],
+          },
+        });
+      });
+
+      expect(container.textContent).toContain("rm -rf build");
+      expect((container.querySelector("textarea") as HTMLTextAreaElement | null)?.disabled).toBe(
+        false,
+      );
+      const inlineSteerButton = container.querySelector(
+        '[aria-label="Send guidance to current response"]',
+      );
+      expect((inlineSteerButton as HTMLButtonElement | null)?.disabled).toBe(false);
+      expect(inlineSteerButton?.className).toContain("bg-warning");
+      const inlineStopButton = container.querySelector('[aria-label="Stop current response"]');
+      expect((inlineStopButton as HTMLButtonElement | null)?.disabled).toBe(false);
       const steerRow = container.querySelector('[data-slot="message-composer-status"]');
-      expect(steerRow?.textContent).toContain("Add guidance to the current reply (Enter).");
+      expect(steerRow?.textContent).toContain(
+        "Press Enter to send guidance. Stop remains available.",
+      );
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -1632,7 +1662,9 @@ describe("desktop chat view stability", () => {
         }));
       });
 
-      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      expect(
+        container.querySelector('[aria-label="Send guidance to current response"]'),
+      ).not.toBeNull();
       const pendingRow = container.querySelector('[data-slot="message-composer-status"]');
       expect(pendingRow?.textContent).toContain(
         "Guidance sent. Waiting for the current run to accept it.",
@@ -1756,8 +1788,10 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("diagram.png");
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.textContent,
-      ).toContain("Add guidance to the current reply (Enter).");
-      const steerButton = container.querySelector('[aria-label="Steer current response"]');
+      ).toContain("Press Enter to send guidance. Stop remains available.");
+      const steerButton = container.querySelector(
+        '[aria-label="Send guidance to current response"]',
+      );
       expect(steerButton).not.toBeNull();
       expect(steerButton?.hasAttribute("disabled")).toBe(false);
 
@@ -1936,6 +1970,11 @@ describe("desktop chat view stability", () => {
     const sendGate = new Promise<void>((resolve) => {
       resolveSend = resolve;
     });
+    let resolvePreparation: ((buffer: ArrayBuffer) => void) | undefined;
+    const preparationGate = new Promise<ArrayBuffer>((resolve) => {
+      resolvePreparation = resolve;
+    });
+    let attachmentReadCount = 0;
 
     useAppStore.setState({
       ready: true,
@@ -2027,7 +2066,12 @@ describe("desktop chat view stability", () => {
         name: "diagram.png",
         type: "image/png",
         size: 3,
-        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+        arrayBuffer: () => {
+          attachmentReadCount += 1;
+          return attachmentReadCount === 1
+            ? Promise.resolve(new Uint8Array([1, 2, 3]).buffer)
+            : preparationGate;
+        },
       } as File;
       Object.defineProperty(fileInput, "files", {
         configurable: true,
@@ -2045,6 +2089,17 @@ describe("desktop chat view stability", () => {
         form.dispatchEvent(
           new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
         );
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      expect(
+        container.querySelector('[aria-label="Sending guidance to current response"]'),
+      ).not.toBeNull();
+      expect(container.textContent).toContain("Uploading and preparing message…");
+      await act(async () => {
+        resolvePreparation?.(new Uint8Array([1, 2, 3]).buffer);
+        await preparationGate;
         await Promise.resolve();
       });
 
@@ -2070,13 +2125,12 @@ describe("desktop chat view stability", () => {
       });
 
       const pendingSteerButton = container.querySelector(
-        'button[aria-label="Steer current response"]',
+        'button[aria-label="Sending guidance to current response"]',
       );
       expect(pendingSteerButton).not.toBeNull();
       expect((pendingSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
-      expect(container.textContent).toContain(
-        "Guidance sent. Waiting for the current run to accept it.",
-      );
+      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      expect(container.textContent).toContain("Sending guidance. Stop remains available.");
 
       await act(async () => {
         resolveSend?.();
@@ -2085,7 +2139,7 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.textContent).not.toContain("diagram.png");
-      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {

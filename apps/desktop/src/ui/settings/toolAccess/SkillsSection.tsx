@@ -2,10 +2,12 @@ import { RefreshCwIcon, SparklesIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { Switch } from "../../../components/ui/switch";
 import type { SkillInstallationEntry } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import {
   EntityIcon,
   SettingsEmptyState,
@@ -47,6 +49,7 @@ export function SkillsSection({
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
   const enableSkillInstallation = useAppStore((s) => s.enableSkillInstallation);
   const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const skillsCatalog = runtime?.skillsCatalog ?? null;
   const skillsLoading = runtime?.skillCatalogLoading ?? false;
@@ -136,12 +139,21 @@ export function SkillsSection({
         ) : (
           visibleInstallations.map((installation) => {
             const displayName = installation.interface?.displayName || installation.name;
-            const togglePending = skillTogglePending(installation);
+            const operation = ["enable", "disable"]
+              .map(
+                (action) =>
+                  operationsByKey[operationKey("skill", action, installation.installationId)],
+              )
+              .find(
+                (candidate) => candidate?.status === "pending" || candidate?.status === "error",
+              );
+            const togglePending =
+              skillTogglePending(installation) || operation?.status === "pending";
             const canToggle = installation.writable;
             return (
               <div
                 key={installation.installationId}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
+                className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
               >
                 <button
                   type="button"
@@ -186,6 +198,7 @@ export function SkillsSection({
                     }
                   }}
                 />
+                <OperationFeedback operation={operation} className="basis-full" />
               </div>
             );
           })

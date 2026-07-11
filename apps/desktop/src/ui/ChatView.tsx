@@ -8,40 +8,33 @@ import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
 } from "../../../../src/shared/displayCitationMarkers";
-import { buildAttachmentSignature } from "../app/attachmentInputs";
 import {
-  type ComposerDraftAttachment,
-  type ComposerDraftRevision,
   composerDraftKeyForThread,
   getComposerDraftAttachmentValidationMessage,
+  hasComposerDraftState,
   resolveActiveComposerDraftKey,
   selectActiveComposerDraft,
 } from "../app/composerDrafts";
+import { selectActiveComposerSubmission } from "../app/composerSubmission";
+import { outstandingInteractions } from "../app/interactionQueue";
+import {
+  isInteractionThreadVisible,
+  resolveInteractionThreadTarget,
+} from "../app/interactionVisibility";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
 } from "../app/openaiCompatibleProviderOptions";
-import {
-  isSandboxApprovalThreadVisible,
-  resolveSandboxApprovalThreadTarget,
-} from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
-import {
-  type FileAttachmentInput,
-  workspaceSupportsToolRetryLineage,
-} from "../app/store.helpers/jsonRpcSocket";
+import { workspaceSupportsToolRetryLineage } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
-import {
-  appendAttachmentSkippedNotes,
-  buildComposerAttachmentSignature,
-  resolveComposerAttachmentsForWorkspace,
-} from "../lib/composerAttachments";
+import { buildComposerAttachmentSignature } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
 import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
-import { ChatFeed, type VisibleSandboxApproval } from "./chat/ChatFeed";
+import { ChatFeed, type VisibleInteraction } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import {
@@ -49,7 +42,6 @@ import {
   countActiveChildAgents,
   filterFeedForDeveloperMode,
   getComposerSubmitState,
-  resolveComposerBusyPolicy,
   resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
@@ -68,9 +60,6 @@ import { recordDesktopRenderMetric } from "./renderDiagnostics";
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
 const FEED_DERIVATION_WINDOW = 80;
 const FEED_DERIVATION_EXPAND_BATCH = 40;
-// Stable empty reference so the sandbox-approvals selector doesn't allocate a new
-// array each render (which would defeat zustand's reference equality check).
-const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
 const ACTIVE_TASK_STATUSES = new Set([
   "draft",
   "planning",
@@ -89,7 +78,6 @@ export {
   getComposerSubmitState,
   reasoningLabelForMode,
   reasoningPreviewText,
-  resolveComposerBusyPolicy,
   resolveCurrentReasoningEffort,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
@@ -127,6 +115,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     return s.threadRuntimeById[s.selectedThreadId] ?? null;
   });
   const composerDraft = useAppStore(selectActiveComposerDraft);
+  const composerSubmission = useAppStore(selectActiveComposerSubmission);
   const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
   const attachmentIngestionPending = useAppStore(
     (state) => (state.composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0,
@@ -142,16 +131,22 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => buildMentionCatalog(workspaceSkills, workspacePluginsCatalog),
     [workspaceSkills, workspacePluginsCatalog],
   );
-  const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const view = useAppStore((s) => s.view);
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const allThreads = useAppStore((s) => s.threads);
   const tasksById = useAppStore((s) => s.tasksById);
-  const sandboxApprovalsByThread = useAppStore((s) => s.sandboxApprovalsByThread);
-  const sandboxApprovals = useMemo(() => {
-    const entries = Object.entries(sandboxApprovalsByThread);
-    if (entries.length === 0) return EMPTY_SANDBOX_APPROVALS;
-
+  const interactionsByThread = useAppStore((s) => s.interactionsByThread);
+  const interactions = useMemo(() => {
+    const selected = selectedThreadId
+      ? outstandingInteractions(interactionsByThread[selectedThreadId])
+          .sort((left, right) => left.receivedSequence - right.receivedSequence)
+          .map(
+            (interaction): VisibleInteraction => ({
+              threadId: selectedThreadId,
+              interaction,
+            }),
+          )
+      : [];
     const visibilityContext = {
       view,
       selectedTaskId,
@@ -159,35 +154,34 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       threads: allThreads,
       tasksById,
     };
-
-    const visible: VisibleSandboxApproval[] = [];
-    if (selectedThreadId && isSandboxApprovalThreadVisible(visibilityContext, selectedThreadId)) {
-      const selectedPrompts = sandboxApprovalsByThread[selectedThreadId] ?? [];
-      for (const prompt of selectedPrompts) {
-        visible.push({ threadId: selectedThreadId, prompt });
-      }
-    }
-    for (const [threadId, prompts] of entries) {
+    const offThreadSandboxInteractions: VisibleInteraction[] = [];
+    for (const [threadId, threadInteractions] of Object.entries(interactionsByThread)) {
       if (
         threadId === selectedThreadId ||
-        !isSandboxApprovalThreadVisible(visibilityContext, threadId)
+        !isInteractionThreadVisible(visibilityContext, threadId)
       ) {
         continue;
       }
-      for (const prompt of prompts) {
-        visible.push({ threadId, prompt });
+      for (const interaction of outstandingInteractions(threadInteractions)) {
+        if (interaction.kind === "approval" && interaction.approvalKind === "sandbox") {
+          offThreadSandboxInteractions.push({ threadId, interaction });
+        }
       }
     }
-
-    return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
-  }, [allThreads, sandboxApprovalsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
+    offThreadSandboxInteractions.sort(
+      (left, right) => left.interaction.receivedSequence - right.interaction.receivedSequence,
+    );
+    return [...selected, ...offThreadSandboxInteractions];
+  }, [allThreads, interactionsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
+  const answerAsk = useAppStore((s) => s.answerAsk);
   const answerApproval = useAppStore((s) => s.answerApproval);
+  const retryInteractionResponse = useAppStore((s) => s.retryInteractionResponse);
   const selectThread = useAppStore((s) => s.selectThread);
   const selectTask = useAppStore((s) => s.selectTask);
   const selectTaskThread = useAppStore((s) => s.selectTaskThread);
-  const selectApprovalThread = useCallback(
+  const selectInteractionThread = useCallback(
     (threadId: string) => {
-      const target = resolveSandboxApprovalThreadTarget(
+      const target = resolveInteractionThreadTarget(
         { selectedThreadId, threads: allThreads, tasksById },
         threadId,
       );
@@ -204,12 +198,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [allThreads, selectTask, selectTaskThread, selectThread, selectedThreadId, tasksById],
   );
   const threadTitleById = useMemo(() => {
-    const onlyOtherThreads = sandboxApprovals.some((a) => a.threadId !== selectedThreadId);
-    if (!onlyOtherThreads) return undefined;
-    const map = new Map<string, string>();
-    for (const t of allThreads) map.set(t.id, t.title);
-    return map;
-  }, [allThreads, sandboxApprovals, selectedThreadId]);
+    if (!interactions.some((entry) => entry.threadId !== selectedThreadId)) return undefined;
+    return new Map(allThreads.map((candidate) => [candidate.id, candidate.title]));
+  }, [allThreads, interactions, selectedThreadId]);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
@@ -220,17 +211,15 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<
     Map<string, CitationSource[]>
   >(() => new Map());
+  const overflowCitationUrlsRef = useRef(overflowCitationUrlsByMessageId);
+  const overflowCitationSourcesRef = useRef(overflowCitationSourcesByMessageId);
+  overflowCitationUrlsRef.current = overflowCitationUrlsByMessageId;
+  overflowCitationSourcesRef.current = overflowCitationSourcesByMessageId;
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
-  const [preparingDraftKeys, setPreparingDraftKeys] = useState<Set<string>>(() => new Set());
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
-  const [submittedAttachmentSignatures, setSubmittedAttachmentSignatures] = useState<
-    Record<string, string>
-  >({});
   const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
-  const preparingAttachments =
-    preparingDraftKeys.has(composerDraftKey) || attachmentIngestionPending;
-  const submittedAttachmentSignature = submittedAttachmentSignatures[composerDraftKey] ?? null;
+  const preparingAttachments = composerSubmission?.phase === "preparing";
   const setAttachmentPickerError = useCallback(
     (message: string | null) => {
       setAttachmentPickerErrors((current) => {
@@ -245,38 +234,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [composerDraftKey],
   );
-  const setPreparingAttachments = useCallback(
-    (preparing: boolean) => {
-      setPreparingDraftKeys((current) => {
-        const next = new Set(current);
-        if (preparing) next.add(composerDraftKey);
-        else next.delete(composerDraftKey);
-        return next;
-      });
-    },
-    [composerDraftKey],
-  );
-  const setSubmittedAttachmentSignature = useCallback(
-    (signature: string | null) => {
-      setSubmittedAttachmentSignatures((current) => {
-        if (signature === null) {
-          if (!(composerDraftKey in current)) return current;
-          const next = { ...current };
-          delete next[composerDraftKey];
-          return next;
-        }
-        return { ...current, [composerDraftKey]: signature };
-      });
-    },
-    [composerDraftKey],
-  );
   const [feedDerivationWindow, setFeedDerivationWindow] = useState({
     threadId: selectedThreadId,
     visibleCount: FEED_DERIVATION_WINDOW,
   });
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
-  const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
+  const isUploading =
+    composerSubmission?.phase === "preparing" ||
+    composerSubmission?.phase === "sending" ||
+    pendingTurnStart?.status === "sending";
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const updateComposerText = useCallback(
@@ -288,6 +255,10 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const addComposerAttachments = useAppStore((s) => s.addComposerAttachments);
   const removeComposerAttachment = useAppStore((s) => s.removeComposerAttachment);
   const sendMessage = useAppStore((s) => s.sendMessage);
+  const submitComposerDraft = useAppStore((s) => s.submitComposerDraft);
+  const retryComposerSubmission = useAppStore((s) => s.retryComposerSubmission);
+  const editAcceptedComposerSubmission = useAppStore((s) => s.editAcceptedComposerSubmission);
+  const dismissComposerSubmission = useAppStore((s) => s.dismissComposerSubmission);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const setThreadReasoningEffort = useAppStore((s) => s.setThreadReasoningEffort);
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
@@ -309,7 +280,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const submitInFlightRef = useRef(new Set<string>());
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -356,19 +326,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       }
 
       setAttachmentPickerError(null);
-      setSubmittedAttachmentSignature(null);
       try {
         await addComposerAttachments(selectedFiles);
       } catch (error) {
         setAttachmentPickerError(error instanceof Error ? error.message : String(error));
       }
     },
-    [
-      addComposerAttachments,
-      composerDraftKey,
-      setAttachmentPickerError,
-      setSubmittedAttachmentSignature,
-    ],
+    [addComposerAttachments, composerDraftKey, setAttachmentPickerError],
   );
 
   const handleFileSelect = useCallback(
@@ -384,10 +348,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const removeAttachment = useCallback(
     (index: number) => {
       setAttachmentPickerError(null);
-      setSubmittedAttachmentSignature(null);
       removeComposerAttachment(index);
     },
-    [removeComposerAttachment, setAttachmentPickerError, setSubmittedAttachmentSignature],
+    [removeComposerAttachment, setAttachmentPickerError],
   );
 
   const feed = rt?.feed ?? [];
@@ -607,10 +570,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
-      setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
-      setOverflowCitationSourcesByMessageId((current) =>
-        current.size === 0 ? current : new Map(),
-      );
+      if (overflowCitationUrlsRef.current.size > 0) {
+        setOverflowCitationUrlsByMessageId(new Map());
+      }
+      if (overflowCitationSourcesRef.current.size > 0) {
+        setOverflowCitationSourcesByMessageId(new Map());
+      }
       return;
     }
 
@@ -645,115 +610,27 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
   }, [activeChildAgentCount, rt?.busy]);
 
-  const resolvePendingAttachmentsForSend = useCallback(
-    async (
-      workspaceId: string,
-      threadId: string,
-      attachments: readonly ComposerDraftAttachment[],
-    ): Promise<{ attachments: FileAttachmentInput[]; skippedNotes: string[] }> => {
-      // Soft-skip failed attachments (same policy as NewChatLanding): keep successful
-      // uploads and append skip notes to the message instead of hard-failing the send.
-      return resolveComposerAttachmentsForWorkspace(
-        useAppStore.getState,
-        useAppStore.setState,
-        workspaceId,
-        attachments,
-        { threadId },
-      );
-    },
-    [],
-  );
-
   const pendingAttachmentSignature = useMemo(
-    () => submittedAttachmentSignature ?? buildComposerAttachmentSignature(pendingAttachments),
-    [pendingAttachments, submittedAttachmentSignature],
+    () => buildComposerAttachmentSignature(pendingAttachments),
+    [pendingAttachments],
   );
   const hasPendingAttachments = pendingAttachments.length > 0;
 
-  const submitComposer = useCallback(
-    (busyPolicy: "reject" | "steer") => {
-      if (!thread) return;
-      if (submitInFlightRef.current.has(composerDraftKey)) return;
-      if (preparingAttachments) return;
-      if (
-        (useAppStore.getState().composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0
-      ) {
-        return;
-      }
-      if (pendingTurnStart?.status === "sending") return;
-      if (!composerText.trim() && pendingAttachments.length === 0) return;
-
-      const targetThreadId = thread.id;
-      const targetWorkspaceId = thread.workspaceId;
-      const draftSubmission: ComposerDraftRevision = {
-        key: composerDraftKey,
-        revision: composerDraft.revision,
-      };
-      const submittedText = composerText;
-      const submittedAttachments = [...pendingAttachments];
-      const submittedReferences = composerDraft.references.map((reference) => ({ ...reference }));
-      submitInFlightRef.current.add(composerDraftKey);
-      setPreparingAttachments(true);
-      setAttachmentPickerError(null);
-      void (async () => {
-        try {
-          let messageText = submittedText;
-          let attachments: FileAttachmentInput[] | undefined;
-          if (submittedAttachments.length > 0) {
-            const resolved = await resolvePendingAttachmentsForSend(
-              targetWorkspaceId,
-              targetThreadId,
-              submittedAttachments,
-            );
-            attachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
-            messageText = appendAttachmentSkippedNotes(submittedText, resolved.skippedNotes);
-          }
-          const attachmentSignature =
-            attachments && attachments.length > 0 ? buildAttachmentSignature(attachments) : null;
-          setSubmittedAttachmentSignature(attachmentSignature);
-
-          // Soft-skip may leave only notes (no files and no user text). Still send so the
-          // model learns what failed; otherwise require real content.
-          if (!messageText.trim() && (!attachments || attachments.length === 0)) {
-            setSubmittedAttachmentSignature(null);
-            return;
-          }
-
-          const accepted = await sendMessage(
-            messageText,
-            busyPolicy,
-            attachments,
-            submittedReferences.length > 0 ? submittedReferences : undefined,
-            { targetThreadId, draftSubmission },
-          );
-          if (!accepted) {
-            setSubmittedAttachmentSignature(null);
-          }
-        } catch (error) {
-          setSubmittedAttachmentSignature(null);
-          const message = error instanceof Error ? error.message : String(error);
-          setAttachmentPickerError(message);
-        } finally {
-          submitInFlightRef.current.delete(composerDraftKey);
-          setPreparingAttachments(false);
-        }
-      })();
-    },
-    [
-      composerDraft,
-      composerDraftKey,
-      composerText,
-      pendingAttachments,
-      pendingTurnStart?.status,
-      preparingAttachments,
-      resolvePendingAttachmentsForSend,
-      sendMessage,
-      setAttachmentPickerError,
-      setPreparingAttachments,
-      setSubmittedAttachmentSignature,
-      thread,
-    ],
-  );
+  const submitComposer = useCallback(() => {
+    if (!thread) return;
+    setAttachmentPickerError(null);
+    submitComposerDraft({ kind: "thread", threadId: thread.id });
+  }, [setAttachmentPickerError, submitComposerDraft, thread]);
+  const retrySubmission = useCallback(() => {
+    retryComposerSubmission(composerDraftKey);
+  }, [composerDraftKey, retryComposerSubmission]);
+  const editAcceptedSubmission = useCallback(() => {
+    if (!editAcceptedComposerSubmission(composerDraftKey)) return;
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [composerDraftKey, editAcceptedComposerSubmission]);
+  const dismissSubmission = useCallback(() => {
+    dismissComposerSubmission(composerDraftKey);
+  }, [composerDraftKey, dismissComposerSubmission]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -775,10 +652,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         const hasPendingInput = Boolean(composerText.trim() || pendingAttachments.length > 0);
         const submitState = getComposerSubmitState({
           busy,
-          hasPromptModal:
-            hasPromptModal ||
+          hasBlockingOverlay:
             hasFilePreview ||
-            preparingAttachments ||
+            attachmentIngestionPending ||
             sourceTask !== null ||
             readOnlyNotice !== undefined,
           composerText,
@@ -786,16 +662,17 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           pendingAttachmentSignature,
           pendingTurnStart,
           pendingSteer: rt?.pendingSteer ?? null,
+          submission: composerSubmission,
           sessionId: rt?.sessionId ?? null,
           threadStatus: thread?.status ?? "active",
         });
-        if (submitState.disabled || preparingAttachments || !hasPendingInput) {
+        if (submitState.disabled || !hasPendingInput) {
           event.preventDefault();
           return;
         }
 
         event.preventDefault();
-        submitComposer(resolveComposerBusyPolicy(busy));
+        submitComposer();
       } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !isComposing) {
         event.preventDefault();
         const textarea = event.currentTarget;
@@ -811,12 +688,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [
       composerText,
+      composerSubmission,
+      attachmentIngestionPending,
       hasFilePreview,
-      hasPromptModal,
       pendingAttachmentSignature,
       pendingAttachments.length,
       pendingTurnStart,
-      preparingAttachments,
       readOnlyNotice,
       rt?.busy,
       rt?.pendingSteer,
@@ -858,12 +735,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled =
-    hasPromptModal ||
-    hasFilePreview ||
-    preparingAttachments ||
-    sourceTask !== null ||
-    readOnlyNotice !== undefined;
+  const inputDisabled = hasFilePreview || sourceTask !== null || readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -891,12 +763,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         !rt?.sessionId));
   const composerSubmitState = getComposerSubmitState({
     busy,
-    hasPromptModal: inputDisabled,
+    hasBlockingOverlay: inputDisabled || attachmentIngestionPending,
     composerText,
     hasPendingAttachments,
     pendingAttachmentSignature,
     pendingTurnStart,
     pendingSteer: rt?.pendingSteer ?? null,
+    submission: composerSubmission,
     sessionId: rt?.sessionId ?? null,
     threadStatus: thread.status,
   });
@@ -929,11 +802,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}
           composerOverlayHeight={composerOverlayHeight}
-          sandboxApprovals={sandboxApprovals}
+          interactions={interactions}
+          onAnswerAsk={answerAsk}
           onAnswerApproval={answerApproval}
+          onRetryInteraction={retryInteractionResponse}
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
-          onSelectThread={selectApprovalThread}
+          onSelectThread={selectInteractionThread}
           onRetryFailedTurn={supportsToolRetryLineage ? retryFailedTurn : undefined}
           retryUnavailableReason={retryUnavailableReason}
           retryFailedTurnDisabled={
@@ -1024,6 +899,12 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             selectedThreadId={selectedThreadId}
             modelDisplayNames={modelDisplayNames}
             preparingAttachments={preparingAttachments}
+            submission={composerSubmission}
+            canEditAcceptedSubmission={!hasComposerDraftState(composerDraft)}
+            interruptPending={rt?.interruptPending === true}
+            onRetrySubmission={retrySubmission}
+            onEditSubmission={editAcceptedSubmission}
+            onDismissSubmission={dismissSubmission}
             onStop={selectedThreadId ? handleStop : undefined}
           />
         )}

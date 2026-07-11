@@ -5,9 +5,11 @@ import {
   ensureWorkspaceRuntime,
   makeId,
   nowIso,
+  operationKey,
   pushNotification,
   RUNTIME,
   requestJsonRpcControlEvent,
+  runAcknowledgedOperation,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
@@ -61,6 +63,56 @@ export function createSkillActions(
   };
   const refreshSharedWorkspaceState = async (sourceWorkspaceId: string) =>
     await refreshSharedWorkspaceStateFor(get, set, sourceWorkspaceId);
+  const requestSkillMutation = async (options: {
+    action: string;
+    label: string;
+    errorMessage: string;
+    subjectId: string;
+    method: string;
+    params: (cwd: string | undefined) => Record<string, unknown>;
+    shouldRefreshShared?: (workspaceId: string) => boolean;
+  }) =>
+    await runAcknowledgedOperation(get, set, {
+      key: operationKey("skill", options.action, options.subjectId),
+      label: options.label,
+      errorTitle: `${options.label} failed`,
+      errorMessage: options.errorMessage,
+      execute: async () => {
+        const workspaceId = managementWorkspaceId();
+        if (!workspaceId) throw new Error("Select a workspace first.");
+        const cwd = workspacePath(workspaceId);
+        const key = mutationPendingKey(options.action, options.subjectId);
+        const refreshSharedAfterSuccess = options.shouldRefreshShared?.(workspaceId) ?? false;
+        setMutationPending(set, workspaceId, "skill", key);
+        const rpcError: { message?: string } = {};
+        const ok = await requestJsonRpcControlEvent(
+          get,
+          set,
+          workspaceId,
+          options.method,
+          options.params(cwd),
+          rpcError,
+        );
+        if (!ok) {
+          const detail = rpcError.message?.trim() || options.errorMessage;
+          clearFailedMutationSend(
+            set,
+            workspaceId,
+            key,
+            detail,
+            {
+              skillMutationError: detail,
+            },
+            "skill",
+            false,
+          );
+          throw new Error(detail);
+        }
+        if (refreshSharedAfterSuccess) {
+          await refreshSharedWorkspaceState(workspaceId);
+        }
+      },
+    });
 
   return {
     openSkills: async () => {
@@ -267,189 +319,154 @@ export function createSkillActions(
     },
 
     installSkills: async (sourceInput: string, targetScope: "project" | "global") => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) {
-        throw new Error("No workspace selected");
-      }
-      const cwd = workspacePath(workspaceId);
-      const key = mutationPendingKey(`install:${targetScope}`);
-      setMutationPending(set, workspaceId, "skill", key);
-      const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
-      const installPromise = Promise.withResolvers<void>();
-      RUNTIME.skillInstallWaiters.set(workspaceId, {
-        pendingKey: key,
-        resolve: installPromise.resolve,
-        reject: installPromise.reject,
-      });
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill", "install"),
+        label: "Install skill",
+        errorTitle: "Skill not installed",
+        errorMessage: "Unable to install skill.",
+        repairAction: "Check the skill source and target, then retry.",
+        execute: async () => {
+          const normalizedSource = sourceInput.trim();
+          if (!normalizedSource) throw new Error("Enter a skill source.");
+          const workspaceId = managementWorkspaceId();
+          if (!workspaceId) throw new Error("Select a workspace first.");
+          const cwd = workspacePath(workspaceId);
+          const key = mutationPendingKey(`install:${targetScope}`);
+          setMutationPending(set, workspaceId, "skill", key);
+          const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
+          const installPromise = Promise.withResolvers<void>();
+          RUNTIME.skillInstallWaiters.set(workspaceId, {
+            pendingKey: key,
+            resolve: installPromise.resolve,
+            reject: installPromise.reject,
+          });
 
-      const rpcError: { message?: string } = {};
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/install",
-        {
-          cwd,
-          sourceInput,
-          targetScope,
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/skills/install",
+            {
+              cwd,
+              sourceInput: normalizedSource,
+              targetScope,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            const detail = rpcError.message?.trim() || "Unable to install skills.";
+            if (existing) {
+              RUNTIME.skillInstallWaiters.set(workspaceId, existing);
+            } else {
+              RUNTIME.skillInstallWaiters.delete(workspaceId);
+            }
+            clearFailedMutationSend(
+              set,
+              workspaceId,
+              key,
+              detail,
+              {
+                skillMutationError: detail,
+              },
+              "skill",
+              false,
+            );
+            installPromise.reject(new Error(detail));
+          } else if (existing) {
+            existing.reject(new Error("Another skill install was started"));
+          }
+
+          await installPromise.promise;
+          if (targetScope === "global") {
+            await refreshSharedWorkspaceState(workspaceId);
+          }
         },
-        rpcError,
-      );
-      if (!ok) {
-        const detail = rpcError.message?.trim() || "Unable to install skills.";
-        if (existing) {
-          RUNTIME.skillInstallWaiters.set(workspaceId, existing);
-        } else {
-          RUNTIME.skillInstallWaiters.delete(workspaceId);
-        }
-        clearFailedMutationSend(set, workspaceId, key, detail, { skillMutationError: detail });
-        installPromise.reject(new Error(detail));
-      } else if (existing) {
-        existing.reject(new Error("Another skill install was started"));
-      }
-
-      const result = await installPromise.promise;
-      if (targetScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
-      return result;
+      });
     },
 
     disableSkill: async (skillName: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const key = mutationPendingKey("disable", skillName);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/disable", {
-        cwd,
-        skillName,
+      return await requestSkillMutation({
+        action: "disable",
+        label: "Disable skill",
+        errorMessage: "Unable to disable skill.",
+        subjectId: skillName,
+        method: "cowork/skills/disable",
+        params: (cwd) => ({ cwd, skillName }),
       });
-      if (!ok) {
-        const detail = "Unable to disable skill.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          skillMutationError: detail,
-        });
-      }
     },
 
     enableSkill: async (skillName: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const key = mutationPendingKey("enable", skillName);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/enable", {
-        cwd,
-        skillName,
+      return await requestSkillMutation({
+        action: "enable",
+        label: "Enable skill",
+        errorMessage: "Unable to enable skill.",
+        subjectId: skillName,
+        method: "cowork/skills/enable",
+        params: (cwd) => ({ cwd, skillName }),
       });
-      if (!ok) {
-        const detail = "Unable to enable skill.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          skillMutationError: detail,
-        });
-      }
     },
 
     deleteSkill: async (skillName: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const key = mutationPendingKey("delete", skillName);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/delete", {
-        cwd,
-        skillName,
+      return await requestSkillMutation({
+        action: "delete",
+        label: "Delete skill",
+        errorMessage: "Unable to delete skill.",
+        subjectId: skillName,
+        method: "cowork/skills/delete",
+        params: (cwd) => ({ cwd, skillName }),
       });
-      if (!ok) {
-        const detail = "Unable to delete skill.";
-        clearFailedMutationSend(set, workspaceId, key, detail, {
-          skillMutationError: detail,
-        });
-      }
     },
 
     disableSkillInstallation: async (installationId: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = mutationPendingKey("disable", installationId);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/installation/disable",
-        { cwd, installationId },
-      );
-      if (!ok) {
-        clearFailedMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
-      } else if (installationScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
+      return await requestSkillMutation({
+        action: "disable",
+        label: "Disable skill",
+        errorMessage: "Unable to disable skill installation.",
+        subjectId: installationId,
+        method: "cowork/skills/installation/disable",
+        params: (cwd) => ({ cwd, installationId }),
+        shouldRefreshShared: (workspaceId) =>
+          resolveInstallationScopeForMutation(workspaceId, installationId) === "global",
+      });
     },
 
     enableSkillInstallation: async (installationId: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = mutationPendingKey("enable", installationId);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/installation/enable",
-        { cwd, installationId },
-      );
-      if (!ok) {
-        clearFailedMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
-      } else if (installationScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
+      return await requestSkillMutation({
+        action: "enable",
+        label: "Enable skill",
+        errorMessage: "Unable to enable skill installation.",
+        subjectId: installationId,
+        method: "cowork/skills/installation/enable",
+        params: (cwd) => ({ cwd, installationId }),
+        shouldRefreshShared: (workspaceId) =>
+          resolveInstallationScopeForMutation(workspaceId, installationId) === "global",
+      });
     },
 
     deleteSkillInstallation: async (installationId: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = mutationPendingKey("delete", installationId);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/installation/delete",
-        { cwd, installationId },
-      );
-      if (!ok) {
-        clearFailedMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
-      } else if (installationScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
+      return await requestSkillMutation({
+        action: "delete",
+        label: "Delete skill",
+        errorMessage: "Unable to delete skill installation.",
+        subjectId: installationId,
+        method: "cowork/skills/installation/delete",
+        params: (cwd) => ({ cwd, installationId }),
+        shouldRefreshShared: (workspaceId) =>
+          resolveInstallationScopeForMutation(workspaceId, installationId) === "global",
+      });
     },
 
     copySkillInstallation: async (installationId: string, targetScope: "project" | "global") => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const key = mutationPendingKey(`copy:${targetScope}`, installationId);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/installation/copy",
-        { cwd, installationId, targetScope },
-      );
-      if (!ok) {
-        clearFailedMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
-      } else if (targetScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
+      return await requestSkillMutation({
+        action: `copy:${targetScope}`,
+        label: "Copy skill",
+        errorMessage: "Unable to copy skill installation.",
+        subjectId: installationId,
+        method: "cowork/skills/installation/copy",
+        params: (cwd) => ({ cwd, installationId, targetScope }),
+        shouldRefreshShared: () => targetScope === "global",
+      });
     },
 
     checkSkillInstallationUpdate: async (installationId: string) => {
@@ -471,24 +488,16 @@ export function createSkillActions(
     },
 
     updateSkillInstallation: async (installationId: string) => {
-      const workspaceId = managementWorkspaceId();
-      if (!workspaceId) return;
-      const cwd = workspacePath(workspaceId);
-      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
-      const key = mutationPendingKey("update", installationId);
-      setMutationPending(set, workspaceId, "skill", key);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/installation/update",
-        { cwd, installationId },
-      );
-      if (!ok) {
-        clearFailedMutationSend(set, workspaceId, key, "Unable to update skill installation.");
-      } else if (installationScope === "global") {
-        await refreshSharedWorkspaceState(workspaceId);
-      }
+      return await requestSkillMutation({
+        action: "update",
+        label: "Update skill",
+        errorMessage: "Unable to update skill installation.",
+        subjectId: installationId,
+        method: "cowork/skills/installation/update",
+        params: (cwd) => ({ cwd, installationId }),
+        shouldRefreshShared: (workspaceId) =>
+          resolveInstallationScopeForMutation(workspaceId, installationId) === "global",
+      });
     },
   };
 }

@@ -1,14 +1,18 @@
+import type { SessionEvent } from "../../lib/wsProtocol";
 import {
   type AppStoreActions,
   ensureControlSocket,
   ensureServerRunning,
   makeId,
   nowIso,
+  operationKey,
   pushNotification,
   requestJsonRpcControlEvent,
+  runAcknowledgedOperation,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
+import { createControlEventAcknowledgementDecoder } from "../store.helpers/controlEventAcknowledgement";
 
 export function createWorkspaceMemoryActions(
   set: StoreSet,
@@ -154,48 +158,62 @@ export function createWorkspaceMemoryActions(
     },
 
     upsertWorkspaceMemory: async (workspaceId, scope, id, content, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/upsert", {
-        cwd: resolveMemoryCwd(workspaceId, opts),
-        scope,
-        ...(id ? { id } : {}),
-        content,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "save", workspaceId),
+        label: "Save memory",
+        errorTitle: "Memory not saved",
+        errorMessage: "Unable to save memory.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/memory/upsert",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              scope,
+              ...(id ? { id } : {}),
+              content,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(rpcError.message?.trim() || "Unable to save memory.");
+          }
+        },
       });
-      if (ok) return;
-
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to save memory.",
-        }),
-      }));
     },
 
     deleteWorkspaceMemory: async (workspaceId, scope, id, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/delete", {
-        cwd: resolveMemoryCwd(workspaceId, opts),
-        scope,
-        id,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "delete", workspaceId, scope, id),
+        label: "Delete memory",
+        errorTitle: "Memory not deleted",
+        errorMessage: "Unable to delete memory.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/memory/delete",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              scope,
+              id,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(rpcError.message?.trim() || "Unable to delete memory.");
+          }
+        },
       });
-      if (ok) return;
-
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to delete memory.",
-        }),
-      }));
     },
 
     requestAdvancedMemories: async (workspaceId, opts) => {
@@ -249,427 +267,473 @@ export function createWorkspaceMemoryActions(
     },
 
     upsertAdvancedMemory: async (workspaceId, input, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        input.folder ? "cowork/memory/advanced/folder/upsert" : "cowork/memory/advanced/upsert",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          ...(input.folder ? { folder: input.folder } : {}),
-          ...(input.slug ? { slug: input.slug } : {}),
-          name: input.name,
-          description: input.description,
-          ...(input.type ? { type: input.type } : {}),
-          body: input.body,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "advanced-save", workspaceId),
+        label: "Save advanced memory",
+        errorTitle: "Memory not saved",
+        errorMessage: "Unable to save memory.",
+        repairAction: "Review the memory fields and retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            input.folder ? "cowork/memory/advanced/folder/upsert" : "cowork/memory/advanced/upsert",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              ...(input.folder ? { folder: input.folder } : {}),
+              ...(input.slug ? { slug: input.slug } : {}),
+              name: input.name,
+              description: input.description,
+              ...(input.type ? { type: input.type } : {}),
+              body: input.body,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(rpcError.message?.trim() || "Unable to save memory.");
+          }
         },
-      );
-      if (ok) return true;
-
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to save memory.",
-        }),
-      }));
-      return false;
+      });
     },
 
     deleteAdvancedMemory: async (workspaceId, folder, slug, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        folder ? "cowork/memory/advanced/folder/delete" : "cowork/memory/advanced/delete",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          ...(folder ? { folder } : {}),
-          slug,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "advanced-delete", workspaceId, folder, slug),
+        label: "Delete advanced memory",
+        errorTitle: "Memory not deleted",
+        errorMessage: "Unable to delete memory.",
+        repairAction: "Confirm the memory still exists and retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            folder ? "cowork/memory/advanced/folder/delete" : "cowork/memory/advanced/delete",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              ...(folder ? { folder } : {}),
+              slug,
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(rpcError.message?.trim() || "Unable to delete memory.");
+          }
         },
-      );
-      if (ok) return;
-
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to delete memory.",
-        }),
-      }));
+      });
     },
 
     generateAdvancedMemoryForThread: async (workspaceId, threadId, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        opts?.folder ? "cowork/memory/advanced/folder/generate" : "cowork/memory/advanced/generate",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          ...(opts?.folder ? { folder: opts.folder } : {}),
-          threadId,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "advanced-generate", workspaceId, opts?.folder, threadId),
+        label: "Generate advanced memory",
+        errorTitle: "Unable to generate memory",
+        errorMessage: "The conversation could not be processed.",
+        repairAction: "Confirm the conversation is available and retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            opts?.folder
+              ? "cowork/memory/advanced/folder/generate"
+              : "cowork/memory/advanced/generate",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              ...(opts?.folder ? { folder: opts.folder } : {}),
+              threadId,
+            },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(
+              errorDetail.message?.trim() || "The conversation could not be processed.",
+            );
+          }
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "info",
+              title: "Memory generated",
+              detail: "The conversation was processed for advanced memory.",
+              audience: "foreground",
+            }),
+          }));
         },
-      );
-
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: ok ? "info" : "error",
-          title: ok ? "Memory generated" : "Unable to generate memory",
-          detail: ok
-            ? "The conversation was processed for advanced memory."
-            : "The conversation could not be processed.",
-        }),
-      }));
-      return ok;
+      });
     },
 
     setWorkspaceAdvancedMemory: async (workspaceId, advancedMemory, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      // The settings UI reads the live `controlSessionConfig` first (server's
-      // effective value), then falls back to the persisted workspace records.
-      // Advanced memory defaults are global, so mirror BOTH everywhere
-      // optimistically and capture prior values for rollback. The server
-      // re-syncs via the subsequent `session_config` event.
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultAdvancedMemory: advancedMemory },
-        sessionConfig: { advancedMemory },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: { advancedMemory },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update advanced memory setting.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "advanced", workspaceId),
+        label: "Update advanced memory",
+        errorTitle: "Advanced memory not updated",
+        errorMessage: "Unable to update advanced memory setting.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultAdvancedMemory: advancedMemory },
+            sessionConfig: { advancedMemory },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: { advancedMemory },
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(
+              rpcError.message?.trim() || "Unable to update advanced memory setting.",
+            );
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+        },
+      });
     },
 
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
       const modelOverride = model.trim() || undefined;
-
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultMemoryGenerationModel: modelOverride },
-        sessionConfig: { memoryGenerationModel: modelOverride },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: modelOverride
-            ? { memoryGenerationModel: modelOverride }
-            : { clearMemoryGenerationModel: true },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update memory generation model.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("memory", "model", workspaceId),
+        label: "Update memory model",
+        errorTitle: "Memory model not updated",
+        errorMessage: "Unable to update memory generation model.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultMemoryGenerationModel: modelOverride },
+            sessionConfig: { memoryGenerationModel: modelOverride },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const rpcError: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: modelOverride
+                ? { memoryGenerationModel: modelOverride }
+                : { clearMemoryGenerationModel: true },
+            },
+            rpcError,
+          );
+          if (!ok) {
+            throw new Error(
+              rpcError.message?.trim() || "Unable to update memory generation model.",
+            );
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+        },
+      });
     },
 
     requestSkillImprovementStatus: requestSkillImprovementStatusImpl,
 
     runSkillImprovement: async (workspaceId, skillName, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
       const key = skillName ? `run:${skillName}` : "run:queued";
-      setSkillImprovementPending(workspaceId, key, true);
-      // Snapshot the known history so the toast only reflects entries this
-      // request produced — never a background run that happened to finish
-      // around the same time.
-      const priorStatus = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus;
-      const historyIdsBefore = priorStatus
-        ? new Set(priorStatus.runHistory.map((entry) => entry.id))
-        : null;
-      const requestedAt = Date.now();
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/improvement/run",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          ...(skillName ? { skillName } : {}),
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "run", workspaceId, skillName ?? "queued"),
+        label: skillName ? `Improve ${skillName}` : "Run queued skill improvements",
+        errorTitle: "Unable to improve skill",
+        errorMessage: "The skill improvement run could not be started.",
+        repairAction: "Confirm the selected model is available and retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          setSkillImprovementPending(workspaceId, key, true);
+          // Snapshot known history so this operation never claims a background
+          // outcome that happened to arrive around the same time.
+          const priorStatus = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus;
+          const historyIdsBefore = priorStatus
+            ? new Set(priorStatus.runHistory.map((entry) => entry.id))
+            : null;
+          const requestedAt = Date.now();
+          const errorDetail: { message?: string } = {};
+          const decodeAcknowledgement = createControlEventAcknowledgementDecoder(
+            "skill_improvement_status",
+            (event) => {
+              const outcome = latestRunOutcomeFromHistory(
+                event.runHistory,
+                historyIdsBefore,
+                requestedAt,
+                skillName,
+              );
+              if (outcome?.status !== "failed") {
+                return { ok: true };
+              }
+              return {
+                ok: false,
+                message: `${outcome.skillName}: ${outcome.error?.trim() || outcome.message}`,
+              };
+            },
+          );
+          try {
+            const ok = await requestJsonRpcControlEvent(
+              get,
+              set,
+              workspaceId,
+              "cowork/skills/improvement/run",
+              {
+                cwd: resolveMemoryCwd(workspaceId, opts),
+                ...(skillName ? { skillName } : {}),
+              },
+              errorDetail,
+              { decodeAcknowledgement },
+            );
+            if (!ok) {
+              throw new Error(
+                errorDetail.message?.trim() || "The skill improvement run could not be started.",
+              );
+            }
+            const outcome = latestRunOutcome(
+              get,
+              workspaceId,
+              historyIdsBefore,
+              requestedAt,
+              skillName,
+            );
+            set((s) => ({
+              notifications: pushNotification(s.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "info",
+                title: !outcome
+                  ? "No skill improvements were due"
+                  : outcome.status === "skipped"
+                    ? "Skill improvement finished without changes"
+                    : "Skill improvement complete",
+                detail: outcome
+                  ? `${outcome.skillName}: ${outcome.message}`
+                  : "No queued skill improvement jobs were due.",
+                audience: "foreground",
+              }),
+            }));
+          } finally {
+            // This request owns its pending key; unrelated status events cannot
+            // re-enable the action while it remains in flight.
+            setSkillImprovementPending(workspaceId, key, false);
+          }
         },
-      );
-      // The action owns its pending key: status events no longer clear it, so
-      // unrelated background broadcasts cannot re-enable the button mid-run.
-      setSkillImprovementPending(workspaceId, key, false);
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Unable to improve skill",
-            detail: "The skill improvement run could not be started.",
-          }),
-        }));
-        return false;
-      }
-      // The run result already refreshed skillImprovementStatus in the store,
-      // so report what actually happened instead of assuming success.
-      const outcome = latestRunOutcome(get, workspaceId, historyIdsBefore, requestedAt, skillName);
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: outcome?.status === "failed" ? "error" : "info",
-          title: !outcome
-            ? "No skill improvements were due"
-            : outcome.status === "failed"
-              ? "Skill improvement failed"
-              : outcome.status === "skipped"
-                ? "Skill improvement finished without changes"
-                : "Skill improvement complete",
-          detail: outcome
-            ? `${outcome.skillName}: ${outcome.message}`
-            : "No queued skill improvement jobs were due.",
-        }),
-      }));
-      return true;
+      });
     },
 
     restoreSkillImprovement: async (workspaceId, skillName, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
       const key = `restore:${skillName}`;
-      setSkillImprovementPending(workspaceId, key, true);
-      const errorDetail: { message?: string } = {};
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/skills/improvement/restore",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          skillName,
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "restore", workspaceId, skillName),
+        label: `Restore ${skillName}`,
+        errorTitle: "Unable to restore skill",
+        errorMessage: `${skillName} could not be restored from backup.`,
+        repairAction: "Confirm a backup exists for this skill and retry.",
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          setSkillImprovementPending(workspaceId, key, true);
+          const errorDetail: { message?: string } = {};
+          try {
+            const ok = await requestJsonRpcControlEvent(
+              get,
+              set,
+              workspaceId,
+              "cowork/skills/improvement/restore",
+              {
+                cwd: resolveMemoryCwd(workspaceId, opts),
+                skillName,
+              },
+              errorDetail,
+            );
+            if (!ok) {
+              throw new Error(
+                errorDetail.message?.trim() || `${skillName} could not be restored from backup.`,
+              );
+            }
+            set((s) => ({
+              notifications: pushNotification(s.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "info",
+                title: "Skill restored",
+                detail: `${skillName} was restored from backup.`,
+                audience: "foreground",
+              }),
+            }));
+          } finally {
+            setSkillImprovementPending(workspaceId, key, false);
+          }
         },
-        errorDetail,
-      );
-      setSkillImprovementPending(workspaceId, key, false);
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Unable to restore skill",
-            detail: errorDetail.message ?? `${skillName} could not be restored from backup.`,
-          }),
-        }));
-        return false;
-      }
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Skill restored",
-          detail: `${skillName} was restored from backup.`,
-        }),
-      }));
-      return true;
+      });
     },
 
     setWorkspaceSkillImprovementEnabled: async (workspaceId, enabled, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultSkillImprovementEnabled: enabled },
-        sessionConfig: { skillImprovementEnabled: enabled },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: { skillImprovementEnabled: enabled },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update skill improvement setting.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "enabled", workspaceId),
+        label: "Update skill improvement",
+        errorTitle: "Skill improvement setting not updated",
+        errorMessage: "Unable to update skill improvement setting.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultSkillImprovementEnabled: enabled },
+            sessionConfig: { skillImprovementEnabled: enabled },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
-      await requestSkillImprovementStatusImpl(workspaceId, opts);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: { skillImprovementEnabled: enabled },
+            },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(
+              errorDetail.message?.trim() || "Unable to update skill improvement setting.",
+            );
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+          await requestSkillImprovementStatusImpl(workspaceId, opts);
+        },
+      });
     },
 
     setWorkspaceSkillImprovementModel: async (workspaceId, model, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
       const modelOverride = model.trim() || undefined;
-
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultSkillImprovementModel: modelOverride },
-        sessionConfig: { skillImprovementModel: modelOverride },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: modelOverride
-            ? { skillImprovementModel: modelOverride }
-            : { clearSkillImprovementModel: true },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update skill improvement model.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "model", workspaceId),
+        label: "Update skill improvement model",
+        errorTitle: "Skill improvement model not updated",
+        errorMessage: "Unable to update skill improvement model.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultSkillImprovementModel: modelOverride },
+            sessionConfig: { skillImprovementModel: modelOverride },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
-      await requestSkillImprovementStatusImpl(workspaceId, opts);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: modelOverride
+                ? { skillImprovementModel: modelOverride }
+                : { clearSkillImprovementModel: true },
+            },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(
+              errorDetail.message?.trim() || "Unable to update skill improvement model.",
+            );
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+          await requestSkillImprovementStatusImpl(workspaceId, opts);
+        },
+      });
     },
 
     setWorkspaceSkillImprovementScope: async (workspaceId, scope, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultSkillImprovementScope: scope },
-        sessionConfig: { skillImprovementScope: scope },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: { skillImprovementScope: scope },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update skill improvement scope.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "scope", workspaceId),
+        label: "Update skill improvement scope",
+        errorTitle: "Skill improvement scope not updated",
+        errorMessage: "Unable to update skill improvement scope.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultSkillImprovementScope: scope },
+            sessionConfig: { skillImprovementScope: scope },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
-      await requestSkillImprovementStatusImpl(workspaceId, opts);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: { skillImprovementScope: scope },
+            },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(
+              errorDetail.message?.trim() || "Unable to update skill improvement scope.",
+            );
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+          await requestSkillImprovementStatusImpl(workspaceId, opts);
+        },
+      });
     },
 
     setWorkspaceSkillImprovementExcludedSkills: async (workspaceId, excludedSkills, opts) => {
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
       const normalized = normalizeExcludedSkills(excludedSkills);
-
-      const restore = applyOptimisticMemoryConfig(get, set, workspaceId, {
-        record: { defaultSkillImprovementExcludedSkills: normalized },
-        sessionConfig: { skillImprovementExcludedSkills: normalized },
-      });
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/session/defaults/apply",
-        {
-          cwd: resolveMemoryCwd(workspaceId, opts),
-          config: { skillImprovementExcludedSkills: normalized },
-        },
-      );
-      if (!ok) {
-        restore();
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to update excluded skills.",
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("skill-improvement", "excluded-skills", workspaceId),
+        label: "Update included skills",
+        errorTitle: "Included skills not updated",
+        errorMessage: "Unable to update included skills.",
+        optimistic: () =>
+          applyOptimisticMemoryConfig(get, set, workspaceId, {
+            record: { defaultSkillImprovementExcludedSkills: normalized },
+            sessionConfig: { skillImprovementExcludedSkills: normalized },
           }),
-        }));
-        return;
-      }
-      await syncAdvancedMemoryDefaultsAcrossThreads(get);
-      await requestSkillImprovementStatusImpl(workspaceId, opts);
+        execute: async () => {
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          const errorDetail: { message?: string } = {};
+          const ok = await requestJsonRpcControlEvent(
+            get,
+            set,
+            workspaceId,
+            "cowork/session/defaults/apply",
+            {
+              cwd: resolveMemoryCwd(workspaceId, opts),
+              config: { skillImprovementExcludedSkills: normalized },
+            },
+            errorDetail,
+          );
+          if (!ok) {
+            throw new Error(errorDetail.message?.trim() || "Unable to update included skills.");
+          }
+          await syncAdvancedMemoryDefaultsAcrossThreads(get);
+          await requestSkillImprovementStatusImpl(workspaceId, opts);
+        },
+      });
     },
   };
 }
@@ -760,8 +824,27 @@ function latestRunOutcome(
   historyIdsBefore: Set<string> | null,
   requestedAtMs: number,
   skillName?: string,
-): { skillName: string; status: "completed" | "failed" | "skipped"; message: string } | null {
+): SkillImprovementRunOutcome | null {
   const history = get().workspaceRuntimeById[workspaceId]?.skillImprovementStatus?.runHistory ?? [];
+  return latestRunOutcomeFromHistory(history, historyIdsBefore, requestedAtMs, skillName);
+}
+
+type SkillImprovementRunHistory = Extract<
+  SessionEvent,
+  { type: "skill_improvement_status" }
+>["runHistory"];
+
+type SkillImprovementRunOutcome = Pick<
+  SkillImprovementRunHistory[number],
+  "skillName" | "status" | "message" | "error"
+>;
+
+function latestRunOutcomeFromHistory(
+  history: SkillImprovementRunHistory,
+  historyIdsBefore: Set<string> | null,
+  requestedAtMs: number,
+  skillName?: string,
+): SkillImprovementRunOutcome | null {
   const entry = history.find((candidate) => {
     if (skillName && candidate.skillName !== skillName) return false;
     // With a pre-request snapshot, only entries this request added count — a
@@ -773,7 +856,12 @@ function latestRunOutcome(
       : new Date(candidate.finishedAt).getTime() >= requestedAtMs;
   });
   return entry
-    ? { skillName: entry.skillName, status: entry.status, message: entry.message }
+    ? {
+        skillName: entry.skillName,
+        status: entry.status,
+        message: entry.message,
+        error: entry.error,
+      }
     : null;
 }
 

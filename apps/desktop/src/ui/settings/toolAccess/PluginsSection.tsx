@@ -2,10 +2,12 @@ import { PackageIcon, RefreshCwIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { Switch } from "../../../components/ui/switch";
 import type { PluginCatalogEntry } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import {
   EntityIcon,
   SettingsEmptyState,
@@ -32,6 +34,7 @@ export function PluginsSection({
   const selectPlugin = useAppStore((s) => s.selectPlugin);
   const enablePlugin = useAppStore((s) => s.enablePlugin);
   const disablePlugin = useAppStore((s) => s.disablePlugin);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const pluginsCatalog = runtime?.pluginsCatalog ?? null;
   const pluginsLoading = runtime?.pluginsLoading ?? false;
@@ -103,11 +106,19 @@ export function PluginsSection({
           <NoMatchesState query={filterQuery.trim()} />
         ) : (
           visiblePlugins.map((plugin) => {
-            const togglePending = pluginTogglePending(plugin);
+            const operation = ["enable", "disable"]
+              .map(
+                (action) =>
+                  operationsByKey[operationKey("plugin", action, plugin.scope, plugin.id)],
+              )
+              .find(
+                (candidate) => candidate?.status === "pending" || candidate?.status === "error",
+              );
+            const togglePending = pluginTogglePending(plugin) || operation?.status === "pending";
             return (
               <div
                 key={`${plugin.scope}:${plugin.id}`}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
+                className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-card/60"
               >
                 <button
                   type="button"
@@ -153,6 +164,7 @@ export function PluginsSection({
                     }
                   }}
                 />
+                <OperationFeedback operation={operation} className="basis-full" />
               </div>
             );
           })

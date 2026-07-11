@@ -35,6 +35,7 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       type: z.literal("userMessage"),
       content: z.array(projectedUserMessageContentPartSchema),
       clientMessageId: nonEmptyStringSchema.optional(),
+      steerRequestId: nonEmptyStringSchema.optional(),
       annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .strict(),
@@ -103,6 +104,8 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
       code: z.enum(SERVER_ERROR_CODES),
       source: z.enum(SERVER_ERROR_SOURCES),
       data: serverErrorDataSchema.optional(),
+      clientMessageId: nonEmptyStringSchema.optional(),
+      steerRequestId: nonEmptyStringSchema.optional(),
     })
     .strict(),
 ]);

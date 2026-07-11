@@ -7,10 +7,20 @@ import type {
   TaskRecord,
 } from "../../../src/shared/tasks";
 import {
+  type CreationDraftError,
+  createEmptyTaskCreationDraft,
+  type TaskCreationDraft,
+} from "../src/app/creationDrafts";
+import {
   __internalTaskActions,
   createTaskActions,
   type TaskActionDependencies,
 } from "../src/app/store.actions/tasks";
+import {
+  __internalOperationIntent,
+  invalidateNavigationIntent,
+  recordThreadNavigationIntent,
+} from "../src/app/store.helpers/operationIntent";
 import type { ThreadRecord } from "../src/app/types";
 
 const NOW = "2026-06-18T12:00:00.000Z";
@@ -68,6 +78,32 @@ function taskRecord(overrides: Partial<TaskRecord> = {}): TaskRecord {
     activity: [],
     latestCheckpoint: null,
     ...overrides,
+  };
+}
+
+function taskCreationInput() {
+  return {
+    idempotencyKey: "manual-task-1",
+    title: "Implement task mode",
+    objective: "Add explicit task mode without changing standard chat.",
+    context: "The chat flow must remain available alongside managed tasks.",
+    requirements: [
+      {
+        kind: "acceptance_criterion" as const,
+        text: "A complete task opens in the work-first task view.",
+      },
+    ],
+    workItems: [
+      {
+        key: "implement",
+        title: "Implement task mode",
+        description: "Build and verify the managed task flow.",
+        dependsOn: [],
+        expectedOutputs: ["Working task mode"],
+      },
+    ],
+    decisions: [],
+    reviewRequired: true,
   };
 }
 
@@ -206,6 +242,8 @@ function createHarness(options: { workspacePath?: string } = {}) {
     taskListLoadingByWorkspaceId: {},
     taskLifecycleRequestByTaskId: {},
     taskError: null as string | null,
+    taskCreationDraft: createEmptyTaskCreationDraft(0, "ws-1") as TaskCreationDraft,
+    taskCreationError: null as CreationDraftError | null,
     desktopFeatureFlags: {
       menuBar: true,
       remoteAccess: false,
@@ -258,18 +296,175 @@ describe("desktop task actions", () => {
     },
     requestJsonRpc,
     syncDesktopStateCache: () => {},
+    persist: () => {},
     persistNow: async () => {},
   } as unknown as TaskActionDependencies;
 
   beforeEach(() => {
     __internalTaskActions.reset();
+    __internalOperationIntent.reset();
     setRendererPlatform("win32");
     notificationRouter = null;
-    requestJsonRpc.mockClear();
+    requestJsonRpc.mockReset();
+    requestJsonRpc.mockImplementation(async (_get, _set, _workspaceId, method) => {
+      if (method === "task/list") return { tasks: [] };
+      return { task: taskRecord(), thread: { id: "task-session-1" } };
+    });
   });
 
   afterEach(() => {
     setRendererPlatform(null);
+  });
+
+  test("a delayed task is recorded without stealing newer navigation", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    const createGate = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await createGate.promise;
+      return { task: taskRecord(), thread: { id: "task-session-1" } };
+    });
+
+    const pending = actions.startTask({
+      workspaceId: "ws-1",
+      task: taskCreationInput(),
+    });
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    harness.state.selectedThreadId = "chat-1";
+    harness.state.selectedTaskId = null;
+    createGate.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: true, value: { id: "task-1" } });
+    expect(harness.state.view).toBe("settings");
+    expect(harness.state.selectedThreadId).toBe("chat-1");
+    expect(harness.state.selectedTaskId).toBeNull();
+    expect(harness.state.tasksById["task-1"]?.title).toBe("Implement task mode");
+    expect(harness.reconnectThread).not.toHaveBeenCalled();
+  });
+
+  test("overlapping task creation lets only the newest operation select its result", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    const firstGate = Promise.withResolvers<void>();
+    const secondGate = Promise.withResolvers<void>();
+    const taskResult = (suffix: "first" | "second") => ({
+      task: taskRecord({
+        id: `task-${suffix}`,
+        title: `${suffix} task`,
+        threads: [
+          {
+            ...taskRecord().threads[0]!,
+            id: `task-thread-${suffix}`,
+            taskId: `task-${suffix}`,
+            sessionId: `task-session-${suffix}`,
+          },
+        ],
+      }),
+      thread: { id: `task-session-${suffix}` },
+    });
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return taskResult("first");
+    });
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await secondGate.promise;
+      return taskResult("second");
+    });
+
+    const first = actions.startTask({
+      workspaceId: "ws-1",
+      task: { ...taskCreationInput(), idempotencyKey: "first-task" },
+    });
+    const second = actions.startTask({
+      workspaceId: "ws-1",
+      task: { ...taskCreationInput(), idempotencyKey: "second-task" },
+    });
+    secondGate.resolve();
+    await expect(second).resolves.toMatchObject({ ok: true, value: { id: "task-second" } });
+    firstGate.resolve();
+    await expect(first).resolves.toMatchObject({ ok: true, value: { id: "task-first" } });
+
+    expect(harness.state.selectedTaskId).toBe("task-second");
+    expect(harness.state.selectedThreadId).toBe("task-session-second");
+    expect(harness.state.tasksById["task-first"]?.title).toBe("first task");
+    expect(harness.reconnectThread).toHaveBeenCalledTimes(1);
+    expect(harness.reconnectThread).toHaveBeenCalledWith("task-session-second", undefined, {
+      skipWorkspaceSelect: true,
+      refreshSnapshot: true,
+    });
+  });
+
+  test("delayed task failure retains the submitted brief after navigation", async () => {
+    const submittedDraft = {
+      ...createEmptyTaskCreationDraft(5, "ws-1"),
+      title: "Preserve this task",
+      objective: "Keep the exact submitted brief.",
+    };
+    const harness = createHarness();
+    harness.state.taskCreationDraft = submittedDraft;
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    const createGate = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await createGate.promise;
+      throw new Error("task service unavailable");
+    });
+
+    const pending = actions.startTask({
+      workspaceId: "ws-1",
+      task: taskCreationInput(),
+      draftRevision: submittedDraft.revision,
+    });
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    createGate.resolve();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: { message: "task service unavailable" },
+    });
+    expect(harness.state.taskCreationDraft).toEqual(submittedDraft);
+    expect(harness.state.taskCreationError).toEqual({
+      revision: submittedDraft.revision,
+      message: "task service unavailable",
+    });
+    expect(harness.state.view).toBe("settings");
+  });
+
+  test("an older task failure cannot overwrite a newer brief revision", async () => {
+    const submittedDraft = {
+      ...createEmptyTaskCreationDraft(8, "ws-1"),
+      title: "Old task",
+      objective: "Old objective",
+    };
+    const harness = createHarness();
+    harness.state.taskCreationDraft = submittedDraft;
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    const createGate = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      await createGate.promise;
+      throw new Error("stale failure");
+    });
+
+    const pending = actions.startTask({
+      workspaceId: "ws-1",
+      task: taskCreationInput(),
+      draftRevision: submittedDraft.revision,
+    });
+    actions.setTaskCreationDraft({ title: "New task" });
+    createGate.resolve();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: { message: "stale failure" },
+    });
+    expect(harness.state.taskCreationDraft.title).toBe("New task");
+    expect(harness.state.taskCreationDraft.revision).toBe(submittedDraft.revision + 1);
+    expect(harness.state.taskCreationError).toBeNull();
   });
 
   test("creates an explicit task thread without replacing standard chat", async () => {
@@ -304,7 +499,7 @@ describe("desktop task actions", () => {
       },
     });
 
-    expect(created?.id).toBe("task-1");
+    expect(created).toMatchObject({ ok: true, value: { id: "task-1" } });
     expect(harness.state.view).toBe("task");
     expect(harness.state.selectedTaskId).toBe("task-1");
     expect(harness.state.selectedThreadId).toBe("task-session-1");
@@ -349,12 +544,54 @@ describe("desktop task actions", () => {
       name: "Chat",
       workspaceKind: "oneOffChat",
     };
+    harness.state.threads[0] = {
+      ...harness.state.threads[0],
+      sessionId: "source-session-1",
+    };
     const actions = createTaskActions(harness.set as never, harness.get as never, deps);
     Object.assign(harness.state, actions);
     await actions.refreshTasks("ws-1");
+    recordThreadNavigationIntent("chat-1");
 
     const created = taskRecord({
       context: "Structured handoff",
+      sourceSessionId: "source-session-1",
+      creationOrigin: "chat_tool",
+    });
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/created",
+      params: {
+        cwd: "c:/users/max/projects/demo",
+        task: created,
+        sourceSessionId: "source-session-1",
+        takeover: true,
+        workspaceDisposition: "promote_one_off",
+      },
+    });
+
+    expect(harness.state.workspaces[0]?.workspaceKind).toBe("project");
+    expect(harness.state.workspaces[0]?.name).toBe("Implement task mode");
+    expect(harness.state.view).toBe("task");
+    expect(harness.state.selectedTaskId).toBe("task-1");
+    expect(harness.state.selectedThreadId).toBe("task-session-1");
+  });
+
+  test("task/created production notification preserves an expired source-chat intent", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    Object.assign(harness.state, actions);
+    await actions.refreshTasks("ws-1");
+    recordThreadNavigationIntent("chat-1");
+
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    harness.state.selectedThreadId = null;
+    invalidateNavigationIntent();
+    harness.state.view = "chat";
+    harness.state.selectedThreadId = "chat-1";
+
+    const created = taskRecord({
       sourceSessionId: "chat-1",
       creationOrigin: "chat_tool",
     });
@@ -366,15 +603,15 @@ describe("desktop task actions", () => {
         task: created,
         sourceSessionId: "chat-1",
         takeover: true,
-        workspaceDisposition: "promote_one_off",
+        workspaceDisposition: "existing_project",
       },
     });
 
-    expect(harness.state.workspaces[0]?.workspaceKind).toBe("project");
-    expect(harness.state.workspaces[0]?.name).toBe("Implement task mode");
-    expect(harness.state.view).toBe("task");
-    expect(harness.state.selectedTaskId).toBe("task-1");
-    expect(harness.state.selectedThreadId).toBe("task-session-1");
+    expect(harness.state.tasksById["task-1"]?.title).toBe("Implement task mode");
+    expect(harness.state.view).toBe("chat");
+    expect(harness.state.selectedThreadId).toBe("chat-1");
+    expect(harness.state.selectedTaskId).toBeNull();
+    expect(harness.reconnectThread).not.toHaveBeenCalled();
   });
 
   test("accepts canonical task notifications for the same Windows workspace", async () => {
@@ -557,7 +794,7 @@ describe("desktop task actions", () => {
       { questionId: "question-1", optionId: "internal" },
     ]);
 
-    expect(result).toBe("queued");
+    expect(result).toEqual({ ok: true, value: "queued" });
     expect(requestJsonRpc.mock.calls.at(-1)?.slice(3)).toEqual([
       "task/questions/resolve",
       {
@@ -621,10 +858,12 @@ describe("desktop task actions", () => {
       throw new Error("Task revision conflict");
     });
 
-    await expect(actions.updateTaskBrief("task-1", { title: "Unsaved title" })).resolves.toBe(
-      false,
-    );
-    expect(harness.state.taskError).toContain("revision conflict");
+    await expect(
+      actions.updateTaskBrief("task-1", { title: "Unsaved title" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "Task revision conflict" },
+    });
   });
 
   test("retries a failed task and stores the working task returned by the harness", async () => {
@@ -637,7 +876,7 @@ describe("desktop task actions", () => {
       retryStatus: "queued",
     }));
 
-    await expect(actions.retryTask("task-1")).resolves.toBe(true);
+    await expect(actions.retryTask("task-1")).resolves.toMatchObject({ ok: true });
     expect(requestJsonRpc.mock.calls.at(-1)?.slice(3)).toEqual([
       "task/retry",
       {
@@ -650,7 +889,7 @@ describe("desktop task actions", () => {
     expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
   });
 
-  test("deduplicates current lifecycle requests and replaces stale actions", async () => {
+  test("deduplicates task lifecycle requests until the acknowledged action settles", async () => {
     const harness = createHarness();
     const actions = createTaskActions(harness.set as never, harness.get as never, deps);
     Object.assign(harness.state, actions);
@@ -671,31 +910,33 @@ describe("desktop task actions", () => {
 
     const duplicateReopen = actions.reopenTask("task-1");
     harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 7 });
-    const retry = actions.retryTask("task-1");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await expect(duplicateReopen).resolves.toBeUndefined();
-    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
-    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
-      action: "retry",
-      expectedRevision: 7,
+    const blockedRetry = actions.retryTask("task-1");
+    await expect(duplicateReopen).resolves.toMatchObject({
+      ok: false,
+      error: { code: "duplicate" },
     });
-    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
-    await expect(actions.retryTask("task-1")).resolves.toBe(false);
-    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
-
-    reopenResult.reject(new Error("Task revision conflict"));
-    await expect(first).resolves.toBeUndefined();
-    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
-      action: "retry",
-      expectedRevision: 7,
+    await expect(blockedRetry).resolves.toMatchObject({
+      ok: false,
+      error: { code: "duplicate" },
     });
+    expect(requestJsonRpc).toHaveBeenCalledTimes(1);
     expect(harness.state.notifications).toHaveLength(0);
 
+    reopenResult.resolve({
+      task: taskRecord({ status: "working", revision: 8 }),
+    });
+    await expect(first).resolves.toMatchObject({ ok: true });
+    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
+
+    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
+    const retry = actions.retryTask("task-1");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     retryResult.resolve({
       task: taskRecord({ status: "working", revision: 9 }),
       retryStatus: "queued",
     });
-    await expect(retry).resolves.toBe(true);
+    await expect(retry).resolves.toMatchObject({ ok: true });
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
     expect(harness.state.tasksById["task-1"]?.revision).toBe(9);
@@ -880,7 +1121,7 @@ describe("desktop task actions", () => {
     );
 
     expect(harness.state.taskError).toBeNull();
-    expect(detail?.activeRevision?.id).toBe("revision-1");
+    expect(detail.ok && detail.value.activeRevision?.id).toBe("revision-1");
     expect(requestJsonRpc.mock.calls.at(-1)?.[4]).toEqual({
       taskId: "task-1",
       artifactId: "artifact-1",
@@ -907,8 +1148,10 @@ describe("desktop task actions", () => {
 
     const result = await actions.restoreTaskArtifactVersion("task-1", "artifact-1", "version-1");
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "Task revision conflict" },
+    });
     expect(requestJsonRpc).toHaveBeenCalledTimes(1);
-    expect(harness.state.taskError).toContain("revision conflict");
   });
 });

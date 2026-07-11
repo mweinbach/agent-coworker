@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { marketplaceRemovePendingKey } from "../../../app/store.actions/marketplaces";
+import { operationKey } from "../../../app/store.helpers";
 import type { MarketplaceDetail } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -15,6 +16,7 @@ import {
 } from "../../../components/ui/dialog";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { confirmAction, openExternalUrl } from "../../../lib/desktopCommands";
+import { OperationFeedback } from "../../OperationFeedback";
 import { EntityIcon } from "../SettingsPrimitives";
 
 type MarketplaceDetailPlugin = MarketplaceDetail["plugins"][number];
@@ -51,6 +53,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
   const installPlugins = useAppStore((s) => s.installPlugins);
   const installSkills = useAppStore((s) => s.installSkills);
   const removeMarketplace = useAppStore((s) => s.removeMarketplace);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const [installingKey, setInstallingKey] = useState<string | null>(null);
 
@@ -72,9 +75,21 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
     installingKey !== null ||
     Object.keys(pluginPendingKeys).some((key) => key.startsWith("plugin:install:")) ||
     Object.keys(skillPendingKeys).some((key) => key.startsWith("install:"));
+  const selectedOperation =
+    selectedId === null
+      ? undefined
+      : [
+          operationsByKey[operationKey("marketplace", "remove", selectedId)],
+          installingKey?.startsWith("plugin:")
+            ? operationsByKey[operationKey("plugin", "install")]
+            : undefined,
+          installingKey?.startsWith("skill:")
+            ? operationsByKey[operationKey("skill", "install")]
+            : undefined,
+        ].find((operation) => operation?.status === "pending" || operation?.status === "error");
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) {
+    if (!open && !removePending && !installPending) {
       void selectMarketplace(null);
     }
   };
@@ -83,10 +98,8 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
     if (!plugin.installSource || selectedId === null) return;
     setInstallingKey(`plugin:${plugin.name}`);
     try {
-      await installPlugins(plugin.installSource, "user");
-      await readMarketplaceDetail(selectedId);
-    } catch {
-      // Failures surface via the `pluginMutationError` runtime state.
+      const result = await installPlugins(plugin.installSource, "user");
+      if (result.ok) await readMarketplaceDetail(selectedId);
     } finally {
       setInstallingKey(null);
     }
@@ -96,10 +109,8 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
     if (!skill.installSource || selectedId === null) return;
     setInstallingKey(`skill:${skill.name}`);
     try {
-      await installSkills(skill.installSource, "global");
-      await readMarketplaceDetail(selectedId);
-    } catch {
-      // Failures surface via the `skillMutationError` runtime state.
+      const result = await installSkills(skill.installSource, "global");
+      if (result.ok) await readMarketplaceDetail(selectedId);
     } finally {
       setInstallingKey(null);
     }
@@ -118,9 +129,8 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
       defaultAction: "cancel",
     });
     if (!confirmed) return;
-    await removeMarketplace(selectedId);
-    const runtimeAfter = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    if (!runtimeAfter?.marketplaceMutationError) {
+    const result = await removeMarketplace(selectedId);
+    if (result.ok) {
       void selectMarketplace(null);
     }
   };
@@ -174,6 +184,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
               {marketplaceMutationError}
             </div>
           ) : null}
+          <OperationFeedback operation={selectedOperation} />
 
           {detailError ? (
             <div className="flex items-center gap-3 rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-3">
@@ -315,7 +326,12 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
               </Button>
             ) : null}
           </div>
-          <Button type="button" size="sm" onClick={() => handleOpenChange(false)}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={removePending || installPending}
+            onClick={() => handleOpenChange(false)}
+          >
             Close
           </Button>
         </div>

@@ -139,7 +139,7 @@ describe("manage models dialog", () => {
               : entry,
           ),
         }));
-        return true;
+        return { ok: true, value: undefined };
       }) as any,
     });
 
@@ -186,10 +186,11 @@ describe("manage models dialog", () => {
     useAppStore.setState({
       setProviderModelsEnabled: (async (provider: string, models: unknown) => {
         setCalls.push({ provider, models });
-        return true;
+        return { ok: true, value: undefined };
       }) as any,
       resetProviderModelPreferences: (async (provider: string) => {
         resetCalls.push(provider);
+        return { ok: true, value: undefined };
       }) as any,
     });
 
@@ -241,13 +242,16 @@ describe("manage models dialog", () => {
     }
   });
 
-  test("reset clears in-flight pending toggles so checkboxes reflect the catalog", async () => {
+  test("blocks reset while a model toggle is in flight", async () => {
     const harness = setupJsdom();
     // setEnabled never resolves, so the optimistic pending entry lingers and
     // disagrees with the (unchanged) catalog — the scenario the reconcile keeps.
     useAppStore.setState({
       setProviderModelsEnabled: (() => new Promise(() => {})) as any,
-      resetProviderModelPreferences: (async () => {}) as any,
+      resetProviderModelPreferences: (async () => ({
+        ok: true,
+        value: undefined,
+      })) as any,
     });
 
     try {
@@ -278,15 +282,12 @@ describe("manage models dialog", () => {
       const reset = [...doc.querySelectorAll("button")].find(
         (el) => el.textContent === "Reset to defaults",
       );
-      await act(async () => {
-        reset?.click();
-      });
+      expect(reset?.hasAttribute("disabled")).toBe(true);
 
-      // After reset the stale pending entry is cleared, so the checkbox tracks
-      // the catalog (still enabled) instead of the abandoned disable.
+      // The pending intent remains visible until its acknowledged result lands.
       expect(
-        doc.querySelector('[aria-label="Disable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
-      ).toBe("true");
+        doc.querySelector('[aria-label="Enable zai-org/GLM-5.2"]')?.getAttribute("aria-checked"),
+      ).toBe("false");
 
       await act(async () => {
         root.unmount();

@@ -19,12 +19,12 @@ import {
   resolveActiveComposerDraftKey,
   revokeComposerDraftAttachmentPreviews,
 } from "../composerDrafts";
+import { isInteractionThreadVisible } from "../interactionVisibility";
 import {
   googleProviderOptionsForReasoningEffort,
   isGoogleReasoningEffortValue,
   isOpenAiReasoningEffortValue,
 } from "../openaiCompatibleProviderOptions";
-import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AbortableActionOptions,
   type AppStoreActions,
@@ -71,9 +71,9 @@ import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
+  type ChatInteraction,
   type FeedItem,
   isOneOffChatWorkspace,
-  type SandboxApprovalPrompt,
   type SessionSnapshot,
   type SessionSnapshotFingerprint,
   type ThreadBusyPolicy,
@@ -160,37 +160,57 @@ function queueOptimisticFirstThreadMessage(
   });
 }
 
-function findLatestSandboxApprovalPrompt(
+function updateInteraction(
+  set: StoreSet,
+  threadId: string,
+  requestId: string,
+  update: (interaction: ChatInteraction) => ChatInteraction,
+): void {
+  set((state) => {
+    const interactions = state.interactionsByThread[threadId];
+    if (!interactions?.some((interaction) => interaction.requestId === requestId)) {
+      return {};
+    }
+    return {
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [threadId]: interactions.map((interaction) =>
+          interaction.requestId === requestId ? update(interaction) : interaction,
+        ),
+      },
+    };
+  });
+}
+
+function findLatestVisibleSandboxInteraction(
   state: AppStoreState,
-): { threadId: string; prompt: SandboxApprovalPrompt } | null {
+): { threadId: string; interaction: ChatInteraction } | null {
+  const eligible = (interaction: ChatInteraction) =>
+    interaction.kind === "approval" &&
+    interaction.approvalKind === "sandbox" &&
+    (interaction.status === "pending" || interaction.status === "failed");
   const selectedThreadId = state.selectedThreadId;
-  const selectedPrompt = selectedThreadId
-    ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
+  const selectedInteraction = selectedThreadId
+    ? state.interactionsByThread[selectedThreadId]?.filter(eligible).at(-1)
     : undefined;
   if (
     selectedThreadId &&
-    selectedPrompt &&
-    isSandboxApprovalThreadVisible(state, selectedThreadId)
+    selectedInteraction &&
+    isInteractionThreadVisible(state, selectedThreadId)
   ) {
-    return { threadId: selectedThreadId, prompt: selectedPrompt };
+    return { threadId: selectedThreadId, interaction: selectedInteraction };
   }
 
-  let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
-  for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
-    if (!isSandboxApprovalThreadVisible(state, threadId)) continue;
-    for (const prompt of prompts) {
-      if (!latest) {
-        latest = { threadId, prompt };
-        continue;
-      }
-      const promptSequence = prompt.receivedSequence ?? 0;
-      const latestSequence = latest.prompt.receivedSequence ?? 0;
-      if (promptSequence > latestSequence) {
-        latest = { threadId, prompt };
+  let latest: { threadId: string; interaction: ChatInteraction } | null = null;
+  for (const [threadId, interactions] of Object.entries(state.interactionsByThread)) {
+    if (!isInteractionThreadVisible(state, threadId)) continue;
+    for (const interaction of interactions) {
+      if (!eligible(interaction)) continue;
+      if (!latest || interaction.receivedSequence > latest.interaction.receivedSequence) {
+        latest = { threadId, interaction };
       }
     }
   }
-
   return latest;
 }
 
@@ -672,6 +692,7 @@ export function createThreadActions(
   | "answerAsk"
   | "answerApproval"
   | "dismissPrompt"
+  | "retryInteractionResponse"
   | "loadAllThreadUsage"
 > {
   const closeThreadSession = (threadId: string) => {
@@ -813,7 +834,6 @@ export function createThreadActions(
       set((s) => {
         const remainingThreads = s.threads.filter((t) => t.id !== threadId);
         const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
-        const nextPromptModal = s.promptModal?.threadId === threadId ? null : s.promptModal;
         const remainingWorkspaces = workspaceIdToRemove
           ? s.workspaces.filter((workspace) => workspace.id !== workspaceIdToRemove)
           : s.workspaces;
@@ -825,15 +845,14 @@ export function createThreadActions(
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
 
-        const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
-        delete nextSandboxApprovals[threadId];
+        const nextInteractionsByThread = { ...s.interactionsByThread };
+        delete nextInteractionsByThread[threadId];
 
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
-          promptModal: nextPromptModal,
-          sandboxApprovalsByThread: nextSandboxApprovals,
+          interactionsByThread: nextInteractionsByThread,
           threadRuntimeById: nextThreadRuntimeById,
           selectedWorkspaceId:
             s.selectedWorkspaceId === workspaceIdToRemove
@@ -1775,6 +1794,20 @@ export function createThreadActions(
     setInjectContext: (v) => set({ injectContext: v }),
 
     answerAsk: (threadId, requestId, answer) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (
+        interaction?.kind !== "ask" ||
+        (interaction.status !== "pending" && interaction.status !== "failed")
+      ) {
+        return false;
+      }
+      updateInteraction(set, threadId, requestId, (current) => {
+        if (current.kind !== "ask") return current;
+        const { error: _error, ...rest } = current;
+        return { ...rest, status: "responding", response: answer };
+      });
       const sent = sendThread(get, threadId, (sessionId) => ({
         type: "ask_response",
         sessionId,
@@ -1782,9 +1815,12 @@ export function createThreadActions(
         answer,
       }));
       if (!sent) {
-        // Socket disconnected — keep the modal open so the user can retry
-        // once reconnected rather than silently swallowing the answer.
-        return;
+        updateInteraction(set, threadId, requestId, (current) => ({
+          ...current,
+          status: "failed",
+          error: "The response could not be sent. Reconnect and retry.",
+        }));
+        return false;
       }
       appendThreadTranscript(threadId, "client", {
         type: "ask_response",
@@ -1792,10 +1828,24 @@ export function createThreadActions(
         requestId,
         answer,
       });
-      set({ promptModal: null });
+      return true;
     },
 
     answerApproval: (threadId, requestId, approved) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (
+        interaction?.kind !== "approval" ||
+        (interaction.status !== "pending" && interaction.status !== "failed")
+      ) {
+        return false;
+      }
+      updateInteraction(set, threadId, requestId, (current) => {
+        if (current.kind !== "approval") return current;
+        const { error: _error, ...rest } = current;
+        return { ...rest, status: "responding", response: approved };
+      });
       const sent = sendThread(get, threadId, (sessionId) => ({
         type: "approval_response",
         sessionId,
@@ -1803,6 +1853,11 @@ export function createThreadActions(
         approved,
       }));
       if (!sent) {
+        updateInteraction(set, threadId, requestId, (current) => ({
+          ...current,
+          status: "failed",
+          error: "The response could not be sent. Reconnect and retry.",
+        }));
         return false;
       }
       appendThreadTranscript(threadId, "client", {
@@ -1811,37 +1866,27 @@ export function createThreadActions(
         requestId,
         approved,
       });
-      // Clear the modal (ordinary approvals) and drop any matching inline
-      // sandbox-escalation prompt for this thread.
-      set((s) => {
-        const existing = s.sandboxApprovalsByThread[threadId];
-        const promptModal =
-          s.promptModal?.kind === "approval" &&
-          s.promptModal.threadId === threadId &&
-          s.promptModal.prompt.requestId === requestId
-            ? null
-            : s.promptModal;
-        if (!existing) return { promptModal };
-        const remaining = existing.filter((p) => p.requestId !== requestId);
-        const nextSandbox = { ...s.sandboxApprovalsByThread };
-        if (remaining.length > 0) nextSandbox[threadId] = remaining;
-        else delete nextSandbox[threadId];
-        return { promptModal, sandboxApprovalsByThread: nextSandbox };
-      });
       return true;
     },
 
     dismissPrompt: () => {
-      const state = get();
-      if (state.promptModal) {
-        set({ promptModal: null });
-        return;
-      }
+      const pending = findLatestVisibleSandboxInteraction(get());
+      if (pending?.interaction.kind !== "approval") return;
+      get().answerApproval(pending.threadId, pending.interaction.requestId, false);
+    },
 
-      const pending = findLatestSandboxApprovalPrompt(state);
-      if (pending) {
-        state.answerApproval(pending.threadId, pending.prompt.requestId, false);
+    retryInteractionResponse: (threadId, requestId) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (interaction?.status !== "failed") return false;
+      if (interaction.kind === "ask" && interaction.response !== undefined) {
+        return get().answerAsk(threadId, requestId, interaction.response);
       }
+      if (interaction.kind === "approval" && interaction.response !== undefined) {
+        return get().answerApproval(threadId, requestId, interaction.response);
+      }
+      return false;
     },
 
     loadAllThreadUsage: async () => {

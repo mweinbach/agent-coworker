@@ -66,6 +66,63 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("invalid ask responses remain pending and can be retried exactly once", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const answer = await params.askUser("Retry me");
+          return { text: `answer:${answer}`, responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start retry flow" }],
+      });
+
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/tool/requestUserInput",
+      );
+      rpc.sendResponse(request.id, { answer: "   " });
+      const replayed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/tool/requestUserInput" &&
+          message.params.requestId === request.params.requestId,
+      );
+      expect(replayed.id).toBe(request.id);
+      await expect(
+        rpc.waitFor(
+          (message) =>
+            message.method === "serverRequest/resolved" &&
+            message.params.requestId === request.params.requestId,
+          250,
+        ),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
+
+      rpc.sendResponse(request.id, { answer: "valid" });
+      const resolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+      );
+      const completed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      expect(resolved.params.threadId).toBe(started.result.thread.id);
+      expect(completed.params.item.text).toBe("answer:valid");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("server-initiated approval requests resolve over JSON-RPC responses", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

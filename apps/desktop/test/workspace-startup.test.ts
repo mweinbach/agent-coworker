@@ -184,7 +184,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { isSandboxApprovalThreadVisible } = await import("../src/app/sandboxApprovalVisibility");
+const { isInteractionThreadVisible } = await import("../src/app/interactionVisibility");
 const { RUNTIME } = await import("../src/app/store.helpers");
 const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 
@@ -294,7 +294,7 @@ describe("workspace startup flow", () => {
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
       workspaceExplorerRefreshById: {},
-      promptModal: null,
+      interactionsByThread: {},
       filePreview: null,
       notifications: [],
       providerStatusByName: {},
@@ -1329,7 +1329,7 @@ describe("workspace startup flow", () => {
     expect(state.newTaskWorkspaceId).toBe("ws-1");
     expect(state.newTaskWorkspaceRequestId).toBe(1);
     expect(state.threadRuntimeById["chat-session-1"]).toBeUndefined();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-1")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-1")).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-one" });
     await selectPromise;
@@ -1397,7 +1397,7 @@ describe("workspace startup flow", () => {
     expect(state.selectedWorkspaceId).toBe("ws-2");
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
 
     startDeferreds[0]?.resolve({ url: "ws://workspace-two" });
     await selectPromise;
@@ -1566,14 +1566,19 @@ describe("workspace startup flow", () => {
           ],
         },
       },
-      sandboxApprovalsByThread: {
+      interactionsByThread: {
         "task-session-1": [
           {
+            kind: "approval",
+            approvalKind: "sandbox",
             requestId: "approval-task-1",
             command: "curl https://example.com/task",
-            reason: "The OS sandbox blocked network access for this command.",
+            dangerous: true,
+            reasonCode: "sandbox_denied_escalation",
+            detail: "The OS sandbox blocked network access for this command.",
             category: "network",
             receivedSequence: 1,
+            status: "pending",
           },
         ],
       },
@@ -1590,7 +1595,7 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Preserved task transcript" }),
     );
-    expect(isSandboxApprovalThreadVisible(state, "task-session-1")).toBe(true);
+    expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
@@ -1704,7 +1709,7 @@ describe("workspace startup flow", () => {
     expect(state.selectedTaskId).toBeNull();
     expect(state.selectedThreadId).toBeNull();
     expect(state.newTaskWorkspaceId).toBeNull();
-    expect(isSandboxApprovalThreadVisible(state, "chat-session-2")).toBe(false);
+    expect(isInteractionThreadVisible(state, "chat-session-2")).toBe(false);
 
     state.closeSettings();
     const closedState = useAppStore.getState();
@@ -1916,8 +1921,8 @@ describe("workspace startup flow", () => {
       expect(state.threadRuntimeById["task-session-1"]?.feed?.[0]).toEqual(
         expect.objectContaining({ text: "Task one transcript" }),
       );
-      expect(isSandboxApprovalThreadVisible(state, "task-session-1")).toBe(true);
-      expect(isSandboxApprovalThreadVisible(state, "task-session-2")).toBe(false);
+      expect(isInteractionThreadVisible(state, "task-session-1")).toBe(true);
+      expect(isInteractionThreadVisible(state, "task-session-2")).toBe(false);
       expect(startCalls).toHaveLength(0);
     });
   }
@@ -1995,7 +2000,7 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById["orphan-task-thread"]?.feed?.[0]).toEqual(
       expect.objectContaining({ text: "Ordinary orphan transcript" }),
     );
-    expect(isSandboxApprovalThreadVisible(state, "orphan-task-thread")).toBe(true);
+    expect(isInteractionThreadVisible(state, "orphan-task-thread")).toBe(true);
     expect(startCalls).toHaveLength(0);
   });
 

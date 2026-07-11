@@ -62,6 +62,7 @@ export type QualityHarness = {
     runId: number,
     path: QualityDeltaBurstPath,
   ): Promise<QualityDeltaBurstDescriptor>;
+  emitInteractionQueue(): Promise<void>;
   emitLongTranscript(count: number, runId: number): Promise<string>;
   emitStreamingActivity(): Promise<void>;
   getExternalNetworkProofUrl(): Promise<string>;
@@ -473,6 +474,11 @@ async function launchQualityHarness(
           },
           { count, path, runId },
         ),
+      emitInteractionQueue: async () => {
+        await electronApp.evaluate(() => {
+          globalThis.__coworkQualityGateMain?.emitInteractionQueue();
+        });
+      },
       emitLongTranscript: async (count, runId) =>
         await electronApp.evaluate(
           (_electron, input) => {

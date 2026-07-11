@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createJsonRpcWorkspaceModule } from "../src/app/store.helpers/threadEventReducer/jsonRpcWorkspace";
 
 describe("jsonRpc workspace thread migration", () => {
-  test("merges sandbox approvals when migrating thread ids", () => {
+  test("merges ordered interactions when migrating thread ids", () => {
     const fromThreadId = "optimistic-thread";
     const toThreadId = "real-thread";
     let state = {
@@ -13,15 +13,40 @@ describe("jsonRpc workspace thread migration", () => {
       ],
       threadRuntimeById: {},
       latestTodosByThreadId: {},
-      sandboxApprovalsByThread: {
+      interactionsByThread: {
         [fromThreadId]: [
-          { requestId: "approval-from", command: "touch ../outside" },
-          { requestId: "approval-shared", command: "curl https://example.com" },
+          {
+            kind: "approval",
+            approvalKind: "sandbox",
+            requestId: "approval-from",
+            command: "touch ../outside",
+            dangerous: true,
+            reasonCode: "sandbox_denied_escalation",
+            receivedSequence: 2,
+            status: "pending",
+          },
+          {
+            kind: "ask",
+            requestId: "ask-from",
+            question: "Continue?",
+            receivedSequence: 3,
+            status: "pending",
+          },
         ],
-        [toThreadId]: [{ requestId: "approval-existing", command: "git status" }],
+        [toThreadId]: [
+          {
+            kind: "approval",
+            approvalKind: "manual",
+            requestId: "approval-existing",
+            command: "git status",
+            dangerous: false,
+            reasonCode: "requires_manual_review",
+            receivedSequence: 1,
+            status: "failed",
+          },
+        ],
       },
       selectedThreadId: fromThreadId,
-      promptModal: null,
     } as any;
     const get = () => state;
     const set = (updater: any) => {
@@ -62,11 +87,10 @@ describe("jsonRpc workspace thread migration", () => {
 
     module.migrateThreadIdentity(get as any, set as any, fromThreadId, toThreadId);
 
-    expect(state.sandboxApprovalsByThread[fromThreadId]).toBeUndefined();
-    expect(state.sandboxApprovalsByThread[toThreadId]).toEqual([
-      { requestId: "approval-existing", command: "git status" },
-      { requestId: "approval-from", command: "touch ../outside" },
-      { requestId: "approval-shared", command: "curl https://example.com" },
-    ]);
+    expect(state.interactionsByThread[fromThreadId]).toBeUndefined();
+    expect(
+      state.interactionsByThread[toThreadId]?.map((interaction) => interaction.requestId),
+    ).toEqual(["approval-existing", "approval-from", "ask-from"]);
+    expect(state.interactionsByThread[toThreadId]?.[0]?.status).toBe("failed");
   });
 });

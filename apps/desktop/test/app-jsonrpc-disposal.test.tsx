@@ -244,7 +244,7 @@ function seedWorkspaceState() {
       },
     },
     notifications: [],
-    promptModal: null,
+    interactionsByThread: {},
     onboardingVisible: false,
   });
   return { workspaceId, threadId };

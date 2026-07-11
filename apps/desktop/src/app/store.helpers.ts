@@ -101,6 +101,7 @@ import {
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
+  ChatInteraction,
   CloudSyncSettings,
   DesktopSettings,
   LmStudioStartModalState,
@@ -110,11 +111,9 @@ import type {
   PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
   PrivacyTelemetrySettings,
-  PromptModalState,
   ResearchCard,
   ResearchDetail,
   ResearchSettingsState,
-  SandboxApprovalPrompt,
   SettingsPageId,
   SidebarSectionKey,
   TaskArtifactDetail,
@@ -248,14 +247,8 @@ export type AppStoreState = {
   workspaceExplorerById: Record<string, WorkspaceExplorerState>;
   workspaceExplorerRefreshById: Record<string, number>;
 
-  promptModal: PromptModalState;
+  interactionsByThread: Record<string, ChatInteraction[]>;
   lmStudioStartModal: LmStudioStartModalState | null;
-  /**
-   * Pending sandbox-denial escalations rendered inline in the chat feed, keyed by
-   * threadId. Sandbox escapes use this inline path; ordinary approvals
-   * (`requires_manual_review`) still use `promptModal`.
-   */
-  sandboxApprovalsByThread: Record<string, SandboxApprovalPrompt[]>;
   filePreview: { path: string } | null;
   canvasActiveTab: "preview" | "edit";
   canvasShowFormattingBar: boolean;
@@ -812,9 +805,10 @@ export type AppStoreState = {
 
   loadAllThreadUsage: () => Promise<void>;
 
-  answerAsk: (threadId: string, requestId: string, answer: string) => void;
+  answerAsk: (threadId: string, requestId: string, answer: string) => boolean;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => boolean;
   dismissPrompt: () => void;
+  retryInteractionResponse: (threadId: string, requestId: string) => boolean;
 
   startOnboarding: () => void;
   dismissOnboarding: () => void;

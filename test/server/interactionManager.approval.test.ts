@@ -136,3 +136,48 @@ describe("InteractionManager prompt timeout", () => {
     await promise;
   });
 });
+
+describe("InteractionManager pending prompt replay", () => {
+  function makeQueueManager() {
+    const events: SessionEvent[] = [];
+    const manager = new InteractionManager({
+      sessionId: "s1",
+      emit: (evt) => events.push(evt),
+      emitError: () => {},
+      log: () => {},
+      queuePersistSessionSnapshot: () => {},
+      getConfig: () => ({}) as unknown as AgentConfig,
+      isYolo: () => false,
+      promptTimeoutMs: 0,
+    });
+    return { manager, events };
+  }
+
+  test("replays mixed asks and approvals in arrival order while resolving only one", async () => {
+    const { manager } = makeQueueManager();
+    const firstAsk = manager.askUser("First question?");
+    const approval = manager.approveCommand("rm -rf build");
+    const secondAsk = manager.askUser("Second question?");
+
+    const pending = manager.getPendingPromptEventsForReplay();
+    expect(pending.map((event) => event.type)).toEqual(["ask", "approval", "ask"]);
+    expect(pending.map((event) => event.requestId)).toHaveLength(3);
+
+    const approvalId = pending[1]?.requestId;
+    expect(approvalId).toBeString();
+    expect(manager.handleApprovalResponse(approvalId ?? "", true)).toBe(true);
+    expect(manager.handleApprovalResponse(approvalId ?? "", false)).toBe(false);
+    expect(manager.getPendingPromptEventsForReplay().map((event) => event.requestId)).toEqual([
+      pending[0]?.requestId,
+      pending[2]?.requestId,
+    ]);
+
+    const firstAskId = pending[0]?.requestId;
+    const secondAskId = pending[2]?.requestId;
+    expect(manager.handleAskResponse(firstAskId ?? "", "one")).toBe(true);
+    expect(manager.handleAskResponse(secondAskId ?? "", "two")).toBe(true);
+    await expect(firstAsk).resolves.toBe("one");
+    await expect(approval).resolves.toBe(true);
+    await expect(secondAsk).resolves.toBe("two");
+  });
+});

@@ -54,7 +54,6 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
     bootstrapPhase: "ready",
     startupError: null,
     onboardingVisible: false,
-    promptModal: null,
     view: "task",
     workspaces: [
       {
@@ -115,14 +114,19 @@ function seedTerminalTaskApprovalState(dismissPrompt: () => void) {
         latestCheckpoint: null,
       },
     } as never,
-    sandboxApprovalsByThread: {
+    interactionsByThread: {
       "task-session-1": [
         {
+          kind: "approval",
+          approvalKind: "sandbox",
           requestId: "approval-1",
           command: "curl https://example.com",
-          reason: "The OS sandbox blocked network access for this command.",
+          dangerous: true,
+          reasonCode: "sandbox_denied_escalation",
+          detail: "The OS sandbox blocked network access for this command.",
           category: "network",
           receivedSequence: 1,
+          status: "pending",
         },
       ],
     },
@@ -359,7 +363,7 @@ describe("app window-mode notification routing", () => {
     try {
       seedTerminalTaskApprovalState(() => {});
       useAppStore.setState({
-        sandboxApprovalsByThread: {},
+        interactionsByThread: {},
         threadRuntimeById: {
           "task-session-1": {
             wsUrl: null,

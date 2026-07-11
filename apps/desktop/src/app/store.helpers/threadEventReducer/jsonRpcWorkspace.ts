@@ -149,14 +149,24 @@ export function createJsonRpcWorkspaceModule(
         if (!requestId) return;
         flushPendingContentForThread(set, mappedThreadId);
         set((s) => {
-          const existing = s.sandboxApprovalsByThread[mappedThreadId];
+          const existing = s.interactionsByThread[mappedThreadId];
           if (!existing) return {};
-          const remaining = existing.filter((approval) => approval.requestId !== requestId);
-          if (remaining.length === existing.length) return {};
-          const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
-          if (remaining.length > 0) nextSandboxApprovals[mappedThreadId] = remaining;
-          else delete nextSandboxApprovals[mappedThreadId];
-          return { sandboxApprovalsByThread: nextSandboxApprovals };
+          let changed = false;
+          const interactions = existing.map((interaction) => {
+            if (interaction.requestId !== requestId || interaction.status === "resolved") {
+              return interaction;
+            }
+            changed = true;
+            const { error: _error, ...rest } = interaction;
+            return { ...rest, status: "resolved" as const };
+          });
+          if (!changed) return {};
+          return {
+            interactionsByThread: {
+              ...s.interactionsByThread,
+              [mappedThreadId]: interactions,
+            },
+          };
         });
         return;
       }
@@ -263,6 +273,7 @@ export function createJsonRpcWorkspaceModule(
     set((s) => {
       let threadsChanged = false;
       let runtimeChanged = false;
+      let interactionsChanged = false;
       const nextThreads = s.threads.map((thread) => {
         if (thread.workspaceId !== workspaceId || !reconnectIds.has(thread.id)) {
           return thread;
@@ -273,6 +284,7 @@ export function createJsonRpcWorkspaceModule(
         return { ...thread, status: "disconnected" as const };
       });
       const nextThreadRuntimeById = { ...s.threadRuntimeById };
+      const nextInteractionsByThread = { ...s.interactionsByThread };
       for (const threadId of reconnectIds) {
         const runtime = nextThreadRuntimeById[threadId];
         if (!runtime) continue;
@@ -286,13 +298,27 @@ export function createJsonRpcWorkspaceModule(
           pendingTurnStart: null,
           pendingSteer: null,
         };
+        const interactions = nextInteractionsByThread[threadId];
+        if (interactions?.some((interaction) => interaction.status === "responding")) {
+          interactionsChanged = true;
+          nextInteractionsByThread[threadId] = interactions.map((interaction) =>
+            interaction.status === "responding"
+              ? {
+                  ...interaction,
+                  status: "failed" as const,
+                  error: "Connection closed before the response was confirmed.",
+                }
+              : interaction,
+          );
+        }
       }
-      if (!threadsChanged && !runtimeChanged) {
+      if (!threadsChanged && !runtimeChanged && !interactionsChanged) {
         return {};
       }
       return {
         threads: nextThreads,
         threadRuntimeById: nextThreadRuntimeById,
+        interactionsByThread: nextInteractionsByThread,
       };
     });
     void ctx.deps.persist(get);
@@ -410,28 +436,24 @@ export function createJsonRpcWorkspaceModule(
       }
       delete nextLatestTodosByThreadId[fromThreadId];
 
-      const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
-      if (fromThreadId in nextSandboxApprovals) {
-        const migrated = nextSandboxApprovals[fromThreadId];
-        delete nextSandboxApprovals[fromThreadId];
+      const nextInteractionsByThread = { ...s.interactionsByThread };
+      if (fromThreadId in nextInteractionsByThread) {
+        const migrated = nextInteractionsByThread[fromThreadId];
+        delete nextInteractionsByThread[fromThreadId];
         if (migrated) {
-          const existing = nextSandboxApprovals[toThreadId] ?? [];
-          const seenRequestIds = new Set(existing.map((approval) => approval.requestId));
-          nextSandboxApprovals[toThreadId] = [
+          const existing = nextInteractionsByThread[toThreadId] ?? [];
+          const seenRequestIds = new Set(existing.map((interaction) => interaction.requestId));
+          nextInteractionsByThread[toThreadId] = [
             ...existing,
-            ...migrated.filter((approval) => !seenRequestIds.has(approval.requestId)),
-          ];
+            ...migrated.filter((interaction) => !seenRequestIds.has(interaction.requestId)),
+          ].sort((left, right) => left.receivedSequence - right.receivedSequence);
         }
       }
 
       return {
         threads: nextThreads,
         selectedThreadId: s.selectedThreadId === fromThreadId ? toThreadId : s.selectedThreadId,
-        promptModal:
-          s.promptModal && s.promptModal.threadId === fromThreadId
-            ? { ...s.promptModal, threadId: toThreadId }
-            : s.promptModal,
-        sandboxApprovalsByThread: nextSandboxApprovals,
+        interactionsByThread: nextInteractionsByThread,
         threadRuntimeById: nextThreadRuntimeById,
         latestTodosByThreadId: nextLatestTodosByThreadId,
       };

@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-
+import { isInteractionThreadVisible } from "./app/interactionVisibility";
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
-import { isSandboxApprovalThreadVisible } from "./app/sandboxApprovalVisibility";
 import { useAppStore } from "./app/store";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { isOneOffChatWorkspace } from "./app/types";
@@ -31,7 +30,6 @@ import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
-import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ContextSidebar } from "./ui/ContextSidebar";
@@ -47,7 +45,6 @@ import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
-import { PromptModal } from "./ui/PromptModal";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 import { TranscriptDeliveryRecovery } from "./ui/TranscriptDeliveryRecovery";
@@ -578,23 +575,16 @@ export default function App() {
           state.dismissOnboarding();
           return;
         }
-        if (state.promptModal) {
-          if (state.promptModal.kind === "ask") {
-            state.answerAsk(
-              state.promptModal.threadId,
-              state.promptModal.prompt.requestId,
-              ASK_SKIP_TOKEN,
-            );
-          } else {
-            state.dismissPrompt();
-          }
-          return;
-        }
-        const hasPendingSandboxApproval = Object.entries(state.sandboxApprovalsByThread).some(
-          ([threadId, pending]) =>
-            pending.length > 0 && isSandboxApprovalThreadVisible(state, threadId),
+        const hasVisibleSandboxApproval = Object.entries(state.interactionsByThread).some(
+          ([threadId, interactions]) =>
+            interactions.some(
+              (interaction) =>
+                interaction.kind === "approval" &&
+                interaction.approvalKind === "sandbox" &&
+                (interaction.status === "pending" || interaction.status === "failed"),
+            ) && isInteractionThreadVisible(state, threadId),
         );
-        if (hasPendingSandboxApproval) {
+        if (hasVisibleSandboxApproval) {
           event.preventDefault();
           event.stopImmediatePropagation();
           state.dismissPrompt();
@@ -804,7 +794,6 @@ export default function App() {
           bootstrapLoading={bootstrapPhase === "loading"}
         />
       )}
-      <PromptModal />
       <LmStudioStartDialog />
       {windowMode === "main" ? <FilePreviewModal /> : null}
       {windowMode === "main" ? (

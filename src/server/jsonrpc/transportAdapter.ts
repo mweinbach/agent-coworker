@@ -275,12 +275,10 @@ export function createJsonRpcTransportAdapter({
       return;
     }
 
-    emitServerRequestResolved(ws, pending.threadId, pending.requestId);
-
+    let accepted = false;
     if (pending.type === "approval") {
       const parsed = approvalResponseResultSchema.safeParse(message.result);
       if (!parsed.success) {
-        ws.data.rpc?.pendingServerRequests.delete(message.id);
         sendJsonRpc(
           ws,
           buildJsonRpcErrorResponse(message.id, {
@@ -293,11 +291,10 @@ export function createJsonRpcTransportAdapter({
       const { approved, decision } = parsed.data;
       const isApproved =
         approved === true || decision === "accept" || decision === "acceptForSession";
-      runtime.lifecycle.handleApprovalResponse(pending.requestId, isApproved);
+      accepted = runtime.lifecycle.handleApprovalResponse(pending.requestId, isApproved);
     } else {
       const parsed = askResponseResultSchema.safeParse(message.result);
       if (!parsed.success) {
-        ws.data.rpc?.pendingServerRequests.delete(message.id);
         sendJsonRpc(
           ws,
           buildJsonRpcErrorResponse(message.id, {
@@ -309,10 +306,26 @@ export function createJsonRpcTransportAdapter({
       }
       const result = parsed.data;
       const answer = "answer" in result ? result.answer : extractTextInput(result.content);
-      runtime.lifecycle.handleAskResponse(pending.requestId, answer);
+      accepted = runtime.lifecycle.handleAskResponse(pending.requestId, answer);
+      if (!accepted && answer.trim().length === 0) {
+        return;
+      }
+    }
+
+    if (!accepted) {
+      ws.data.rpc?.pendingServerRequests.delete(message.id);
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: `Interaction request is no longer pending: ${pending.requestId}`,
+        }),
+      );
+      return;
     }
 
     ws.data.rpc?.pendingServerRequests.delete(message.id);
+    emitServerRequestResolved(ws, pending.threadId, pending.requestId);
     void enqueueThreadJournalEvent({
       threadId: pending.threadId,
       ts: new Date().toISOString(),

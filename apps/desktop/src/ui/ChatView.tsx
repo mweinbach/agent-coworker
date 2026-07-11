@@ -17,14 +17,15 @@ import {
   resolveActiveComposerDraftKey,
   selectActiveComposerDraft,
 } from "../app/composerDrafts";
+import { outstandingInteractions } from "../app/interactionQueue";
+import {
+  isInteractionThreadVisible,
+  resolveInteractionThreadTarget,
+} from "../app/interactionVisibility";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
 } from "../app/openaiCompatibleProviderOptions";
-import {
-  isSandboxApprovalThreadVisible,
-  resolveSandboxApprovalThreadTarget,
-} from "../app/sandboxApprovalVisibility";
 import { useAppStore } from "../app/store";
 import {
   type FileAttachmentInput,
@@ -41,7 +42,7 @@ import type { ProviderName } from "../lib/wsProtocol";
 import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
 import { ChatComposer } from "./chat/ChatComposer";
-import { ChatFeed, type VisibleSandboxApproval } from "./chat/ChatFeed";
+import { ChatFeed, type VisibleInteraction } from "./chat/ChatFeed";
 import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import {
@@ -68,9 +69,6 @@ import { recordDesktopRenderMetric } from "./renderDiagnostics";
 const COMPOSER_OVERLAY_MIN_HEIGHT_PX = 140;
 const FEED_DERIVATION_WINDOW = 80;
 const FEED_DERIVATION_EXPAND_BATCH = 40;
-// Stable empty reference so the sandbox-approvals selector doesn't allocate a new
-// array each render (which would defeat zustand's reference equality check).
-const EMPTY_SANDBOX_APPROVALS: VisibleSandboxApproval[] = [];
 const ACTIVE_TASK_STATUSES = new Set([
   "draft",
   "planning",
@@ -142,16 +140,22 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => buildMentionCatalog(workspaceSkills, workspacePluginsCatalog),
     [workspaceSkills, workspacePluginsCatalog],
   );
-  const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const view = useAppStore((s) => s.view);
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const allThreads = useAppStore((s) => s.threads);
   const tasksById = useAppStore((s) => s.tasksById);
-  const sandboxApprovalsByThread = useAppStore((s) => s.sandboxApprovalsByThread);
-  const sandboxApprovals = useMemo(() => {
-    const entries = Object.entries(sandboxApprovalsByThread);
-    if (entries.length === 0) return EMPTY_SANDBOX_APPROVALS;
-
+  const interactionsByThread = useAppStore((s) => s.interactionsByThread);
+  const interactions = useMemo(() => {
+    const selected = selectedThreadId
+      ? outstandingInteractions(interactionsByThread[selectedThreadId])
+          .sort((left, right) => left.receivedSequence - right.receivedSequence)
+          .map(
+            (interaction): VisibleInteraction => ({
+              threadId: selectedThreadId,
+              interaction,
+            }),
+          )
+      : [];
     const visibilityContext = {
       view,
       selectedTaskId,
@@ -159,35 +163,34 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       threads: allThreads,
       tasksById,
     };
-
-    const visible: VisibleSandboxApproval[] = [];
-    if (selectedThreadId && isSandboxApprovalThreadVisible(visibilityContext, selectedThreadId)) {
-      const selectedPrompts = sandboxApprovalsByThread[selectedThreadId] ?? [];
-      for (const prompt of selectedPrompts) {
-        visible.push({ threadId: selectedThreadId, prompt });
-      }
-    }
-    for (const [threadId, prompts] of entries) {
+    const offThreadSandboxInteractions: VisibleInteraction[] = [];
+    for (const [threadId, threadInteractions] of Object.entries(interactionsByThread)) {
       if (
         threadId === selectedThreadId ||
-        !isSandboxApprovalThreadVisible(visibilityContext, threadId)
+        !isInteractionThreadVisible(visibilityContext, threadId)
       ) {
         continue;
       }
-      for (const prompt of prompts) {
-        visible.push({ threadId, prompt });
+      for (const interaction of outstandingInteractions(threadInteractions)) {
+        if (interaction.kind === "approval" && interaction.approvalKind === "sandbox") {
+          offThreadSandboxInteractions.push({ threadId, interaction });
+        }
       }
     }
-
-    return visible.length > 0 ? visible : EMPTY_SANDBOX_APPROVALS;
-  }, [allThreads, sandboxApprovalsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
+    offThreadSandboxInteractions.sort(
+      (left, right) => left.interaction.receivedSequence - right.interaction.receivedSequence,
+    );
+    return [...selected, ...offThreadSandboxInteractions];
+  }, [allThreads, interactionsByThread, selectedTaskId, selectedThreadId, tasksById, view]);
+  const answerAsk = useAppStore((s) => s.answerAsk);
   const answerApproval = useAppStore((s) => s.answerApproval);
+  const retryInteractionResponse = useAppStore((s) => s.retryInteractionResponse);
   const selectThread = useAppStore((s) => s.selectThread);
   const selectTask = useAppStore((s) => s.selectTask);
   const selectTaskThread = useAppStore((s) => s.selectTaskThread);
-  const selectApprovalThread = useCallback(
+  const selectInteractionThread = useCallback(
     (threadId: string) => {
-      const target = resolveSandboxApprovalThreadTarget(
+      const target = resolveInteractionThreadTarget(
         { selectedThreadId, threads: allThreads, tasksById },
         threadId,
       );
@@ -204,12 +207,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [allThreads, selectTask, selectTaskThread, selectThread, selectedThreadId, tasksById],
   );
   const threadTitleById = useMemo(() => {
-    const onlyOtherThreads = sandboxApprovals.some((a) => a.threadId !== selectedThreadId);
-    if (!onlyOtherThreads) return undefined;
-    const map = new Map<string, string>();
-    for (const t of allThreads) map.set(t.id, t.title);
-    return map;
-  }, [allThreads, sandboxApprovals, selectedThreadId]);
+    if (!interactions.some((entry) => entry.threadId !== selectedThreadId)) return undefined;
+    return new Map(allThreads.map((candidate) => [candidate.id, candidate.title]));
+  }, [allThreads, interactions, selectedThreadId]);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
@@ -775,8 +775,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         const hasPendingInput = Boolean(composerText.trim() || pendingAttachments.length > 0);
         const submitState = getComposerSubmitState({
           busy,
-          hasPromptModal:
-            hasPromptModal ||
+          hasBlockingOverlay:
             hasFilePreview ||
             preparingAttachments ||
             sourceTask !== null ||
@@ -812,7 +811,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [
       composerText,
       hasFilePreview,
-      hasPromptModal,
       pendingAttachmentSignature,
       pendingAttachments.length,
       pendingTurnStart,
@@ -859,11 +857,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const busy = rt?.busy === true;
   const inputDisabled =
-    hasPromptModal ||
-    hasFilePreview ||
-    preparingAttachments ||
-    sourceTask !== null ||
-    readOnlyNotice !== undefined;
+    hasFilePreview || preparingAttachments || sourceTask !== null || readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||
@@ -891,7 +885,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         !rt?.sessionId));
   const composerSubmitState = getComposerSubmitState({
     busy,
-    hasPromptModal: inputDisabled,
+    hasBlockingOverlay: inputDisabled,
     composerText,
     hasPendingAttachments,
     pendingAttachmentSignature,
@@ -929,11 +923,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           citationSourcesByMessageId={citationSourcesByMessageId}
           desktopBasePath={workspace?.path ?? null}
           composerOverlayHeight={composerOverlayHeight}
-          sandboxApprovals={sandboxApprovals}
+          interactions={interactions}
+          onAnswerAsk={answerAsk}
           onAnswerApproval={answerApproval}
+          onRetryInteraction={retryInteractionResponse}
           selectedThreadId={selectedThreadId}
           threadTitleById={threadTitleById}
-          onSelectThread={selectApprovalThread}
+          onSelectThread={selectInteractionThread}
           onRetryFailedTurn={supportsToolRetryLineage ? retryFailedTurn : undefined}
           retryUnavailableReason={retryUnavailableReason}
           retryFailedTurnDisabled={

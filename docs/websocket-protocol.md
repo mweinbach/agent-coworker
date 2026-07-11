@@ -526,6 +526,17 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
+Server-initiated interactions use JSON-RPC requests: `item/tool/requestUserInput` for asks and
+`item/commandExecution/requestApproval` for approvals. Each request is independently identified by
+its thread and request ID. Pending interactions replay in their original arrival order after
+`thread/resume`, with the same request IDs; replay does not collapse or replace sibling requests.
+Clients should disable an interaction's response controls after the first send, but keep the item
+until the server emits `serverRequest/resolved`. A local send failure remains retryable with the
+same response, while an invalid response remains pending and may be corrected. A duplicate or stale
+response is rejected and never resolves another interaction. A terminal `turn/completed`
+notification expires any requests that remain outstanding for that turn, including requests ended
+by cancellation or the server-side prompt timeout.
+
 `cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, `cowork/plugins/delete`, `cowork/plugins/checkUpdate`, and `cowork/plugins/update` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
 
 A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>"` on plugin and standalone skill entries. Installed marketplace copies report `installedSourceHash`, `latestSourceHash`, and `updateAvailable` when Cowork can compare the stored install hash with the latest marketplace hash. Updates stay opt-in: clients should offer `cowork/plugins/update` or `cowork/skills/installation/update` only when the catalog or explicit check says an update is available.

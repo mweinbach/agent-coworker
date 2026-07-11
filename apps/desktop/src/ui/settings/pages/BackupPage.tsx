@@ -15,6 +15,7 @@ import { type ComponentType, useEffect, useEffectEvent, useMemo, useState } from
 
 import { useAppStore } from "../../../app/store";
 import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
+import { operationKey } from "../../../app/store.helpers/operations";
 import { isStandardChatThread } from "../../../app/threadFilters";
 import type {
   WorkspaceBackupDeltaEvent,
@@ -35,6 +36,7 @@ import {
 import { Switch } from "../../../components/ui/switch";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
+import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import {
   SettingsEmptyState,
@@ -628,6 +630,7 @@ export function BackupPage(props: BackupPageProps = {}) {
     (s) => s.setWorkspaceBackupSessionEnabled,
   );
   const updateWorkspaceDefaultsFromStore = useAppStore((s) => s.updateWorkspaceDefaults);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   // During SSR (renderToStaticMarkup), hooks like useAppStore(selector) return default state
@@ -713,8 +716,10 @@ export function BackupPage(props: BackupPageProps = {}) {
     props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
   const setWorkspaceBackupsDefault = async (enabled: boolean) => {
     if (!workspace) return;
-    await updateWorkspaceDefaultsFromStore(workspace.id, { defaultBackupsEnabled: enabled });
-    if (enabled && refreshBackups) {
+    const result = await updateWorkspaceDefaultsFromStore(workspace.id, {
+      defaultBackupsEnabled: enabled,
+    });
+    if ((!result || result.ok) && enabled && refreshBackups) {
       void refreshBackups();
     }
   };
@@ -812,6 +817,43 @@ export function BackupPage(props: BackupPageProps = {}) {
     selectedEntry && selectedEntry.lifecycle === "active" && selectedThreadRuntime?.sessionId,
   );
   const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
+  const workspaceDefaultsOperation = workspace
+    ? operationsByKey[operationKey("workspace-defaults", workspace.id, "settings")]
+    : undefined;
+  const sessionBackupsOperation =
+    selectedEntry && workspace
+      ? operationsByKey[
+          operationKey("backup", "session-enabled", workspace.id, selectedEntry.targetSessionId)
+        ]
+      : undefined;
+  const selectedBackupOperation =
+    selectedEntry && workspace
+      ? [
+          operationKey("backup", "checkpoint", workspace.id, selectedEntry.targetSessionId),
+          operationKey("backup", "restore-original", workspace.id, selectedEntry.targetSessionId),
+          operationKey("backup", "delete-entry", workspace.id, selectedEntry.targetSessionId),
+          ...(selectedCheckpointId
+            ? [
+                operationKey(
+                  "backup",
+                  "restore-checkpoint",
+                  workspace.id,
+                  selectedEntry.targetSessionId,
+                  selectedCheckpointId,
+                ),
+                operationKey(
+                  "backup",
+                  "delete-checkpoint",
+                  workspace.id,
+                  selectedEntry.targetSessionId,
+                  selectedCheckpointId,
+                ),
+              ]
+            : []),
+        ]
+          .map((key) => operationsByKey[key])
+          .find((operation) => operation?.status === "pending" || operation?.status === "error")
+      : undefined;
   const showInspector = sortedEntries.length > 0;
 
   const settingsChrome = useOptionalSettingsChrome();
@@ -946,6 +988,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               control={
                 <Switch
                   checked={workspaceBackupsDefaultEnabled}
+                  disabled={workspaceDefaultsOperation?.status === "pending"}
                   aria-label="Enable workspace backups"
                   onCheckedChange={(checked) => {
                     void setWorkspaceBackupsDefault(checked);
@@ -964,7 +1007,9 @@ export function BackupPage(props: BackupPageProps = {}) {
               control={
                 <Switch
                   checked={selectedBackupsEnabled ?? false}
-                  disabled={!canToggleSelectedEntry}
+                  disabled={
+                    !canToggleSelectedEntry || sessionBackupsOperation?.status === "pending"
+                  }
                   aria-label="Keep recovery snapshots for this session"
                   onCheckedChange={(checked) => {
                     if (!selectedEntry) return;
@@ -974,6 +1019,9 @@ export function BackupPage(props: BackupPageProps = {}) {
               }
             />
           </div>
+          <OperationFeedback operation={workspaceDefaultsOperation} />
+          <OperationFeedback operation={sessionBackupsOperation} />
+          <OperationFeedback operation={selectedBackupOperation} />
         </section>
 
         {error ? (

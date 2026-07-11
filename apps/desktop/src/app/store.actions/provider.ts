@@ -5,12 +5,14 @@ import {
   ensureServerRunning,
   makeId,
   nowIso,
+  operationKey,
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
   RUNTIME,
   requestJsonRpcControl,
   requestJsonRpcControlEvent,
+  runAcknowledgedOperation,
   type StoreGet,
   type StoreSet,
 } from "../store.helpers";
@@ -154,11 +156,51 @@ export function createProviderActions(
     return workspaceId;
   };
 
+  const requestProviderMutation = async (options: {
+    provider: string;
+    action: string;
+    label: string;
+    errorTitle: string;
+    errorMessage: string;
+    method: string;
+    params: (workspaceId: string) => Record<string, unknown>;
+    prepare?: () => void;
+  }) =>
+    await runAcknowledgedOperation(get, set, {
+      key: operationKey("provider", options.action, options.provider),
+      label: options.label,
+      errorTitle: options.errorTitle,
+      errorMessage: options.errorMessage,
+      execute: async () => {
+        const workspaceId = resolveProviderWorkspaceId();
+        if (!workspaceId) {
+          throw new Error("Add or select a workspace first.");
+        }
+        await ensureServerRunning(get, set, workspaceId);
+        ensureControlSocket(get, set, workspaceId);
+        options.prepare?.();
+        const rpcError: { message?: string } = {};
+        const ok = await requestJsonRpcControlEvent(
+          get,
+          set,
+          workspaceId,
+          options.method,
+          {
+            cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+            ...options.params(workspaceId),
+          },
+          rpcError,
+        );
+        if (!ok) {
+          throw new Error(rpcError.message?.trim() || options.errorMessage);
+        }
+      },
+    });
+
   return {
     connectProvider: async (provider, apiKey) => {
       if (provider === "lmstudio") {
-        await get().setLmStudioEnabled(true);
-        return;
+        return await get().setLmStudioEnabled(true);
       }
 
       const methods = providerAuthMethodsFor(get(), provider);
@@ -170,8 +212,7 @@ export function createProviderActions(
           type: "api",
           label: "API key",
         };
-        await get().setProviderApiKey(provider, apiMethod.id, normalizedKey);
-        return;
+        return await get().setProviderApiKey(provider, apiMethod.id, normalizedKey);
       }
 
       const oauthMethod = methods.find((method) => method.type === "oauth");
@@ -180,338 +221,163 @@ export function createProviderActions(
           providerLastAuthChallenge: null,
           providerLastAuthResult: null,
         }));
-        await get().authorizeProviderAuth(provider, oauthMethod.id);
-        if (oauthMethod.oauthMode !== "code") {
-          await get().callbackProviderAuth(provider, oauthMethod.id);
+        const authorized = await get().authorizeProviderAuth(provider, oauthMethod.id);
+        if (!authorized.ok) {
+          return authorized;
         }
-        return;
+        if (oauthMethod.oauthMode !== "code") {
+          return await get().callbackProviderAuth(provider, oauthMethod.id);
+        }
+        return authorized;
       }
 
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "API key required",
-          detail: `Enter an API key to connect ${provider}.`,
-        }),
-      }));
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("provider", "connect", provider),
+        label: "Connect provider",
+        errorTitle: "API key required",
+        errorMessage: `Enter an API key to connect ${provider}.`,
+        repairAction: "Enter an API key and retry.",
+        execute: async () => {
+          throw new Error(`Enter an API key to connect ${provider}.`);
+        },
+      });
     },
 
     setProviderApiKey: async (provider, methodId, apiKey) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
       const trimmedKey = apiKey.trim();
-      if (!trimmedKey) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Missing API key",
-            detail: "Enter an API key before saving.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/setApiKey",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          methodId: methodId.trim() || "api_key",
-          apiKey: trimmedKey,
+      return await requestProviderMutation({
+        provider,
+        action: `api-key:${methodId.trim() || "api_key"}`,
+        label: "Save provider API key",
+        errorTitle: trimmedKey ? "API key not saved" : "Missing API key",
+        errorMessage: trimmedKey
+          ? "Unable to save the provider API key."
+          : "Enter an API key before saving.",
+        method: "cowork/provider/auth/setApiKey",
+        params: () => {
+          if (!trimmedKey) {
+            throw new Error("Enter an API key before saving.");
+          }
+          return {
+            provider,
+            methodId: methodId.trim() || "api_key",
+            apiKey: trimmedKey,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_set_api_key.",
-          }),
-        }));
-      }
+      });
     },
 
     setProviderConfig: async (provider, methodId, values) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/setConfig",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      return await requestProviderMutation({
+        provider,
+        action: `config:${methodId.trim()}`,
+        label: "Save provider credentials",
+        errorTitle: "Credentials not saved",
+        errorMessage: "Unable to save the provider credentials.",
+        method: "cowork/provider/auth/setConfig",
+        params: () => ({
           provider,
           methodId: methodId.trim(),
           values,
-        },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_set_config.",
-          }),
-        }));
-      }
+        }),
+      });
     },
 
     copyProviderApiKey: async (provider, sourceProvider) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      set(() => ({
-        providerLastAuthChallenge: null,
-        providerLastAuthResult: null,
-      }));
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/copyApiKey",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      return await requestProviderMutation({
+        provider,
+        action: `copy-api-key:${sourceProvider}`,
+        label: "Copy provider API key",
+        errorTitle: "API key not copied",
+        errorMessage: "Unable to copy the provider API key.",
+        method: "cowork/provider/auth/copyApiKey",
+        params: () => ({
           provider,
           sourceProvider,
-        },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_copy_api_key.",
+        }),
+        prepare: () =>
+          set({
+            providerLastAuthChallenge: null,
+            providerLastAuthResult: null,
           }),
-        }));
-      }
+      });
     },
 
     authorizeProviderAuth: async (provider, methodId) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
       const normalizedMethodId = methodId.trim();
-      if (!normalizedMethodId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Missing auth method",
-            detail: "Choose an auth method before continuing.",
-          }),
-        }));
-        return;
-      }
-
-      set(() => ({
-        providerLastAuthChallenge: null,
-        providerLastAuthResult: null,
-      }));
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/authorize",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          methodId: normalizedMethodId,
+      return await requestProviderMutation({
+        provider,
+        action: `authorize:${normalizedMethodId || "missing"}`,
+        label: "Start provider sign-in",
+        errorTitle: normalizedMethodId ? "Sign-in not started" : "Missing auth method",
+        errorMessage: normalizedMethodId
+          ? "Unable to start provider sign-in."
+          : "Choose an auth method before continuing.",
+        method: "cowork/provider/auth/authorize",
+        params: () => {
+          if (!normalizedMethodId) {
+            throw new Error("Choose an auth method before continuing.");
+          }
+          return {
+            provider,
+            methodId: normalizedMethodId,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_authorize.",
+        prepare: () =>
+          set({
+            providerLastAuthChallenge: null,
+            providerLastAuthResult: null,
           }),
-        }));
-      }
+      });
     },
 
     logoutProviderAuth: async (provider) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
-      set(() => ({
-        providerLastAuthChallenge: null,
-        providerLastAuthResult: null,
-      }));
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/logout",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      return await requestProviderMutation({
+        provider,
+        action: "logout",
+        label: "Disconnect provider",
+        errorTitle: "Provider not disconnected",
+        errorMessage: "Unable to disconnect the provider.",
+        method: "cowork/provider/auth/logout",
+        params: () => ({
           provider,
-        },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_logout.",
+        }),
+        prepare: () =>
+          set({
+            providerLastAuthChallenge: null,
+            providerLastAuthResult: null,
           }),
-        }));
-      }
+      });
     },
 
     callbackProviderAuth: async (provider, methodId, code) => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-      if (!workspaceId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "info",
-            title: "Workspace required",
-            detail: "Add or select a workspace first.",
-          }),
-        }));
-        return;
-      }
-
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-
       const normalizedMethodId = methodId.trim();
-      if (!normalizedMethodId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Missing auth method",
-            detail: "Choose an auth method before continuing.",
-          }),
-        }));
-        return;
-      }
-
-      set(() => ({
-        providerLastAuthChallenge: null,
-        providerLastAuthResult: null,
-      }));
-
       const normalizedCode = code?.trim();
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/auth/callback",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          methodId: normalizedMethodId,
-          code: normalizedCode || undefined,
+      return await requestProviderMutation({
+        provider,
+        action: `callback:${normalizedMethodId || "missing"}`,
+        label: "Complete provider sign-in",
+        errorTitle: normalizedMethodId ? "Sign-in not completed" : "Missing auth method",
+        errorMessage: normalizedMethodId
+          ? "Unable to complete provider sign-in."
+          : "Choose an auth method before continuing.",
+        method: "cowork/provider/auth/callback",
+        params: () => {
+          if (!normalizedMethodId) {
+            throw new Error("Choose an auth method before continuing.");
+          }
+          return {
+            provider,
+            methodId: normalizedMethodId,
+            code: normalizedCode || undefined,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to send provider_auth_callback.",
+        prepare: () =>
+          set({
+            providerLastAuthChallenge: null,
+            providerLastAuthResult: null,
           }),
-        }));
-      }
+      });
     },
 
     requestProviderCatalog: async () => {
@@ -569,135 +435,92 @@ export function createProviderActions(
 
     addCustomProviderModel: async (provider, modelId) => {
       const normalizedModelId = modelId.trim();
-      if (!normalizedModelId) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Missing model ID",
-            detail: "Enter a model ID before adding it.",
-          }),
-        }));
-        return false;
-      }
-
-      const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return false;
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/customModel/add",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          modelId: normalizedModelId,
+      return await requestProviderMutation({
+        provider,
+        action: `model-add:${normalizedModelId || "missing"}`,
+        label: "Add custom provider model",
+        errorTitle: normalizedModelId ? "Model not added" : "Missing model ID",
+        errorMessage: normalizedModelId
+          ? "Unable to add custom provider model."
+          : "Enter a model ID before adding it.",
+        method: "cowork/provider/customModel/add",
+        params: () => {
+          if (!normalizedModelId) {
+            throw new Error("Enter a model ID before adding it.");
+          }
+          return {
+            provider,
+            modelId: normalizedModelId,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Model not added",
-            detail: "Unable to add custom provider model.",
-          }),
-        }));
-      }
-      return ok;
+      });
     },
 
     deleteCustomProviderModel: async (provider, modelId) => {
       const normalizedModelId = modelId.trim();
-      if (!normalizedModelId) return;
-      const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return;
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/customModel/delete",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          modelId: normalizedModelId,
+      return await requestProviderMutation({
+        provider,
+        action: `model-delete:${normalizedModelId || "missing"}`,
+        label: "Remove custom provider model",
+        errorTitle: "Model not removed",
+        errorMessage: normalizedModelId
+          ? "Unable to remove custom provider model."
+          : "Choose a custom provider model to remove.",
+        method: "cowork/provider/customModel/delete",
+        params: () => {
+          if (!normalizedModelId) {
+            throw new Error("Choose a custom provider model to remove.");
+          }
+          return {
+            provider,
+            modelId: normalizedModelId,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Model not removed",
-            detail: "Unable to remove custom provider model.",
-          }),
-        }));
-      }
+      });
     },
 
     setProviderModelsEnabled: async (provider, models) => {
       const normalizedModels = models
         .map((model) => ({ id: model.id.trim(), enabled: model.enabled }))
         .filter((model) => model.id);
-      if (normalizedModels.length === 0) return false;
-      const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return false;
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/model/setEnabled",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          provider,
-          models: normalizedModels,
+      const subject = normalizedModels
+        .map((model) => `${model.id}=${model.enabled}`)
+        .sort((left, right) => left.localeCompare(right))
+        .join(",");
+      return await requestProviderMutation({
+        provider,
+        action: `models-enabled:${subject || "missing"}`,
+        label: "Update provider models",
+        errorTitle: "Models not updated",
+        errorMessage:
+          normalizedModels.length > 0
+            ? "Unable to update provider model preferences."
+            : "Choose at least one provider model to update.",
+        method: "cowork/provider/model/setEnabled",
+        params: () => {
+          if (normalizedModels.length === 0) {
+            throw new Error("Choose at least one provider model to update.");
+          }
+          return {
+            provider,
+            models: normalizedModels,
+          };
         },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Models not updated",
-            detail: "Unable to update provider model preferences.",
-          }),
-        }));
-      }
-      return ok;
+      });
     },
 
     resetProviderModelPreferences: async (provider) => {
-      const workspaceId = await ensureProviderControlReady();
-      if (!workspaceId) return;
-
-      const ok = await requestJsonRpcControlEvent(
-        get,
-        set,
-        workspaceId,
-        "cowork/provider/model/resetEnabled",
-        {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      return await requestProviderMutation({
+        provider,
+        action: "models-reset",
+        label: "Reset provider models",
+        errorTitle: "Models not reset",
+        errorMessage: "Unable to reset provider model preferences.",
+        method: "cowork/provider/model/resetEnabled",
+        params: () => ({
           provider,
-        },
-      );
-      if (!ok) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Models not reset",
-            detail: "Unable to reset provider model preferences.",
-          }),
-        }));
-      }
+        }),
+      });
     },
 
     refreshProviderStatus: async (opts) => {
@@ -792,42 +615,92 @@ export function createProviderActions(
     },
 
     setLmStudioEnabled: async (enabled) => {
-      set((s) => ({
-        providerUiState: {
-          ...s.providerUiState,
-          lmstudio: {
-            ...s.providerUiState.lmstudio,
-            enabled,
-          },
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("provider", "lmstudio-enabled"),
+        label: enabled ? "Enable LM Studio" : "Disable LM Studio",
+        errorTitle: "LM Studio setting not saved",
+        errorMessage: "Unable to save the LM Studio setting.",
+        optimistic: () => {
+          const previous = get().providerUiState.lmstudio.enabled;
+          set((s) => ({
+            providerUiState: {
+              ...s.providerUiState,
+              lmstudio: {
+                ...s.providerUiState.lmstudio,
+                enabled,
+              },
+            },
+          }));
+          return () => {
+            set((s) => ({
+              providerUiState: {
+                ...s.providerUiState,
+                lmstudio: {
+                  ...s.providerUiState.lmstudio,
+                  enabled: previous,
+                },
+              },
+            }));
+          };
         },
-      }));
-      await persistNow(get);
-      if (enabled) {
-        await get().refreshProviderStatus();
-      }
+        execute: async () => {
+          await persistNow(get);
+          if (enabled) {
+            await get().refreshProviderStatus();
+          }
+        },
+      });
     },
 
     setLmStudioModelVisible: async (modelId, visible) => {
       const normalizedModelId = modelId.trim();
-      if (!normalizedModelId) return;
-      set((s) => {
-        const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
-        if (visible) {
-          hiddenModels.delete(normalizedModelId);
-        } else {
-          hiddenModels.add(normalizedModelId);
-        }
-        return {
-          providerUiState: {
-            ...s.providerUiState,
-            lmstudio: {
-              ...s.providerUiState.lmstudio,
-              hiddenModels: [...hiddenModels].sort((a, b) => a.localeCompare(b)),
-            },
-          },
-        };
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("provider", "lmstudio-model-visible", normalizedModelId || "missing"),
+        label: "Update LM Studio model visibility",
+        errorTitle: "LM Studio model setting not saved",
+        errorMessage: normalizedModelId
+          ? "Unable to save the LM Studio model setting."
+          : "Choose an LM Studio model to update.",
+        optimistic: normalizedModelId
+          ? () => {
+              const previous = get().providerUiState.lmstudio.hiddenModels;
+              set((s) => {
+                const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
+                if (visible) {
+                  hiddenModels.delete(normalizedModelId);
+                } else {
+                  hiddenModels.add(normalizedModelId);
+                }
+                return {
+                  providerUiState: {
+                    ...s.providerUiState,
+                    lmstudio: {
+                      ...s.providerUiState.lmstudio,
+                      hiddenModels: [...hiddenModels].sort((a, b) => a.localeCompare(b)),
+                    },
+                  },
+                };
+              });
+              return () => {
+                set((s) => ({
+                  providerUiState: {
+                    ...s.providerUiState,
+                    lmstudio: {
+                      ...s.providerUiState.lmstudio,
+                      hiddenModels: previous,
+                    },
+                  },
+                }));
+              };
+            }
+          : undefined,
+        execute: async () => {
+          if (!normalizedModelId) {
+            throw new Error("Choose an LM Studio model to update.");
+          }
+          await persistNow(get);
+        },
       });
-      await persistNow(get);
     },
   };
 }

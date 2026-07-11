@@ -67,7 +67,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   }, [loadSlide]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
@@ -97,7 +97,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
             <AlertTriangleIcon className="size-6 text-destructive" />
             <h3 className="text-sm font-medium text-foreground">Couldn’t render slide</h3>
-            <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-[11px] leading-relaxed text-destructive">
+            <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-[11px] leading-relaxed text-foreground">
               {error}
             </pre>
           </div>

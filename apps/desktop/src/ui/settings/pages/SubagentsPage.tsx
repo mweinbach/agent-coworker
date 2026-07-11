@@ -13,8 +13,11 @@ import {
   OPENAI_REASONING_EFFORT_VALUES,
 } from "../../../../../../src/shared/openaiCompatibleOptions";
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import {
   isOneOffChatWorkspace,
+  type OperationResult,
+  type OperationState,
   type WorkspaceRecord,
   type WorkspaceRuntime,
 } from "../../../app/types";
@@ -59,6 +62,7 @@ import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import {
   EntityIcon,
@@ -315,7 +319,7 @@ export async function saveAgentProfileDraft(
   draft: DraftProfile | null,
   upsertAgentProfile: (
     profile: AgentProfileDefinition & { scope: AgentProfileScope },
-  ) => Promise<boolean>,
+  ) => Promise<OperationResult>,
 ): Promise<"invalid" | "failed" | "saved"> {
   if (!draft) return "invalid";
   const displayName = draft.displayName.trim();
@@ -339,7 +343,7 @@ export async function saveAgentProfileDraft(
     defaultContextMode: draft.defaultContextMode,
     scope: draft.scope,
   });
-  return saved ? "saved" : "failed";
+  return saved.ok ? "saved" : "failed";
 }
 
 export function SubagentsPage() {
@@ -359,6 +363,7 @@ export function SubagentsPage() {
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const providerUiState = useAppStore((s) => s.providerUiState);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const workspaceChoices = useMemo(() => listSubagentProfileWorkspaces(workspaces), [workspaces]);
   const [profileWorkspaceId, setProfileWorkspaceId] = useState<string | null>(null);
@@ -398,6 +403,12 @@ export function SubagentsPage() {
   const profilesLoading = runtime?.agentProfilesLoading ?? false;
   const [scope, setScope] = useState<AgentProfileScope>("global");
   const [draft, setDraft] = useState<DraftProfile | null>(null);
+  const saveOperation =
+    workspace && draft
+      ? operationsByKey[
+          operationKey("agent-profile", "save", workspace.id, `${draft.scope}:${draft.id}`)
+        ]
+      : undefined;
 
   useEffect(() => {
     const nextWorkspace = resolveSubagentProfilesWorkspace(
@@ -514,7 +525,7 @@ export function SubagentsPage() {
       },
       workspace.id,
     );
-    if (copied) setScope(targetScope);
+    if (copied.ok) setScope(targetScope);
   };
 
   if (!workspace) {
@@ -599,30 +610,46 @@ export function SubagentsPage() {
           />
         ) : (
           <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
-            {profileRows.map((entry) => (
-              <ProfileRow
-                key={`${entry.scope}:${entry.profile.id}`}
-                entry={entry}
-                onEdit={() => {
-                  setDraft(draftFromEntry(entry));
-                }}
-                onCopy={() => void copyProfile(entry)}
-                onDelete={async () => {
-                  const confirmed = await confirmAction({
-                    title: "Delete subagent",
-                    message: `Delete the "${entry.profile.displayName}" subagent?`,
-                    detail: "This subagent will be permanently removed.",
-                    confirmLabel: "Delete",
-                    cancelLabel: "Cancel",
-                    kind: "warning",
-                    defaultAction: "cancel",
-                  });
-                  if (confirmed) {
-                    void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
-                  }
-                }}
-              />
-            ))}
+            {profileRows.map((entry) => {
+              const profileRef = `${entry.scope}:${entry.profile.id}`;
+              const copyOperation =
+                operationsByKey[
+                  operationKey(
+                    "agent-profile",
+                    "copy",
+                    workspace.id,
+                    `${profileRef}:${entry.scope === "workspace" ? "global" : "workspace"}`,
+                  )
+                ];
+              const deleteOperation =
+                operationsByKey[operationKey("agent-profile", "delete", workspace.id, profileRef)];
+              return (
+                <ProfileRow
+                  key={profileRef}
+                  entry={entry}
+                  copyPending={copyOperation?.status === "pending"}
+                  deletePending={deleteOperation?.status === "pending"}
+                  onEdit={() => {
+                    setDraft(draftFromEntry(entry));
+                  }}
+                  onCopy={() => void copyProfile(entry)}
+                  onDelete={async () => {
+                    const confirmed = await confirmAction({
+                      title: "Delete subagent",
+                      message: `Delete the "${entry.profile.displayName}" subagent?`,
+                      detail: "This subagent will be permanently removed.",
+                      confirmLabel: "Delete",
+                      cancelLabel: "Cancel",
+                      kind: "warning",
+                      defaultAction: "cancel",
+                    });
+                    if (confirmed) {
+                      void deleteAgentProfile(entry.scope, entry.profile.id, workspace.id);
+                    }
+                  }}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -638,19 +665,26 @@ export function SubagentsPage() {
               </div>
             </div>
             <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
-              {globalAvailabilityRows.map((entry) => (
-                <GlobalAvailabilityRow
-                  key={`availability:${entry.profile.id}`}
-                  entry={entry}
-                  onAvailabilityChange={(available) =>
-                    void setAgentProfileWorkspaceAvailability(
-                      entry.profile.id,
-                      !available,
-                      workspace.id,
-                    )
-                  }
-                />
-              ))}
+              {globalAvailabilityRows.map((entry) => {
+                const operation =
+                  operationsByKey[
+                    operationKey("agent-profile", "availability", workspace.id, entry.profile.id)
+                  ];
+                return (
+                  <GlobalAvailabilityRow
+                    key={`availability:${entry.profile.id}`}
+                    entry={entry}
+                    pending={operation?.status === "pending"}
+                    onAvailabilityChange={(available) =>
+                      void setAgentProfileWorkspaceAvailability(
+                        entry.profile.id,
+                        !available,
+                        workspace.id,
+                      )
+                    }
+                  />
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -668,6 +702,7 @@ export function SubagentsPage() {
         workspaceChoices={workspaceChoices}
         onWorkspaceChange={setProfileWorkspaceId}
         onSave={() => void saveDraft()}
+        operation={saveOperation}
       />
     </SettingsPage>
   );
@@ -719,11 +754,15 @@ function WorkspaceTargetPicker({
 
 function ProfileRow({
   entry,
+  copyPending,
+  deletePending,
   onEdit,
   onCopy,
   onDelete,
 }: {
   entry: AgentProfileCatalogEntry;
+  copyPending: boolean;
+  deletePending: boolean;
   onEdit: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -749,14 +788,20 @@ function ProfileRow({
         <Button variant="ghost" size="icon" aria-label="Edit profile" onClick={onEdit}>
           <PencilIcon />
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Copy profile" onClick={onCopy}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Copy profile"
+          disabled={copyPending}
+          onClick={onCopy}
+        >
           <CopyIcon />
         </Button>
         <Button
           variant="ghost"
           size="icon"
           aria-label="Delete profile"
-          disabled={entry.builtIn && !entry.path}
+          disabled={(entry.builtIn && !entry.path) || deletePending}
           onClick={onDelete}
         >
           <Trash2Icon />
@@ -768,9 +813,11 @@ function ProfileRow({
 
 function GlobalAvailabilityRow({
   entry,
+  pending,
   onAvailabilityChange,
 }: {
   entry: AgentProfileCatalogEntry;
+  pending: boolean;
   onAvailabilityChange: (available: boolean) => void;
 }) {
   const available = entry.workspaceDisabled !== true;
@@ -795,7 +842,7 @@ function GlobalAvailabilityRow({
       </div>
       <Switch
         checked={available}
-        disabled={entry.locked === true || overriddenByWorkspaceProfile}
+        disabled={entry.locked === true || overriddenByWorkspaceProfile || pending}
         aria-label={`Toggle ${entry.profile.displayName} availability in this workspace`}
         onCheckedChange={onAvailabilityChange}
       />
@@ -815,6 +862,7 @@ export function ProfileDialog({
   workspaceChoices,
   onWorkspaceChange,
   onSave,
+  operation,
 }: {
   draft: DraftProfile | null;
   setDraft: (draft: DraftProfile | null) => void;
@@ -827,6 +875,7 @@ export function ProfileDialog({
   workspaceChoices: WorkspaceRecord[];
   onWorkspaceChange: (workspaceId: string) => void;
   onSave: () => void;
+  operation?: OperationState;
 }) {
   const tools = ALL_BUILT_IN_TOOLS;
   const { groups: modelGroups, customOptions } = useMemo(
@@ -837,19 +886,28 @@ export function ProfileDialog({
   const canSave = !!draft?.id.trim() && !!draft.displayName.trim();
   const editingExisting = draft?.originalRef !== undefined;
   const disableEnabledSwitch = draft?.locked === true;
+  const saving = operation?.status === "pending";
   const generatedProfileRef = draft?.id.trim()
     ? `${draft.scope}:${draft.id.trim()}`
     : "generated from name";
 
   return (
-    <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
-      <DialogContent className="max-h-[94vh] w-[min(94vw,58rem)] max-w-none overflow-y-auto sm:max-w-none">
+    <Dialog
+      open={draft !== null}
+      onOpenChange={(open) => {
+        if (!open && !saving) setDraft(null);
+      }}
+    >
+      <DialogContent
+        aria-busy={saving}
+        className="max-h-[94vh] w-[min(94vw,58rem)] max-w-none overflow-y-auto sm:max-w-none"
+      >
         <DialogHeader>
           <DialogTitle>{editingExisting ? "Edit subagent" : "New subagent"}</DialogTitle>
           <DialogDescription className="sr-only">Configure the subagent profile.</DialogDescription>
         </DialogHeader>
         {draft ? (
-          <div className="flex flex-col gap-5 py-2">
+          <fieldset disabled={saving} className="flex flex-col gap-5 py-2">
             <div className="flex flex-col gap-2">
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Scope">
@@ -1084,14 +1142,15 @@ export function ProfileDialog({
                 })
               }
             />
-          </div>
+          </fieldset>
         ) : null}
+        <OperationFeedback operation={operation} />
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setDraft(null)}>
+          <Button variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
             Cancel
           </Button>
-          <Button onClick={onSave} disabled={!canSave}>
-            Save
+          <Button onClick={onSave} disabled={!canSave || saving}>
+            {saving ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

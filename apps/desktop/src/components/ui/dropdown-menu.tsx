@@ -2,11 +2,45 @@
 
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import type * as React from "react";
+import { createContext, useContext } from "react";
 
 import { cn } from "@/lib/utils";
+import {
+  type OverlayOwnership,
+  type OverlayRootState,
+  useOverlayOwner,
+  useOverlayRootState,
+} from "@/ui/OverlayStack";
 
-function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+type DropdownMenuOverlayState = OverlayRootState & {
+  ownership: OverlayOwnership | null;
+};
+
+const DropdownMenuOverlayContext = createContext<DropdownMenuOverlayState | null>(null);
+
+function DropdownMenu({
+  defaultOpen,
+  onOpenChange,
+  open,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  const state = useOverlayRootState({ defaultOpen, onOpenChange, open });
+  const ownership = useOverlayOwner({
+    active: state.open,
+    label: "Dropdown menu",
+    onDismiss: () => state.setOpen(false),
+    restoreFocus: () => state.restoreFocusRef.current,
+  });
+  return (
+    <DropdownMenuOverlayContext.Provider value={{ ...state, ownership }}>
+      <DropdownMenuPrimitive.Root
+        data-slot="dropdown-menu"
+        open={state.open}
+        onOpenChange={state.setOpen}
+        {...props}
+      />
+    </DropdownMenuOverlayContext.Provider>
+  );
 }
 
 function DropdownMenuTrigger({
@@ -25,8 +59,13 @@ function getPortalContainer() {
 function DropdownMenuContent({
   className,
   sideOffset = 4,
+  onEscapeKeyDown,
+  style,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  const owner = useContext(DropdownMenuOverlayContext);
+  const ownership = owner?.ownership;
+
   return (
     <DropdownMenuPrimitive.Portal container={getPortalContainer()}>
       <DropdownMenuPrimitive.Content
@@ -36,6 +75,11 @@ function DropdownMenuContent({
           "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className,
         )}
+        style={{ ...style, zIndex: ownership?.zIndex ?? style?.zIndex }}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          ownership?.handleEscape(event);
+        }}
         {...props}
       />
     </DropdownMenuPrimitive.Portal>

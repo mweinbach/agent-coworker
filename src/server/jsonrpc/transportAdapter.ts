@@ -13,6 +13,15 @@ import {
   type JsonRpcLiteNotification,
   type JsonRpcLiteRequest,
 } from "./protocol";
+import {
+  parseServerRequestReceipt,
+  SERVER_REQUEST_RECEIPT_SCAN_LIMIT,
+  type ServerRequestReceipt,
+  ServerRequestReceiptLedger,
+  type ServerRequestResponse,
+  serverRequestResolvedPayload,
+  serverRequestResponsesEqual,
+} from "./serverRequestReceipts";
 
 /** Schema for approval response payloads (command execution approval). */
 const approvalResponseResultSchema = z
@@ -55,6 +64,7 @@ type CreateJsonRpcTransportAdapterDeps = {
     threadId: string,
     opts: { afterSeq?: number; limit?: number },
   ) => PersistedThreadJournalEvent[];
+  getThreadJournalTailSeq: (threadId: string) => number;
   enqueueThreadJournalEvent: (event: Omit<PersistedThreadJournalEvent, "seq">) => Promise<unknown>;
   shouldSendNotification: (ws: StartServerSocket, method: string) => boolean;
   sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
@@ -69,12 +79,14 @@ export function createJsonRpcTransportAdapter({
   removeBindingSink,
   countLiveConnectionSinks,
   listThreadJournalEvents,
+  getThreadJournalTailSeq,
   enqueueThreadJournalEvent,
   shouldSendNotification,
   sendJsonRpc,
   extractTextInput,
 }: CreateJsonRpcTransportAdapterDeps) {
   const subscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
+  const resolvedServerRequests = new ServerRequestReceiptLedger();
 
   const ensureConnectionSubscriptions = (connectionId: string) => {
     const existing = subscriptionsByConnectionId.get(connectionId);
@@ -91,17 +103,126 @@ export function createJsonRpcTransportAdapter({
     binding.runtime.replay.beginDisconnectedReplayBuffer();
   };
 
-  const emitServerRequestResolved = (
-    ws: StartServerSocket,
-    threadId: string,
-    requestId: string,
-  ) => {
+  const emitServerRequestResolved = (ws: StartServerSocket, receipt: ServerRequestReceipt) => {
     sendJsonRpc(ws, {
       method: "serverRequest/resolved",
-      params: {
-        threadId,
-        requestId,
-      },
+      params: serverRequestResolvedPayload(receipt),
+    });
+  };
+
+  const loadRecentServerRequestReceipts = (threadId: string): ServerRequestReceipt[] => {
+    const tailSeq = getThreadJournalTailSeq(threadId);
+    const afterSeq = Math.max(0, tailSeq - SERVER_REQUEST_RECEIPT_SCAN_LIMIT);
+    resolvedServerRequests.hydrate(
+      listThreadJournalEvents(threadId, {
+        afterSeq,
+        limit: SERVER_REQUEST_RECEIPT_SCAN_LIMIT,
+      }),
+    );
+    return resolvedServerRequests.listForThread(threadId);
+  };
+
+  const findResolvedServerRequest = (
+    ws: StartServerSocket,
+    requestId: string,
+  ): ServerRequestReceipt | null => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) return null;
+    const subscriptions = subscriptionsByConnectionId.get(connectionId);
+    if (!subscriptions) return null;
+    for (const threadId of subscriptions.keys()) {
+      const receipt = resolvedServerRequests.get(threadId, requestId);
+      if (receipt) return receipt;
+    }
+    return null;
+  };
+
+  const parseServerRequestResponse = (
+    type: "ask" | "approval",
+    result: unknown,
+  ):
+    | { ok: true; response: ServerRequestResponse }
+    | { ok: false; message: string; emptyAsk: boolean } => {
+    if (type === "approval") {
+      const parsed = approvalResponseResultSchema.safeParse(result);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          message: `Invalid approval response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
+          emptyAsk: false,
+        };
+      }
+      const { approved, decision } = parsed.data;
+      return {
+        ok: true,
+        response: {
+          kind: "approval",
+          approved: approved === true || decision === "accept" || decision === "acceptForSession",
+        },
+      };
+    }
+
+    const parsed = askResponseResultSchema.safeParse(result);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        message: `Invalid ask response: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
+        emptyAsk: false,
+      };
+    }
+    const answer =
+      "answer" in parsed.data ? parsed.data.answer : extractTextInput(parsed.data.content);
+    if (answer.trim().length === 0) {
+      return {
+        ok: false,
+        message: "Ask response cannot be empty",
+        emptyAsk: true,
+      };
+    }
+    return {
+      ok: true,
+      response: { kind: "ask", answer },
+    };
+  };
+
+  const sendInteractionResponseError = (
+    ws: StartServerSocket,
+    id: string | number,
+    opts: {
+      code: number;
+      message: string;
+      category: string;
+      requestId: string;
+      threadId?: string;
+    },
+  ) => {
+    sendJsonRpc(
+      ws,
+      buildJsonRpcErrorResponse(id, {
+        code: opts.code,
+        message: opts.message,
+        data: {
+          category: opts.category,
+          requestId: opts.requestId,
+          ...(opts.threadId ? { threadId: opts.threadId } : {}),
+        },
+      }),
+    );
+  };
+
+  const persistServerRequestReceipt = async (receipt: ServerRequestReceipt): Promise<void> => {
+    resolvedServerRequests.remember(receipt);
+    await enqueueThreadJournalEvent({
+      threadId: receipt.threadId,
+      ts: receipt.resolvedAt,
+      eventType: "serverRequest/resolved",
+      turnId: getThreadBinding(receipt.threadId)?.runtime?.turns.activeTurnId ?? null,
+      itemId: null,
+      requestId: receipt.requestId,
+      payload: serverRequestResolvedPayload(receipt),
+    }).catch(() => {
+      // The bounded in-memory ledger still protects this server process. Journal
+      // health reports the persistence failure for cross-process reconnects.
     });
   };
 
@@ -112,6 +233,15 @@ export function createJsonRpcTransportAdapter({
         ? listThreadJournalEvents(threadId, { afterSeq })
         : listThreadJournalEvents(threadId, { afterSeq, limit });
     for (const event of journalEvents) {
+      if (event.eventType === "serverRequest/resolved") {
+        if (event.requestId) {
+          ws.data.rpc?.pendingServerRequests.delete(event.requestId);
+        }
+        const receipt = parseServerRequestReceipt(event);
+        if (receipt) {
+          resolvedServerRequests.remember(receipt);
+        }
+      }
       if (event.eventType.startsWith("request:")) {
         const method = event.eventType.slice("request:".length);
         if (event.requestId) {
@@ -209,6 +339,10 @@ export function createJsonRpcTransportAdapter({
       }
       projector.handle(event);
     }
+    for (const receipt of loadRecentServerRequestReceipts(threadId)) {
+      ws.data.rpc?.pendingServerRequests.delete(receipt.requestId);
+      emitServerRequestResolved(ws, receipt);
+    }
     return binding;
   };
 
@@ -254,79 +388,108 @@ export function createJsonRpcTransportAdapter({
     subscriptionsByConnectionId.delete(connectionId);
   };
 
-  const routeResponse = (ws: StartServerSocket, message: JsonRpcLiteClientResponse) => {
+  const routeResponse = async (ws: StartServerSocket, message: JsonRpcLiteClientResponse) => {
     const pending = ws.data.rpc?.pendingServerRequests.get(message.id);
-    if (!pending) {
-      sendJsonRpc(
-        ws,
-        buildJsonRpcErrorResponse(message.id, {
-          code: JSONRPC_ERROR_CODES.invalidRequest,
-          message: `Unknown server request id: ${String(message.id)}`,
-        }),
+    const priorReceipt = pending ? null : findResolvedServerRequest(ws, String(message.id));
+    if (!pending && !priorReceipt) {
+      sendInteractionResponseError(ws, message.id, {
+        code: JSONRPC_ERROR_CODES.invalidRequest,
+        message: `Unknown server request id: ${String(message.id)}`,
+        category: "interaction_response_not_found",
+        requestId: String(message.id),
+      });
+      return;
+    }
+
+    const type = pending?.type ?? priorReceipt?.response.kind;
+    if (!type) return;
+    const parsedResponse = parseServerRequestResponse(type, message.result);
+    if (!parsedResponse.ok) {
+      if (parsedResponse.emptyAsk && pending) {
+        getThreadBinding(pending.threadId)?.runtime?.lifecycle.handleAskResponse(
+          pending.requestId,
+          "",
+        );
+        return;
+      }
+      sendInteractionResponseError(ws, message.id, {
+        code: JSONRPC_ERROR_CODES.invalidParams,
+        message: parsedResponse.message,
+        category: "interaction_response_invalid",
+        requestId: pending?.requestId ?? priorReceipt?.requestId ?? String(message.id),
+        threadId: pending?.threadId ?? priorReceipt?.threadId,
+      });
+      return;
+    }
+
+    if (priorReceipt) {
+      if (!serverRequestResponsesEqual(priorReceipt.response, parsedResponse.response)) {
+        sendInteractionResponseError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Conflicting response for resolved interaction: ${priorReceipt.requestId}`,
+          category: "interaction_response_conflict",
+          requestId: priorReceipt.requestId,
+          threadId: priorReceipt.threadId,
+        });
+        return;
+      }
+      emitServerRequestResolved(ws, priorReceipt);
+      return;
+    }
+
+    if (!pending) return;
+    const runtime = getThreadBinding(pending.threadId)?.runtime;
+    let accepted = runtime === null || runtime === undefined;
+    if (runtime && parsedResponse.response.kind === "approval") {
+      accepted = runtime.lifecycle.handleApprovalResponse(
+        pending.requestId,
+        parsedResponse.response.approved,
       );
-      return;
+    } else if (runtime && parsedResponse.response.kind === "ask") {
+      accepted = runtime.lifecycle.handleAskResponse(
+        pending.requestId,
+        parsedResponse.response.answer,
+      );
     }
 
-    const binding = getThreadBinding(pending.threadId);
-    const runtime = binding?.runtime;
-    if (!runtime) {
-      ws.data.rpc?.pendingServerRequests.delete(message.id);
-      emitServerRequestResolved(ws, pending.threadId, pending.requestId);
-      return;
-    }
-
-    emitServerRequestResolved(ws, pending.threadId, pending.requestId);
-
-    if (pending.type === "approval") {
-      const parsed = approvalResponseResultSchema.safeParse(message.result);
-      if (!parsed.success) {
+    if (!accepted) {
+      const concurrentlyResolved = resolvedServerRequests.get(pending.threadId, pending.requestId);
+      if (
+        concurrentlyResolved &&
+        serverRequestResponsesEqual(concurrentlyResolved.response, parsedResponse.response)
+      ) {
         ws.data.rpc?.pendingServerRequests.delete(message.id);
-        sendJsonRpc(
-          ws,
-          buildJsonRpcErrorResponse(message.id, {
-            code: JSONRPC_ERROR_CODES.invalidParams,
-            message: `Invalid approval response: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-          }),
-        );
+        emitServerRequestResolved(ws, concurrentlyResolved);
         return;
       }
-      const { approved, decision } = parsed.data;
-      const isApproved =
-        approved === true || decision === "accept" || decision === "acceptForSession";
-      runtime.lifecycle.handleApprovalResponse(pending.requestId, isApproved);
-    } else {
-      const parsed = askResponseResultSchema.safeParse(message.result);
-      if (!parsed.success) {
-        ws.data.rpc?.pendingServerRequests.delete(message.id);
-        sendJsonRpc(
-          ws,
-          buildJsonRpcErrorResponse(message.id, {
-            code: JSONRPC_ERROR_CODES.invalidParams,
-            message: `Invalid ask response: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-          }),
-        );
-        return;
-      }
-      const result = parsed.data;
-      const answer = "answer" in result ? result.answer : extractTextInput(result.content);
-      runtime.lifecycle.handleAskResponse(pending.requestId, answer);
-    }
-
-    ws.data.rpc?.pendingServerRequests.delete(message.id);
-    void enqueueThreadJournalEvent({
-      threadId: pending.threadId,
-      ts: new Date().toISOString(),
-      eventType: "serverRequest/resolved",
-      turnId: runtime.turns.activeTurnId ?? null,
-      itemId: null,
-      requestId: pending.requestId,
-      payload: {
-        threadId: pending.threadId,
+      sendInteractionResponseError(ws, message.id, {
+        code: concurrentlyResolved
+          ? JSONRPC_ERROR_CODES.invalidParams
+          : JSONRPC_ERROR_CODES.invalidRequest,
+        message: concurrentlyResolved
+          ? `Conflicting response for resolved interaction: ${pending.requestId}`
+          : `Interaction request is no longer pending: ${pending.requestId}`,
+        category: concurrentlyResolved
+          ? "interaction_response_conflict"
+          : "interaction_response_not_pending",
         requestId: pending.requestId,
-      },
-    }).catch(() => {
-      // Best-effort journal persistence.
-    });
+        threadId: pending.threadId,
+      });
+      if (!concurrentlyResolved) {
+        ws.data.rpc?.pendingServerRequests.delete(message.id);
+      }
+      return;
+    }
+
+    const receipt: ServerRequestReceipt = {
+      threadId: pending.threadId,
+      requestId: pending.requestId,
+      response: parsedResponse.response,
+      resolvedAt: new Date().toISOString(),
+    };
+    ws.data.rpc?.pendingServerRequests.delete(message.id);
+    await persistServerRequestReceipt(receipt);
+    emitServerRequestResolved(ws, receipt);
   };
 
   const handleMessage = (
@@ -385,7 +548,7 @@ export function createJsonRpcTransportAdapter({
           });
       },
       onResponse: (response) => {
-        routeResponse(ws, response);
+        void routeResponse(ws, response);
       },
     });
   };

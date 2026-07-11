@@ -413,7 +413,10 @@ describe("marketplace sources section", () => {
 describe("add marketplace dialog", () => {
   test("submits the source input and closes on success", async () => {
     const previousState = useAppStore.getState();
-    const addMarketplaceMock = mock(async (_sourceInput: string) => {});
+    const addMarketplaceMock = mock(async (_sourceInput: string) => ({
+      ok: true as const,
+      value: undefined,
+    }));
 
     useAppStore.setState({
       ...previousState,
@@ -499,7 +502,15 @@ describe("add marketplace dialog", () => {
           },
         },
       }));
-      throw new Error(errorMessage);
+      return {
+        ok: false as const,
+        error: {
+          code: "request_failed" as const,
+          message: errorMessage,
+          retryable: true,
+          repairAction: "Check the marketplace source and retry.",
+        },
+      };
     });
 
     useAppStore.setState({

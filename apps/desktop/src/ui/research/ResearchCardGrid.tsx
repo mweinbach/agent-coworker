@@ -1,12 +1,14 @@
 import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import type { ResearchCard } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { confirmAction, showContextMenu } from "../../lib/desktopCommands";
 import { formatRelativeAge } from "../../lib/time";
 import { cn } from "../../lib/utils";
+import { OperationFeedback } from "../OperationFeedback";
 
 function cleanMarkdown(block: string): string {
   return block
@@ -82,6 +84,7 @@ type ItemProps = {
   selected: boolean;
   isChild: boolean;
   editing: boolean;
+  renaming: boolean;
   editingTitle: string;
   onSelect: () => void;
   onStartEditing: () => void;
@@ -96,6 +99,7 @@ function ResearchListItem({
   selected,
   isChild,
   editing,
+  renaming,
   editingTitle,
   onSelect,
   onStartEditing,
@@ -132,6 +136,7 @@ function ResearchListItem({
           ref={inputRef}
           className="min-w-0 h-7 flex-1 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
           value={editingTitle}
+          disabled={renaming}
           onChange={(event) => onEditingTitleChange(event.target.value)}
           onBlur={onCommitRename}
           onClick={(event) => event.stopPropagation()}
@@ -204,6 +209,7 @@ type TreeProps = {
   childrenByParent: Map<string | null, ResearchCard[]>;
   selectedResearchId: string | null;
   editingId: string | null;
+  renaming: boolean;
   editingTitle: string;
   onSelect: (researchId: string) => void;
   onStartEditing: (research: ResearchCard) => void;
@@ -219,6 +225,7 @@ function renderResearchTree({
   childrenByParent,
   selectedResearchId,
   editingId,
+  renaming,
   editingTitle,
   onSelect,
   onStartEditing,
@@ -242,6 +249,7 @@ function renderResearchTree({
           selected={selectedResearchId === research.id}
           isChild={depth > 0}
           editing={editingId === research.id}
+          renaming={renaming}
           editingTitle={editingTitle}
           onSelect={() => onSelect(research.id)}
           onStartEditing={() => onStartEditing(research)}
@@ -258,6 +266,7 @@ function renderResearchTree({
               childrenByParent,
               selectedResearchId,
               editingId,
+              renaming,
               editingTitle,
               onSelect,
               onStartEditing,
@@ -329,8 +338,10 @@ export function ResearchCardGrid({
   const renameResearch = useAppStore((s) => s.renameResearch);
   const deleteResearch = useAppStore((s) => s.deleteResearch);
   const selectResearch = useAppStore((s) => s.selectResearch);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenResearchIds());
   const hiddenResearchCount = useMemo(
     () => research.filter((entry) => hiddenIds.has(entry.id)).length,
@@ -393,19 +404,30 @@ export function ResearchCardGrid({
     setEditingTitle("");
   }, []);
 
-  const commitRename = useCallback(() => {
-    if (!editingId) {
+  const commitRename = useCallback(async () => {
+    if (!editingId || renaming) {
       return;
     }
     const currentId = editingId;
     const trimmed = editingTitle.trim();
-    setEditingId(null);
-    setEditingTitle("");
     if (!trimmed) {
       return;
     }
-    void renameResearch(currentId, trimmed);
-  }, [editingId, editingTitle, renameResearch]);
+    setRenaming(true);
+    try {
+      const result = await renameResearch(currentId, trimmed);
+      if (result.ok) {
+        setEditingId(null);
+        setEditingTitle("");
+      }
+    } finally {
+      setRenaming(false);
+    }
+  }, [editingId, editingTitle, renameResearch, renaming]);
+
+  const renameOperation = editingId
+    ? operationsByKey[operationKey("research", "rename", editingId)]
+    : undefined;
 
   const handleContextMenu = useCallback(
     async (event: MouseEvent<HTMLElement>, entry: ResearchCard) => {
@@ -473,6 +495,7 @@ export function ResearchCardGrid({
           childrenByParent,
           selectedResearchId,
           editingId,
+          renaming,
           editingTitle,
           onSelect: onSelectResearch,
           onStartEditing: startEditing,
@@ -482,6 +505,7 @@ export function ResearchCardGrid({
           onContextMenu: handleContextMenu,
         })}
       </div>
+      <OperationFeedback operation={renameOperation} />
     </div>
   );
 }

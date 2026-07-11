@@ -14,9 +14,9 @@ import {
   useMemo,
   useState,
 } from "react";
-
 import { useAppStore } from "../../../app/store";
-import type { AdvancedMemoryEntry } from "../../../app/types";
+import { operationKey } from "../../../app/store.helpers";
+import type { AdvancedMemoryEntry, OperationState } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -38,6 +38,7 @@ import {
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
+import { OperationFeedback } from "../../OperationFeedback";
 
 export type DraftAdvancedMemory = {
   slug: string;
@@ -58,6 +59,7 @@ export function AdvancedMemoryEditorDialog({
   editingSlug,
   draft,
   saving,
+  operation,
   isDirty,
   setDraft,
   onCancel,
@@ -67,6 +69,7 @@ export function AdvancedMemoryEditorDialog({
   editingSlug: string | null;
   draft: DraftAdvancedMemory;
   saving: boolean;
+  operation: OperationState | undefined;
   isDirty: boolean;
   setDraft: Dispatch<SetStateAction<DraftAdvancedMemory>>;
   onCancel: () => void;
@@ -76,6 +79,7 @@ export function AdvancedMemoryEditorDialog({
     <Dialog
       open={open}
       onOpenChange={async (nextOpen) => {
+        if (!nextOpen && saving) return;
         if (!nextOpen && isDirty) {
           const confirmed = await confirmAction({
             title: "Discard changes?",
@@ -107,6 +111,7 @@ export function AdvancedMemoryEditorDialog({
                 id="adv-memory-name"
                 placeholder="Short topic title"
                 value={draft.name}
+                disabled={saving}
                 onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
               />
             </div>
@@ -118,6 +123,7 @@ export function AdvancedMemoryEditorDialog({
                 id="adv-memory-desc"
                 placeholder="One-line summary for the index"
                 value={draft.description}
+                disabled={saving}
                 onChange={(event) =>
                   setDraft((prev) => ({ ...prev, description: event.target.value }))
                 }
@@ -129,6 +135,7 @@ export function AdvancedMemoryEditorDialog({
               </label>
               <Select
                 value={draft.type}
+                disabled={saving}
                 onValueChange={(value) => setDraft((prev) => ({ ...prev, type: value }))}
               >
                 <SelectTrigger id="adv-memory-type" aria-label="Memory type">
@@ -152,13 +159,15 @@ export function AdvancedMemoryEditorDialog({
                 placeholder="What should Cowork remember?"
                 className="h-[min(42vh,24rem)] min-h-[12rem] resize-y overflow-auto [field-sizing:fixed]"
                 value={draft.body}
+                disabled={saving}
                 onChange={(event) => setDraft((prev) => ({ ...prev, body: event.target.value }))}
               />
             </div>
           </div>
         </div>
+        <OperationFeedback operation={operation} className="mx-5 mb-4" />
         <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" disabled={saving} onClick={onCancel}>
             Cancel
           </Button>
           <Button
@@ -179,12 +188,15 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   const requestAdvancedMemories = useAppStore((s) => s.requestAdvancedMemories);
   const upsertAdvancedMemory = useAppStore((s) => s.upsertAdvancedMemory);
   const deleteAdvancedMemory = useAppStore((s) => s.deleteAdvancedMemory);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const runtime = workspaceRuntimeById[workspaceId];
   const memories = useMemo(() => runtime?.advancedMemories ?? [], [runtime?.advancedMemories]);
   const folder = runtime?.advancedMemoryActiveFolder ?? null;
   const loading = runtime?.advancedMemoriesLoading ?? false;
   const controlSessionId = runtime?.controlSessionId ?? null;
+  const saveOperation = operationsByKey[operationKey("memory", "advanced-save", workspaceId)];
+  const saving = saveOperation?.status === "pending";
 
   const [draft, setDraft] = useState<DraftAdvancedMemory>(emptyDraft);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
@@ -246,30 +258,21 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
     );
   }, [draft, editingSlug, memories]);
 
-  const [saving, setSaving] = useState(false);
-
   const handleSave = async () => {
     if (!draft.name.trim() || !draft.body.trim() || saving) return;
-    setSaving(true);
-    try {
-      // Only close on success so a failed save keeps the dialog (and the user's
-      // entered content) intact rather than silently discarding it.
-      const ok = await upsertAdvancedMemory(
-        workspaceId,
-        {
-          ...(folder ? { folder } : {}),
-          ...(editingSlug ? { slug: editingSlug } : {}),
-          name: draft.name.trim(),
-          description: draft.description.trim(),
-          type: draft.type,
-          body: draft.body.trim(),
-        },
-        { cwd },
-      );
-      if (ok) closeDialog();
-    } finally {
-      setSaving(false);
-    }
+    const result = await upsertAdvancedMemory(
+      workspaceId,
+      {
+        ...(folder ? { folder } : {}),
+        ...(editingSlug ? { slug: editingSlug } : {}),
+        name: draft.name.trim(),
+        description: draft.description.trim(),
+        type: draft.type,
+        body: draft.body.trim(),
+      },
+      { cwd },
+    );
+    if (result.ok) closeDialog();
   };
 
   const handleDelete = async (entry: AdvancedMemoryEntry) => {
@@ -318,6 +321,16 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
         <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
           {memories.map((entry) => {
             const isExpanded = expandedSlugs[entry.slug] ?? false;
+            const deleteOperation =
+              operationsByKey[
+                operationKey(
+                  "memory",
+                  "advanced-delete",
+                  workspaceId,
+                  folder ?? undefined,
+                  entry.slug,
+                )
+              ];
             return (
               <div
                 key={entry.slug}
@@ -370,6 +383,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                        disabled={deleteOperation?.status === "pending"}
                         onClick={(event) => {
                           event.stopPropagation();
                           void handleDelete(entry);
@@ -379,6 +393,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
                         Delete
                       </Button>
                     </div>
+                    <OperationFeedback operation={deleteOperation} />
                   </div>
                 )}
               </div>
@@ -392,6 +407,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
         editingSlug={editingSlug}
         draft={draft}
         saving={saving}
+        operation={saveOperation}
         isDirty={isDraftDirty()}
         setDraft={setDraft}
         onCancel={closeDialog}

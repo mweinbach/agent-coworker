@@ -1,26 +1,27 @@
 import type { BrowserWindow } from "electron";
+import { NATIVE_THEME_TOKENS } from "../../../src/styles/tokens/native";
 import { getPlatformChrome, getTitlebarSymbolColor } from "./platformChrome";
-import type { WindowChromeModule } from "./types";
+import type { WindowChromeContext, WindowChromeModule } from "./types";
 
 function windowsTitleBarOverlay(
-  useDarkColors: boolean,
+  captionSymbolTone: WindowChromeContext["captionSymbolTone"],
 ): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
   const chrome = getPlatformChrome("win32");
   // Electron requires an integer; keep overlay height identical to the renderer
   // title band (--platform-titlebar-height) so native caption buttons stay
   // vertically centered and do not extend past the custom top bar.
   return {
-    color: "#00000000",
-    symbolColor: getTitlebarSymbolColor(useDarkColors),
+    color: NATIVE_THEME_TOKENS.transparentSurface,
+    symbolColor: getTitlebarSymbolColor(captionSymbolTone),
     height: Math.round(chrome.titlebarHeight),
   };
 }
 
 const windowsWindowChrome: WindowChromeModule = {
-  getBrowserWindowOptions({ useDarkColors }) {
+  getBrowserWindowOptions({ captionSymbolTone }) {
     return {
       titleBarStyle: "hidden",
-      titleBarOverlay: windowsTitleBarOverlay(useDarkColors),
+      titleBarOverlay: windowsTitleBarOverlay(captionSymbolTone),
     };
   },
 
@@ -28,9 +29,9 @@ const windowsWindowChrome: WindowChromeModule = {
     win.setMenu(null);
   },
 
-  syncAppearance(win, { useDarkColors }) {
+  syncAppearance(win, { captionSymbolTone }) {
     try {
-      win.setTitleBarOverlay(windowsTitleBarOverlay(useDarkColors));
+      win.setTitleBarOverlay(windowsTitleBarOverlay(captionSymbolTone));
     } catch {
       // Ignore older Windows versions that do not support dynamic overlay updates.
     }

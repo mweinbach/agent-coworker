@@ -24,6 +24,8 @@ import type { McpServerLookup } from "./mcp/McpServerLookup";
 import type { SeededSessionContext } from "./SessionContext";
 import type {
   SendUserMessageOptions,
+  SteerIdempotencyClaim,
+  SteerIdempotencyInput,
   UserMessageIdempotencyClaim,
   UserMessageIdempotencyInput,
 } from "./TurnExecutionManager";
@@ -166,6 +168,14 @@ export class SessionTurnService {
 
   rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
     this.session.rejectUserMessageClaim(claim, message);
+  }
+
+  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
+    return this.session.claimSteer(input);
+  }
+
+  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
+    this.session.rejectSteerClaim(claim, message);
   }
 
   async sendSteerMessage(
@@ -723,12 +733,12 @@ export class SessionLifecycleService {
     await this.session.deleteSession(targetSessionId);
   }
 
-  handleAskResponse(requestId: string, answer: string): void {
-    this.session.handleAskResponse(requestId, answer);
+  handleAskResponse(requestId: string, answer: string): boolean {
+    return this.session.handleAskResponse(requestId, answer);
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean): void {
-    this.session.handleApprovalResponse(requestId, approved);
+  handleApprovalResponse(requestId: string, approved: boolean): boolean {
+    return this.session.handleApprovalResponse(requestId, approved);
   }
 
   async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {

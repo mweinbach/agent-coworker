@@ -29,12 +29,13 @@ export function CanvasFilePreviewLayout({
       className={cn(
         "flex h-full w-full min-w-0 flex-col",
         isSpreadsheet
-          ? "bg-[var(--surface-spreadsheet)] text-[var(--text-spreadsheet)]"
+          ? "bg-canvas text-canvas-foreground"
           : isCanvasMode
-            ? "bg-background"
-            : "bg-[var(--surface-sidebar-pane)]",
+            ? "bg-canvas text-canvas-foreground"
+            : "bg-[var(--surface-sidebar-pane)] text-foreground",
         isCanvasMode && "app-canvas-mode-window",
       )}
+      data-canvas-surface={isSpreadsheet ? "spreadsheet" : "document"}
       style={isSpreadsheet ? { colorScheme: "light" } : undefined}
     >
       <div className="flex min-h-0 flex-1 flex-col gap-0">

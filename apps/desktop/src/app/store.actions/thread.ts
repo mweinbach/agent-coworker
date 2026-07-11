@@ -1,7 +1,6 @@
 import {
-  appendAttachmentSkippedNotes,
   createComposerAttachmentFile,
-  resolveComposerAttachmentsForWorkspace,
+  prepareComposerMessageForWorkspace,
 } from "../../lib/composerAttachments";
 import * as desktopCommands from "../../lib/desktopCommands";
 import { type NewChatLandingTarget, resolveDefaultNewChatTarget } from "../../lib/newChatLanding";
@@ -11,20 +10,30 @@ import {
   type ComposerDraftAttachment,
   type ComposerDraftRevision,
   clearComposerDraftRevision,
+  composerDraftKeyForNewChatTarget,
   composerDraftKeyForThread,
   createComposerDraftAttachment,
   createEmptyComposerDraft,
   getComposerDraftAttachmentValidationMessage,
+  hasComposerDraftState,
   pruneComposerDrafts as pruneComposerDraftEntries,
   resolveActiveComposerDraftKey,
   revokeComposerDraftAttachmentPreviews,
 } from "../composerDrafts";
 import {
+  type ComposerSubmission,
+  type ComposerSubmissionRequest,
+  cloneComposerDraftForSubmission,
+  composerSubmissionErrorMessage,
+  findComposerSubmissionById,
+  isComposerSubmissionInFlight,
+} from "../composerSubmission";
+import { isInteractionThreadVisible } from "../interactionVisibility";
+import {
   googleProviderOptionsForReasoningEffort,
   isGoogleReasoningEffortValue,
   isOpenAiReasoningEffortValue,
 } from "../openaiCompatibleProviderOptions";
-import { isSandboxApprovalThreadVisible } from "../sandboxApprovalVisibility";
 import {
   type AbortableActionOptions,
   type AppStoreActions,
@@ -65,15 +74,23 @@ import {
 import type { FileAttachmentInput } from "../store.helpers/jsonRpcSocket";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
+import {
+  beginCreationOperationIntent,
+  invalidateNavigationIntent,
+  isCreationNavigationIntentCurrent,
+  isOperationAbortError,
+  recordThreadNavigationIntent,
+  waitForOperation,
+} from "../store.helpers/operationIntent";
 import { waitForNextPaintOrTimeout } from "../store.helpers/paintScheduling";
 import { persist } from "../store.helpers/persistence";
 import { MAX_FEED_ITEMS } from "../store.helpers/threadEventReducerContext";
 import { isStandardChatThread } from "../threadFilters";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import {
+  type ChatInteraction,
   type FeedItem,
   isOneOffChatWorkspace,
-  type SandboxApprovalPrompt,
   type SessionSnapshot,
   type SessionSnapshotFingerprint,
   type ThreadBusyPolicy,
@@ -113,12 +130,13 @@ function queueOptimisticFirstThreadMessage(
   attachments?: FileAttachmentInput[],
   references?: import("../../lib/wsProtocol").TurnReference[],
   draftSubmission?: ComposerDraftRevision,
+  presetClientMessageId?: string,
 ): void {
   const trimmed = text.trim();
   const hasAttachments = (attachments?.length ?? 0) > 0;
   if (!trimmed && !hasAttachments) return;
 
-  const clientMessageId = makeId();
+  const clientMessageId = presetClientMessageId ?? makeId();
   queuePendingThreadMessage(
     threadId,
     trimmed,
@@ -160,37 +178,57 @@ function queueOptimisticFirstThreadMessage(
   });
 }
 
-function findLatestSandboxApprovalPrompt(
+function updateInteraction(
+  set: StoreSet,
+  threadId: string,
+  requestId: string,
+  update: (interaction: ChatInteraction) => ChatInteraction,
+): void {
+  set((state) => {
+    const interactions = state.interactionsByThread[threadId];
+    if (!interactions?.some((interaction) => interaction.requestId === requestId)) {
+      return {};
+    }
+    return {
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [threadId]: interactions.map((interaction) =>
+          interaction.requestId === requestId ? update(interaction) : interaction,
+        ),
+      },
+    };
+  });
+}
+
+function findLatestVisibleSandboxInteraction(
   state: AppStoreState,
-): { threadId: string; prompt: SandboxApprovalPrompt } | null {
+): { threadId: string; interaction: ChatInteraction } | null {
+  const eligible = (interaction: ChatInteraction) =>
+    interaction.kind === "approval" &&
+    interaction.approvalKind === "sandbox" &&
+    (interaction.status === "pending" || interaction.status === "failed");
   const selectedThreadId = state.selectedThreadId;
-  const selectedPrompt = selectedThreadId
-    ? state.sandboxApprovalsByThread[selectedThreadId]?.at(-1)
+  const selectedInteraction = selectedThreadId
+    ? state.interactionsByThread[selectedThreadId]?.filter(eligible).at(-1)
     : undefined;
   if (
     selectedThreadId &&
-    selectedPrompt &&
-    isSandboxApprovalThreadVisible(state, selectedThreadId)
+    selectedInteraction &&
+    isInteractionThreadVisible(state, selectedThreadId)
   ) {
-    return { threadId: selectedThreadId, prompt: selectedPrompt };
+    return { threadId: selectedThreadId, interaction: selectedInteraction };
   }
 
-  let latest: { threadId: string; prompt: SandboxApprovalPrompt } | null = null;
-  for (const [threadId, prompts] of Object.entries(state.sandboxApprovalsByThread)) {
-    if (!isSandboxApprovalThreadVisible(state, threadId)) continue;
-    for (const prompt of prompts) {
-      if (!latest) {
-        latest = { threadId, prompt };
-        continue;
-      }
-      const promptSequence = prompt.receivedSequence ?? 0;
-      const latestSequence = latest.prompt.receivedSequence ?? 0;
-      if (promptSequence > latestSequence) {
-        latest = { threadId, prompt };
+  let latest: { threadId: string; interaction: ChatInteraction } | null = null;
+  for (const [threadId, interactions] of Object.entries(state.interactionsByThread)) {
+    if (!isInteractionThreadVisible(state, threadId)) continue;
+    for (const interaction of interactions) {
+      if (!eligible(interaction)) continue;
+      if (!latest || interaction.receivedSequence > latest.interaction.receivedSequence) {
+        latest = { threadId, interaction };
       }
     }
   }
-
   return latest;
 }
 
@@ -656,6 +694,12 @@ export function createThreadActions(
   | "selectThread"
   | "reconnectThread"
   | "sendMessage"
+  | "submitComposerDraft"
+  | "retryComposerSubmission"
+  | "editAcceptedComposerSubmission"
+  | "dismissComposerSubmission"
+  | "completeComposerSubmission"
+  | "failComposerSubmission"
   | "cancelThread"
   | "clearThreadUsageHardCap"
   | "setThreadModel"
@@ -672,6 +716,7 @@ export function createThreadActions(
   | "answerAsk"
   | "answerApproval"
   | "dismissPrompt"
+  | "retryInteractionResponse"
   | "loadAllThreadUsage"
 > {
   const closeThreadSession = (threadId: string) => {
@@ -757,6 +802,171 @@ export function createThreadActions(
     }
   };
 
+  const submissionEntry = (
+    submissionId: string,
+  ): { key: string; submission: ComposerSubmission } | null => {
+    for (const [key, submission] of Object.entries(get().composerSubmissionsByKey)) {
+      if (submission.id === submissionId) return { key, submission };
+    }
+    return null;
+  };
+
+  const updateSubmission = (
+    submissionId: string,
+    update: (submission: ComposerSubmission) => ComposerSubmission,
+  ): boolean => {
+    let updated = false;
+    set((state) => {
+      const submission = findComposerSubmissionById(state.composerSubmissionsByKey, submissionId);
+      if (!submission) return {};
+      const key = Object.keys(state.composerSubmissionsByKey).find(
+        (candidate) => state.composerSubmissionsByKey[candidate]?.id === submissionId,
+      );
+      if (!key) return {};
+      updated = true;
+      return {
+        composerSubmissionsByKey: {
+          ...state.composerSubmissionsByKey,
+          [key]: update(submission),
+        },
+      };
+    });
+    return updated;
+  };
+
+  const markSubmissionSending = (
+    submissionId: string | undefined,
+    delivery?: ComposerSubmission["delivery"],
+  ): void => {
+    if (!submissionId) return;
+    updateSubmission(submissionId, (submission) => ({
+      ...submission,
+      phase: "sending",
+      delivery: delivery ?? submission.delivery,
+      error: null,
+    }));
+  };
+
+  const failSubmission = (submissionId: string, error: unknown): void => {
+    updateSubmission(submissionId, (submission) => ({
+      ...submission,
+      phase: "failed",
+      error: composerSubmissionErrorMessage(error),
+    }));
+  };
+
+  const revokeAttachmentPreviewsIfUnreferenced = (
+    attachments: readonly ComposerDraftAttachment[],
+  ): void => {
+    const state = get();
+    const retainedPreviewUrls = new Set([
+      ...Object.values(state.composerDraftsByKey).flatMap((draft) =>
+        draft.attachments
+          .map((attachment) => attachment.previewUrl)
+          .filter((previewUrl): previewUrl is string => Boolean(previewUrl)),
+      ),
+      ...Object.values(state.composerSubmissionsByKey).flatMap((submission) =>
+        submission.draft.attachments
+          .map((attachment) => attachment.previewUrl)
+          .filter((previewUrl): previewUrl is string => Boolean(previewUrl)),
+      ),
+    ]);
+    revokeComposerDraftAttachmentPreviews(
+      attachments.filter(
+        (attachment) =>
+          typeof attachment.previewUrl === "string" &&
+          !retainedPreviewUrls.has(attachment.previewUrl),
+      ),
+    );
+  };
+
+  const currentSubmissionDelivery = (
+    request: ComposerSubmissionRequest,
+  ): ComposerSubmission["delivery"] =>
+    request.kind === "thread" && get().threadRuntimeById[request.threadId]?.busy ? "steer" : "send";
+
+  const executeComposerSubmission = async (submissionId: string): Promise<void> => {
+    const entry = submissionEntry(submissionId);
+    if (entry?.submission.phase !== "preparing") return;
+    const { submission } = entry;
+
+    try {
+      if (submission.request.kind === "newChat") {
+        const { target, provider, model, reasoningEffort } = submission.request;
+        const started = await get().newThread({
+          scope: target.kind === "project" ? "project" : "oneOff",
+          ...(target.kind === "project" ? { workspaceId: target.workspaceId } : {}),
+          firstMessage: submission.draft.text,
+          titleHint:
+            submission.draft.text.trim() || submission.draft.attachments[0]?.filename || "New chat",
+          mode: "session",
+          draftAttachments: submission.draft.attachments,
+          references:
+            submission.draft.references.length > 0 ? submission.draft.references : undefined,
+          provider,
+          model,
+          reasoningEffort: reasoningEffort ?? undefined,
+          draftSubmission: submission.owner,
+          clientMessageId: submission.clientMessageId,
+        });
+        if (!started) {
+          failSubmission(submissionId, new Error("The new chat could not be started."));
+        }
+        return;
+      }
+
+      const targetThreadId = submission.request.threadId;
+      const thread = get().threads.find((candidate) => candidate.id === targetThreadId);
+      if (!thread) {
+        failSubmission(submissionId, new Error("The target chat is no longer available."));
+        return;
+      }
+      const prepared =
+        submission.prepared ??
+        (await prepareComposerMessageForWorkspace(
+          get,
+          set,
+          thread.workspaceId,
+          submission.draft.text,
+          submission.draft.attachments,
+          { threadId: thread.id },
+        ));
+      if (!submission.prepared) {
+        updateSubmission(submissionId, (current) =>
+          current.phase === "preparing" ? { ...current, prepared } : current,
+        );
+      }
+      const latest = submissionEntry(submissionId);
+      if (latest?.submission.phase !== "preparing") return;
+      const exactPrepared = latest.submission.prepared ?? prepared;
+      if (!exactPrepared.text.trim() && !exactPrepared.attachments?.length) {
+        failSubmission(submissionId, new Error("The message has no sendable content."));
+        return;
+      }
+
+      const delivery = currentSubmissionDelivery(latest.submission.request);
+      markSubmissionSending(submissionId, delivery);
+      const accepted = await get().sendMessage(
+        exactPrepared.text,
+        delivery === "steer" ? "steer" : "reject",
+        exactPrepared.attachments,
+        latest.submission.draft.references.length > 0
+          ? latest.submission.draft.references
+          : undefined,
+        {
+          targetThreadId: thread.id,
+          draftSubmission: latest.submission.owner,
+          clientMessageId: latest.submission.clientMessageId,
+        },
+      );
+      if (!accepted) {
+        failSubmission(submissionId, new Error("The message was not accepted by the chat."));
+      }
+    } catch (error) {
+      failSubmission(submissionId, error);
+    }
+  };
+
   return {
     archiveThread: async (threadId: string) => {
       set((s) => ({
@@ -813,7 +1023,6 @@ export function createThreadActions(
       set((s) => {
         const remainingThreads = s.threads.filter((t) => t.id !== threadId);
         const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
-        const nextPromptModal = s.promptModal?.threadId === threadId ? null : s.promptModal;
         const remainingWorkspaces = workspaceIdToRemove
           ? s.workspaces.filter((workspace) => workspace.id !== workspaceIdToRemove)
           : s.workspaces;
@@ -825,15 +1034,14 @@ export function createThreadActions(
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
 
-        const nextSandboxApprovals = { ...s.sandboxApprovalsByThread };
-        delete nextSandboxApprovals[threadId];
+        const nextInteractionsByThread = { ...s.interactionsByThread };
+        delete nextInteractionsByThread[threadId];
 
         return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
           selectedThreadId,
-          promptModal: nextPromptModal,
-          sandboxApprovalsByThread: nextSandboxApprovals,
+          interactionsByThread: nextInteractionsByThread,
           threadRuntimeById: nextThreadRuntimeById,
           selectedWorkspaceId:
             s.selectedWorkspaceId === workspaceIdToRemove
@@ -914,6 +1122,11 @@ export function createThreadActions(
     },
 
     newThread: async (opts) => {
+      const operationIntent = opts?.intent ?? beginCreationOperationIntent();
+      const canNavigate = () => isCreationNavigationIntentCurrent(operationIntent);
+      const reportPhase = opts?.onPhase ?? (() => {});
+      reportPhase("preparing");
+      if (opts?.signal?.aborted) return false;
       const explicitWorkspace = opts?.workspaceId
         ? (get().workspaces.find((workspace) => workspace.id === opts.workspaceId) ?? null)
         : null;
@@ -922,24 +1135,28 @@ export function createThreadActions(
         (explicitWorkspace && !isOneOffChatWorkspace(explicitWorkspace) ? "project" : "oneOff");
       const hasQueuedAttachments =
         (opts?.attachments && opts.attachments.length > 0) ||
-        (opts?.attachmentFiles && opts.attachmentFiles.length > 0);
+        (opts?.attachmentFiles && opts.attachmentFiles.length > 0) ||
+        (opts?.draftAttachments && opts.draftAttachments.length > 0);
       const createSessionImmediately =
         opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
 
       let workspaceId: string | null = null;
       if (scope === "oneOff") {
         try {
-          const oneOffWorkspace = await createOneOffWorkspaceRecord(
-            get,
-            opts?.titleHint ?? opts?.firstMessage,
+          const oneOffWorkspace = await waitForOperation(
+            createOneOffWorkspaceRecord(get, opts?.titleHint ?? opts?.firstMessage),
+            opts?.signal,
           );
           workspaceId = oneOffWorkspace.id;
-          set((s) => ({
-            workspaces: [oneOffWorkspace, ...s.workspaces],
-            selectedWorkspaceId: oneOffWorkspace.id,
-          }));
+          set((s) => {
+            const next = {
+              workspaces: [oneOffWorkspace, ...s.workspaces],
+            };
+            return canNavigate() ? { ...next, selectedWorkspaceId: oneOffWorkspace.id } : next;
+          });
           ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
         } catch (error) {
+          if (isOperationAbortError(error)) return false;
           set((s) => ({
             notifications: pushNotification(s.notifications, {
               id: makeId(),
@@ -977,12 +1194,12 @@ export function createThreadActions(
             }));
             return false;
           }
-          await get().addWorkspace();
+          await get().addWorkspace({ intent: operationIntent });
           workspaceId = projectWorkspaces()[0]?.id ?? null;
           if (!workspaceId) return false;
         }
 
-        if (get().selectedWorkspaceId !== workspaceId) {
+        if (canNavigate() && get().selectedWorkspaceId !== workspaceId) {
           set({ selectedWorkspaceId: workspaceId });
         }
 
@@ -991,12 +1208,14 @@ export function createThreadActions(
             (thread) => thread.workspaceId === workspaceId && thread.draft === true,
           );
           if (existingDraft) {
-            set({
-              selectedThreadId: existingDraft.id,
-              selectedTaskId: null,
-              view: "chat",
-              newChatLandingTarget: null,
-            });
+            if (canNavigate()) {
+              set({
+                selectedThreadId: existingDraft.id,
+                selectedTaskId: null,
+                view: "chat",
+                newChatLandingTarget: null,
+              });
+            }
             ensureThreadRuntime(get, set, existingDraft.id);
             await persistNow(get);
             return true;
@@ -1008,7 +1227,13 @@ export function createThreadActions(
 
       let url: string | null = null;
       if (createSessionImmediately) {
-        await ensureServerRunning(get, set, workspaceId);
+        reportPhase("starting-server");
+        try {
+          await ensureServerRunning(get, set, workspaceId, { signal: opts?.signal });
+        } catch (error) {
+          if (isOperationAbortError(error)) return false;
+          throw error;
+        }
         ensureControlSocket(get, set, workspaceId);
 
         const wsRt = get().workspaceRuntimeById[workspaceId];
@@ -1028,6 +1253,30 @@ export function createThreadActions(
       }
 
       const threadId = makeId();
+      let firstMessage = opts?.firstMessage ?? "";
+      let resolvedAttachments = opts?.attachments;
+      const draftAttachments =
+        opts?.draftAttachments ?? opts?.attachmentFiles?.map(createComposerAttachmentFile) ?? [];
+      if (draftAttachments.length > 0) {
+        reportPhase("processing-attachments");
+        try {
+          const prepared = await prepareComposerMessageForWorkspace(
+            get,
+            set,
+            workspaceId,
+            firstMessage,
+            draftAttachments,
+            { threadId, signal: opts?.signal },
+          );
+          resolvedAttachments = prepared.attachments;
+          firstMessage = prepared.text;
+        } catch (error) {
+          if (isOperationAbortError(error)) return false;
+          throw error;
+        }
+      }
+      if (opts?.signal?.aborted) return false;
+      reportPhase("creating");
       const createdAt = nowIso();
       const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
 
@@ -1048,28 +1297,50 @@ export function createThreadActions(
       let queuedDraftSubmission = opts?.draftSubmission;
       set((s) => {
         let composerDraftsByKey = s.composerDraftsByKey;
+        let composerSubmissionsByKey = s.composerSubmissionsByKey;
         if (queuedDraftSubmission) {
-          const submittedDraft = composerDraftsByKey[queuedDraftSubmission.key];
+          const previousKey = queuedDraftSubmission.key;
+          const submittedDraft = composerDraftsByKey[previousKey];
           if (submittedDraft?.revision === queuedDraftSubmission.revision) {
             const nextKey = composerDraftKeyForThread(threadId);
             const nextDrafts = { ...composerDraftsByKey };
-            delete nextDrafts[queuedDraftSubmission.key];
+            delete nextDrafts[previousKey];
             nextDrafts[nextKey] = submittedDraft;
             composerDraftsByKey = nextDrafts;
             queuedDraftSubmission = {
               key: nextKey,
               revision: queuedDraftSubmission.revision,
+              ...(queuedDraftSubmission.submissionId
+                ? { submissionId: queuedDraftSubmission.submissionId }
+                : {}),
             };
+            const submission = s.composerSubmissionsByKey[previousKey];
+            if (submission?.id === queuedDraftSubmission.submissionId) {
+              composerSubmissionsByKey = { ...s.composerSubmissionsByKey };
+              delete composerSubmissionsByKey[previousKey];
+              composerSubmissionsByKey[nextKey] = {
+                ...submission,
+                owner: queuedDraftSubmission,
+                request: { kind: "thread", threadId },
+              };
+            }
           }
         }
-        return {
+        const next = {
           threads: [thread, ...s.threads],
-          selectedThreadId: threadId,
-          selectedTaskId: null,
-          view: "chat",
           composerDraftsByKey,
-          newChatLandingTarget: null,
+          composerSubmissionsByKey,
         };
+        return canNavigate()
+          ? {
+              ...next,
+              selectedWorkspaceId: workspaceId,
+              selectedThreadId: threadId,
+              selectedTaskId: null,
+              view: "chat" as const,
+              newChatLandingTarget: null,
+            }
+          : next;
       });
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({
@@ -1094,20 +1365,18 @@ export function createThreadActions(
         return false;
       }
 
-      let firstMessage = opts?.firstMessage ?? "";
-      let resolvedAttachments = opts?.attachments;
-      if (opts?.attachmentFiles && opts.attachmentFiles.length > 0) {
-        const resolved = await resolveComposerAttachmentsForWorkspace(
-          get,
-          set,
-          workspaceId,
-          opts.attachmentFiles.map(createComposerAttachmentFile),
-          { threadId },
-        );
-        resolvedAttachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
-        firstMessage = appendAttachmentSkippedNotes(firstMessage, resolved.skippedNotes);
+      if (queuedDraftSubmission?.submissionId) {
+        const prepared = {
+          text: firstMessage,
+          attachments:
+            resolvedAttachments && resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
+        };
+        updateSubmission(queuedDraftSubmission.submissionId, (submission) => ({
+          ...submission,
+          prepared: submission.prepared ?? prepared,
+        }));
       }
-
+      markSubmissionSending(queuedDraftSubmission?.submissionId);
       const hasFirstMessage = Boolean(firstMessage.trim());
       const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
       if (hasFirstMessage || hasResolvedAttachments) {
@@ -1118,7 +1387,9 @@ export function createThreadActions(
           resolvedAttachments,
           opts?.references,
           queuedDraftSubmission,
+          opts?.clientMessageId,
         );
+        recordThreadNavigationIntent(threadId, operationIntent);
       }
       ensureThreadSocket(
         get,
@@ -1136,6 +1407,7 @@ export function createThreadActions(
       defaultTargetKind?: "project" | "oneOff";
       target?: NewChatLandingTarget;
     }) => {
+      invalidateNavigationIntent();
       const state = get();
       const landingTarget: NewChatLandingTarget =
         opts?.target ??
@@ -1153,12 +1425,14 @@ export function createThreadActions(
     },
 
     setNewChatLandingTarget: (target) => {
+      invalidateNavigationIntent();
       set({ newChatLandingTarget: target });
       syncDesktopStateCache(get);
     },
 
     selectThread: async (threadId: string, options = {}) => {
       if (options.signal?.aborted) return;
+      invalidateNavigationIntent();
       set({ newChatLandingTarget: null });
       if (options.signal?.aborted) return;
       await hydrateThreadSelection(get, set, threadId, {
@@ -1179,6 +1453,7 @@ export function createThreadActions(
         refreshSnapshot?: boolean;
         signal?: AbortSignal;
         draftSubmission?: ComposerDraftRevision;
+        clientMessageId?: string;
       },
     ) => {
       const isReconnectCurrent = () =>
@@ -1230,7 +1505,7 @@ export function createThreadActions(
           firstMessage ?? "",
           opts?.attachments,
           opts?.references,
-          undefined,
+          opts?.clientMessageId,
           opts?.draftSubmission,
         );
       }
@@ -1256,6 +1531,7 @@ export function createThreadActions(
       options?: {
         targetThreadId?: string;
         draftSubmission?: ComposerDraftRevision;
+        clientMessageId?: string;
         retryToolItemIds?: string[];
       },
     ): Promise<boolean> => {
@@ -1286,15 +1562,16 @@ export function createThreadActions(
       const taskCommand = !hasAttachments ? trimmed.match(/^\/task(?:\s+([\s\S]*))?$/i) : null;
       if (taskCommand) {
         try {
+          recordThreadNavigationIntent(activeThreadId);
           await ensureServerRunning(get, set, thread.workspaceId);
           ensureControlSocket(get, set, thread.workspaceId);
           await requestJsonRpc(get, set, thread.workspaceId, "command/execute", {
             threadId: activeThreadId,
             name: "task",
             arguments: taskCommand[1]?.trim() ?? "",
-            clientMessageId: makeId(),
+            clientMessageId: options?.clientMessageId ?? makeId(),
           });
-          if (draftSubmission) get().clearComposerDraft(draftSubmission);
+          if (draftSubmission) get().completeComposerSubmission(draftSubmission);
           return true;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1323,6 +1600,7 @@ export function createThreadActions(
           attachments,
           references,
           draftSubmission,
+          clientMessageId: options?.clientMessageId,
         });
         if (!started) return false;
         return true;
@@ -1335,8 +1613,10 @@ export function createThreadActions(
           attachments,
           references,
           draftSubmission,
+          clientMessageId: options?.clientMessageId,
         });
         if (!reconnected) return false;
+        recordThreadNavigationIntent(activeThreadId);
         return true;
       }
 
@@ -1348,24 +1628,248 @@ export function createThreadActions(
         busyPolicy,
         attachments,
         references,
-        undefined,
+        options?.clientMessageId,
         draftSubmission,
         options?.retryToolItemIds,
       );
       if (!accepted) return false;
+      recordThreadNavigationIntent(activeThreadId);
       return true;
     },
 
+    submitComposerDraft: (request) => {
+      const key =
+        request.kind === "thread"
+          ? composerDraftKeyForThread(request.threadId)
+          : composerDraftKeyForNewChatTarget(request.target);
+      const state = get();
+      if ((state.composerAttachmentIngestionCountByKey[key] ?? 0) > 0) return false;
+      const draft = state.composerDraftsByKey[key];
+      if (!draft || (!draft.text.trim() && draft.attachments.length === 0)) return false;
+      const existing = state.composerSubmissionsByKey[key];
+      if (isComposerSubmissionInFlight(existing)) return false;
+
+      const submissionId = makeId();
+      const owner: ComposerDraftRevision = {
+        key,
+        revision: draft.revision,
+        submissionId,
+      };
+      const submission: ComposerSubmission = {
+        id: submissionId,
+        clientMessageId: makeId(),
+        owner,
+        request,
+        draft: cloneComposerDraftForSubmission(draft),
+        prepared: null,
+        phase: "preparing",
+        delivery: currentSubmissionDelivery(request),
+        error: null,
+      };
+      let claimed = false;
+      set((current) => {
+        if ((current.composerAttachmentIngestionCountByKey[key] ?? 0) > 0) return {};
+        if (isComposerSubmissionInFlight(current.composerSubmissionsByKey[key])) return {};
+        const currentDraft = current.composerDraftsByKey[key];
+        if (!currentDraft || currentDraft.revision !== owner.revision) return {};
+        claimed = true;
+        return {
+          composerSubmissionsByKey: {
+            ...current.composerSubmissionsByKey,
+            [key]: submission,
+          },
+        };
+      });
+      if (!claimed) return false;
+      if (existing) revokeAttachmentPreviewsIfUnreferenced(existing.draft.attachments);
+      void executeComposerSubmission(submissionId);
+      return true;
+    },
+
+    retryComposerSubmission: (key) => {
+      const ownerKey = key ?? resolveActiveComposerDraftKey(get());
+      const submission = get().composerSubmissionsByKey[ownerKey];
+      if (submission?.phase !== "failed") return false;
+      let claimed = false;
+      set((state) => {
+        const current = state.composerSubmissionsByKey[ownerKey];
+        if (!current || current.id !== submission.id || current.phase !== "failed") return {};
+        claimed = true;
+        return {
+          composerSubmissionsByKey: {
+            ...state.composerSubmissionsByKey,
+            [ownerKey]: {
+              ...current,
+              phase: "preparing",
+              delivery: currentSubmissionDelivery(current.request),
+              error: null,
+            },
+          },
+        };
+      });
+      if (!claimed) return false;
+      void executeComposerSubmission(submission.id);
+      return true;
+    },
+
+    editAcceptedComposerSubmission: (key) => {
+      const ownerKey = key ?? resolveActiveComposerDraftKey(get());
+      const submission = get().composerSubmissionsByKey[ownerKey];
+      if (submission?.phase !== "accepted") return false;
+      let restored = false;
+      set((state) => {
+        const currentSubmission = state.composerSubmissionsByKey[ownerKey];
+        if (
+          !currentSubmission ||
+          currentSubmission.id !== submission.id ||
+          currentSubmission.phase !== "accepted"
+        ) {
+          return {};
+        }
+        const current = state.composerDraftsByKey[ownerKey];
+        if (hasComposerDraftState(current)) {
+          return {};
+        }
+        const nextSubmissions = { ...state.composerSubmissionsByKey };
+        delete nextSubmissions[ownerKey];
+        restored = true;
+        return {
+          composerDraftsByKey: {
+            ...state.composerDraftsByKey,
+            [ownerKey]: {
+              ...cloneComposerDraftForSubmission(currentSubmission.draft),
+              revision: Math.max(current?.revision ?? 0, currentSubmission.owner.revision) + 1,
+              generation: Math.max(current?.generation ?? 0, currentSubmission.draft.generation),
+              updatedAt: nowIso(),
+            },
+          },
+          composerSubmissionsByKey: nextSubmissions,
+        };
+      });
+      if (restored) persist(get);
+      return restored;
+    },
+
+    dismissComposerSubmission: (key) => {
+      const ownerKey = key ?? resolveActiveComposerDraftKey(get());
+      const submission = get().composerSubmissionsByKey[ownerKey];
+      if (!submission || isComposerSubmissionInFlight(submission)) return;
+      set((state) => {
+        if (state.composerSubmissionsByKey[ownerKey]?.id !== submission.id) return {};
+        const next = { ...state.composerSubmissionsByKey };
+        delete next[ownerKey];
+        return { composerSubmissionsByKey: next };
+      });
+      revokeAttachmentPreviewsIfUnreferenced(submission.draft.attachments);
+    },
+
+    completeComposerSubmission: (owner) => {
+      if (!owner.submissionId) {
+        get().clearComposerDraft(owner);
+        return;
+      }
+      const entry = submissionEntry(owner.submissionId);
+      if (!entry) return;
+      const { key, submission } = entry;
+      if (submission.delivery === "steer") {
+        set((state) => {
+          const current = state.composerSubmissionsByKey[key];
+          if (!current || current.id !== submission.id) return {};
+          const cleared = clearComposerDraftRevision(state.composerDraftsByKey, current.owner);
+          return {
+            ...(cleared.cleared ? { composerDraftsByKey: cleared.drafts } : {}),
+            composerSubmissionsByKey: {
+              ...state.composerSubmissionsByKey,
+              [key]: {
+                ...current,
+                phase: "accepted",
+                error: null,
+              },
+            },
+          };
+        });
+        persist(get);
+        return;
+      }
+
+      set((state) => {
+        const current = state.composerSubmissionsByKey[key];
+        if (!current || current.id !== submission.id) return {};
+        const next = { ...state.composerSubmissionsByKey };
+        delete next[key];
+        return { composerSubmissionsByKey: next };
+      });
+      const cleared = get().clearComposerDraft(submission.owner);
+      if (!cleared) revokeAttachmentPreviewsIfUnreferenced(submission.draft.attachments);
+    },
+
+    failComposerSubmission: (submissionId, error) => {
+      failSubmission(submissionId, error);
+    },
+
     cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => {
-      const ok = sendThread(get, threadId, (sid) => ({
-        type: "cancel",
-        sessionId: sid,
-        ...(opts?.includeSubagents !== undefined
-          ? { includeSubagents: opts.includeSubagents }
-          : {}),
-      }));
+      let claimed = false;
+      set((state) => {
+        const runtime = state.threadRuntimeById[threadId];
+        if (!runtime?.busy || runtime.interruptPending) return {};
+        claimed = true;
+        return {
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...runtime,
+              interruptPending: true,
+            },
+          },
+        };
+      });
+      if (!claimed) return false;
+
+      const ok = sendThread(
+        get,
+        threadId,
+        (sid) => ({
+          type: "cancel",
+          sessionId: sid,
+          ...(opts?.includeSubagents !== undefined
+            ? { includeSubagents: opts.includeSubagents }
+            : {}),
+        }),
+        {
+          onSettled: (error) => {
+            if (!error) return;
+            set((state) => {
+              const runtime = state.threadRuntimeById[threadId];
+              if (!runtime?.interruptPending) return {};
+              return {
+                threadRuntimeById: {
+                  ...state.threadRuntimeById,
+                  [threadId]: {
+                    ...runtime,
+                    interruptPending: false,
+                  },
+                },
+                notifications: pushNotification(state.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Unable to stop response",
+                  detail: composerSubmissionErrorMessage(error),
+                }),
+              };
+            });
+          },
+        },
+      );
       if (!ok) {
         set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...s.threadRuntimeById[threadId],
+              interruptPending: false,
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -1374,7 +1878,9 @@ export function createThreadActions(
             detail: "Unable to cancel this run.",
           }),
         }));
+        return false;
       }
+      return true;
     },
 
     clearThreadUsageHardCap: (threadId: string) => {
@@ -1648,7 +2154,7 @@ export function createThreadActions(
           },
         };
       });
-      revokeComposerDraftAttachmentPreviews(removed);
+      revokeAttachmentPreviewsIfUnreferenced(removed);
       get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
       persist(get);
     },
@@ -1712,7 +2218,7 @@ export function createThreadActions(
         return result.cleared ? { composerDraftsByKey: result.drafts } : {};
       });
       if (cleared) {
-        revokeComposerDraftAttachmentPreviews(removedAttachments);
+        revokeAttachmentPreviewsIfUnreferenced(removedAttachments);
         get().pruneComposerDrafts(undefined, Number.POSITIVE_INFINITY);
         persist(get);
       }
@@ -1742,11 +2248,12 @@ export function createThreadActions(
           ),
           activeKey: resolveActiveComposerDraftKey(state),
           maxAgeMs,
-          protectedKeys: new Set(
-            Object.entries(state.composerAttachmentIngestionCountByKey)
+          protectedKeys: new Set([
+            ...Object.entries(state.composerAttachmentIngestionCountByKey)
               .filter(([, count]) => count > 0)
               .map(([key]) => key),
-          ),
+            ...Object.keys(state.composerSubmissionsByKey),
+          ]),
         });
         removedAttachments = result.removedAttachments;
         changed = result.removedKeys.length > 0;
@@ -1768,13 +2275,27 @@ export function createThreadActions(
           composerDraftRevisionFloorByKey,
         };
       });
-      revokeComposerDraftAttachmentPreviews(removedAttachments);
+      revokeAttachmentPreviewsIfUnreferenced(removedAttachments);
       if (changed) persist(get);
     },
 
     setInjectContext: (v) => set({ injectContext: v }),
 
     answerAsk: (threadId, requestId, answer) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (
+        interaction?.kind !== "ask" ||
+        (interaction.status !== "pending" && interaction.status !== "failed")
+      ) {
+        return false;
+      }
+      updateInteraction(set, threadId, requestId, (current) => {
+        if (current.kind !== "ask") return current;
+        const { error: _error, ...rest } = current;
+        return { ...rest, status: "responding", response: answer };
+      });
       const sent = sendThread(get, threadId, (sessionId) => ({
         type: "ask_response",
         sessionId,
@@ -1782,9 +2303,12 @@ export function createThreadActions(
         answer,
       }));
       if (!sent) {
-        // Socket disconnected — keep the modal open so the user can retry
-        // once reconnected rather than silently swallowing the answer.
-        return;
+        updateInteraction(set, threadId, requestId, (current) => ({
+          ...current,
+          status: "failed",
+          error: "The response could not be sent. Reconnect and retry.",
+        }));
+        return false;
       }
       appendThreadTranscript(threadId, "client", {
         type: "ask_response",
@@ -1792,10 +2316,24 @@ export function createThreadActions(
         requestId,
         answer,
       });
-      set({ promptModal: null });
+      return true;
     },
 
     answerApproval: (threadId, requestId, approved) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (
+        interaction?.kind !== "approval" ||
+        (interaction.status !== "pending" && interaction.status !== "failed")
+      ) {
+        return false;
+      }
+      updateInteraction(set, threadId, requestId, (current) => {
+        if (current.kind !== "approval") return current;
+        const { error: _error, ...rest } = current;
+        return { ...rest, status: "responding", response: approved };
+      });
       const sent = sendThread(get, threadId, (sessionId) => ({
         type: "approval_response",
         sessionId,
@@ -1803,6 +2341,11 @@ export function createThreadActions(
         approved,
       }));
       if (!sent) {
+        updateInteraction(set, threadId, requestId, (current) => ({
+          ...current,
+          status: "failed",
+          error: "The response could not be sent. Reconnect and retry.",
+        }));
         return false;
       }
       appendThreadTranscript(threadId, "client", {
@@ -1811,37 +2354,27 @@ export function createThreadActions(
         requestId,
         approved,
       });
-      // Clear the modal (ordinary approvals) and drop any matching inline
-      // sandbox-escalation prompt for this thread.
-      set((s) => {
-        const existing = s.sandboxApprovalsByThread[threadId];
-        const promptModal =
-          s.promptModal?.kind === "approval" &&
-          s.promptModal.threadId === threadId &&
-          s.promptModal.prompt.requestId === requestId
-            ? null
-            : s.promptModal;
-        if (!existing) return { promptModal };
-        const remaining = existing.filter((p) => p.requestId !== requestId);
-        const nextSandbox = { ...s.sandboxApprovalsByThread };
-        if (remaining.length > 0) nextSandbox[threadId] = remaining;
-        else delete nextSandbox[threadId];
-        return { promptModal, sandboxApprovalsByThread: nextSandbox };
-      });
       return true;
     },
 
     dismissPrompt: () => {
-      const state = get();
-      if (state.promptModal) {
-        set({ promptModal: null });
-        return;
-      }
+      const pending = findLatestVisibleSandboxInteraction(get());
+      if (pending?.interaction.kind !== "approval") return;
+      get().answerApproval(pending.threadId, pending.interaction.requestId, false);
+    },
 
-      const pending = findLatestSandboxApprovalPrompt(state);
-      if (pending) {
-        state.answerApproval(pending.threadId, pending.prompt.requestId, false);
+    retryInteractionResponse: (threadId, requestId) => {
+      const interaction = get().interactionsByThread[threadId]?.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (interaction?.status !== "failed") return false;
+      if (interaction.kind === "ask" && interaction.response !== undefined) {
+        return get().answerAsk(threadId, requestId, interaction.response);
       }
+      if (interaction.kind === "approval" && interaction.response !== undefined) {
+        return get().answerApproval(threadId, requestId, interaction.response);
+      }
+      return false;
     },
 
     loadAllThreadUsage: async () => {

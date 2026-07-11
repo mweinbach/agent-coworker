@@ -3,7 +3,7 @@ import { isStandardChatThread } from "./threadFilters";
 import { getThreadSelectionContext } from "./threadSelectionContext";
 import type { ThreadRecord, ViewId } from "./types";
 
-type SandboxApprovalContext = {
+type InteractionContext = {
   view: ViewId;
   lastNonSettingsView?: ViewId | null;
   selectedTaskId: string | null;
@@ -12,14 +12,14 @@ type SandboxApprovalContext = {
   tasksById: Record<string, TaskRecord>;
 };
 
-export type SandboxApprovalThreadTarget =
+export type InteractionThreadTarget =
   | { kind: "chat" }
   | { kind: "task"; taskId: string; taskThreadId: string | null };
 
-export function resolveSandboxApprovalThreadTarget(
-  context: Pick<SandboxApprovalContext, "selectedThreadId" | "threads" | "tasksById">,
+export function resolveInteractionThreadTarget(
+  context: Pick<InteractionContext, "selectedThreadId" | "threads" | "tasksById">,
   threadId: string,
-): SandboxApprovalThreadTarget | null {
+): InteractionThreadTarget | null {
   const thread = context.threads.find((candidate) => candidate.id === threadId);
   const directTaskId = thread?.taskId ?? null;
   if (directTaskId) {
@@ -39,7 +39,7 @@ export function resolveSandboxApprovalThreadTarget(
   }
 
   if (
-    (thread && isStandardChatThread(thread, { includeDrafts: true })) ||
+    (thread && isStandardChatThread(thread, { includeDrafts: true, includeArchived: true })) ||
     threadId === context.selectedThreadId
   ) {
     return { kind: "chat" };
@@ -47,16 +47,14 @@ export function resolveSandboxApprovalThreadTarget(
   return null;
 }
 
-export function isSandboxApprovalThreadVisible(
-  context: SandboxApprovalContext,
-  threadId: string,
-): boolean {
-  const target = resolveSandboxApprovalThreadTarget(context, threadId);
+export function isInteractionThreadVisible(context: InteractionContext, threadId: string): boolean {
+  const thread = context.threads.find((candidate) => candidate.id === threadId);
+  if (thread?.archived) return false;
+  const target = resolveInteractionThreadTarget(context, threadId);
   if (!target) return false;
   const selectionContext = getThreadSelectionContext(context.view, context.lastNonSettingsView);
   if (selectionContext === "task") {
-    if (target.kind !== "task" || target.taskId !== context.selectedTaskId) return false;
-    return true;
+    return target.kind === "task" && target.taskId === context.selectedTaskId;
   }
   return target.kind === "chat";
 }

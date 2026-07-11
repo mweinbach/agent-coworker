@@ -31,6 +31,7 @@ import {
 import { resolveCollapsedLeftRailWidth } from "../../lib/desktopPlatform";
 import { useDesktopPlatform } from "../../lib/useDesktopPlatform";
 import { cn } from "../../lib/utils";
+import { useOverlayOwner } from "../OverlayStack";
 import { PlatformTopBarChrome } from "./PlatformTopBarChrome";
 
 interface AppTopBarProps {
@@ -266,7 +267,14 @@ export function AppTopBar({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
+  const detailsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const detailsId = useId();
+  const detailsOwner = useOverlayOwner({
+    active: detailsOpen,
+    label: "Thread details",
+    onDismiss: () => setDetailsOpen(false),
+    restoreFocus: () => detailsTriggerRef.current,
+  });
   const platformInfo = useDesktopPlatform();
   const isDarwin = platformInfo.platform === "macos";
   const usesLeftRail = platformInfo.topbarControlPlacement === "left-rail";
@@ -436,19 +444,9 @@ export function AppTopBar({
       }
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setDetailsOpen(false);
-      }
-    };
-
     document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown, true);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [detailsOpen]);
 
@@ -496,6 +494,7 @@ export function AppTopBar({
               </span>
             ) : (
               <button
+                ref={detailsTriggerRef}
                 type="button"
                 aria-label="Open thread details"
                 aria-haspopup="dialog"
@@ -536,6 +535,7 @@ export function AppTopBar({
                 role="dialog"
                 aria-label="Thread details"
                 className="app-topbar__thread-popover absolute left-0 top-full mt-1.5 w-[19.5rem] max-w-[min(19.5rem,calc(100vw-2rem))]"
+                style={{ zIndex: detailsOwner?.zIndex }}
               >
                 <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
                   <div className="min-w-0 flex-1">

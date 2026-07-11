@@ -29,11 +29,7 @@ export type PendingPromptReplayEvent =
 export class InteractionManager {
   private readonly pendingAsk = new Map<string, PromiseWithResolvers<string>>();
   private readonly pendingApproval = new Map<string, PromiseWithResolvers<boolean>>();
-  private readonly pendingAskEvents = new Map<string, Extract<SessionEvent, { type: "ask" }>>();
-  private readonly pendingApprovalEvents = new Map<
-    string,
-    Extract<SessionEvent, { type: "approval" }>
-  >();
+  private readonly pendingPromptEvents = new Map<string, PendingPromptReplayEvent>();
 
   constructor(
     private readonly opts: {
@@ -76,18 +72,28 @@ export class InteractionManager {
   }
 
   get pendingAskEventsForReplay(): ReadonlyMap<string, Extract<SessionEvent, { type: "ask" }>> {
-    return this.pendingAskEvents;
+    return new Map(
+      [...this.pendingPromptEvents].filter(
+        (entry): entry is [string, Extract<SessionEvent, { type: "ask" }>] =>
+          entry[1].type === "ask",
+      ),
+    );
   }
 
   get pendingApprovalEventsForReplay(): ReadonlyMap<
     string,
     Extract<SessionEvent, { type: "approval" }>
   > {
-    return this.pendingApprovalEvents;
+    return new Map(
+      [...this.pendingPromptEvents].filter(
+        (entry): entry is [string, Extract<SessionEvent, { type: "approval" }>] =>
+          entry[1].type === "approval",
+      ),
+    );
   }
 
   getPendingPromptEventsForReplay(): ReadonlyArray<PendingPromptReplayEvent> {
-    return [...this.pendingAskEvents.values(), ...this.pendingApprovalEvents.values()];
+    return [...this.pendingPromptEvents.values()];
   }
 
   replayPendingPrompts() {
@@ -109,15 +115,15 @@ export class InteractionManager {
         "session",
         `Ask response cannot be empty. Reply with text or ${ASK_SKIP_TOKEN} to skip.`,
       );
-      const pendingEvt = this.pendingAskEvents.get(requestId);
-      if (pendingEvt) {
+      const pendingEvt = this.pendingPromptEvents.get(requestId);
+      if (pendingEvt?.type === "ask") {
         this.opts.emit(pendingEvt);
       }
       return false;
     }
 
     this.pendingAsk.delete(requestId);
-    this.pendingAskEvents.delete(requestId);
+    this.pendingPromptEvents.delete(requestId);
     this.opts.queuePersistSessionSnapshot("session.ask_resolved");
     pending.resolve(answer);
     return true;
@@ -131,7 +137,7 @@ export class InteractionManager {
     }
 
     this.pendingApproval.delete(requestId);
-    this.pendingApprovalEvents.delete(requestId);
+    this.pendingPromptEvents.delete(requestId);
     this.opts.queuePersistSessionSnapshot("session.approval_resolved");
     pending.resolve(approved);
     return true;
@@ -141,13 +147,13 @@ export class InteractionManager {
     for (const [id, pending] of this.pendingAsk) {
       pending.reject(new Error(reason));
       this.pendingAsk.delete(id);
-      this.pendingAskEvents.delete(id);
+      this.pendingPromptEvents.delete(id);
     }
 
     for (const [id, pending] of this.pendingApproval) {
       pending.reject(new Error(reason));
       this.pendingApproval.delete(id);
-      this.pendingApprovalEvents.delete(id);
+      this.pendingPromptEvents.delete(id);
     }
   }
 
@@ -163,14 +169,14 @@ export class InteractionManager {
       question,
       options,
     };
-    this.pendingAskEvents.set(requestId, evt);
+    this.pendingPromptEvents.set(requestId, evt);
     this.opts.emit(evt);
     this.opts.queuePersistSessionSnapshot("session.ask_pending");
 
     const timeout = this.armPromptTimeout(() => {
       // Only act if still pending (delete() returns false if already answered).
       if (!this.pendingAsk.delete(requestId)) return;
-      this.pendingAskEvents.delete(requestId);
+      this.pendingPromptEvents.delete(requestId);
       this.opts.log(`[warn] ask ${requestId} timed out without a response`);
       this.opts.queuePersistSessionSnapshot("session.ask_timeout");
       pending.reject(new Error("Ask prompt timed out without a response."));
@@ -178,7 +184,7 @@ export class InteractionManager {
 
     return await this.waitForPromptResponse(requestId, this.pendingAsk).finally(() => {
       timeout?.clear();
-      this.pendingAskEvents.delete(requestId);
+      this.pendingPromptEvents.delete(requestId);
     });
   }
 
@@ -224,7 +230,7 @@ export class InteractionManager {
       ...(isSandboxEscalation && opts?.detail ? { detail: opts.detail } : {}),
       ...(isSandboxEscalation && opts?.category ? { category: opts.category } : {}),
     };
-    this.pendingApprovalEvents.set(requestId, evt);
+    this.pendingPromptEvents.set(requestId, evt);
     this.opts.emit(evt);
     captureProductEvent("tool_approval_requested", {
       eventSource: "server",
@@ -236,7 +242,7 @@ export class InteractionManager {
     const timeout = this.armPromptTimeout(() => {
       // Fail safe: an abandoned approval denies (false), never silently runs.
       if (!this.pendingApproval.delete(requestId)) return;
-      this.pendingApprovalEvents.delete(requestId);
+      this.pendingPromptEvents.delete(requestId);
       this.opts.log(`[warn] approval ${requestId} timed out without a response; denying`);
       this.opts.queuePersistSessionSnapshot("session.approval_timeout");
       pending.resolve(false);
@@ -244,7 +250,7 @@ export class InteractionManager {
 
     return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {
       timeout?.clear();
-      this.pendingApprovalEvents.delete(requestId);
+      this.pendingPromptEvents.delete(requestId);
     });
   }
 

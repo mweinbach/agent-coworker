@@ -1,11 +1,46 @@
 import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
+import { createContext, useContext } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  isReservedEditableEscape,
+  type OverlayOwnership,
+  type OverlayRootState,
+  useOverlayOwner,
+  useOverlayRootState,
+} from "@/ui/OverlayStack";
 
-function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+type DialogOverlayState = OverlayRootState & {
+  ownership: OverlayOwnership | null;
+};
+
+const DialogOverlayContext = createContext<DialogOverlayState | null>(null);
+
+function Dialog({
+  defaultOpen,
+  onOpenChange,
+  open,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const state = useOverlayRootState({ defaultOpen, onOpenChange, open });
+  const ownership = useOverlayOwner({
+    active: state.open,
+    label: "Dialog",
+    onDismiss: () => state.setOpen(false),
+    restoreFocus: () => state.restoreFocusRef.current,
+  });
+  return (
+    <DialogOverlayContext.Provider value={{ ...state, ownership }}>
+      <DialogPrimitive.Root
+        data-slot="dialog"
+        open={state.open}
+        onOpenChange={state.setOpen}
+        {...props}
+      />
+    </DialogOverlayContext.Provider>
+  );
 }
 
 function DialogTrigger({ ...props }: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
@@ -29,8 +64,10 @@ function DialogClose({ ...props }: React.ComponentProps<typeof DialogPrimitive.C
 
 function DialogOverlay({
   className,
+  style,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+  const owner = useContext(DialogOverlayContext);
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
@@ -38,6 +75,7 @@ function DialogOverlay({
         "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className,
       )}
+      style={{ ...style, zIndex: owner?.ownership?.zIndex ?? style?.zIndex }}
       {...props}
     />
   );
@@ -47,11 +85,18 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  preventEditableEscapeDismissal = false,
   forceMount,
+  onEscapeKeyDown,
+  style,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  preventEditableEscapeDismissal?: boolean;
   showCloseButton?: boolean;
 }) {
+  const owner = useContext(DialogOverlayContext);
+  const ownership = owner?.ownership;
+
   return (
     <DialogPortal data-slot="dialog-portal" forceMount={forceMount}>
       <DialogOverlay />
@@ -61,6 +106,12 @@ function DialogContent({
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-popover p-6 text-popover-foreground shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
+        style={{ ...style, zIndex: ownership?.zIndex ?? style?.zIndex }}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          if (preventEditableEscapeDismissal && isReservedEditableEscape(event)) return;
+          ownership?.handleEscape(event);
+        }}
         {...props}
       >
         {children}

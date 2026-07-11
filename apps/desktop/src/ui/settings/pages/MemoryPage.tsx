@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import type { MemoryListEntry } from "../../../app/types";
 import {
   CHATS_WORKSPACE_TARGET_ID,
@@ -63,6 +64,7 @@ import { displayProviderName } from "../../../lib/providerDisplayNames";
 import { sortProviderEntriesForSettings } from "../../../lib/providerOrdering";
 import { cn } from "../../../lib/utils";
 import { PROVIDER_NAMES, type ProviderName, type SessionEvent } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { SettingsEmptyState, SettingsRow, SettingsSection } from "../SettingsPrimitives";
 import { AdvancedMemoryPanel } from "./AdvancedMemoryPanel";
 
@@ -258,6 +260,33 @@ export function MemoryPage() {
     [workspaces, selectedWorkspaceId],
   );
   const runtime = activeTarget ? workspaceRuntimeById[activeTarget.workspaceId] : null;
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
+  const saveOperation = activeTarget
+    ? operationsByKey[operationKey("memory", "save", activeTarget.workspaceId)]
+    : undefined;
+  const advancedMemoryOperation = activeTarget
+    ? operationsByKey[operationKey("memory", "advanced", activeTarget.workspaceId)]
+    : undefined;
+  const memoryModelOperation = activeTarget
+    ? operationsByKey[operationKey("memory", "model", activeTarget.workspaceId)]
+    : undefined;
+  const skillImprovementEnabledOperation = activeTarget
+    ? operationsByKey[operationKey("skill-improvement", "enabled", activeTarget.workspaceId)]
+    : undefined;
+  const skillImprovementModelOperation = activeTarget
+    ? operationsByKey[operationKey("skill-improvement", "model", activeTarget.workspaceId)]
+    : undefined;
+  const skillImprovementScopeOperation = activeTarget
+    ? operationsByKey[operationKey("skill-improvement", "scope", activeTarget.workspaceId)]
+    : undefined;
+  const skillImprovementExcludedOperation = activeTarget
+    ? operationsByKey[
+        operationKey("skill-improvement", "excluded-skills", activeTarget.workspaceId)
+      ]
+    : undefined;
+  const queuedSkillImprovementOperation = activeTarget
+    ? operationsByKey[operationKey("skill-improvement", "run", activeTarget.workspaceId, "queued")]
+    : undefined;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
 
@@ -475,13 +504,21 @@ export function MemoryPage() {
     return draft.scope !== fresh.scope || draft.id !== fresh.id || draft.content !== fresh.content;
   };
 
-  const handleSave = () => {
-    if (!activeTarget || !draft.content.trim()) return;
+  const handleSave = async () => {
+    if (!activeTarget || !draft.content.trim() || saveOperation?.status === "pending") return;
     const id = resolveDraftMemoryId(draft.id);
-    void upsertWorkspaceMemory(activeTarget.workspaceId, draft.scope, id, draft.content.trim(), {
-      cwd: activeTarget.targetPath,
-    });
-    closeDialog();
+    const result = await upsertWorkspaceMemory(
+      activeTarget.workspaceId,
+      draft.scope,
+      id,
+      draft.content.trim(),
+      {
+        cwd: activeTarget.targetPath,
+      },
+    );
+    if (result.ok) {
+      closeDialog();
+    }
   };
 
   const handleDelete = async (entry: MemoryListEntry) => {
@@ -552,7 +589,7 @@ export function MemoryPage() {
           control={
             <Switch
               checked={advancedMemoryEnabled}
-              disabled={!activeTarget}
+              disabled={!activeTarget || advancedMemoryOperation?.status === "pending"}
               onCheckedChange={(value) => {
                 if (!activeTarget) return;
                 void setWorkspaceAdvancedMemory(activeTarget.workspaceId, value, {
@@ -562,7 +599,9 @@ export function MemoryPage() {
               aria-label="Advanced memory"
             />
           }
-        />
+        >
+          <OperationFeedback operation={advancedMemoryOperation} />
+        </SettingsRow>
         {advancedMemoryEnabled ? (
           <SettingsRow
             title="Memory generation model"
@@ -570,6 +609,7 @@ export function MemoryPage() {
             control={
               <Select
                 value={memoryGenerationModelSelection}
+                disabled={memoryModelOperation?.status === "pending"}
                 onValueChange={(value) => {
                   if (!activeTarget) return;
                   void setWorkspaceMemoryGenerationModel(
@@ -599,7 +639,9 @@ export function MemoryPage() {
                 </SelectContent>
               </Select>
             }
-          />
+          >
+            <OperationFeedback operation={memoryModelOperation} />
+          </SettingsRow>
         ) : null}
       </SettingsSection>
 
@@ -636,7 +678,9 @@ export function MemoryPage() {
                 control={
                   <Switch
                     checked={skillImprovementEnabled}
-                    disabled={!activeTarget}
+                    disabled={
+                      !activeTarget || skillImprovementEnabledOperation?.status === "pending"
+                    }
                     onCheckedChange={(value) => {
                       if (!activeTarget) return;
                       void setWorkspaceSkillImprovementEnabled(activeTarget.workspaceId, value, {
@@ -646,7 +690,9 @@ export function MemoryPage() {
                     aria-label="Skill improvement"
                   />
                 }
-              />
+              >
+                <OperationFeedback operation={skillImprovementEnabledOperation} />
+              </SettingsRow>
               {skillImprovementEnabled ? (
                 <>
                   <SettingsRow
@@ -655,6 +701,7 @@ export function MemoryPage() {
                     control={
                       <Select
                         value={skillImprovementModelSelection}
+                        disabled={skillImprovementModelOperation?.status === "pending"}
                         onValueChange={(value) => {
                           if (!activeTarget) return;
                           void setWorkspaceSkillImprovementModel(
@@ -690,13 +737,16 @@ export function MemoryPage() {
                         </SelectContent>
                       </Select>
                     }
-                  />
+                  >
+                    <OperationFeedback operation={skillImprovementModelOperation} />
+                  </SettingsRow>
                   <SettingsRow
                     title="Improvement scope"
                     description="Choose whether only user-authored skills or all eligible local skills can be updated."
                     control={
                       <Select
                         value={skillImprovementScope}
+                        disabled={skillImprovementScopeOperation?.status === "pending"}
                         onValueChange={(value) => {
                           if (!activeTarget || (value !== "user" && value !== "all")) return;
                           void setWorkspaceSkillImprovementScope(activeTarget.workspaceId, value, {
@@ -713,7 +763,9 @@ export function MemoryPage() {
                         </SelectContent>
                       </Select>
                     }
-                  />
+                  >
+                    <OperationFeedback operation={skillImprovementScopeOperation} />
+                  </SettingsRow>
                   <SettingsRow
                     title="Included skills"
                     description="Checked skills can be improved when they are used."
@@ -760,6 +812,7 @@ export function MemoryPage() {
                               <Checkbox
                                 id={checkboxId}
                                 checked={checked}
+                                disabled={skillImprovementExcludedOperation?.status === "pending"}
                                 onCheckedChange={(value) =>
                                   toggleExcludedSkill(skill.skillName, value === true)
                                 }
@@ -773,6 +826,7 @@ export function MemoryPage() {
                         })}
                       </div>
                     )}
+                    <OperationFeedback operation={skillImprovementExcludedOperation} />
                   </SettingsRow>
                   <SettingsRow
                     title="Queued jobs"
@@ -788,7 +842,8 @@ export function MemoryPage() {
                         disabled={
                           !activeTarget ||
                           skillImprovementBusy ||
-                          !!skillImprovementPendingActionKeys["run:queued"]
+                          !!skillImprovementPendingActionKeys["run:queued"] ||
+                          queuedSkillImprovementOperation?.status === "pending"
                         }
                         onClick={() =>
                           activeTarget &&
@@ -798,7 +853,10 @@ export function MemoryPage() {
                         }
                       >
                         <PlayIcon data-icon="inline-start" />
-                        {skillImprovementPendingActionKeys["run:queued"] ? "Running" : "Run queued"}
+                        {skillImprovementPendingActionKeys["run:queued"] ||
+                        queuedSkillImprovementOperation?.status === "pending"
+                          ? "Running"
+                          : "Run queued"}
                       </Button>
                     }
                   >
@@ -820,6 +878,7 @@ export function MemoryPage() {
                         ))}
                       </div>
                     )}
+                    <OperationFeedback operation={queuedSkillImprovementOperation} />
                   </SettingsRow>
                   <SettingsRow title="History" description="Most recent improvement outcomes.">
                     {skillImprovementHistory.length === 0 ? (
@@ -869,6 +928,16 @@ export function MemoryPage() {
                     <div className="space-y-2">
                       {skillImprovementBackups.map((backup) => {
                         const restoreKey = `restore:${backup.skillName}`;
+                        const restoreOperation = activeTarget
+                          ? operationsByKey[
+                              operationKey(
+                                "skill-improvement",
+                                "restore",
+                                activeTarget.workspaceId,
+                                backup.skillName,
+                              )
+                            ]
+                          : undefined;
                         return (
                           <div
                             key={backup.key}
@@ -884,14 +953,22 @@ export function MemoryPage() {
                               variant="outline"
                               size="sm"
                               type="button"
-                              disabled={!!skillImprovementPendingActionKeys[restoreKey]}
+                              disabled={
+                                !!skillImprovementPendingActionKeys[restoreKey] ||
+                                restoreOperation?.status === "pending"
+                              }
                               onClick={() => handleRestoreSkill(backup.skillName)}
                             >
                               <RotateCcwIcon data-icon="inline-start" />
-                              {skillImprovementPendingActionKeys[restoreKey]
+                              {skillImprovementPendingActionKeys[restoreKey] ||
+                              restoreOperation?.status === "pending"
                                 ? "Restoring"
                                 : "Restore"}
                             </Button>
+                            <OperationFeedback
+                              operation={restoreOperation}
+                              className="basis-full"
+                            />
                           </div>
                         );
                       })}
@@ -1089,6 +1166,7 @@ export function MemoryPage() {
           <Dialog
             open={dialogOpen}
             onOpenChange={async (open) => {
+              if (!open && saveOperation?.status === "pending") return;
               if (!open && isDraftDirty()) {
                 const confirmed = await confirmAction({
                   title: "Discard changes?",
@@ -1103,7 +1181,10 @@ export function MemoryPage() {
               if (!open) closeDialog();
             }}
           >
-            <DialogContent className="flex max-h-[min(88vh,36rem)] w-[min(92vw,34rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+            <DialogContent
+              aria-busy={saveOperation?.status === "pending"}
+              className="flex max-h-[min(88vh,36rem)] w-[min(92vw,34rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+            >
               <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
                 <DialogTitle>
                   {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
@@ -1122,7 +1203,7 @@ export function MemoryPage() {
                       id="memory-title"
                       placeholder="Optional. Leave blank to always include it."
                       value={draft.id}
-                      disabled={!!editingEntry}
+                      disabled={!!editingEntry || saveOperation?.status === "pending"}
                       onChange={(event) =>
                         setDraft((prev) => ({ ...prev, id: event.target.value }))
                       }
@@ -1135,7 +1216,7 @@ export function MemoryPage() {
                     </label>
                     <Select
                       value={draft.scope}
-                      disabled={!!editingEntry}
+                      disabled={!!editingEntry || saveOperation?.status === "pending"}
                       onValueChange={(value) =>
                         setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
                       }
@@ -1159,19 +1240,34 @@ export function MemoryPage() {
                       placeholder="What should Cowork remember?"
                       className="h-[min(32vh,16rem)] min-h-[8rem] resize-y overflow-auto [field-sizing:fixed]"
                       value={draft.content}
+                      disabled={saveOperation?.status === "pending"}
                       onChange={(event) =>
                         setDraft((prev) => ({ ...prev, content: event.target.value }))
                       }
                     />
                   </div>
                 </div>
+                <OperationFeedback operation={saveOperation} className="mt-3" />
               </div>
               <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
-                <Button type="button" variant="outline" onClick={closeDialog}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeDialog}
+                  disabled={saveOperation?.status === "pending"}
+                >
                   Cancel
                 </Button>
-                <Button type="button" onClick={handleSave} disabled={!draft.content.trim()}>
-                  {editingEntry ? "Save changes" : "Add remembered fact"}
+                <Button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={!draft.content.trim() || saveOperation?.status === "pending"}
+                >
+                  {saveOperation?.status === "pending"
+                    ? "Saving…"
+                    : editingEntry
+                      ? "Save changes"
+                      : "Add remembered fact"}
                 </Button>
               </DialogFooter>
             </DialogContent>

@@ -79,6 +79,12 @@ export class IdempotencyLedger<T> {
     existing.resolve({ status: "rejected", message });
   }
 
+  forgetAccepted(key: string): boolean {
+    const existing = this.entries.get(key);
+    if (existing?.status !== "accepted") return false;
+    return this.entries.delete(key);
+  }
+
   seedAccepted(key: string, fingerprint: string, value: T): void {
     if (this.entries.has(key)) return;
     this.entries.set(key, {

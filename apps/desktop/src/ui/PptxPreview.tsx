@@ -85,7 +85,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   }, [slides.length]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>

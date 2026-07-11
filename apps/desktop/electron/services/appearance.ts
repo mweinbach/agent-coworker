@@ -1,16 +1,18 @@
 import { type BrowserWindow, type BrowserWindowConstructorOptions, nativeTheme } from "electron";
 
+import { hostPlatform } from "../../../../src/platform/host";
 import type {
   SetWindowAppearanceInput,
   SystemAppearance,
   WindowsBackgroundMaterial,
 } from "../../src/lib/desktopApi";
+import type { CaptionSymbolTone } from "../../src/styles/tokens/native";
 import { resolveWindowChromePaint } from "./windowAppearancePaint";
 import { shouldUseMacosNativeGlass, syncWindowChromeAppearance } from "./windowEnhancements";
 
 export function getSystemAppearanceSnapshot(): SystemAppearance {
   return {
-    platform: process.platform,
+    platform: hostPlatform(),
     themeSource: nativeTheme.themeSource,
     shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
     shouldUseDarkColorsForSystemIntegratedUI: nativeTheme.shouldUseDarkColorsForSystemIntegratedUI,
@@ -30,18 +32,30 @@ type SyncWindowAppearanceOptions = {
   platform?: NodeJS.Platform;
   useMacosNativeGlass?: boolean;
   useDarkColors?: boolean;
+  backgroundColor?: string;
   backgroundMaterial?: WindowsBackgroundMaterial;
+  captionSymbolTone?: CaptionSymbolTone;
 };
+
+export type WindowAppearanceProfile = {
+  backgroundColor?: (useDarkColors: boolean) => string;
+  backgroundMaterial?: WindowsBackgroundMaterial;
+  captionSymbolTone?: (useDarkColors: boolean) => CaptionSymbolTone;
+  useMacosNativeGlass?: boolean;
+};
+
+const windowAppearanceProfiles = new WeakMap<BrowserWindow, WindowAppearanceProfile>();
 
 function resolveWindowAppearance(
   options: {
     platform?: NodeJS.Platform;
     useMacosNativeGlass?: boolean;
     useDarkColors?: boolean;
+    backgroundColor?: string;
     backgroundMaterial?: WindowsBackgroundMaterial;
   } = {},
 ): ResolvedWindowAppearance {
-  const platform = options.platform ?? process.platform;
+  const platform = options.platform ?? hostPlatform();
   const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
   const useMacosNativeGlass =
     options.useMacosNativeGlass ??
@@ -53,8 +67,16 @@ function resolveWindowAppearance(
     platform,
     useDarkColors,
     useMacosNativeGlass,
+    backgroundColor: options.backgroundColor,
     backgroundMaterial: options.backgroundMaterial,
   });
+}
+
+export function registerWindowAppearanceProfile(
+  win: BrowserWindow,
+  profile: WindowAppearanceProfile,
+): void {
+  windowAppearanceProfiles.set(win, profile);
 }
 
 export function getInitialWindowAppearanceOptions(
@@ -62,6 +84,8 @@ export function getInitialWindowAppearanceOptions(
     platform?: NodeJS.Platform;
     useMacosNativeGlass?: boolean;
     useDarkColors?: boolean;
+    backgroundColor?: string;
+    backgroundMaterial?: WindowsBackgroundMaterial;
   } = {},
 ): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
   const { backgroundColor, backgroundMaterial } = resolveWindowAppearance(options);
@@ -76,7 +100,7 @@ export function getInitialWindowAppearanceOptions(
 function setWindowBackgroundMaterial(
   win: BrowserWindow,
   material: WindowsBackgroundMaterial,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform(),
 ): void {
   if (platform !== "win32") {
     return;
@@ -92,10 +116,17 @@ export function syncWindowAppearance(
   win: BrowserWindow,
   options: SyncWindowAppearanceOptions = {},
 ): void {
-  const platform = options.platform ?? process.platform;
+  const platform = options.platform ?? hostPlatform();
+  const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
+  const profile = windowAppearanceProfiles.get(win);
+  const useMacosNativeGlass = profile?.useMacosNativeGlass ?? options.useMacosNativeGlass;
   const { backgroundColor, backgroundMaterial } = resolveWindowAppearance({
     ...options,
     platform,
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundColor: profile?.backgroundColor?.(useDarkColors) ?? options.backgroundColor,
+    backgroundMaterial: profile?.backgroundMaterial ?? options.backgroundMaterial,
   });
 
   win.setBackgroundColor(backgroundColor);
@@ -106,8 +137,10 @@ export function syncWindowAppearance(
 
   syncWindowChromeAppearance(win, {
     platform,
-    useDarkColors: options.useDarkColors,
-    useMacosNativeGlass: options.useMacosNativeGlass,
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundColor,
+    captionSymbolTone: profile?.captionSymbolTone?.(useDarkColors) ?? options.captionSymbolTone,
   });
 }
 
@@ -135,7 +168,7 @@ export function applyWindowAppearance(
   syncWindowAppearance(win, {
     backgroundMaterial: opts.backgroundMaterial,
     useDarkColors: nativeTheme.shouldUseDarkColors,
-    useMacosNativeGlass: shouldUseMacosNativeGlass(process.platform, process.env, {
+    useMacosNativeGlass: shouldUseMacosNativeGlass(hostPlatform(), process.env, {
       prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     }),
   });

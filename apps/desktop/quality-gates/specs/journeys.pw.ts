@@ -231,6 +231,7 @@ test.describe("connection recovery", () => {
     const viewport = page.locator('[data-slot="message-scroller-viewport"]');
     await viewport.evaluate((element) => {
       element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
     });
     const composer = page.getByRole("combobox", { name: "Message input" });
     await composer.fill("Preserve this draft while the connection recovers.");

@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareCoworkRuntimeToolEnv } from "../coworkRuntime";
 import { buildPluginCatalogSnapshot } from "../plugins";
+import type { FileChangeVersion } from "../shared/fileVersion";
 import type { AgentConfig } from "../types";
+import {
+  fileChangeVersionFromStat,
+  readCappedFilePreview,
+  readFileChangeVersion,
+} from "../utils/filePreviewRead";
 import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
@@ -34,7 +41,10 @@ type PresentationSlide = {
 export type PresentationPreviewResult =
   | {
       ok: true;
+      dependencies: string[];
+      path: string;
       slides: PresentationSlide[];
+      version: FileChangeVersion;
     }
   | {
       ok: false;
@@ -102,16 +112,17 @@ async function resolvePresentationScript(
 async function loadCachedPresentationSlides(
   resolvedPath: string,
   cwd: string,
-): Promise<PresentationSlide[] | null> {
+): Promise<{ dependencies: string[]; slides: PresentationSlide[] } | null> {
   const pptxDir = path.dirname(resolvedPath);
-  const searchDirs = [
+  const candidateDirs = [
     path.join(pptxDir, "preview"),
     path.join(pptxDir, "../preview"),
     path.join(cwd, "preview"),
   ];
 
-  for (const previewDir of searchDirs) {
+  for (const candidateDir of candidateDirs) {
     try {
+      const previewDir = await resolveWorkspaceFilePath(cwd, candidateDir);
       const files = await fs.readdir(previewDir);
       const pngFiles = files
         .filter((filename) => /^slide[-_]?\d+\.png$/i.test(filename))
@@ -123,49 +134,102 @@ async function loadCachedPresentationSlides(
 
       if (pngFiles.length === 0) continue;
 
+      const dependencies = [previewDir];
       const slides: PresentationSlide[] = [];
-      for (let i = 0; i < pngFiles.length; i++) {
-        const filename = pngFiles[i];
-        if (!filename) continue;
-        const pngBuffer = await fs.readFile(path.join(previewDir, filename));
+      for (const filename of pngFiles) {
+        let pngPath: string;
+        try {
+          pngPath = await resolveWorkspaceFilePath(cwd, path.join(previewDir, filename));
+        } catch {
+          continue;
+        }
+        const preview = await readCappedFilePreview(pngPath, Number.MAX_SAFE_INTEGER);
         const slideName = path.basename(filename, ".png");
+        dependencies.push(pngPath);
         slides.push({
-          slideIndex: i,
+          slideIndex: slides.length,
           slideId: slideName,
           title: slideName,
-          pngBase64: `data:image/png;base64,${pngBuffer.toString("base64")}`,
+          pngBase64: `data:image/png;base64,${Buffer.from(preview.bytes).toString("base64")}`,
         });
       }
-      return slides;
+      if (slides.length > 0) {
+        return { dependencies, slides };
+      }
     } catch {}
   }
 
   return null;
 }
 
-async function findPresentationSlideModules(cwd: string): Promise<string[]> {
-  const slidesDir = path.join(cwd, "slides");
-  let slideModules: string[] = [];
+async function findPresentationSlideModules(
+  cwd: string,
+): Promise<{ directory: string; modules: string[] }> {
+  let slidesDir: string;
+  let files: string[];
   try {
-    const files = await fs.readdir(slidesDir);
-    slideModules = files
-      .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
-      .map((filename) => path.join(slidesDir, filename));
+    slidesDir = await resolveWorkspaceFilePath(cwd, path.join(cwd, "slides"));
+    files = await fs.readdir(slidesDir);
   } catch {
     try {
-      const files = await fs.readdir(cwd);
-      slideModules = files
-        .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
-        .map((filename) => path.join(cwd, filename));
-    } catch {}
+      slidesDir = await resolveWorkspaceFilePath(cwd, cwd);
+      files = await fs.readdir(slidesDir);
+    } catch {
+      return { directory: cwd, modules: [] };
+    }
   }
 
+  const slideModules = (
+    await Promise.all(
+      files
+        .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
+        .map(async (filename) => {
+          try {
+            const modulePath = await resolveWorkspaceFilePath(cwd, path.join(slidesDir, filename));
+            return (await fs.stat(modulePath)).isFile() ? modulePath : null;
+          } catch {
+            return null;
+          }
+        }),
+    )
+  ).filter((modulePath): modulePath is string => modulePath !== null);
   slideModules.sort((a, b) => {
     const numA = Number.parseInt(path.basename(a).match(/\d+/)?.[0] || "0", 10);
     const numB = Number.parseInt(path.basename(b).match(/\d+/)?.[0] || "0", 10);
     return numA - numB;
   });
-  return slideModules;
+  return { directory: slidesDir, modules: slideModules };
+}
+
+async function buildPresentationVersion(
+  dependencies: readonly string[],
+): Promise<FileChangeVersion> {
+  const uniquePaths = [...new Set(dependencies)].sort();
+  const versionedPaths = await Promise.all(
+    uniquePaths.map(async (dependencyPath) => ({
+      path: dependencyPath,
+      version: await readFileChangeVersion(dependencyPath, { allowDirectory: true }),
+    })),
+  );
+  const hash = createHash("sha256");
+  let modifiedAtMs = 0;
+  let changeTimeMs = 0;
+  let size = 0;
+  for (const dependency of versionedPaths) {
+    modifiedAtMs = Math.max(modifiedAtMs, dependency.version.modifiedAtMs);
+    changeTimeMs = Math.max(changeTimeMs, dependency.version.changeTimeMs);
+    size += dependency.version.size;
+    hash.update(dependency.path);
+    hash.update("\0");
+    hash.update(dependency.version.fingerprint);
+    hash.update("\0");
+  }
+  return {
+    modifiedAtMs,
+    changeTimeMs,
+    size,
+    fingerprint: hash.digest("hex"),
+  };
 }
 
 export async function previewPresentationFile(
@@ -197,10 +261,20 @@ export async function previewPresentationFile(
       },
     };
   }
+  const sourceVersion = fileChangeVersionFromStat(await fs.stat(resolvedPath));
 
   if (isPptx) {
     const cachedSlides = await loadCachedPresentationSlides(resolvedPath, request.cwd);
-    if (cachedSlides) return { ok: true, slides: cachedSlides };
+    if (cachedSlides) {
+      const dependencies = [resolvedPath, ...cachedSlides.dependencies];
+      return {
+        ok: true,
+        dependencies,
+        path: resolvedPath,
+        slides: cachedSlides.slides,
+        version: await buildPresentationVersion(dependencies),
+      };
+    }
   }
 
   const { scriptPath, expectedPath } = await resolvePresentationScript(
@@ -217,7 +291,10 @@ export async function previewPresentationFile(
     };
   }
 
-  const slideModules = isPptx ? await findPresentationSlideModules(request.cwd) : [];
+  const slideModuleResult = isPptx
+    ? await findPresentationSlideModules(request.cwd)
+    : { directory: request.cwd, modules: [] };
+  const slideModules = slideModuleResult.modules;
   if (isPptx && slideModules.length === 0) {
     return {
       ok: false,
@@ -267,6 +344,8 @@ export async function previewPresentationFile(
       const slideName = path.basename(resolvedPath, ext);
       return {
         ok: true,
+        dependencies: [resolvedPath],
+        path: resolvedPath,
         slides: [
           {
             slideIndex: 0,
@@ -275,6 +354,7 @@ export async function previewPresentationFile(
             pngBase64,
           },
         ],
+        version: sourceVersion,
       };
     } catch (err) {
       await fs.unlink(tempPngPath).catch(() => {});
@@ -341,7 +421,14 @@ export async function previewPresentationFile(
       };
     }
 
-    return { ok: true, slides };
+    const dependencies = [resolvedPath, slideModuleResult.directory, ...slideModules];
+    return {
+      ok: true,
+      dependencies,
+      path: resolvedPath,
+      slides,
+      version: await buildPresentationVersion(dependencies),
+    };
   } catch (err) {
     return {
       ok: false,

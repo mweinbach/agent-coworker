@@ -18,6 +18,7 @@ import type {
 } from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceRouteHandlers } from "../src/server/jsonrpc/routes/workspace";
 import { jsonRpcWorkspaceResultSchemas } from "../src/server/jsonrpc/schema.workspace";
+import { readFileChangeVersion } from "../src/utils/filePreviewRead";
 
 const WORKSPACE_BOOTSTRAP_METHOD = "cowork/workspace/bootstrap";
 
@@ -49,6 +50,8 @@ function createWorkspaceRouteHarness() {
   const liveCwds: string[] = [];
   const readStateCwds: string[] = [];
   const summaryFilters: JsonRpcThreadSummaryFilter[] = [];
+  const notifications: Array<{ method: string; params: unknown }> = [];
+  const emissions: Array<"error" | "notification" | "result"> = [];
 
   const context = {
     threads: {
@@ -93,10 +96,16 @@ function createWorkspaceRouteHarness() {
       },
     },
     jsonrpc: {
+      broadcast: (method: string, params: unknown) => {
+        emissions.push("notification");
+        notifications.push({ method, params });
+      },
       sendResult: (_ws: unknown, id: JsonRpcLiteId, result: unknown) => {
+        emissions.push("result");
         results.push({ id, result });
       },
       sendError: (_ws: unknown, id: JsonRpcLiteId | null, error: JsonRpcLiteError) => {
+        emissions.push("error");
         errors.push({ id, error });
       },
     },
@@ -139,6 +148,8 @@ function createWorkspaceRouteHarness() {
     liveCwds,
     readStateCwds,
     summaryFilters,
+    notifications,
+    emissions,
   };
 }
 
@@ -324,6 +335,19 @@ describe("workspace JSON-RPC route", () => {
       );
       expect(saved.ok).toBe(true);
       expect(await fs.readFile(filePath, "utf8")).toBe("saved through JSON-RPC");
+      const savedChangeVersion = saved.ok ? await readFileChangeVersion(filePath) : null;
+      expect(harness.notifications).toEqual([
+        {
+          method: "cowork/workspace/fileChanged",
+          params: {
+            cwd: dir,
+            kind: "changed",
+            path: filePath,
+            version: savedChangeVersion,
+          },
+        },
+      ]);
+      expect(harness.emissions.slice(-2)).toEqual(["result", "notification"]);
 
       await invokeWorkspaceDocument(handlers, "cowork/workspace/document/close", {
         documentId: "canvas-route-test",
@@ -432,6 +456,17 @@ describe("workspace JSON-RPC route", () => {
       );
       expect(parsed).toEqual({ ok: true });
       expect(await fs.readFile(filePath, "utf8")).toBe("edited,b\nc,d\n");
+      expect(harness.notifications).toHaveLength(1);
+      expect(harness.notifications[0]).toMatchObject({
+        method: "cowork/workspace/fileChanged",
+        params: {
+          cwd: dir,
+          kind: "changed",
+          path: filePath,
+          version: { size: 13 },
+        },
+      });
+      expect(harness.emissions).toEqual(["result", "notification"]);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

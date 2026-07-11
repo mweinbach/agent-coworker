@@ -3,9 +3,10 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
 import { useAppStore } from "./app/store";
-import { disposeAllJsonRpcState } from "./app/store.helpers";
+import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
+import { operationKey } from "./app/store.helpers/operations";
 import { isOneOffChatWorkspace } from "./app/types";
-import { Button } from "./components/ui/button";
+import { Spinner } from "./components/ui/spinner";
 import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
 import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
@@ -13,6 +14,7 @@ import {
   getPlatformChrome,
   getSystemAppearance,
   onMenuCommand,
+  onPreviewFileChanged,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   onWindowCloseRequested,
@@ -26,6 +28,7 @@ import {
   writeRendererLog,
 } from "./lib/desktopCommands";
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
+import { workspaceFileChangeEvents } from "./lib/filePreviewResource";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./lib/themeBootstrap";
@@ -33,6 +36,7 @@ import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
+import { ConnectionRecoveryBanner } from "./ui/ConnectionRecoveryBanner";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { InlineErrorBoundary } from "./ui/CrashReportingErrorBoundary";
 import { shouldShowReconnectBanner } from "./ui/chat/chatLogic";
@@ -48,6 +52,8 @@ import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { isEditableEscapeTarget, OverlayStackProvider, useOverlayStack } from "./ui/OverlayStack";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
+import { StartupRecovery } from "./ui/recovery/StartupRecovery";
+import { startupStagePresentation } from "./ui/recovery/startupPresentation";
 import { Sidebar } from "./ui/Sidebar";
 import { TranscriptDeliveryRecovery } from "./ui/TranscriptDeliveryRecovery";
 import { TaskContextSidebar } from "./ui/tasks/TaskContextSidebar";
@@ -139,11 +145,13 @@ const ChatShell = memo(function ChatShell({
   ready,
   startupError,
   bootstrapLoading,
+  bootstrapStage,
 }: {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
   bootstrapLoading: boolean;
+  bootstrapStage: BootstrapStage | null;
 }) {
   const view = useAppStore((s) => s.view);
   const googleResearchAvailable = useAppStore((s) =>
@@ -190,6 +198,8 @@ const ChatShell = memo(function ChatShell({
     s.selectedThreadId ? (s.threadRuntimeById[s.selectedThreadId]?.sessionId ?? null) : null,
   );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
+  const reconnectThreadWithFeedback = useAppStore((s) => s.reconnectThreadWithFeedback);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -294,6 +304,12 @@ const ChatShell = memo(function ChatShell({
     workspaceStarting: workspaceStartupProgress !== null,
     terminalTaskConversation,
   });
+  const reconnectOperation = selectedThreadId
+    ? operationsByKey[operationKey("thread-reconnect", selectedThreadId)]
+    : undefined;
+  const preserveCachedContentOnStartupError =
+    Boolean(startupError) && ready && (workspaces.length > 0 || threads.length > 0);
+  const startupPresentation = startupStagePresentation(bootstrapStage);
   useEffect(() => {
     const documentBody = document.body;
     const windowTarget = window;
@@ -381,26 +397,31 @@ const ChatShell = memo(function ChatShell({
         }
         onCloseCanvas={showCanvasInTopBar ? closeFilePreview : undefined}
       />
-      {showReconnectBanner ? (
+      {preserveCachedContentOnStartupError && startupError ? (
+        <StartupRecovery
+          detail={startupError}
+          init={init}
+          retrying={bootstrapLoading}
+          presentation="banner"
+        />
+      ) : ready && bootstrapLoading ? (
         <div
           role="status"
-          data-slot="connection-banner"
-          className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-warning/15 px-4 py-2 text-sm text-foreground"
+          data-slot="startup-progress-banner"
+          className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/85 px-4 py-2 text-xs text-muted-foreground"
         >
-          <span className="min-w-0 truncate">
-            Disconnected from this chat. Reconnect to continue.
+          <Spinner className="size-3.5" aria-hidden="true" />
+          <span>
+            {startupPresentation.title}. {startupPresentation.detail}
           </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              if (selectedThreadId) void useAppStore.getState().reconnectThread(selectedThreadId);
-            }}
-          >
-            Reconnect
-          </Button>
         </div>
+      ) : null}
+      {!startupError && !bootstrapLoading && selectedThreadId ? (
+        <ConnectionRecoveryBanner
+          disconnected={showReconnectBanner}
+          operation={reconnectOperation}
+          reconnect={() => reconnectThreadWithFeedback(selectedThreadId)}
+        />
       ) : null}
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
@@ -423,7 +444,9 @@ const ChatShell = memo(function ChatShell({
               <PrimaryContent
                 init={init}
                 ready={ready}
-                startupError={startupError}
+                bootstrapLoading={bootstrapLoading}
+                bootstrapStage={bootstrapStage}
+                startupError={preserveCachedContentOnStartupError ? null : startupError}
                 workspaceStartupProgress={workspaceStartupProgress}
                 view={
                   effectiveView === "research"
@@ -452,10 +475,13 @@ function AppContent() {
   const { hasOpenOverlay } = useOverlayStack();
   const ready = useAppStore((s) => s.ready);
   const bootstrapPhase = useAppStore((s) => s.bootstrapPhase);
+  const bootstrapStage = useAppStore((s) => s.bootstrapStage);
   const startupError = useAppStore((s) => s.startupError);
   const init = useAppStore((s) => s.init);
   const invalidateBootstrap = useAppStore((s) => s.invalidateBootstrap);
   const view = useAppStore((s) => s.view);
+  const filePreviewPath = useAppStore((s) => s.filePreview?.path ?? null);
+  const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
   const handleWorkspaceServerExited = useAppStore((s) => s.handleWorkspaceServerExited);
@@ -645,6 +671,12 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    return onPreviewFileChanged((event) => {
+      workspaceFileChangeEvents.publish(event);
+    });
+  }, []);
+
+  useEffect(() => {
     return onUpdateStateChanged(setUpdateState);
   }, [setUpdateState]);
 
@@ -730,10 +762,14 @@ function AppContent() {
           ready={ready}
           startupError={startupError}
           bootstrapLoading={bootstrapPhase === "loading"}
+          bootstrapStage={bootstrapStage}
         />
       )}
       <LmStudioStartDialog />
-      {windowMode === "main" ? <FilePreviewModal /> : null}
+      {windowMode === "main" &&
+      !(canvasEnabled && filePreviewPath && isCanvasSupportedFile(filePreviewPath)) ? (
+        <FilePreviewModal />
+      ) : null}
       {windowMode === "main" ? (
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       ) : null}

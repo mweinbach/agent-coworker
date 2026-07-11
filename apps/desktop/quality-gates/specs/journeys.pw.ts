@@ -1,47 +1,118 @@
+import { promises as fs } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
   assertNoViewportClipping,
   settleQualityPage,
 } from "../assertions";
+import budgets from "../budgets.json" with { type: "json" };
 import { expect, test } from "../fixtures";
+import {
+  assertIndependentMentionGeometry,
+  measureIndependentMentionGeometry,
+} from "../mentionGeometry";
 
-test.describe("first launch", () => {
+const delayedMentionWebfontPath = fileURLToPath(
+  new URL("../../src/assets/fonts/IBMPlexMono-Regular.ttf", import.meta.url),
+);
+const delayedMentionWebfontBase64 = fs
+  .readFile(delayedMentionWebfontPath)
+  .then((contents) => contents.toString("base64"));
+
+for (const mode of ["light", "dark", "system"] as const) {
+  test.describe(`first launch ${mode}`, () => {
+    test.use({
+      qualityOptions: {
+        appearanceDelayMs: 900,
+        height: 820,
+        holdBootstrap: true,
+        mode,
+        scenario: "first-launch",
+        startupDelayMs: 900,
+        width: 1_024,
+      },
+    });
+
+    test(`captures a native-aligned ${mode} first paint before slow appearance and bootstrap`, async ({
+      quality,
+    }, testInfo) => {
+      const { electronApp, page } = quality;
+      const resolvedTheme = mode === "light" ? "light" : "dark";
+      await expect(page.locator("html")).toHaveAttribute("data-theme", resolvedTheme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);
+      await expect(page.locator("html")).toHaveAttribute("data-platform", /darwin|win32|linux/);
+      await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+      const nativeBackground = await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.getBackgroundColor().toLowerCase(),
+      );
+      expect(nativeBackground).toContain(mode === "light" ? "dde1ca" : "171d13");
+      const lifecycle = await quality.getLifecycle();
+      expect(lifecycle.networkGuardInstalled).toBeLessThan(lifecycle.captureReady);
+      expect(lifecycle.captureReady).toBeLessThan(lifecycle.firstWindowCreated);
+      expect(lifecycle.firstWindowCreated).toBeLessThan(lifecycle.firstLoadStarted);
+      await expect(page).toHaveScreenshot(`first-paint-${mode}-1024.png`);
+
+      await quality.releaseBootstrap();
+      await expect(page.getByRole("dialog", { name: "Onboarding" })).toBeVisible();
+      if (mode !== "dark") {
+        return;
+      }
+      await expect(page.getByText("Welcome to Cowork")).toBeVisible();
+      await assertKeyboardFocusJourney(page);
+      await assertNoViewportClipping(page, '[role="dialog"]', "button");
+      await assertNoSeriousAxeViolations(page, testInfo, '[role="dialog"]');
+      await settleQualityPage(page);
+      await expect(page).toHaveScreenshot("first-launch-dark-1024.png");
+      await page.getByRole("button", { name: "Not now" }).click();
+      await expect(page.getByRole("dialog", { name: "Onboarding" })).toHaveCount(0);
+      await expect
+        .poll(async () => (await quality.getMainMetrics()).stateSaves)
+        .toBeGreaterThanOrEqual(1);
+    });
+  });
+}
+
+test.describe("startup recovery", () => {
   test.use({
     qualityOptions: {
       height: 820,
-      holdBootstrap: true,
-      mode: "dark",
-      scenario: "first-launch",
-      startupDelayMs: 750,
+      mode: "light",
+      scenario: "product",
+      startupDelayMs: 250,
+      startupFailureCount: 1,
       width: 1_024,
     },
   });
 
-  test("captures the requested first paint before bootstrap and persists onboarding dismissal", async ({
+  test("reports a truthful failure, exposes diagnostics, and retries without discarding work", async ({
     quality,
-  }, testInfo) => {
+  }) => {
     const { page } = quality;
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    const lifecycle = await quality.getLifecycle();
-    expect(lifecycle.networkGuardInstalled).toBeLessThan(lifecycle.captureReady);
-    expect(lifecycle.captureReady).toBeLessThan(lifecycle.firstWindowCreated);
-    expect(lifecycle.firstWindowCreated).toBeLessThan(lifecycle.firstLoadStarted);
-    await expect(page).toHaveScreenshot("first-paint-dark-1024.png");
+    const recovery = page.locator('[data-slot="startup-recovery"]');
+    await expect(recovery).toContainText("Cowork couldn't start");
+    await expect(recovery).toContainText("Quality fixture could not restore the saved workspace.");
+    await expect(page.getByText("Recovered", { exact: true })).toHaveCount(0);
 
-    await quality.releaseBootstrap();
-    await expect(page.getByRole("dialog", { name: "Onboarding" })).toBeVisible();
-    await expect(page.getByText("Welcome to Cowork")).toBeVisible();
-    await assertKeyboardFocusJourney(page);
-    await assertNoViewportClipping(page, '[role="dialog"]', "button");
-    await assertNoSeriousAxeViolations(page, testInfo, '[role="dialog"]');
-    await settleQualityPage(page);
-    await expect(page).toHaveScreenshot("first-launch-dark-1024.png");
-    await page.getByRole("button", { name: "Not now" }).click();
-    await expect(page.getByRole("dialog", { name: "Onboarding" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Copy diagnostics" }).click();
+    await expect(page.getByText("Diagnostics copied.")).toBeVisible();
+    await page.getByRole("button", { name: "Open diagnostics" }).click();
+    await expect(page.getByText("Diagnostics opened.")).toBeVisible();
     await expect
-      .poll(async () => (await quality.getMainMetrics()).stateSaves)
-      .toBeGreaterThanOrEqual(1);
+      .poll(async () => {
+        const metrics = await quality.getMainMetrics();
+        return {
+          bundles: metrics.diagnosticBundles,
+          copies: metrics.diagnosticCopies,
+          reveals: metrics.diagnosticReveals,
+        };
+      })
+      .toEqual({ bundles: 1, copies: 1, reveals: 1 });
+
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+    await expect(page.getByRole("group", { name: "Message composer" })).toBeVisible();
   });
 });
 
@@ -131,43 +202,158 @@ test("resolves one queued interaction without disturbing its siblings", async ({
   ).toBeVisible();
 });
 
-test("switches through a draft chat and restores the conversation scroll anchor", async ({
+test("preserves detached transcript ownership and exact thread anchors", async ({
   quality,
-}) => {
+}, testInfo) => {
   const { page } = quality;
   await quality.emitLongTranscript(200, 0);
   const viewport = page.locator('[data-slot="message-scroller-viewport"]');
   await expect(page.getByText("Deterministic transcript run 0 message 200")).toBeAttached();
-  await viewport.evaluate((element) => {
-    element.scrollTop = 0;
+  const showOlderButton = page.locator('[data-slot="feed-window-spacer"] button');
+  await expect(showOlderButton).toBeVisible();
+  await showOlderButton.click();
+  await settleQualityPage(page);
+  const anchor = page.locator('[data-message-id="quality-long-0-1"]');
+  await expect(anchor).toBeAttached();
+  await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    const desiredOffset = -24;
+    viewportElement.scrollTop +=
+      element.getBoundingClientRect().top -
+      viewportElement.getBoundingClientRect().top -
+      desiredOffset;
+    viewportElement.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -80 }));
+    viewportElement.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(viewport).toHaveAttribute("data-scroll-mode", "detached");
+  await settleQualityPage(page);
+  const before = await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    return {
+      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+      scrollTop: viewportElement.scrollTop,
+    };
   });
 
   const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Keep this controlled draft while switching chats.");
+  const navigationStartedAt = performance.now();
   await page.getByRole("button", { name: /^Controlled fixture draft / }).click();
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
   await expect(composer).toBeEditable();
 
+  const appendStartedAt = performance.now();
+  await quality.emitLongTranscript(3, 1);
+  const appendElapsedMs = performance.now() - appendStartedAt;
   await page.getByRole("button", { name: /^Electron release review / }).click();
-  await expect(page.getByText("Deterministic transcript run 0 message 200")).toBeAttached();
+  await expect(anchor).toBeAttached();
+  await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
   await expect
-    .poll(async () => await viewport.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(0);
+    .poll(
+      async () =>
+        await anchor.evaluate((element) => {
+          const viewportElement = element.closest<HTMLElement>(
+            '[data-slot="message-scroller-viewport"]',
+          );
+          if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+          return Math.round(
+            element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+          );
+        }),
+    )
+    .toBe(Math.round(before.offset));
+  const navigationElapsedMs = performance.now() - navigationStartedAt;
+  const restored = await anchor.evaluate((element) => {
+    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
+    return {
+      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
+      scrollTop: viewportElement.scrollTop,
+    };
+  });
+  const sample = {
+    anchorDriftAfterAwayArrivalPx: Math.abs(restored.offset - before.offset),
+    appendElapsedMs,
+    navigationElapsedMs,
+    scrollCompensationAfterAwayArrivalPx: Math.abs(restored.scrollTop - before.scrollTop),
+  };
+  expect(sample.anchorDriftAfterAwayArrivalPx).toBeLessThanOrEqual(
+    budgets.scrollOwnership.anchorDriftPx,
+  );
+  expect(sample.appendElapsedMs).toBeLessThanOrEqual(budgets.scrollOwnership.appendMessagesMs);
+  expect(sample.navigationElapsedMs).toBeLessThanOrEqual(budgets.scrollOwnership.threadRoundTripMs);
+  await testInfo.attach("scroll-ownership-performance", {
+    body: Buffer.from(
+      `${JSON.stringify(
+        {
+          budget: budgets.scrollOwnership,
+          sample,
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    contentType: "application/json",
+  });
 });
 
-test("covers persistent disconnect recovery, tool failures, and quick chat", async ({
-  quality,
-}) => {
+test.describe("connection recovery", () => {
+  test.use({
+    qualityOptions: {
+      height: 820,
+      mode: "light",
+      reconnectDelayMs: 750,
+      scenario: "product",
+      startupDelayMs: 0,
+      width: 1_240,
+    },
+  });
+
+  test("covers persistent disconnect recovery while the feed is scrolled away", async ({
+    quality,
+  }) => {
+    const { page } = quality;
+    await quality.emitLongTranscript(200, 7);
+    const viewport = page.locator('[data-slot="message-scroller-viewport"]');
+    await expect(page.getByText("Deterministic transcript run 7 message 200")).toBeAttached();
+    const scrolledAway = await viewport.evaluate(async (element) => {
+      const maxScrollTop = element.scrollHeight - element.clientHeight;
+      element.scrollTop = Math.max(200, maxScrollTop - 600);
+      element.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -600 }));
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      return { maxScrollTop, scrollTop: element.scrollTop };
+    });
+    expect(scrolledAway.scrollTop).toBeGreaterThan(160);
+    expect(scrolledAway.maxScrollTop - scrolledAway.scrollTop).toBeGreaterThanOrEqual(500);
+    const composer = page.getByRole("combobox", { name: "Message input" });
+    await composer.fill("Preserve this draft while the connection recovers.");
+    await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
+    await expect(
+      page.getByText("Connection lost. Your draft is safe; reconnect to continue."),
+    ).toBeVisible();
+    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
+
+    await page.getByRole("button", { name: "Reconnect" }).click();
+    await expect(page.getByText("Reconnecting this chat… Your draft is safe.")).toBeVisible();
+    await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
+    await expect(
+      page.getByText("Reconnected. Your draft and conversation are intact."),
+    ).toBeVisible();
+    await expect(composer).toHaveValue("Preserve this draft while the connection recovers.");
+    await page.getByRole("button", { name: "Dismiss connection status" }).click();
+    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(0);
+  });
+});
+
+test("covers tool failures and quick chat", async ({ quality }) => {
   const { page } = quality;
-  await page.evaluate(() => window.__coworkQualityGate?.showDisconnect());
-  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
-
-  await page.evaluate(() => window.__coworkQualityGate?.showReconnect());
-  await expect(page.getByText("Disconnected from this chat. Reconnect to continue.")).toHaveCount(
-    0,
-  );
-
   await page.evaluate(() => window.__coworkQualityGate?.showToolFailureHistory());
   await page.getByRole("button", { name: /Couldn't finish/ }).click();
   await expect(page.getByText("Finished with an issue")).toBeVisible();
@@ -181,6 +367,7 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   });
   await expect(quickWindow.getByRole("button", { name: "Open full app" })).toBeVisible();
   await expect(quickWindow.getByRole("group", { name: "Message composer" })).toBeVisible();
+  await expect(quickWindow.locator('[data-slot="connection-banner"]')).toHaveCount(0);
 
   const quickComposer = quickWindow.getByRole("combobox", { name: "Message input" });
   await quickComposer.fill("@");
@@ -198,6 +385,28 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   await quickWindow.getByRole("button", { name: "Close quick chat" }).focus();
   await quickWindow.keyboard.press("Escape");
   await quickWindowClosed;
+});
+
+test("exposes usable diagnostics from the root crash fallback", async ({ quality }) => {
+  const { page } = quality;
+  await page.evaluate(() => window.__coworkQualityGate?.showCrashFallback());
+  await expect(page.getByText("Cowork hit an unexpected error")).toBeVisible();
+  await expect(page.getByText("Deterministic quality-gate renderer crash.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy diagnostics" }).click();
+  await expect(page.getByText("Diagnostics copied.")).toBeVisible();
+  await page.getByRole("button", { name: "Open diagnostics" }).click();
+  await expect(page.getByText("Diagnostics opened.")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const metrics = await quality.getMainMetrics();
+      return {
+        bundles: metrics.diagnosticBundles,
+        copies: metrics.diagnosticCopies,
+        reveals: metrics.diagnosticReveals,
+      };
+    })
+    .toEqual({ bundles: 1, copies: 1, reveals: 1 });
 });
 
 test("covers file preview, Canvas popout, and resizers with bounded filesystem work", async ({
@@ -307,16 +516,128 @@ test("aborts an external renderer request in the main process", async ({ quality
     .toEqual([proofUrl]);
 });
 
-for (const zoomFactor of [1, 1.25]) {
-  test(`keeps mention geometry inside the viewport at ${zoomFactor}x zoom`, async ({ quality }) => {
+for (const zoom of [
+  { factor: 1, label: "100%" },
+  { factor: 1.5, label: "150%" },
+  { factor: 2, label: "200%" },
+] as const) {
+  test(`keeps mention text, highlight, scroll, and caret picker aligned at ${zoom.label} zoom`, async ({
+    quality,
+  }, testInfo) => {
     const { electronApp, page } = quality;
-    await electronApp.evaluate(({ BrowserWindow }, zoom) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoom);
-    }, zoomFactor);
-    await page.getByRole("combobox", { name: "Message input" }).fill("@");
-    const menu = page.getByRole("listbox");
+    const appliedZoom = await electronApp.evaluate(({ BrowserWindow }, zoomFactor) => {
+      const webContents = BrowserWindow.getAllWindows()[0]?.webContents;
+      if (!webContents) throw new Error("Quality-gate window is missing");
+      webContents.setZoomFactor(zoomFactor);
+      return webContents.getZoomFactor();
+    }, zoom.factor);
+    expect(appliedZoom).toBe(zoom.factor);
+    const composer = page.getByRole("combobox", { name: "Message input" });
+    const delayedFontFamily = `Quality Gate Delayed Mention Mono ${zoom.label}`;
+    await composer.evaluate((textarea, fontFamily) => {
+      textarea.style.fontFamily = `"${fontFamily}", serif`;
+    }, delayedFontFamily);
+    const text = [
+      ...Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Wrapped geometry line ${index + 1} keeps @geometry-audit aligned through the composer.`,
+      ),
+      `${"Long wrapping text ".repeat(8)}use @geometry-audit then @g`,
+    ].join("\n");
+    await composer.fill(text);
+    await composer.focus();
+
+    const menu = page.getByRole("listbox", { name: "Mentions" });
     await expect(menu).toBeVisible();
-    const insideViewport = await menu.evaluate((element) => {
+    await expect(page.getByRole("option", { name: /@geometry-audit/ })).toBeVisible();
+    const beforeWebfont = await measureIndependentMentionGeometry(page);
+    const fontStatus = await composer.evaluate(
+      async (textarea, fixture) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, fixture.delayMs));
+        const face = new FontFace(
+          fixture.fontFamily,
+          `url(data:font/ttf;base64,${fixture.base64}) format("truetype")`,
+          { style: "normal", weight: "400" },
+        );
+        document.fonts.add(face);
+        await face.load();
+        await document.fonts.ready;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        return {
+          computedFamily: getComputedStyle(textarea).fontFamily,
+          loaded: face.status,
+        };
+      },
+      {
+        base64: await delayedMentionWebfontBase64,
+        delayMs: 150,
+        fontFamily: delayedFontFamily,
+      },
+    );
+    expect(fontStatus.loaded).toBe("loaded");
+    expect(fontStatus.computedFamily).toContain(delayedFontFamily);
+    await expect(menu).toBeVisible();
+
+    const { geometry, pixels } = await assertIndependentMentionGeometry(page, testInfo, {
+      attachmentName: `mention-geometry-${zoom.label}`,
+    });
+    expect(
+      Math.abs(geometry.nativeMentionAdvance - beforeWebfont.nativeMentionAdvance),
+      "The delayed webfont fixture must change native text metrics after the picker opens",
+    ).toBeGreaterThan(1);
+    expect(geometry.metricMismatches).toEqual([]);
+    expect(geometry.overlayScrollTop).toBe(geometry.scrollTop);
+    expect(geometry.scrollTop).toBeGreaterThan(0);
+    expect(geometry.highlightStyle.padding).toBe("0px");
+    expect(geometry.highlightStyle.margin).toBe("0px");
+    expect(geometry.highlightStyle.borderWidth).toBe("0px");
+    expect(geometry.highlightStyle.fontWeight).toBe("400");
+    expect(geometry.highlightStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(geometry.activeDescendant).toContain("-skill-geometry-audit");
+    expect(geometry.caretInsideMenuWidth).toBe(true);
+    expect(geometry.pickerGap).not.toBeNull();
+    expect(geometry.pickerGap ?? -1).toBeGreaterThanOrEqual(0);
+    expect(geometry.pickerGap ?? 9).toBeLessThanOrEqual(8);
+    expect(pixels.differentPixels).toBeLessThanOrEqual(pixels.maximumDifferentPixels);
+    if (zoom.factor === 1) {
+      await assertNoSeriousAxeViolations(page, testInfo);
+    }
+
+    await composer.evaluate((textarea) => {
+      textarea.wrap = "off";
+      textarea.style.setProperty("field-sizing", "fixed");
+      textarea.style.flex = "none";
+      textarea.style.maxWidth = "320px";
+      textarea.style.overflowWrap = "normal";
+      textarea.style.whiteSpace = "pre";
+      textarea.style.width = "320px";
+    });
+    await composer.fill(`${"horizontal-geometry-".repeat(24)} @geometry-audit then @g`);
+    await composer.evaluate((textarea) => {
+      textarea.scrollLeft = Math.max(1, textarea.scrollWidth - textarea.clientWidth - 20);
+      textarea.dispatchEvent(new Event("scroll"));
+    });
+    const horizontalScroll = await composer.evaluate((textarea) => {
+      const overlay = textarea.parentElement?.querySelector<HTMLDivElement>(
+        '[data-slot="composer-highlight-overlay"]',
+      );
+      return {
+        overlayScrollLeft: overlay?.scrollLeft ?? -1,
+        scrollLeft: textarea.scrollLeft,
+      };
+    });
+    expect(horizontalScroll.scrollLeft).toBeGreaterThan(0);
+    expect(horizontalScroll.overlayScrollLeft).toBe(horizontalScroll.scrollLeft);
+
+    const screenshot = await page.screenshot();
+    await testInfo.attach(`mention-geometry-${zoom.label}-window`, {
+      body: screenshot,
+      contentType: "image/png",
+    });
+    const finalMenuRect = await menu.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return (
         rect.left >= 0 &&
@@ -325,6 +646,6 @@ for (const zoomFactor of [1, 1.25]) {
         rect.bottom <= window.innerHeight
       );
     });
-    expect(insideViewport).toBe(true);
+    expect(finalMenuRect).toBe(true);
   });
 }

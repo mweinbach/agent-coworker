@@ -13,6 +13,7 @@ import type {
   loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
 } from "../../prompt";
 import { createLmStudioLocalService } from "../../providers/lmstudio/local";
+import type { WorkspaceFileChangeEvent } from "../../shared/fileVersion";
 import { SkillImprovementService } from "../../skillImprovement";
 import { ensureDefaultGlobalSkillsReady } from "../../skills/defaultGlobalSkills";
 import type { AgentConfig } from "../../types";
@@ -59,6 +60,7 @@ import { SocketSendQueue } from "./SocketSendQueue";
 import { runStartupMaintenance } from "./startupMaintenance";
 import { ThreadJournal } from "./ThreadJournal";
 import { WorkspaceControl } from "./WorkspaceControl";
+import { WorkspaceFileChangeMonitor } from "./WorkspaceFileChangeMonitor";
 import { WorkspaceJsonRpcSubscribers } from "./WorkspaceJsonRpcSubscribers";
 
 let observabilityOtelModulePromise: Promise<typeof import("../../observability/otel")> | null =
@@ -159,6 +161,7 @@ export type AgentServerRuntime = {
   handleDecodedMessage(ws: StartServerSocket, message: JsonRpcDecodedMessage): void;
   closeConnection(ws: StartServerSocket): void;
   drainConnection(ws: StartServerSocket): void;
+  notifyWorkspaceFileChanged(change: WorkspaceFileChangeEvent): void;
   isAddrInUse(err: unknown): boolean;
   startIdleEviction(): ReturnType<typeof setInterval>;
   getHealthSnapshot(): HealthSnapshot;
@@ -320,6 +323,25 @@ export async function createAgentServerRuntime(
       sendJsonRpc(connection, { method, params });
     }
   };
+  const notifyWorkspaceFileChanged = (change: WorkspaceFileChangeEvent): void => {
+    broadcastJsonRpcNotification("cowork/workspace/fileChanged", {
+      cwd: config.workingDirectory,
+      ...change,
+    });
+  };
+  let workspaceFileChangeMonitor: WorkspaceFileChangeMonitor | null = null;
+  try {
+    workspaceFileChangeMonitor = new WorkspaceFileChangeMonitor({
+      cwd: config.workingDirectory,
+      onChange: notifyWorkspaceFileChanged,
+    });
+  } catch (error) {
+    console.warn(
+      `[workspace-files] unable to monitor ${config.workingDirectory}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const broadcastWorkspaceListChanged = () => {
     workspaceListRevision += 1;
     broadcastJsonRpcNotification("workspace/listChanged", {
@@ -838,6 +860,7 @@ export async function createAgentServerRuntime(
     },
     lmstudioLocal: createLmStudioLocalService({ env }),
     jsonrpc: {
+      broadcast: broadcastJsonRpcNotification,
       send: sendJsonRpc,
       sendResult: (ws, id, result) => sendJsonRpc(ws, buildJsonRpcResultResponse(id, result)),
       sendError: (ws, id, error) => sendJsonRpc(ws, buildJsonRpcErrorResponse(id, error)),
@@ -924,6 +947,7 @@ export async function createAgentServerRuntime(
     drainConnection: (ws) => {
       sendQueue.flush(ws);
     },
+    notifyWorkspaceFileChanged,
     isAddrInUse: (err) => isErrorWithCode(err, "EADDRINUSE"),
     startIdleEviction: () =>
       setInterval(() => {
@@ -967,6 +991,7 @@ export async function createAgentServerRuntime(
         markStartupReady(new Error("Server stopped before startup completed"));
       }
       disposeDesktopStateWatcher?.();
+      workspaceFileChangeMonitor?.stop();
       skillImprovement.stop();
       skillMutationBus.stop();
       workspaceControl.clearSubscribers();

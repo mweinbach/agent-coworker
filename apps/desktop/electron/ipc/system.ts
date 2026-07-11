@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Notification, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, shell } from "electron";
 
 import {
   type CaptureProductEventInput,
@@ -23,7 +23,11 @@ import {
   telemetryStatusInputSchema,
   uploadDiagnosticsBundleInputSchema,
 } from "../../src/lib/desktopSchemas";
-import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
+import {
+  applyThemeSourcePreference,
+  applyWindowAppearance,
+  getSystemAppearanceSnapshot,
+} from "../services/appearance";
 import { buildConfirmDialog } from "../services/dialogs";
 import { writeLocalLog } from "../services/localLogs";
 import { resolveDesktopTelemetryStatus } from "../services/telemetryStatus";
@@ -202,13 +206,15 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
       );
       const ownerWindow =
         BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-      if (!ownerWindow) {
-        if (input.themeSource) {
-          nativeTheme.themeSource = input.themeSource;
-        }
-        return getSystemAppearanceSnapshot();
+      const appearance = !ownerWindow
+        ? input.themeSource
+          ? applyThemeSourcePreference(input.themeSource)
+          : getSystemAppearanceSnapshot()
+        : applyWindowAppearance(ownerWindow, input);
+      if (input.themeSource) {
+        await context.deps.appearancePreferences.saveThemeSource(input.themeSource);
       }
-      return applyWindowAppearance(ownerWindow, input);
+      return appearance;
     },
   );
 }

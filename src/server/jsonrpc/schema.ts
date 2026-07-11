@@ -59,6 +59,7 @@ import {
   jsonRpcThreadTurnServerRequestSchemas,
 } from "./schema.threadTurn";
 import {
+  jsonRpcWorkspaceNotificationSchemas,
   jsonRpcWorkspaceRequestSchemas,
   jsonRpcWorkspaceResultSchemas,
 } from "./schema.workspace";
@@ -95,6 +96,7 @@ export const jsonRpcNotificationSchemas = {
   ...jsonRpcResearchNotificationSchemas,
   ...jsonRpcMiscNotificationSchemas,
   ...jsonRpcTaskNotificationSchemas,
+  ...jsonRpcWorkspaceNotificationSchemas,
 } as const;
 
 export const jsonRpcServerRequestSchemas = {

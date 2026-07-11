@@ -12,10 +12,12 @@ import {
   persistedStateInputSchema,
   pickDirectoryInputSchema,
   platformChromeInfoSchema,
+  previewFileChangeEventSchema,
   showQuickChatWindowInputSchema,
   startWorkspaceServerInputSchema,
   telemetryStatusInputSchema,
   updaterStateSchema,
+  workspaceFileChangeEventSchema,
   workspaceServerStartupProgressSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -308,6 +310,32 @@ describe("desktop persisted-state schema defaults", () => {
     expect(() => telemetryStatusInputSchema.parse({ extra: true })).toThrow();
   });
 
+  test("keeps preview invalidations distinct from explorer watcher events", () => {
+    const previewEvent = {
+      kind: "changed",
+      path: "/tmp/workspace/report.md",
+      version: {
+        modifiedAtMs: 1,
+        changeTimeMs: 2,
+        size: 3,
+        fingerprint: "preview-version",
+      },
+    };
+    const explorerEvent = {
+      workspaceId: "ws_1",
+      rootPath: "/tmp/workspace",
+      kind: "modify",
+      changedPaths: ["/tmp/workspace/report.md"],
+      affectedDirectoryPaths: ["/tmp/workspace"],
+      invalidatedSubtreePaths: [],
+    };
+
+    expect(previewFileChangeEventSchema.safeParse(previewEvent).success).toBe(true);
+    expect(workspaceFileChangeEventSchema.safeParse(explorerEvent).success).toBe(true);
+    expect(previewFileChangeEventSchema.safeParse(explorerEvent).success).toBe(false);
+    expect(workspaceFileChangeEventSchema.safeParse(previewEvent).success).toBe(false);
+  });
+
   test("validates workspace runtime startup progress events", () => {
     expect(
       workspaceServerStartupProgressSchema.parse({
@@ -479,18 +507,56 @@ describe("desktop persisted-state schema defaults", () => {
   });
 
   test("accepts mobile relay trusted-device commands", () => {
-    expect(mobileRelayForgetTrustedPhoneInputSchema.parse({ deviceId: "phone-1" })).toEqual({
+    expect(
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "device",
+        deviceId: "phone-1",
+      }),
+    ).toEqual({
+      workspaceId: "ws_1",
+      scope: "device",
       deviceId: "phone-1",
     });
     expect(
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "all",
+        expectedDeviceIds: ["phone-1", "phone-2"],
+      }),
+    ).toEqual({
+      workspaceId: "ws_1",
+      scope: "all",
+      expectedDeviceIds: ["phone-1", "phone-2"],
+    });
+    expect(
       mobileRelayUpdateTrustedPhonePermissionsInputSchema.parse({
+        workspaceId: "ws_1",
         deviceId: "phone-1",
         permissions: { turns: true },
       }),
     ).toEqual({
+      workspaceId: "ws_1",
       deviceId: "phone-1",
       permissions: { turns: true },
     });
+  });
+
+  test("rejects unscoped or stale-shaped mobile relay trust mutations", () => {
+    expect(() => mobileRelayForgetTrustedPhoneInputSchema.parse({ deviceId: "phone-1" })).toThrow();
+    expect(() =>
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "all",
+        expectedDeviceIds: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      mobileRelayUpdateTrustedPhonePermissionsInputSchema.parse({
+        deviceId: "phone-1",
+        permissions: { turns: true },
+      }),
+    ).toThrow();
   });
 
   test("rejects legacy mobile relay bridge pairing payloads", () => {

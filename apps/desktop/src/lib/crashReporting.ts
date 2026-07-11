@@ -8,7 +8,7 @@ import {
 import type { DesktopCrashReportingConfig } from "./desktopApi";
 
 function getDesktopCrashReportingConfig(): DesktopCrashReportingConfig | null {
-  return window.cowork?.crashReporting ?? null;
+  return typeof window === "undefined" ? null : (window.cowork?.crashReporting ?? null);
 }
 
 export async function initRendererCrashReporting(enabledOverride?: boolean): Promise<void> {

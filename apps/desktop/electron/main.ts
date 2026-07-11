@@ -17,18 +17,21 @@ import {
   type ShowCanvasWindowInput,
   type ShowQuickChatWindowInput,
   type SystemAppearance,
+  type ThemeSource,
   type UpdaterState,
 } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import { WorkspaceRootsController } from "./ipc/workspaceRoots";
 import {
   applySystemAppearanceToWindow,
+  applyThemeSourcePreference,
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
   registerWindowAppearanceProfile,
   syncWindowAppearance,
 } from "./services/appearance";
+import { AppearancePreferences } from "./services/appearancePreferences";
 import {
   captureCrashReportingError,
   initElectronMainCrashReporting,
@@ -117,6 +120,7 @@ const serverManager = new ServerManager({
 });
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();
+const appearancePreferences = new AppearancePreferences(app);
 // Shared between the cowork-media protocol handler and desktop IPC so both
 // enforce (and observe approvals against) the same workspace-root boundary.
 const workspaceRoots = new WorkspaceRootsController(persistence);
@@ -424,6 +428,15 @@ async function loadRendererWindow(
   windowMode: "main" | "quick-chat" | "utility" | "canvas",
   query: Record<string, string> = {},
 ): Promise<void> {
+  const appearance = getSystemAppearanceSnapshot();
+  const initialAppearanceQuery = {
+    platform: appearance.platform,
+    themeSource: appearance.themeSource,
+    resolvedTheme: appearance.shouldUseDarkColors ? "dark" : "light",
+    highContrast:
+      appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false",
+    reducedTransparency: appearance.prefersReducedTransparency ? "true" : "false",
+  };
   if (!app.isPackaged) {
     const { url, warning } = resolveDesktopRendererUrl(
       process.env.ELECTRON_RENDERER_URL,
@@ -437,17 +450,20 @@ async function loadRendererWindow(
     if (windowMode !== "main") {
       target.searchParams.set("window", windowMode);
     }
-    for (const [key, value] of Object.entries(query)) {
+    for (const [key, value] of Object.entries({ ...initialAppearanceQuery, ...query })) {
       target.searchParams.set(key, value);
     }
     await win.loadURL(target.toString());
     return;
   }
 
-  await win.loadFile(
-    path.join(__dirname, "../renderer/index.html"),
-    windowMode === "main" ? undefined : { query: { window: windowMode, ...query } },
-  );
+  await win.loadFile(path.join(__dirname, "../renderer/index.html"), {
+    query: {
+      ...(windowMode === "main" ? {} : { window: windowMode }),
+      ...initialAppearanceQuery,
+      ...query,
+    },
+  });
 }
 
 async function createMainWindow(): Promise<Electron.BrowserWindow> {
@@ -764,6 +780,10 @@ if (!gotSingleInstanceLock) {
     .then(async () => {
       registerDesktopMediaProtocolHandler(protocol, net, workspaceRoots);
       const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
+      const initialThemeSource = await appearancePreferences
+        .loadThemeSource()
+        .catch((): ThemeSource => "system");
+      applyThemeSourcePreference(initialThemeSource);
       await initElectronMainCrashReporting(initialState?.privacyTelemetrySettings);
       let preparedInitialState = initialState;
       if (preparedInitialState) {
@@ -801,6 +821,7 @@ if (!gotSingleInstanceLock) {
       quickChatController.initialize();
 
       registerDesktopIpc({
+        appearancePreferences,
         mobileRelayBridge,
         persistence,
         workspaceRoots,

@@ -4,10 +4,11 @@ import type { TestInfo } from "playwright";
 
 import { assertNoSeriousAxeViolations, settleQualityPage } from "../assertions";
 import { expect, test } from "../fixtures";
+import { assertIndependentMentionGeometry } from "../mentionGeometry";
 
 async function attachIntentionalFailureMarker(
   testInfo: TestInfo,
-  proof: "axe" | "renderer" | "visual",
+  proof: "axe" | "mention-geometry" | "renderer" | "visual",
 ): Promise<void> {
   const markerPath = testInfo.outputPath("intentional-failure-marker.json");
   await fs.writeFile(
@@ -55,6 +56,32 @@ test.describe("visual failure proof", () => {
     });
     await settleQualityPage(quality.page);
     await expect(quality.page).toHaveScreenshot("shipping-chat-1240-light.png");
+  });
+});
+
+test.describe("mention geometry failure proof", () => {
+  test.skip(process.env.COWORK_QUALITY_PROOF !== "mention-geometry", "opt-in failure proof");
+
+  test("proof:mention-geometry rejects intentional highlight drift", async ({
+    quality,
+  }, testInfo) => {
+    await attachIntentionalFailureMarker(testInfo, "mention-geometry");
+    const composer = quality.page.getByRole("combobox", { name: "Message input" });
+    await composer.fill("Independent geometry keeps @geometry-audit aligned while choosing @g");
+    await composer.focus();
+    await expect(quality.page.getByRole("listbox", { name: "Mentions" })).toBeVisible();
+    await composer.evaluate((textarea) => {
+      const highlights = textarea.parentElement?.querySelectorAll<HTMLElement>(
+        '[data-slot="composer-highlight-overlay"] [data-mention-start]',
+      );
+      const highlight = highlights?.item((highlights?.length ?? 1) - 1);
+      if (!highlight) throw new Error("Intentional geometry drift target is missing");
+      highlight.style.position = "relative";
+      highlight.style.left = "4px";
+    });
+    await assertIndependentMentionGeometry(quality.page, testInfo, {
+      attachmentName: "mention-geometry-intentional-drift",
+    });
   });
 });
 

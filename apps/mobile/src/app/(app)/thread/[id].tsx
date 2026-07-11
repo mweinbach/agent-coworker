@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
@@ -17,7 +18,7 @@ import { SubagentBar } from "@/components/thread/subagent-bar";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
-import { buildChatRenderItems, type ChatRenderItem } from "@/features/cowork/activityGroups";
+import { buildChatRenderItems } from "@/features/cowork/activityGroups";
 import {
   type ComposerSubmission,
   getComposerPolicy,
@@ -25,27 +26,41 @@ import {
   toComposerTurnInput,
 } from "@/features/cowork/composer-policy";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
+import { getMobileListPerformanceContract } from "@/features/cowork/mobilePerformanceContracts";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import {
   copyPendingServerRequestIdentity,
   hasPendingServerRequestIdentity,
   type PendingServerRequestIdentity,
 } from "@/features/cowork/server-request-identity";
-import type { PendingServerRequest } from "@/features/cowork/threadStore";
+import {
+  buildThreadDetailList,
+  type ThreadDetailListItem,
+} from "@/features/cowork/threadListModel";
+import {
+  beginThreadProgrammaticMomentum,
+  beginThreadProgrammaticScroll,
+  finishThreadProgrammaticScroll,
+  initialThreadProgrammaticScrollGuard,
+  isThreadProgrammaticScrollActive,
+  shouldApplyThreadUserScroll,
+  shouldFinishInstantThreadScroll,
+} from "@/features/cowork/threadProgrammaticScrollGuard";
+import {
+  changedThreadRows,
+  initialThreadScrollState,
+  measuredThreadDistanceFromBottom,
+  reduceThreadScrollState,
+  shouldFollowChangedRows,
+  THREAD_NEAR_TAIL_THRESHOLD_PX,
+  type ThreadRowRevision,
+  type ThreadScrollEvent,
+  type ThreadScrollMetrics,
+} from "@/features/cowork/threadScrollState";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useAppTheme } from "@/theme/use-app-theme";
-
-type ThreadDetailListItem =
-  | {
-      type: "pending";
-      data: PendingServerRequest;
-    }
-  | {
-      type: "render";
-      data: ChatRenderItem;
-    };
 
 type ThreadActionError =
   | { kind: "load"; message: string }
@@ -60,8 +75,11 @@ type ThreadActionError =
     }
   | { kind: "interrupt"; message: string };
 
-const NEAR_BOTTOM_THRESHOLD_PX = 96;
 const EMPTY_AGENTS: unknown[] = [];
+const THREAD_LIST_PERFORMANCE = getMobileListPerformanceContract(
+  process.env.EXPO_OS === "ios" ? "ios" : "android",
+  "thread",
+);
 
 function normalizeAgents(agents: unknown[]): Array<{
   sessionId?: string;
@@ -86,10 +104,6 @@ function normalizeAgents(agents: unknown[]): Array<{
       };
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-}
-
-function renderItemKey(item: ChatRenderItem): string {
-  return item.kind === "activity-group" ? item.id : item.item.id;
 }
 
 function describeError(error: unknown, fallback: string): string {
@@ -128,6 +142,9 @@ export default function ThreadDetailScreen() {
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
+  const feedMutation = useThreadStore(
+    (state) => state.lastFeedMutationByThread?.[threadId] ?? null,
+  );
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
   const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
@@ -141,9 +158,20 @@ export default function ThreadDetailScreen() {
   const [askDraft, setAskDraft] = useState("");
   const [actionError, setActionError] = useState<ThreadActionError | null>(null);
   const [isStopping, setIsStopping] = useState(false);
-
-  const [stickToBottom, setStickToBottom] = useState(true);
+  const [scrollState, setScrollState] = useState(initialThreadScrollState);
+  const scrollStateRef = useRef(scrollState);
   const listRef = useRef<FlatList<ThreadDetailListItem>>(null);
+  const previousRowsRef = useRef<ThreadRowRevision[]>([]);
+  const userGestureActiveRef = useRef(false);
+  const programmaticScrollGuardRef = useRef(initialThreadProgrammaticScrollGuard());
+  const scrollMetricsRef = useRef<ThreadScrollMetrics>({
+    contentHeight: null,
+    offsetY: 0,
+    viewportHeight: null,
+  });
+  const forceFollowNextRowsRef = useRef(false);
+  const previousFeedMutationRevisionRef = useRef<number | null>(null);
+  const scrollThreadIdRef = useRef(threadId);
   const loadRequestIdRef = useRef(0);
   const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
@@ -155,6 +183,26 @@ export default function ThreadDetailScreen() {
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
   const isOfflineReadOnly = !isConnected && !isDraftThread;
+
+  useEffect(() => {
+    if (scrollThreadIdRef.current === threadId) {
+      return;
+    }
+    const initialState = initialThreadScrollState();
+    scrollThreadIdRef.current = threadId;
+    scrollStateRef.current = initialState;
+    previousRowsRef.current = [];
+    userGestureActiveRef.current = false;
+    programmaticScrollGuardRef.current = initialThreadProgrammaticScrollGuard();
+    scrollMetricsRef.current = {
+      contentHeight: null,
+      offsetY: 0,
+      viewportHeight: null,
+    };
+    forceFollowNextRowsRef.current = false;
+    previousFeedMutationRevisionRef.current = null;
+    setScrollState(initialState);
+  }, [threadId]);
 
   const loadThreadFeed = useCallback(async () => {
     const requestId = ++loadRequestIdRef.current;
@@ -210,31 +258,153 @@ export default function ThreadDetailScreen() {
     return null;
   }, [activeTurnStartedAt, renderItems]);
 
-  const listData = useMemo(() => {
-    const activePendingRequest = isConnected ? pendingRequest : null;
-    return [
-      ...renderItems.map((item) => ({ type: "render" as const, data: item })),
-      ...(activePendingRequest ? [{ type: "pending" as const, data: activePendingRequest }] : []),
-    ] as ThreadDetailListItem[];
-  }, [isConnected, pendingRequest, renderItems]);
+  const listData = useMemo(
+    () => buildThreadDetailList(renderItems, isConnected ? pendingRequest : null),
+    [isConnected, pendingRequest, renderItems],
+  );
+  const rowRevisions = useMemo<ThreadRowRevision[]>(
+    () => listData.map(({ key, revision }) => ({ key, revision })),
+    [listData],
+  );
 
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    setStickToBottom(distanceFromBottom <= NEAR_BOTTOM_THRESHOLD_PX);
+  const applyScrollEvent = useCallback((event: ThreadScrollEvent) => {
+    const currentScrollState = scrollStateRef.current;
+    const nextScrollState = reduceThreadScrollState(currentScrollState, event);
+    if (nextScrollState === currentScrollState) {
+      return nextScrollState;
+    }
+    scrollStateRef.current = nextScrollState;
+    setScrollState(nextScrollState);
+    return nextScrollState;
   }, []);
 
-  const scrollToLatest = useCallback((animated = true) => {
+  const beginProgrammaticScrollToEnd = useCallback((animated: boolean) => {
+    programmaticScrollGuardRef.current = beginThreadProgrammaticScroll(animated);
     listRef.current?.scrollToEnd({ animated });
-    setStickToBottom(true);
   }, []);
 
-  const handleContentSizeChange = useCallback(() => {
-    if (!stickToBottom) return;
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+  const observeScrollDistance = useCallback(
+    (distanceFromBottom: number) => {
+      applyScrollEvent({
+        type: "position-observed",
+        distanceFromBottom,
+      });
+
+      const guard = programmaticScrollGuardRef.current;
+      if (shouldApplyThreadUserScroll(guard, userGestureActiveRef.current)) {
+        applyScrollEvent({
+          type: "user-scroll",
+          distanceFromBottom,
+        });
+      }
+      if (shouldFinishInstantThreadScroll(guard, distanceFromBottom)) {
+        programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
+      }
+    },
+    [applyScrollEvent],
+  );
+
+  const observeCurrentMetrics = useCallback(
+    (establishUnmeasuredTail: boolean) => {
+      const metrics = scrollMetricsRef.current;
+      if (listData.length === 0) {
+        return;
+      }
+      const distanceFromBottom = measuredThreadDistanceFromBottom(metrics);
+      if (distanceFromBottom === null) {
+        return;
+      }
+      const shouldEstablishTail =
+        establishUnmeasuredTail &&
+        scrollStateRef.current.position === "unmeasured" &&
+        scrollStateRef.current.followTailIntent &&
+        distanceFromBottom > THREAD_NEAR_TAIL_THRESHOLD_PX;
+      observeScrollDistance(distanceFromBottom);
+      if (shouldEstablishTail) {
+        beginProgrammaticScrollToEnd(false);
+      }
+    },
+    [beginProgrammaticScrollToEnd, listData.length, observeScrollDistance],
+  );
+
+  useEffect(() => {
+    const previousRows = previousRowsRef.current;
+    previousRowsRef.current = rowRevisions;
+    if (previousRows.length === 0) {
+      return;
+    }
+    const changedKeys = changedThreadRows(previousRows, rowRevisions);
+    if (changedKeys.length === 0) {
+      return;
+    }
+    const hasNewFeedMutation =
+      feedMutation !== null && feedMutation.revision !== previousFeedMutationRevisionRef.current;
+    previousFeedMutationRevisionRef.current = feedMutation?.revision ?? null;
+
+    const currentScrollState = scrollStateRef.current;
+    applyScrollEvent({
+      type: "rows-changed",
+      changedKeys,
     });
-  }, [stickToBottom]);
+
+    const forceFollow = forceFollowNextRowsRef.current;
+    forceFollowNextRowsRef.current = false;
+    const isStreamingMutation =
+      feedMutation?.kind === "started" ||
+      feedMutation?.kind === "delta" ||
+      feedMutation?.kind === "local";
+    if (
+      forceFollow ||
+      shouldFollowChangedRows(
+        currentScrollState,
+        changedKeys,
+        turnActive && hasNewFeedMutation && isStreamingMutation,
+      )
+    ) {
+      beginProgrammaticScrollToEnd(false);
+    }
+  }, [applyScrollEvent, beginProgrammaticScrollToEnd, feedMutation, rowRevisions, turnActive]);
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      scrollMetricsRef.current = {
+        contentHeight: contentSize.height,
+        offsetY: contentOffset.y,
+        viewportHeight: layoutMeasurement.height,
+      };
+      const distanceFromBottom = Math.max(
+        0,
+        contentSize.height - layoutMeasurement.height - contentOffset.y,
+      );
+      observeScrollDistance(distanceFromBottom);
+    },
+    [observeScrollDistance],
+  );
+
+  const scrollToLatest = useCallback(
+    (animated = true) => {
+      applyScrollEvent({ type: "jump" });
+      beginProgrammaticScrollToEnd(animated);
+    },
+    [applyScrollEvent, beginProgrammaticScrollToEnd],
+  );
+
+  const handleContentSizeChange = useCallback(
+    (_width: number, height: number) => {
+      scrollMetricsRef.current.contentHeight = height;
+      observeCurrentMetrics(true);
+    },
+    [observeCurrentMetrics],
+  );
+
+  const handleListLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+      observeCurrentMetrics(true);
+    },
+    [observeCurrentMetrics],
+  );
 
   if (!thread) {
     return (
@@ -314,7 +484,8 @@ export default function ThreadDetailScreen() {
       submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
     appendOptimisticUserMessage(activeThread.id, optimisticText, submission.clientMessageId);
     setActionError((current) => (current?.kind === "send" ? null : current));
-    setStickToBottom(true);
+    forceFollowNextRowsRef.current = true;
+    applyScrollEvent({ type: "jump" });
     try {
       if (!client) {
         throw new Error("Desktop connection is unavailable.");
@@ -447,10 +618,41 @@ export default function ThreadDetailScreen() {
           }}
           keyboardShouldPersistTaps="handled"
           data={listData}
-          keyExtractor={(item) => (item.type === "pending" ? "pending" : renderItemKey(item.data))}
+          keyExtractor={(item) => item.key}
+          initialNumToRender={THREAD_LIST_PERFORMANCE.initialNumToRender}
+          maxToRenderPerBatch={THREAD_LIST_PERFORMANCE.maxToRenderPerBatch}
+          updateCellsBatchingPeriod={THREAD_LIST_PERFORMANCE.updateCellsBatchingPeriod}
+          windowSize={THREAD_LIST_PERFORMANCE.windowSize}
+          removeClippedSubviews={THREAD_LIST_PERFORMANCE.removeClippedSubviews}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          onScrollBeginDrag={(event) => {
+            programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
+            userGestureActiveRef.current = true;
+            handleScroll(event);
+          }}
           onScroll={handleScroll}
+          onScrollEndDrag={(event) => {
+            handleScroll(event);
+            userGestureActiveRef.current = false;
+          }}
+          onMomentumScrollBegin={() => {
+            if (isThreadProgrammaticScrollActive(programmaticScrollGuardRef.current)) {
+              programmaticScrollGuardRef.current = beginThreadProgrammaticMomentum(
+                programmaticScrollGuardRef.current,
+              );
+              userGestureActiveRef.current = false;
+              return;
+            }
+            userGestureActiveRef.current = true;
+          }}
+          onMomentumScrollEnd={(event) => {
+            handleScroll(event);
+            programmaticScrollGuardRef.current = finishThreadProgrammaticScroll();
+            userGestureActiveRef.current = false;
+          }}
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
+          onLayout={handleListLayout}
           ListHeaderComponent={
             showSessionBadge || normalizedAgents.length > 0
               ? () => (
@@ -531,12 +733,13 @@ export default function ThreadDetailScreen() {
                 showDebugMessages={showDebugMessages}
                 live={item.data.kind === "activity-group" && item.data.id === liveActivityGroupId}
                 liveStartedAt={activeTurnStartedAt}
+                revision={item.revision}
               />
             );
           }}
         />
 
-        {!stickToBottom && listData.length > 0 ? (
+        {!scrollState.followTail && listData.length > 0 ? (
           <View
             pointerEvents="box-none"
             style={{
@@ -549,7 +752,11 @@ export default function ThreadDetailScreen() {
           >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Jump to latest messages"
+              accessibilityLabel={
+                scrollState.unseenKeys.length > 0
+                  ? `${scrollState.unseenKeys.length} new. Jump to latest messages`
+                  : "Jump to latest messages"
+              }
               onPress={() => scrollToLatest(true)}
               style={({ pressed }) => ({
                 borderRadius: 999,
@@ -563,7 +770,9 @@ export default function ThreadDetailScreen() {
               })}
             >
               <Text style={{ color: theme.text, fontSize: 13, fontWeight: "600" }}>
-                Jump to latest
+                {scrollState.unseenKeys.length > 0
+                  ? `${scrollState.unseenKeys.length} new · Jump to latest`
+                  : "Jump to latest"}
               </Text>
             </Pressable>
           </View>

@@ -19,6 +19,7 @@ describe("mobile thread store offline draft preservation", () => {
       selectedThreadId: null,
       pendingRequests: {},
       activeTurnStartedAt: {},
+      lastFeedMutationByThread: {},
       expandedWorkspaceIds: {},
     });
   });
@@ -195,6 +196,30 @@ describe("mobile thread store offline draft preservation", () => {
     expect(userMessages[0]).toMatchObject({
       id: "projected-user-message",
       clientMessageId: "client-message-1",
+    });
+  });
+
+  test("records delta and completion mutations separately for follow-tail policy", () => {
+    const store = useThreadStore.getState();
+
+    store.appendAgentDelta("streaming-thread", "assistant-1", "hello", "2026-07-10T00:00:00Z");
+    expect(useThreadStore.getState().lastFeedMutationByThread["streaming-thread"]).toMatchObject({
+      kind: "delta",
+      revision: 1,
+    });
+
+    store.appendCompleted(
+      "streaming-thread",
+      {
+        type: "agentMessage",
+        id: "assistant-1",
+        text: "hello",
+      },
+      "2026-07-10T00:00:01Z",
+    );
+    expect(useThreadStore.getState().lastFeedMutationByThread["streaming-thread"]).toMatchObject({
+      kind: "completed",
+      revision: 2,
     });
   });
 

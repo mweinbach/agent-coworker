@@ -48,6 +48,11 @@ export type MobileThreadSummary = {
 
 export type MobileThreadFeedEntry = SessionFeedItem;
 
+export type ThreadFeedMutation = {
+  kind: "hydrate" | "started" | "delta" | "completed" | "local" | "removed";
+  revision: number;
+};
+
 export type PendingServerRequest = PendingServerRequestIdentity &
   (
     | {
@@ -73,6 +78,7 @@ type ThreadStoreState = {
   selectedThreadId: string | null;
   pendingRequests: Record<string, PendingServerRequest | null>;
   activeTurnStartedAt: Record<string, string | null>;
+  lastFeedMutationByThread: Record<string, ThreadFeedMutation>;
   expandedWorkspaceIds: Record<string, true>;
   sectionOrder: HomeSectionKey[];
   sectionsOpen: ThreadHomeSectionsOpen;
@@ -142,6 +148,20 @@ type ThreadStoreState = {
 };
 
 let threadCachePersistQueued = false;
+
+function recordFeedMutation(
+  state: ThreadStoreState,
+  threadId: string,
+  kind: ThreadFeedMutation["kind"],
+): Record<string, ThreadFeedMutation> {
+  return {
+    ...state.lastFeedMutationByThread,
+    [threadId]: {
+      kind,
+      revision: (state.lastFeedMutationByThread[threadId]?.revision ?? 0) + 1,
+    },
+  };
+}
 
 function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
   if (threadCachePersistQueued) {
@@ -290,6 +310,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   selectedThreadId: null,
   pendingRequests: {},
   activeTurnStartedAt: {},
+  lastFeedMutationByThread: {},
   expandedWorkspaceIds: {},
   sectionOrder: defaultThreadHomeUiState().sectionOrder,
   sectionsOpen: defaultThreadHomeUiState().sectionsOpen,
@@ -332,6 +353,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
             : (cachedThreads[0]?.id ?? existingDraftThreads[0]?.id ?? null),
         pendingRequests: {},
         activeTurnStartedAt: {},
+        lastFeedMutationByThread: {},
         expandedWorkspaceIds: {
           ...state.expandedWorkspaceIds,
           ...cache.expandedWorkspaceIds,
@@ -367,6 +389,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         },
         threads: updateThreadList(state, snapshot.sessionId, mergedSnapshot),
         selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
+        lastFeedMutationByThread: recordFeedMutation(state, snapshot.sessionId, "hydrate"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -391,6 +414,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "started"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -415,6 +439,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "completed"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -440,6 +465,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "delta"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -466,6 +492,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "delta"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -666,6 +693,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot, ""),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "local"),
       };
     });
   },
@@ -701,6 +729,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "local"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -721,6 +750,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "removed"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -758,6 +788,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       const nextThreads = state.threads.filter((t) => t.id.startsWith("draft-"));
       const nextSnapshots: Record<string, SessionSnapshotLike> = {};
       const nextPendingRequests: Record<string, PendingServerRequest | null> = {};
+      const nextFeedMutations: Record<string, ThreadFeedMutation> = {};
 
       for (const t of nextThreads) {
         if (state.snapshots[t.id]) {
@@ -765,6 +796,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         }
         if (state.pendingRequests[t.id]) {
           nextPendingRequests[t.id] = state.pendingRequests[t.id];
+        }
+        if (state.lastFeedMutationByThread[t.id]) {
+          nextFeedMutations[t.id] = state.lastFeedMutationByThread[t.id];
         }
       }
 
@@ -778,6 +812,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: nextThreads,
         selectedThreadId: nextSelectedThreadId,
         pendingRequests: nextPendingRequests,
+        lastFeedMutationByThread: nextFeedMutations,
       };
     });
     scheduleThreadCachePersist(get);

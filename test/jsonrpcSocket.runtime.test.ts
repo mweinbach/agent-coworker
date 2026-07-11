@@ -255,6 +255,53 @@ describe("JsonRpcSocket runtime", () => {
     await expect(requestPromise).resolves.toEqual({ threads: [] });
   });
 
+  test("routes response-shaped server-request acknowledgements without a client request waiter", async () => {
+    FakeWebSocket.instances = [];
+    const serverResponses: unknown[] = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop", version: "1.0.0" },
+      WebSocketImpl: FakeWebSocket as any,
+      onServerResponse: (message) => {
+        serverResponses.push(message);
+      },
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+    const ws = FakeWebSocket.instances[0]!;
+    await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    await ws.emitMessage(
+      JSON.stringify({
+        id: "ask-conflict",
+        error: {
+          code: -32602,
+          message: "Conflicting response",
+          data: {
+            category: "interaction_response_conflict",
+            requestId: "ask-conflict",
+          },
+        },
+      }),
+    );
+
+    expect(serverResponses).toEqual([
+      {
+        id: "ask-conflict",
+        error: {
+          code: -32602,
+          message: "Conflicting response",
+          data: {
+            category: "interaction_response_conflict",
+            requestId: "ask-conflict",
+          },
+        },
+      },
+    ]);
+  });
+
   test("negotiates tool retry lineage without changing the legacy handshake shape", async () => {
     FakeWebSocket.instances = [];
     const socket = new JsonRpcSocket({

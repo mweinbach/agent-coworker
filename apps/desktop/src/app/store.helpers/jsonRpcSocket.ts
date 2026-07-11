@@ -29,7 +29,13 @@ import {
 
 type JsonRpcNotification =
   | { kind: "notification"; method: string; params?: unknown }
-  | { kind: "request"; id: string | number; method: string; params?: unknown };
+  | { kind: "request"; id: string | number; method: string; params?: unknown }
+  | {
+      kind: "response";
+      id: string | number;
+      result?: unknown;
+      error?: { code: number; message: string; data?: unknown };
+    };
 
 type WorkspaceNotificationRouter = (message: JsonRpcNotification) => void;
 type WorkspaceLifecycleListener = {
@@ -435,6 +441,21 @@ export function ensureWorkspaceJsonRpcSocket(
         id: message.id,
         method: message.method,
         params: message.params,
+      });
+    },
+    onServerResponse: (message: {
+      id: string | number;
+      result?: unknown;
+      error?: { code: number; message: string; data?: unknown };
+    }) => {
+      if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
+        return;
+      }
+      emitToWorkspaceRouters(workspaceId, {
+        kind: "response",
+        id: message.id,
+        ...(message.result !== undefined ? { result: message.result } : {}),
+        ...(message.error ? { error: message.error } : {}),
       });
     },
     onOpen: () => {

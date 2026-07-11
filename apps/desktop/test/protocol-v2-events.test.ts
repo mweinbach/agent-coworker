@@ -39,6 +39,7 @@ class MockJsonRpcSocket {
       onClose?: () => void;
       onNotification?: (message: any) => void;
       onServerRequest?: (message: any) => void;
+      onServerResponse?: (message: any) => void;
     },
   ) {
     MockJsonRpcSocket.instances.push(this);
@@ -75,6 +76,15 @@ class MockJsonRpcSocket {
   requestFromServer(id: string | number, method: string, params?: unknown) {
     act(() => {
       this.opts.onServerRequest?.({ id, method, params });
+    });
+  }
+
+  respondFromServer(
+    id: string | number,
+    response: { result?: unknown; error?: { code: number; message: string; data?: unknown } },
+  ) {
+    act(() => {
+      this.opts.onServerResponse?.({ id, ...response });
     });
   }
 }
@@ -1378,6 +1388,67 @@ describe("desktop JSON-RPC event mapping", () => {
       status: "responding",
       response: true,
     });
+  });
+
+  test("routes a response conflict to the exact responding interaction and keeps retry visible", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    socket.requestFromServer("ask-conflict", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      question: "Which response should commit?",
+    });
+    socket.requestFromServer("approval-sibling", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      command: "bun run check",
+      dangerous: false,
+      reason: "requires_manual_review",
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      expect(useAppStore.getState().answerAsk(threadId, "ask-conflict", "First")).toBe(true);
+    });
+    socket.respondFromServer("ask-conflict", {
+      error: {
+        code: -32602,
+        message: "Conflicting response for resolved interaction: ask-conflict",
+        data: {
+          category: "interaction_response_conflict",
+          requestId: "ask-conflict",
+          threadId: sessionId,
+        },
+      },
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({
+        requestId: "ask-conflict",
+        status: "failed",
+        error: "Conflicting response for resolved interaction: ask-conflict",
+      }),
+      expect.objectContaining({
+        requestId: "approval-sibling",
+        status: "pending",
+      }),
+    ]);
+    expect(harness?.dom.window.document.body.textContent).toContain(
+      "Conflicting response for resolved interaction: ask-conflict",
+    );
+    expect(harness?.dom.window.document.body.textContent).toContain("Retry");
+
+    act(() => {
+      expect(useAppStore.getState().retryInteractionResponse(threadId, "ask-conflict")).toBe(true);
+    });
+    socket.notify("serverRequest/resolved", {
+      threadId: sessionId,
+      requestId: "ask-conflict",
+      response: { kind: "ask", answer: "First" },
+    });
+    await flushAsyncWork();
+    expect(useAppStore.getState().interactionsByThread[threadId]).toEqual([
+      expect.objectContaining({ requestId: "ask-conflict", status: "resolved" }),
+      expect.objectContaining({ requestId: "approval-sibling", status: "pending" }),
+    ]);
   });
 
   test("expires every outstanding interaction when its turn ends", async () => {

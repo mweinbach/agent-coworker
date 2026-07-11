@@ -128,6 +128,62 @@ export function createJsonRpcWorkspaceModule(
         return;
       }
 
+      if (message.kind === "response") {
+        const errorData =
+          message.error?.data &&
+          typeof message.error.data === "object" &&
+          !Array.isArray(message.error.data)
+            ? (message.error.data as Record<string, unknown>)
+            : null;
+        const category = typeof errorData?.category === "string" ? errorData.category : null;
+        if (message.error && !category?.startsWith("interaction_response_")) {
+          return;
+        }
+        const requestId =
+          typeof errorData?.requestId === "string" ? errorData.requestId : String(message.id);
+        const responseThreadId =
+          typeof errorData?.threadId === "string"
+            ? findThreadIdForJsonRpcNotification(get, workspaceId, errorData.threadId)
+            : null;
+        set((state) => {
+          const candidateThreadIds = responseThreadId
+            ? [responseThreadId]
+            : state.threads
+                .filter((thread) => thread.workspaceId === workspaceId)
+                .map((thread) => thread.id);
+          for (const threadId of candidateThreadIds) {
+            const existing = state.interactionsByThread[threadId];
+            if (!existing) continue;
+            const interactionIndex = existing.findIndex(
+              (interaction) =>
+                interaction.requestId === requestId &&
+                (interaction.status === "responding" || interaction.status === "failed"),
+            );
+            if (interactionIndex < 0) continue;
+            const interactions = existing.map((interaction, index) => {
+              if (index !== interactionIndex) return interaction;
+              if (message.error) {
+                return {
+                  ...interaction,
+                  status: "failed" as const,
+                  error: message.error.message,
+                };
+              }
+              const { error: _error, ...rest } = interaction;
+              return { ...rest, status: "resolved" as const };
+            });
+            return {
+              interactionsByThread: {
+                ...state.interactionsByThread,
+                [threadId]: interactions,
+              },
+            };
+          }
+          return {};
+        });
+        return;
+      }
+
       const params = (message.params ?? {}) as JsonRpcMessageParams;
       const mappedThreadId = findThreadIdForJsonRpcNotification(
         get,

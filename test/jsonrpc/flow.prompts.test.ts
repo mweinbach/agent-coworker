@@ -362,4 +362,155 @@ describe("server JSON-RPC flows", () => {
       await stopTestServer(server);
     }
   });
+
+  test(
+    "committed ask response survives a lost acknowledgement and reconnect retry",
+    async () => {
+      const tmpDir = await makeTmpProject();
+      const responseCommitted = Promise.withResolvers<void>();
+      const releaseTurn = Promise.withResolvers<void>();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            const answer = await params.askUser("Commit before acknowledgement");
+            responseCommitted.resolve();
+            await releaseTurn.promise;
+            return { text: `answer:${answer}`, responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let rpc: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      let replayRpc: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        rpc = await connectJsonRpc(url);
+        const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+        await rpc.waitFor((message) => message.method === "thread/started");
+        await rpc.sendRequest("turn/start", {
+          threadId: started.result.thread.id,
+          input: [{ type: "text", text: "start committed response flow" }],
+        });
+        const request = await rpc.waitFor(
+          (message) => message.method === "item/tool/requestUserInput",
+        );
+
+        rpc.sendResponse(request.id, { answer: "committed" });
+        await responseCommitted.promise;
+        rpc.close();
+        rpc = null;
+
+        replayRpc = await connectJsonRpc(url);
+        const resumeResponse = replayRpc.sendRequest("thread/resume", {
+          threadId: started.result.thread.id,
+        });
+        const replayedResolution = await replayRpc.waitFor(
+          (message) =>
+            message.method === "serverRequest/resolved" &&
+            message.params.requestId === request.params.requestId,
+          2_000,
+        );
+        await resumeResponse;
+        expect(replayedResolution.params.threadId).toBe(started.result.thread.id);
+        expect(replayedResolution.params.response).toEqual({
+          kind: "ask",
+          answer: "committed",
+        });
+
+        replayRpc.sendResponse(request.id, { answer: "committed" });
+        const retryResolution = await replayRpc.waitFor(
+          (message) =>
+            message.method === "serverRequest/resolved" &&
+            message.params.requestId === request.params.requestId,
+          2_000,
+        );
+        expect(retryResolution.params.threadId).toBe(started.result.thread.id);
+
+        replayRpc.sendResponse(request.id, { answer: "conflicting" });
+        const conflict = await replayRpc.waitFor(
+          (message) => message.id === request.id && message.error,
+        );
+        expect(conflict.error).toMatchObject({
+          code: -32602,
+          data: {
+            category: "interaction_response_conflict",
+            requestId: request.params.requestId,
+            threadId: started.result.thread.id,
+          },
+        });
+
+        releaseTurn.resolve();
+        const completed = await replayRpc.waitFor(
+          (message) =>
+            message.method === "item/completed" && message.params.item.type === "agentMessage",
+        );
+        expect(completed.params.item.text).toBe("answer:committed");
+      } finally {
+        releaseTurn.resolve();
+        rpc?.close();
+        replayRpc?.close();
+        await stopTestServer(server);
+      }
+    },
+    JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  );
+
+  test("conflicting duplicate approval response is rejected after the first response commits", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const approved = await params.approveCommand("rm -rf /tmp/conflict-example");
+          await releaseTurn.promise;
+          return { text: approved ? "approved" : "denied", responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start approval conflict flow" }],
+      });
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/commandExecution/requestApproval",
+      );
+
+      rpc.sendResponse(request.id, { decision: "accept" });
+      const resolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+      );
+      expect(resolved.params.response).toEqual({
+        kind: "approval",
+        approved: true,
+      });
+
+      rpc.sendResponse(request.id, { decision: "decline" });
+      const conflict = await rpc.waitFor((message) => message.id === request.id && message.error);
+      expect(conflict.error).toMatchObject({
+        code: -32602,
+        data: {
+          category: "interaction_response_conflict",
+          requestId: request.params.requestId,
+          threadId: started.result.thread.id,
+        },
+      });
+
+      releaseTurn.resolve();
+      const completed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      expect(completed.params.item.text).toBe("approved");
+      rpc.close();
+    } finally {
+      releaseTurn.resolve();
+      await stopTestServer(server);
+    }
+  });
 });

@@ -1,7 +1,12 @@
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import type { PropsWithChildren } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+  useReducedMotionEnabled,
+} from "@/features/accessibility/mobile-accessibility";
 import { alpha, radius } from "@/theme/tokens";
 import { type AppTheme, useAppTheme } from "@/theme/use-app-theme";
 
@@ -31,6 +36,10 @@ type AppButtonProps = PropsWithChildren<{
   fullWidth?: boolean;
   onPress?: () => void;
   disabled?: boolean;
+  busy?: boolean;
+  expanded?: boolean;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }>;
 
 type VariantStyle = {
@@ -115,13 +124,19 @@ export function AppButton({
   fullWidth = false,
   onPress,
   disabled = false,
+  busy = false,
+  expanded,
+  accessibilityLabel,
+  accessibilityHint,
 }: AppButtonProps) {
   const theme = useAppTheme();
+  const reducedMotionEnabled = useReducedMotionEnabled();
   const isGlass = variant === "glass";
   const isPrimary = variant === "primary";
-  const shouldUseGlass = isGlass && Platform.OS === "ios" && isLiquidGlassAvailable();
+  const shouldUseGlass = isGlass && process.env.EXPO_OS === "ios" && isLiquidGlassAvailable();
   const v = resolveVariant(variant, theme);
   const sizing = SIZE_STYLE[size];
+  const minimumHeight = minimumTouchTarget();
   const hasBorder = isGlass || v.borderColor !== undefined;
   const borderColor = isGlass ? theme.borderMuted : v.borderColor;
   // Solid variants (and glass) cast the surface shadow; quiet variants stay flat.
@@ -131,6 +146,12 @@ export function AppButton({
     <Pressable
       disabled={disabled}
       onPress={onPress}
+      accessibilityHint={accessibilityHint}
+      accessibilityLabel={
+        accessibilityLabel ?? (typeof children === "string" ? children : undefined)
+      }
+      accessibilityRole="button"
+      accessibilityState={{ busy, disabled, expanded }}
       style={({ pressed }) => ({
         position: isGlass ? "relative" : undefined,
         overflow: isGlass ? "hidden" : undefined,
@@ -147,10 +168,11 @@ export function AppButton({
         backgroundColor:
           isGlass && shouldUseGlass ? "transparent" : pressed ? v.pressedBackground : v.background,
         opacity: disabled ? 0.5 : isGlass && pressed ? 0.88 : 1,
+        minHeight: minimumHeight,
         paddingHorizontal: sizing.paddingHorizontal,
         paddingVertical: sizing.paddingVertical,
         boxShadow: elevated ? (isGlass ? glassShadow(theme.isDark) : theme.shadow) : undefined,
-        transform: isGlass && pressed ? [{ scale: 0.985 }] : undefined,
+        transform: isGlass && pressed && !reducedMotionEnabled ? [{ scale: 0.985 }] : undefined,
       })}
     >
       {shouldUseGlass ? (
@@ -180,7 +202,8 @@ export function AppButton({
       >
         {icon ? <SFSymbol name={icon} size={18} color={v.label} /> : null}
         <Text
-          selectable
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: v.label,
             fontSize: sizing.fontSize,

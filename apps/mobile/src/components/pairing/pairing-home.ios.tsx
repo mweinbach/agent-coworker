@@ -11,6 +11,7 @@ import {
 import { buttonStyle, foregroundStyle, frame, listStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { useRouter } from "expo-router";
 
+import { useAccessibilityAnnouncement } from "@/features/accessibility/mobile-accessibility";
 import { describeHero, describeRelay } from "@/features/pairing/pairingCopy";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import {
@@ -46,6 +47,7 @@ export function PairingHomeIos() {
     connectionState.status === "connecting" ||
     connectionState.status === "reconnecting";
   const showWelcome = connectionState.status === "idle" && !isConnected;
+  useAccessibilityAnnouncement(connectionState.lastError ?? (isBusy ? statusLabel : null));
 
   const scanButton = (
     <PairingActionButton
@@ -84,7 +86,7 @@ export function PairingHomeIos() {
               <Button
                 label="Open Threads"
                 systemImage="bubble.left.and.bubble.right.fill"
-                onPress={() => router.replace("/(app)/(tabs)/threads")}
+                onPress={() => router.replace("/threads")}
                 modifiers={[
                   buttonStyle("bordered"),
                   tint(theme.primary),

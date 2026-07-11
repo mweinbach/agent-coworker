@@ -5,6 +5,10 @@ import { Alert, Text, TextInput, View } from "react-native";
 
 import { GroupedScreen, GroupedSection } from "@/components/pairing/grouped-list";
 import { AppButton } from "@/components/ui/app-button";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { validatePairingPayload } from "@/features/pairing/qrValidation";
 import { createPairingScanHandler } from "@/features/pairing/scanHandler";
@@ -25,6 +29,9 @@ export function PairingScanFallback() {
   const pairingInFlight =
     scannedPayload !== null &&
     (connectionState.status === "pairing" || connectionState.status === "connecting");
+  useAccessibilityAnnouncement(
+    connectionState.lastError ?? (pairingInFlight ? "Connecting to your Mac" : null),
+  );
 
   if (!scanHandlerRef.current) {
     scanHandlerRef.current = createPairingScanHandler({
@@ -32,7 +39,7 @@ export function PairingScanFallback() {
       connectWithQr,
       setScannedPayload,
       onSuccess: () => {
-        router.replace("/(app)/(tabs)/threads");
+        router.replace("/threads");
       },
       onInvalidPayload: (message) => {
         Alert.alert("Invalid QR", message);
@@ -79,6 +86,7 @@ export function PairingScanFallback() {
             }}
           >
             <CameraView
+              accessibilityLabel="QR code scanner camera"
               style={{ height: 320, width: "100%" }}
               facing="back"
               barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
@@ -115,7 +123,12 @@ export function PairingScanFallback() {
       {pairingInFlight ? (
         <GroupedSection footer="Keep Cowork Desktop open while pairing finishes.">
           <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
-            <Text selectable style={{ color: theme.textSecondary, fontSize: 15 }}>
+            <Text
+              accessibilityLiveRegion="polite"
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              selectable
+              style={{ color: theme.textSecondary, fontSize: 15 }}
+            >
               Connecting to your Mac…
             </Text>
           </View>
@@ -128,6 +141,9 @@ export function PairingScanFallback() {
       >
         <View style={{ padding: 12, gap: 10 }}>
           <TextInput
+            accessibilityLabel="Pairing key"
+            accessibilityHint="Paste the pairing key from Cowork Desktop"
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
             value={manualPayload}
             onChangeText={setManualPayload}
             placeholder="cowork-pair://…"

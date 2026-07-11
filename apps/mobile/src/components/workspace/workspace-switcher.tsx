@@ -2,6 +2,12 @@ import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, Text, View } fr
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+  useReducedMotionEnabled,
+} from "@/features/accessibility/mobile-accessibility";
 import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { useThreadStore } from "@/features/cowork/threadStore";
@@ -47,6 +53,9 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
   const switchWorkspace = useWorkspaceStore((state) => state.switchWorkspace);
   const loading = useWorkspaceStore((state) => state.loading);
+  const error = useWorkspaceStore((state) => state.error);
+  const reducedMotionEnabled = useReducedMotionEnabled();
+  useAccessibilityAnnouncement(error ?? (loading ? "Switching workspace" : null));
 
   const handleSwitch = async (workspaceId: string) => {
     if (workspaceId === activeWorkspaceId) {
@@ -89,9 +98,10 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType={reducedMotionEnabled ? "none" : "slide"}
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      accessibilityViewIsModal
     >
       <View
         style={{ flex: 1, backgroundColor: theme.background, paddingTop: Math.max(insets.top, 8) }}
@@ -105,18 +115,36 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
             paddingBottom: 16,
           }}
         >
-          <Text style={{ color: theme.text, fontSize: 22, fontWeight: "800" }}>
+          <Text
+            accessibilityRole="header"
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+            style={{ color: theme.text, fontSize: 22, fontWeight: "800" }}
+          >
             Switch workspace
           </Text>
-          <Pressable onPress={onClose}>
-            <Text style={{ color: theme.primary, fontSize: 16, fontWeight: "600" }}>Done</Text>
+          <Pressable
+            accessibilityLabel="Close workspace switcher"
+            accessibilityRole="button"
+            onPress={onClose}
+            style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
+          >
+            <Text
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              style={{ color: theme.primary, fontSize: 16, fontWeight: "600" }}
+            >
+              Done
+            </Text>
           </Pressable>
         </View>
 
         {loading ? (
           <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
             <ActivityIndicator size="large" color={theme.primary} />
-            <Text style={{ color: theme.textSecondary, marginTop: 12, fontSize: 14 }}>
+            <Text
+              accessibilityLiveRegion="polite"
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              style={{ color: theme.textSecondary, marginTop: 12, fontSize: 14 }}
+            >
               Switching workspace...
             </Text>
           </View>
@@ -133,10 +161,14 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
               return (
                 <Pressable
                   key={workspace.id}
+                  accessibilityLabel={`${workspace.name}, ${workspace.path}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ busy: loading, selected: isActive }}
                   onPress={() => {
                     void handleSwitch(workspace.id);
                   }}
                   style={({ pressed }) => ({
+                    minHeight: minimumTouchTarget(),
                     gap: 6,
                     borderRadius: 22,
                     borderCurve: "continuous",
@@ -162,16 +194,25 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
                       alignItems: "center",
                     }}
                   >
-                    <Text style={{ color: theme.text, fontSize: 16, fontWeight: "700", flex: 1 }}>
+                    <Text
+                      maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                      style={{ color: theme.text, fontSize: 16, fontWeight: "700", flex: 1 }}
+                    >
                       {workspace.name}
                     </Text>
                     {isActive ? <StatusPill label="active" tone="success" /> : null}
                   </View>
-                  <Text numberOfLines={1} style={{ color: theme.textSecondary, fontSize: 13 }}>
+                  <Text
+                    maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                    style={{ color: theme.textSecondary, fontSize: 13 }}
+                  >
                     {workspace.path}
                   </Text>
                   {workspace.defaultProvider || workspace.defaultModel ? (
-                    <Text style={{ color: theme.textTertiary, fontSize: 12 }}>
+                    <Text
+                      maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                      style={{ color: theme.textTertiary, fontSize: 12 }}
+                    >
                       {[workspace.defaultProvider, workspace.defaultModel]
                         .filter(Boolean)
                         .join(" / ")}

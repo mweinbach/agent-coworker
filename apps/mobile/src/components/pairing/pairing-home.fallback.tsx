@@ -8,6 +8,10 @@ import {
 } from "@/components/pairing/grouped-list";
 import { PairingWelcomeCard } from "@/components/pairing/pairing-welcome-card";
 import { AppButton } from "@/components/ui/app-button";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { describeHero, describeRelay } from "@/features/pairing/pairingCopy";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import {
@@ -36,6 +40,12 @@ export function PairingHomeFallback() {
   const showDetails =
     isConnected || Boolean(connectionState.lastError) || Boolean(connectionState.sessionId);
   const showWelcome = connectionState.status === "idle" && !isConnected;
+  useAccessibilityAnnouncement(
+    connectionState.lastError ??
+      (connectionState.status === "connecting" || connectionState.status === "reconnecting"
+        ? statusLabel
+        : null),
+  );
 
   return (
     <GroupedScreen>
@@ -47,11 +57,20 @@ export function PairingHomeFallback() {
         <>
           <GroupedSection footer={hero.body}>
             <View style={{ paddingHorizontal: 16, paddingVertical: 18, gap: 6 }}>
-              <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+              <Text
+                accessibilityRole="header"
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                selectable
+                style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}
+              >
                 {hero.title}
               </Text>
               {!isConnected && connectionState.status !== "idle" ? (
-                <Text selectable style={{ color: theme.textSecondary, fontSize: 15 }}>
+                <Text
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                  selectable
+                  style={{ color: theme.textSecondary, fontSize: 15 }}
+                >
                   Status: {statusLabel}
                 </Text>
               ) : null}
@@ -72,7 +91,7 @@ export function PairingHomeFallback() {
                   fullWidth
                   variant="secondary"
                   icon="bubble.left.and.bubble.right.fill"
-                  onPress={() => router.replace("/(app)/(tabs)/threads")}
+                  onPress={() => router.replace("/threads")}
                 >
                   Open Threads
                 </AppButton>
@@ -123,7 +142,12 @@ export function PairingHomeFallback() {
           ) : null}
           {connectionState.lastError ? (
             <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-              <Text selectable style={{ color: theme.danger, fontSize: 15, lineHeight: 21 }}>
+              <Text
+                accessibilityLiveRegion="assertive"
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                selectable
+                style={{ color: theme.danger, fontSize: 15, lineHeight: 21 }}
+              >
                 {connectionState.lastError}
               </Text>
             </View>

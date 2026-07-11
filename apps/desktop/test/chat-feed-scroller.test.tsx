@@ -66,9 +66,12 @@ function installScrollerGeometry(
   harness: JsdomHarness,
   heights: ReadonlyMap<string, number>,
   viewportHeight = 400,
+  textAnchorOffsets: ReadonlyMap<string, number> = new Map(),
 ) {
-  const { HTMLElement } = harness.dom.window;
+  const { HTMLElement, Range } = harness.dom.window;
   const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  const originalRangeRect = Range.prototype.getBoundingClientRect;
+  const originalRangeRects = Range.prototype.getClientRects;
   const originalClientHeight = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "clientHeight",
@@ -125,6 +128,40 @@ function installScrollerGeometry(
       this.scrollTop = options.top ?? this.scrollTop;
     },
   });
+  Range.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    const element =
+      this.startContainer instanceof HTMLElement
+        ? this.startContainer
+        : this.startContainer.parentElement;
+    const item = element?.closest<HTMLElement>('[data-slot="message-scroller-item"]');
+    const messageId = item?.dataset.messageId;
+    const offset = messageId ? textAnchorOffsets.get(messageId) : undefined;
+    if (item && offset !== undefined) {
+      return rect(item.getBoundingClientRect().top + offset, 16);
+    }
+    return originalRangeRect?.call(this) ?? rect(0, 0);
+  };
+  Range.prototype.getClientRects = function getClientRects() {
+    const rangeRect = this.getBoundingClientRect();
+    if (rangeRect.height > 0) {
+      return {
+        0: rangeRect,
+        item: (index: number) => (index === 0 ? rangeRect : null),
+        length: 1,
+        [Symbol.iterator]: function* iterator() {
+          yield rangeRect;
+        },
+      } as DOMRectList;
+    }
+    return (
+      originalRangeRects?.call(this) ??
+      ({
+        item: () => null,
+        length: 0,
+        [Symbol.iterator]: function* iterator() {},
+      } as DOMRectList)
+    );
+  };
 }
 
 function message(id: string, role: "assistant" | "user", text: string): ChatRenderItem {
@@ -177,13 +214,16 @@ function renderFeed(
   );
 }
 
-function setupScroller(heights: Map<string, number>) {
+function setupScroller(
+  heights: Map<string, number>,
+  textAnchorOffsets: Map<string, number> = new Map(),
+) {
   ControlledResizeObserver.callbacks.clear();
   const harness = setupJsdom({
     includeAnimationFrame: true,
     extraGlobals: { ResizeObserver: ControlledResizeObserver },
   });
-  installScrollerGeometry(harness, heights);
+  installScrollerGeometry(harness, heights, 400, textAnchorOffsets);
   return harness;
 }
 
@@ -658,6 +698,97 @@ describe("desktop chat message scroller", () => {
     }
   });
 
+  test("persists the unread baseline and exact count while a detached thread is away", async () => {
+    const heights = new Map([
+      ["user-a", 100],
+      ["assistant-a", 700],
+      ["away-1", 100],
+      ["away-2", 100],
+      ["away-3", 100],
+      ["away-4", 100],
+      ["away-5", 100],
+      ["user-b", 100],
+      ["assistant-b", 500],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const initialThreadA = [
+        message("user-a", "user", "Question A"),
+        message("assistant-a", "assistant", "Answer A"),
+      ];
+      const threadB = [
+        message("user-b", "user", "Question B"),
+        message("assistant-b", "assistant", "Answer B"),
+      ];
+
+      await act(async () => {
+        root.render(renderFeed(initialThreadA, "thread-a"));
+      });
+      const viewportA = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewportA) throw new Error("missing thread A viewport");
+      viewportA.scrollTop = 100;
+      await act(async () => {
+        viewportA.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewportA.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      await act(async () => {
+        root.render(renderFeed(threadB, "thread-b"));
+      });
+      const firstAwayBatch = [
+        message("away-1", "assistant", "Away one"),
+        message("away-2", "assistant", "Away two"),
+        message("away-3", "assistant", "Away three"),
+      ];
+      await act(async () => {
+        root.render(renderFeed([...initialThreadA, ...firstAwayBatch], "thread-a"));
+      });
+      expect(
+        container.querySelector('[aria-label="3 new messages. Jump to latest"]'),
+      ).not.toBeNull();
+      const firstRestoredViewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      expect(firstRestoredViewport?.scrollTop).toBe(100);
+
+      await act(async () => {
+        root.render(renderFeed(threadB, "thread-b"));
+      });
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              ...initialThreadA,
+              ...firstAwayBatch,
+              message("away-4", "assistant", "Away four"),
+              message("away-5", "assistant", "Away five"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+      expect(
+        container.querySelector('[aria-label="5 new messages. Jump to latest"]'),
+      ).not.toBeNull();
+      expect(
+        (container.querySelector('[data-slot="message-scroller-viewport"]') as HTMLElement | null)
+          ?.scrollTop,
+      ).toBe(100);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("preserves a detached reading anchor through dynamic row height changes", async () => {
     const heights = new Map([
       ["user-1", 100],
@@ -711,6 +842,87 @@ describe("desktop chat message scroller", () => {
       expect(
         container.querySelector('[data-message-id="user-2"]')?.getBoundingClientRect().top,
       ).toBe(-20);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("compensates Markdown growth above the reading point within one row", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 800],
+    ]);
+    const textAnchorOffsets = new Map([["assistant-1", 250]]);
+    const harness = setupScroller(heights, textAnchorOffsets);
+
+    try {
+      const document = harness.dom.window.document;
+      const container = document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("user-1", "user", "Prelude"),
+              message(
+                "assistant-1",
+                "assistant",
+                "Opening Markdown paragraph.\n\nReading point remains stable.",
+              ),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      const anchorItem = container.querySelector(
+        '[data-message-id="assistant-1"]',
+      ) as HTMLElement | null;
+      if (!viewport || !anchorItem) throw new Error("missing same-row anchor");
+      const textWalker = document.createTreeWalker(anchorItem, 4);
+      let readingNode = textWalker.nextNode();
+      while (readingNode && !readingNode.textContent?.includes("Reading point")) {
+        readingNode = textWalker.nextNode();
+      }
+      if (!readingNode) throw new Error("missing Markdown reading text");
+      const caretNode = readingNode;
+      const caretDocument = document as Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      caretDocument.caretRangeFromPoint = () => {
+        const range = document.createRange();
+        range.setStart(caretNode, 0);
+        range.collapse(true);
+        return range;
+      };
+
+      viewport.scrollTop = 300;
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      const readingRange = document.createRange();
+      readingRange.setStart(caretNode, 0);
+      readingRange.collapse(true);
+      expect(readingRange.getBoundingClientRect().top).toBe(50);
+
+      heights.set("assistant-1", 1_000);
+      textAnchorOffsets.set("assistant-1", 450);
+      await act(async () => {
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(viewport.scrollTop).toBe(500);
+      expect(readingRange.getBoundingClientRect().top).toBe(50);
 
       await act(async () => root.unmount());
     } finally {

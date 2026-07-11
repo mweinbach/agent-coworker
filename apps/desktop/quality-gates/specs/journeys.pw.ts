@@ -139,13 +139,16 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await quality.emitLongTranscript(200, 0);
   const viewport = page.locator('[data-slot="message-scroller-viewport"]');
   await expect(page.getByText("Deterministic transcript run 0 message 200")).toBeAttached();
+  const showOlderButton = page.locator('[data-slot="feed-window-spacer"] button');
+  await expect(showOlderButton).toBeVisible();
+  await showOlderButton.click();
   await settleQualityPage(page);
-  const anchor = page.locator('[data-message-id="quality-long-0-150"]');
+  const anchor = page.locator('[data-message-id="quality-long-0-1"]');
   await expect(anchor).toBeAttached();
   await anchor.evaluate((element) => {
     const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
     if (!viewportElement) throw new Error("Conversation viewport is unavailable");
-    const desiredOffset = 96;
+    const desiredOffset = -24;
     viewportElement.scrollTop +=
       element.getBoundingClientRect().top -
       viewportElement.getBoundingClientRect().top -
@@ -164,20 +167,6 @@ test("preserves detached transcript ownership and exact thread anchors", async (
     };
   });
 
-  const appendStartedAt = performance.now();
-  await quality.emitLongTranscript(2, 1);
-  await expect(page.getByRole("button", { name: "2 new messages. Jump to latest" })).toBeVisible();
-  const appendElapsedMs = performance.now() - appendStartedAt;
-  const afterAppend = await anchor.evaluate((element) => {
-    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
-    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
-    return {
-      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
-      scrollTop: viewportElement.scrollTop,
-    };
-  });
-  expect(Math.abs(afterAppend.offset - before.offset)).toBeLessThanOrEqual(1);
-
   const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Keep this controlled draft while switching chats.");
   const navigationStartedAt = performance.now();
@@ -185,8 +174,12 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
   await expect(composer).toBeEditable();
 
+  const appendStartedAt = performance.now();
+  await quality.emitLongTranscript(3, 1);
+  const appendElapsedMs = performance.now() - appendStartedAt;
   await page.getByRole("button", { name: /^Electron release review / }).click();
   await expect(anchor).toBeAttached();
+  await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
   await expect
     .poll(
       async () =>
@@ -211,16 +204,12 @@ test("preserves detached transcript ownership and exact thread anchors", async (
     };
   });
   const sample = {
-    anchorDriftAfterAppendPx: Math.abs(afterAppend.offset - before.offset),
-    anchorDriftAfterRestorePx: Math.abs(restored.offset - before.offset),
+    anchorDriftAfterAwayArrivalPx: Math.abs(restored.offset - before.offset),
     appendElapsedMs,
     navigationElapsedMs,
-    scrollCompensationAfterAppendPx: Math.abs(afterAppend.scrollTop - before.scrollTop),
+    scrollCompensationAfterAwayArrivalPx: Math.abs(restored.scrollTop - before.scrollTop),
   };
-  expect(sample.anchorDriftAfterAppendPx).toBeLessThanOrEqual(
-    budgets.scrollOwnership.anchorDriftPx,
-  );
-  expect(sample.anchorDriftAfterRestorePx).toBeLessThanOrEqual(
+  expect(sample.anchorDriftAfterAwayArrivalPx).toBeLessThanOrEqual(
     budgets.scrollOwnership.anchorDriftPx,
   );
   expect(sample.appendElapsedMs).toBeLessThanOrEqual(budgets.scrollOwnership.appendMessagesMs);

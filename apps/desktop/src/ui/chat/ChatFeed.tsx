@@ -188,7 +188,9 @@ function DaySeparatorRow(props: { label: string }) {
 type TranscriptScrollMode = "anchored" | "detached" | "following";
 
 type TranscriptScrollSnapshot = {
+  itemIds: string[];
   mode: TranscriptScrollMode;
+  newMessageCount: number;
   position: ScrollAnchorPosition | null;
 };
 
@@ -218,21 +220,33 @@ function TranscriptScroller(props: {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const initialSnapshot = memory.get(threadId);
+  const initialNewMessageCount =
+    initialSnapshot?.mode === "detached"
+      ? initialSnapshot.newMessageCount + countNewIds(initialSnapshot.itemIds, itemIds)
+      : 0;
   const [mode, setMode] = useState<TranscriptScrollMode>(
     () => initialSnapshot?.mode ?? "following",
   );
-  const [newMessageCount, setNewMessageCount] = useState(0);
+  const [newMessageCount, setNewMessageCount] = useState(initialNewMessageCount);
   const modeRef = useRef(mode);
+  const newMessageCountRef = useRef(initialNewMessageCount);
   const restoredRef = useRef(false);
   const previousItemIdsRef = useRef(itemIds);
+  const currentItemIdsRef = useRef(itemIds);
   const previousLastUserTurnIdRef = useRef(lastUserTurnId);
   const programmaticScrollRef = useRef(false);
   const clearProgrammaticFrameRef = useRef<number | null>(null);
   modeRef.current = mode;
+  currentItemIdsRef.current = itemIds;
 
   const setScrollMode = useCallback((nextMode: TranscriptScrollMode) => {
     modeRef.current = nextMode;
     setMode(nextMode);
+  }, []);
+
+  const setUnreadCount = useCallback((nextCount: number) => {
+    newMessageCountRef.current = nextCount;
+    setNewMessageCount(nextCount);
   }, []);
 
   const markProgrammaticScroll = useCallback(() => {
@@ -251,7 +265,9 @@ function TranscriptScroller(props: {
     const content = contentRef.current;
     if (!viewport || !content || !restoredRef.current) return;
     memory.set(threadId, {
+      itemIds: [...currentItemIdsRef.current],
       mode: modeRef.current,
+      newMessageCount: newMessageCountRef.current,
       position: captureScrollAnchor(viewport, content),
     });
   }, [memory, threadId]);
@@ -273,9 +289,9 @@ function TranscriptScroller(props: {
     markProgrammaticScroll();
     scrollViewportToEnd(viewport);
     setScrollMode("following");
-    setNewMessageCount(0);
+    setUnreadCount(0);
     persistSnapshot();
-  }, [markProgrammaticScroll, persistSnapshot, setScrollMode]);
+  }, [markProgrammaticScroll, persistSnapshot, setScrollMode, setUnreadCount]);
 
   useLayoutEffect(() => {
     if (hydrating || restoredRef.current) return;
@@ -376,12 +392,13 @@ function TranscriptScroller(props: {
     };
   }, [hydrating, markProgrammaticScroll, memory, persistSnapshot, restorePosition, threadId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousIds = previousItemIdsRef.current;
     const addedCount = countNewIds(previousIds, itemIds);
     previousItemIdsRef.current = itemIds;
     if (addedCount > 0 && modeRef.current === "detached") {
-      setNewMessageCount((current) => current + addedCount);
+      setUnreadCount(newMessageCountRef.current + addedCount);
+      persistSnapshot();
     }
 
     const previousLastUserTurnId = previousLastUserTurnIdRef.current;
@@ -398,7 +415,7 @@ function TranscriptScroller(props: {
       });
       persistSnapshot();
     }
-  }, [itemIds, lastUserTurnId, persistSnapshot, restorePosition]);
+  }, [itemIds, lastUserTurnId, persistSnapshot, restorePosition, setUnreadCount]);
 
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
@@ -406,7 +423,7 @@ function TranscriptScroller(props: {
       if (isNearScrollEnd(viewport)) {
         if (!programmaticScrollRef.current || modeRef.current === "following") {
           setScrollMode("following");
-          setNewMessageCount(0);
+          setUnreadCount(0);
         }
       } else if (!programmaticScrollRef.current && modeRef.current === "following") {
         setScrollMode("detached");
@@ -414,7 +431,7 @@ function TranscriptScroller(props: {
       persistSnapshot();
       onViewportScroll(event);
     },
-    [onViewportScroll, persistSnapshot, setScrollMode],
+    [onViewportScroll, persistSnapshot, setScrollMode, setUnreadCount],
   );
 
   const detachFromTail = useCallback(() => {

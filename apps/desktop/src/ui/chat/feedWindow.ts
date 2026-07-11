@@ -1,5 +1,20 @@
 import type { FeedItem } from "../../app/types";
 
+export type FeedDerivationWindowState = {
+  feedLength: number;
+  visibleCount: number;
+};
+
+export function resolveFeedDerivationVisibleCount(
+  state: FeedDerivationWindowState | undefined,
+  feedLength: number,
+  defaultVisibleCount: number,
+): number {
+  if (!state) return defaultVisibleCount;
+  const appendedCount = Math.max(0, feedLength - state.feedLength);
+  return Math.min(feedLength, state.visibleCount + appendedCount);
+}
+
 export function selectFeedDerivationWindow(
   feed: FeedItem[],
   visibleCount: number,

@@ -47,7 +47,11 @@ import {
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
-import { selectFeedDerivationWindow } from "./chat/feedWindow";
+import {
+  type FeedDerivationWindowState,
+  resolveFeedDerivationVisibleCount,
+  selectFeedDerivationWindow,
+} from "./chat/feedWindow";
 import { NewChatLanding } from "./chat/NewChatLanding";
 import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
@@ -235,10 +239,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     },
     [composerDraftKey],
   );
-  const [feedDerivationWindow, setFeedDerivationWindow] = useState({
-    threadId: selectedThreadId,
-    visibleCount: FEED_DERIVATION_WINDOW,
-  });
+  const [feedDerivationWindows, setFeedDerivationWindows] = useState<
+    Map<string, FeedDerivationWindowState>
+  >(() => new Map());
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading =
@@ -362,10 +365,14 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   );
 
   const feed = rt?.feed ?? [];
-  const feedDerivationVisibleCount =
-    feedDerivationWindow.threadId === selectedThreadId
-      ? feedDerivationWindow.visibleCount
-      : FEED_DERIVATION_WINDOW;
+  const savedFeedDerivationWindow = selectedThreadId
+    ? feedDerivationWindows.get(selectedThreadId)
+    : undefined;
+  const feedDerivationVisibleCount = resolveFeedDerivationVisibleCount(
+    savedFeedDerivationWindow,
+    feed.length,
+    FEED_DERIVATION_WINDOW,
+  );
   const windowedSourceFeed = useMemo(
     () => selectFeedDerivationWindow(feed, feedDerivationVisibleCount),
     [feed, feedDerivationVisibleCount],
@@ -376,17 +383,29 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     windowedSourceFeed.feed.length,
   );
   const expandOlderFeed = useCallback(() => {
-    setFeedDerivationWindow((current) => {
-      const currentVisibleCount =
-        current.threadId === selectedThreadId ? current.visibleCount : FEED_DERIVATION_WINDOW;
-      return {
-        threadId: selectedThreadId,
-        visibleCount: Math.min(feed.length, currentVisibleCount + FEED_DERIVATION_EXPAND_BATCH),
-      };
+    if (!selectedThreadId) return;
+    setFeedDerivationWindows((current) => {
+      const next = new Map(current);
+      next.set(selectedThreadId, {
+        feedLength: feed.length,
+        visibleCount: Math.min(
+          feed.length,
+          feedDerivationVisibleCount + FEED_DERIVATION_EXPAND_BATCH,
+        ),
+      });
+      return next;
     });
-  }, [feed.length, selectedThreadId]);
+  }, [feed.length, feedDerivationVisibleCount, selectedThreadId]);
   const showAllOlderFeed = useCallback(() => {
-    setFeedDerivationWindow({ threadId: selectedThreadId, visibleCount: feed.length });
+    if (!selectedThreadId) return;
+    setFeedDerivationWindows((current) => {
+      const next = new Map(current);
+      next.set(selectedThreadId, {
+        feedLength: feed.length,
+        visibleCount: feed.length,
+      });
+      return next;
+    });
   }, [feed.length, selectedThreadId]);
   const normalizedFeed = useMemo(
     () => normalizeFeedForToolCards(windowedSourceFeed.feed, developerMode),

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { FeedItem } from "../src/app/types";
-import { selectFeedDerivationWindow } from "../src/ui/chat/feedWindow";
+import {
+  type FeedDerivationWindowState,
+  resolveFeedDerivationVisibleCount,
+  selectFeedDerivationWindow,
+} from "../src/ui/chat/feedWindow";
 
 function makeFeed(count: number): FeedItem[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -32,5 +36,26 @@ describe("chat feed derivation window", () => {
       hiddenCount: 0,
     });
     expect(selectFeedDerivationWindow(feed, 80).feed).toBe(feed);
+  });
+
+  test("preserves each thread window and its oldest anchor across away arrivals", () => {
+    const windows = new Map<string, FeedDerivationWindowState>([
+      ["thread-a", { feedLength: 200, visibleCount: 200 }],
+      ["thread-b", { feedLength: 200, visibleCount: 80 }],
+    ]);
+    const threadAFeed = makeFeed(203);
+
+    const threadAVisibleCount = resolveFeedDerivationVisibleCount(
+      windows.get("thread-a"),
+      threadAFeed.length,
+      80,
+    );
+    const threadBVisibleCount = resolveFeedDerivationVisibleCount(windows.get("thread-b"), 200, 80);
+    const restoredThreadAWindow = selectFeedDerivationWindow(threadAFeed, threadAVisibleCount);
+
+    expect(threadAVisibleCount).toBe(203);
+    expect(threadBVisibleCount).toBe(80);
+    expect(restoredThreadAWindow.hiddenCount).toBe(0);
+    expect(restoredThreadAWindow.feed[1]?.id).toBe("message-2");
   });
 });

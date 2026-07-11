@@ -1,5 +1,6 @@
 import {
   type ClipboardEvent as ReactClipboardEvent,
+  type CompositionEvent as ReactCompositionEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
   useCallback,
@@ -14,11 +15,36 @@ import { useOverlayOwner } from "@/ui/OverlayStack";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
 import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
+  type ComposerCaretAnchor,
+  fallbackComposerCaretAnchor,
+  measureComposerCaretAnchor,
+  syncComposerOverlayGeometry,
+} from "./composerMentionGeometry";
+import {
   detectActiveMentionQuery,
   filterMentionItems,
   type MentionCatalog,
   type MentionItem,
 } from "./composerMentions";
+
+function mentionItemKey(item: MentionItem): string {
+  return `${item.kind}-${item.name}`;
+}
+
+function mentionOptionId(prefix: string, item: MentionItem): string {
+  return `${prefix}-option-${mentionItemKey(item)}`;
+}
+
+function sameCaretAnchor(current: ComposerCaretAnchor | null, next: ComposerCaretAnchor): boolean {
+  return (
+    current !== null &&
+    current.bottom === next.bottom &&
+    current.left === next.left &&
+    current.lineHeight === next.lineHeight &&
+    current.right === next.right &&
+    current.top === next.top
+  );
+}
 
 /**
  * Composer text input with inline @-mention support. Wraps the plain
@@ -66,10 +92,15 @@ export function ComposerMentionInput(props: {
     textareaScrollClassName,
   } = props;
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const isComposingRef = useRef(false);
+  const suppressCaretRefreshRef = useRef(false);
+  const caretRef = useRef(0);
+  const activeMentionRef = useRef<{ end: number; start: number } | null>(null);
   const listboxId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
   const [items, setItems] = useState<MentionItem[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeItemKey, setActiveItemKey] = useState<string | null>(null);
+  const [caretAnchor, setCaretAnchor] = useState<ComposerCaretAnchor | null>(null);
   const [query, setQuery] = useState("");
   const mentionMenuOwner = useOverlayOwner({
     active: menuOpen,
@@ -86,27 +117,82 @@ export function ComposerMentionInput(props: {
     overlay.scrollLeft = textarea.scrollLeft;
   }, [textareaRef]);
 
-  // Keep the overlay aligned with the textarea after value changes (which can
-  // change scroll position / wrapping).
-  useLayoutEffect(() => {
+  const updateGeometry = useCallback(() => {
+    const textarea = textareaRef.current;
+    const overlay = overlayRef.current;
+    if (!textarea || !overlay) return;
+    syncComposerOverlayGeometry(textarea, overlay);
     syncScroll();
-  }, [syncScroll]);
+    if (!menuOpen) {
+      setCaretAnchor(null);
+      return;
+    }
+    const nextAnchor =
+      measureComposerCaretAnchor(overlay, caretRef.current, value.length) ??
+      fallbackComposerCaretAnchor(textarea);
+    setCaretAnchor((current) => (sameCaretAnchor(current, nextAnchor) ? current : nextAnchor));
+  }, [menuOpen, syncScroll, textareaRef, value.length]);
+
+  // Value-driven changes can alter wrapping and native textarea scroll. Resolve
+  // metrics after every render before measuring the caret for the picker.
+  useLayoutEffect(() => {
+    updateGeometry();
+  });
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const observer = new ResizeObserver(updateGeometry);
+    observer.observe(textarea);
+    const mutationObserver = new MutationObserver(updateGeometry);
+    mutationObserver.observe(textarea, {
+      attributeFilter: ["class", "style"],
+      attributes: true,
+    });
+    const fonts = document.fonts;
+    const handleViewportChange = () => updateGeometry();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    window.visualViewport?.addEventListener("resize", handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", handleViewportChange);
+    fonts?.addEventListener("loadingdone", handleViewportChange);
+    void fonts?.ready.then(handleViewportChange);
+    return () => {
+      observer.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+      window.visualViewport?.removeEventListener("resize", handleViewportChange);
+      window.visualViewport?.removeEventListener("scroll", handleViewportChange);
+      fonts?.removeEventListener("loadingdone", handleViewportChange);
+    };
+  }, [textareaRef, updateGeometry]);
 
   const refreshMenu = useCallback(
     (text: string, caret: number) => {
-      if (disabled) {
+      caretRef.current = caret;
+      if (disabled || isComposingRef.current) {
+        activeMentionRef.current = null;
         setMenuOpen(false);
         return;
       }
       const active = detectActiveMentionQuery(text, caret);
       if (!active) {
+        activeMentionRef.current = null;
         setMenuOpen(false);
         return;
       }
       const next = filterMentionItems(catalog, active.query);
+      activeMentionRef.current = { end: caret, start: active.start };
       setItems(next);
       setQuery(active.query);
-      setActiveIndex(0);
+      setActiveItemKey((current) =>
+        current && next.some((item) => mentionItemKey(item) === current)
+          ? current
+          : next[0]
+            ? mentionItemKey(next[0])
+            : null,
+      );
       setMenuOpen(true);
     },
     [catalog, disabled],
@@ -114,29 +200,35 @@ export function ComposerMentionInput(props: {
 
   const refreshFromCaret = useCallback(() => {
     const textarea = textareaRef.current;
-    if (!textarea) return;
+    if (!textarea || suppressCaretRefreshRef.current) return;
     refreshMenu(textarea.value, textarea.selectionStart ?? textarea.value.length);
   }, [refreshMenu, textareaRef]);
 
-  const handleKeyUp = useCallback(
-    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Escape") return;
-      refreshFromCaret();
-    },
-    [refreshFromCaret],
+  const refreshFromPointer = useCallback(() => {
+    suppressCaretRefreshRef.current = false;
+    refreshFromCaret();
+  }, [refreshFromCaret]);
+
+  const activeIndex = Math.max(
+    0,
+    items.findIndex((item) => mentionItemKey(item) === activeItemKey),
   );
 
   const handleSelect = useCallback(
     (item: MentionItem) => {
       const textarea = textareaRef.current;
-      const caret = textarea ? (textarea.selectionStart ?? value.length) : value.length;
-      const active = detectActiveMentionQuery(value, caret);
-      const start = active ? active.start : caret;
+      const liveCaret = textarea ? (textarea.selectionStart ?? value.length) : value.length;
+      const active = activeMentionRef.current ?? {
+        end: liveCaret,
+        start: detectActiveMentionQuery(value, liveCaret)?.start ?? liveCaret,
+      };
       const insert = `@${item.name} `;
-      const nextText = value.slice(0, start) + insert + value.slice(caret);
+      const nextText = value.slice(0, active.start) + insert + value.slice(active.end);
       setValue(nextText);
       setMenuOpen(false);
-      const nextCaret = start + insert.length;
+      activeMentionRef.current = null;
+      const nextCaret = active.start + insert.length;
+      caretRef.current = nextCaret;
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (!el) return;
@@ -148,11 +240,35 @@ export function ComposerMentionInput(props: {
     [setValue, textareaRef, value],
   );
 
+  const dismissMenuFromEscape = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    suppressCaretRefreshRef.current = true;
+    setMenuOpen(false);
+    activeMentionRef.current = null;
+  }, []);
+
+  const handleKeyDownCapture = useCallback(
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+      if (event.key !== "Escape") suppressCaretRefreshRef.current = false;
+      if (menuOpen && event.key === "Escape" && !isComposing) {
+        dismissMenuFromEscape(event);
+      }
+    },
+    [dismissMenuFromEscape, menuOpen],
+  );
+
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+      if (isComposing) {
+        onKeyDown(event);
+        return;
+      }
       if (menuOpen) {
         if (event.key === "Escape") {
-          mentionMenuOwner?.handleEscape(event);
+          dismissMenuFromEscape(event);
           return;
         }
         if (event.key === "Tab") {
@@ -164,15 +280,25 @@ export function ComposerMentionInput(props: {
           switch (event.key) {
             case "ArrowDown":
               event.preventDefault();
-              setActiveIndex((index) => (index + 1) % items.length);
+              {
+                const nextItem = items[(activeIndex + 1) % items.length] ?? items[0];
+                if (nextItem) setActiveItemKey(mentionItemKey(nextItem));
+              }
               return;
             case "ArrowUp":
               event.preventDefault();
-              setActiveIndex((index) => (index - 1 + items.length) % items.length);
+              {
+                const previousItem =
+                  items[(activeIndex - 1 + items.length) % items.length] ?? items[items.length - 1];
+                if (previousItem) setActiveItemKey(mentionItemKey(previousItem));
+              }
               return;
             case "Enter":
               event.preventDefault();
-              handleSelect(items[activeIndex] ?? items[0]);
+              {
+                const activeItem = items[activeIndex] ?? items[0];
+                if (activeItem) handleSelect(activeItem);
+              }
               return;
             default:
               break;
@@ -181,7 +307,24 @@ export function ComposerMentionInput(props: {
       }
       onKeyDown(event);
     },
-    [activeIndex, handleSelect, items, mentionMenuOwner, menuOpen, onKeyDown],
+    [activeIndex, dismissMenuFromEscape, handleSelect, items, menuOpen, onKeyDown],
+  );
+
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+    setMenuOpen(false);
+  }, []);
+
+  const handleCompositionEnd = useCallback(
+    (event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+      isComposingRef.current = false;
+      suppressCaretRefreshRef.current = false;
+      refreshMenu(
+        event.currentTarget.value,
+        event.currentTarget.selectionStart ?? event.currentTarget.value.length,
+      );
+    },
+    [refreshMenu],
   );
 
   const handlePaste = useCallback(
@@ -195,8 +338,12 @@ export function ComposerMentionInput(props: {
     [disabled, onPasteFiles],
   );
 
-  const activeOptionId =
-    menuOpen && items.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined;
+  const getOptionId = useCallback(
+    (item: MentionItem) => mentionOptionId(listboxId, item),
+    [listboxId],
+  );
+  const activeItem = items[activeIndex];
+  const activeOptionId = menuOpen && activeItem ? getOptionId(activeItem) : undefined;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -219,33 +366,44 @@ export function ComposerMentionInput(props: {
         aria-autocomplete="list"
         aria-haspopup="listbox"
         className={cn(
-          "relative z-[1] break-words text-transparent caret-foreground",
+          "relative z-[1] break-words text-foreground caret-foreground",
           textareaClassName,
           textareaScrollClassName,
         )}
         onChange={(event) => {
+          suppressCaretRefreshRef.current = false;
           setValue(event.currentTarget.value);
           refreshMenu(
             event.currentTarget.value,
             event.currentTarget.selectionStart ?? event.currentTarget.value.length,
           );
         }}
+        onKeyDownCapture={handleKeyDownCapture}
         onKeyDown={handleKeyDown}
-        onKeyUp={handleKeyUp}
-        onClick={refreshFromCaret}
-        onScroll={syncScroll}
+        onClick={refreshFromPointer}
+        onSelect={refreshFromCaret}
+        onScroll={() => {
+          syncScroll();
+          updateGeometry();
+        }}
         onPaste={handlePaste}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
         onBlur={() => setMenuOpen(false)}
       />
-      {menuOpen ? (
+      {menuOpen && caretAnchor ? (
         <ComposerMentionMenu
+          anchor={caretAnchor}
           id={listboxId}
-          activeOptionIdPrefix={listboxId}
+          optionId={getOptionId}
           items={items}
           activeIndex={activeIndex}
           query={query}
           onSelect={handleSelect}
-          onHover={setActiveIndex}
+          onHover={(index) => {
+            const item = items[index];
+            if (item) setActiveItemKey(mentionItemKey(item));
+          }}
           zIndex={mentionMenuOwner?.zIndex}
         />
       ) : null}

@@ -307,16 +307,176 @@ test("aborts an external renderer request in the main process", async ({ quality
     .toEqual([proofUrl]);
 });
 
-for (const zoomFactor of [1, 1.25]) {
-  test(`keeps mention geometry inside the viewport at ${zoomFactor}x zoom`, async ({ quality }) => {
+for (const zoomFactor of [1, 1.25, 2]) {
+  test(`keeps mention text, highlight, scroll, and caret picker aligned at ${zoomFactor}x zoom`, async ({
+    quality,
+  }, testInfo) => {
     const { electronApp, page } = quality;
     await electronApp.evaluate(({ BrowserWindow }, zoom) => {
       BrowserWindow.getAllWindows()[0]?.webContents.setZoomFactor(zoom);
     }, zoomFactor);
-    await page.getByRole("combobox", { name: "Message input" }).fill("@");
-    const menu = page.getByRole("listbox");
+    const composer = page.getByRole("combobox", { name: "Message input" });
+    await composer.evaluate(async (textarea) => {
+      textarea.style.fontFamily = "monospace";
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      textarea.style.fontFamily = "serif";
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    });
+    const text = [
+      ...Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Wrapped geometry line ${index + 1} keeps @geometry-audit aligned through the composer.`,
+      ),
+      `${"Long wrapping text ".repeat(8)}use @geometry-audit then @g`,
+    ].join("\n");
+    await composer.fill(text);
+    await composer.focus();
+
+    const menu = page.getByRole("listbox", { name: "Mentions" });
     await expect(menu).toBeVisible();
-    const insideViewport = await menu.evaluate((element) => {
+    await expect(page.getByRole("option", { name: /@geometry-audit/ })).toBeVisible();
+    const geometry = await composer.evaluate((textarea) => {
+      const overlay = textarea.parentElement?.querySelector<HTMLDivElement>(
+        '[data-slot="composer-highlight-overlay"]',
+      );
+      const menuElement = document.querySelector<HTMLElement>(
+        '[data-slot="composer-mention-menu"]',
+      );
+      const highlights = overlay?.querySelectorAll<HTMLElement>("[data-mention-start]");
+      const highlight = highlights?.item((highlights?.length ?? 1) - 1) ?? null;
+      if (!overlay || !menuElement || !highlight) {
+        throw new Error("Mention geometry surface is incomplete");
+      }
+      const textRect = textarea.getBoundingClientRect();
+      const overlayRect = overlay.getBoundingClientRect();
+      const menuRect = menuElement.getBoundingClientRect();
+      const textStyle = getComputedStyle(textarea);
+      const overlayStyle = getComputedStyle(overlay);
+      const highlightStyle = getComputedStyle(highlight);
+      const metricProperties = [
+        "font-family",
+        "font-size",
+        "font-style",
+        "font-weight",
+        "letter-spacing",
+        "line-height",
+        "overflow-wrap",
+        "padding-bottom",
+        "padding-left",
+        "padding-right",
+        "padding-top",
+        "tab-size",
+        "white-space",
+        "word-break",
+        "word-spacing",
+      ];
+      const metricMismatches = metricProperties.filter(
+        (property) =>
+          textStyle.getPropertyValue(property) !== overlayStyle.getPropertyValue(property),
+      );
+
+      const walker = document.createTreeWalker(overlay, NodeFilter.SHOW_TEXT);
+      let consumed = 0;
+      let caretRect: DOMRect | null = null;
+      let node = walker.nextNode();
+      while (node) {
+        const length = node.textContent?.length ?? 0;
+        if (textarea.value.length <= consumed + length) {
+          const range = document.createRange();
+          range.setStart(node, textarea.value.length - consumed);
+          range.collapse(true);
+          caretRect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+          break;
+        }
+        consumed += length;
+        node = walker.nextNode();
+      }
+      if (!caretRect) throw new Error("Unable to measure mirrored caret");
+
+      const placement = menuElement.dataset.placement;
+      const pickerGap =
+        placement === "above" ? caretRect.top - menuRect.bottom : menuRect.top - caretRect.bottom;
+      return {
+        activeDescendant: textarea.getAttribute("aria-activedescendant"),
+        caretInsideMenuWidth: caretRect.left >= menuRect.left && caretRect.left <= menuRect.right,
+        highlightBackground: highlightStyle.backgroundColor,
+        highlightBorderWidth: highlightStyle.borderWidth,
+        highlightFontWeight: highlightStyle.fontWeight,
+        highlightMargin: highlightStyle.margin,
+        highlightPadding: highlightStyle.padding,
+        insideViewport:
+          menuRect.left >= 0 &&
+          menuRect.top >= 0 &&
+          menuRect.right <= window.innerWidth &&
+          menuRect.bottom <= window.innerHeight,
+        metricMismatches,
+        overlayHeightDelta: Math.abs(overlayRect.height - textarea.clientHeight),
+        overlayLeftDelta: Math.abs(overlayRect.left - (textRect.left + textarea.clientLeft)),
+        overlayScrollTop: overlay.scrollTop,
+        overlayTopDelta: Math.abs(overlayRect.top - (textRect.top + textarea.clientTop)),
+        overlayWidthDelta: Math.abs(overlayRect.width - textarea.clientWidth),
+        pickerGap,
+        scrollTop: textarea.scrollTop,
+        tolerance: 1 / window.devicePixelRatio + 0.01,
+      };
+    });
+
+    expect(geometry.metricMismatches).toEqual([]);
+    expect(geometry.overlayLeftDelta).toBeLessThanOrEqual(geometry.tolerance);
+    expect(geometry.overlayTopDelta).toBeLessThanOrEqual(geometry.tolerance);
+    expect(geometry.overlayWidthDelta).toBeLessThanOrEqual(geometry.tolerance);
+    expect(geometry.overlayHeightDelta).toBeLessThanOrEqual(geometry.tolerance);
+    expect(geometry.overlayScrollTop).toBe(geometry.scrollTop);
+    expect(geometry.scrollTop).toBeGreaterThan(0);
+    expect(geometry.highlightPadding).toBe("0px");
+    expect(geometry.highlightMargin).toBe("0px");
+    expect(geometry.highlightBorderWidth).toBe("0px");
+    expect(geometry.highlightFontWeight).toBe("400");
+    expect(geometry.highlightBackground).not.toBe("rgba(0, 0, 0, 0)");
+    expect(geometry.activeDescendant).toContain("-skill-geometry-audit");
+    expect(geometry.insideViewport).toBe(true);
+    expect(geometry.caretInsideMenuWidth).toBe(true);
+    expect(geometry.pickerGap).toBeGreaterThanOrEqual(0);
+    expect(geometry.pickerGap).toBeLessThanOrEqual(8);
+    if (zoomFactor === 1) {
+      await assertNoSeriousAxeViolations(page, testInfo);
+    }
+
+    await composer.evaluate((textarea) => {
+      textarea.wrap = "off";
+      textarea.style.setProperty("field-sizing", "fixed");
+      textarea.style.flex = "none";
+      textarea.style.maxWidth = "320px";
+      textarea.style.overflowWrap = "normal";
+      textarea.style.whiteSpace = "pre";
+      textarea.style.width = "320px";
+    });
+    await composer.fill(`${"horizontal-geometry-".repeat(24)} @geometry-audit then @g`);
+    await composer.evaluate((textarea) => {
+      textarea.scrollLeft = Math.max(1, textarea.scrollWidth - textarea.clientWidth - 20);
+      textarea.dispatchEvent(new Event("scroll"));
+    });
+    const horizontalScroll = await composer.evaluate((textarea) => {
+      const overlay = textarea.parentElement?.querySelector<HTMLDivElement>(
+        '[data-slot="composer-highlight-overlay"]',
+      );
+      return {
+        overlayScrollLeft: overlay?.scrollLeft ?? -1,
+        scrollLeft: textarea.scrollLeft,
+      };
+    });
+    expect(horizontalScroll.scrollLeft).toBeGreaterThan(0);
+    expect(horizontalScroll.overlayScrollLeft).toBe(horizontalScroll.scrollLeft);
+
+    const screenshot = await page.screenshot();
+    await testInfo.attach(`mention-geometry-${zoomFactor}x`, {
+      body: screenshot,
+      contentType: "image/png",
+    });
+    const finalMenuRect = await menu.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return (
         rect.left >= 0 &&
@@ -325,6 +485,6 @@ for (const zoomFactor of [1, 1.25]) {
         rect.bottom <= window.innerHeight
       );
     });
-    expect(insideViewport).toBe(true);
+    expect(finalMenuRect).toBe(true);
   });
 }

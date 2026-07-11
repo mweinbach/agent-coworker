@@ -99,6 +99,17 @@ mockLocalModule(
   }),
 );
 
+mockLocalModule(
+  "@/features/accessibility/mobile-accessibility",
+  "apps/mobile/src/features/accessibility/mobile-accessibility",
+  () => ({
+    MAX_DYNAMIC_TYPE_MULTIPLIER: 2,
+    minimumTouchTarget: () => 48,
+    useAccessibilityAnnouncement: () => undefined,
+    useReducedMotionEnabled: () => false,
+  }),
+);
+
 // Mock theme
 mockLocalModule("@/theme/use-app-theme", "apps/mobile/src/theme/use-app-theme", () => ({
   useAppTheme: () => ({
@@ -302,7 +313,8 @@ mockLocalModule("@/components/ui/status-pill", "apps/mobile/src/components/ui/st
 }));
 
 // Import component under test
-const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/thread/[id]")).default;
+const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id]"))
+  .default;
 
 describe("mobile ThreadDetailScreen", () => {
   beforeEach(() => {

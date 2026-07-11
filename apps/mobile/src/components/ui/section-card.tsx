@@ -1,6 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
 import { Text, View } from "react-native";
 
+import { MAX_DYNAMIC_TYPE_MULTIPLIER } from "@/features/accessibility/mobile-accessibility";
 import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -37,6 +38,9 @@ export function SectionCard({ title, description, action, children }: SectionCar
       >
         <View style={{ flex: 1, gap: 6 }}>
           <Text
+            accessibilityRole="header"
+            allowFontScaling
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
             selectable
             style={{
               color: theme.text,
@@ -49,6 +53,8 @@ export function SectionCard({ title, description, action, children }: SectionCar
           </Text>
           {description ? (
             <Text
+              allowFontScaling
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
               selectable
               style={{
                 color: theme.textSecondary,

@@ -1,5 +1,9 @@
 import { Pressable, Text, TextInput, View } from "react-native";
 
+import {
+  minimumTouchTarget,
+  useAccessibilityFocus,
+} from "@/features/accessibility/mobile-accessibility";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { alpha, radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -26,12 +30,23 @@ export function PendingRequestCard({
   const theme = useAppTheme();
   const isApproval = request.kind === "approval";
   const isDangerous = isApproval && request.dangerous;
+  const focusRef = useAccessibilityFocus<View>(
+    `${request.threadId}:${request.itemId}:${request.requestFingerprint}`,
+  );
   // Desktop SandboxApprovalCard: quiet tinted wash (border-destructive/40 + bg-destructive/5),
   // no heavy shadow — not a loud solid border.
   const toneAccent = isDangerous ? theme.danger : theme.warning;
 
   return (
     <View
+      ref={focusRef}
+      accessibilityLabel={
+        request.kind === "approval"
+          ? `${isDangerous ? "Dangerous command" : "Approval needed"}. ${request.command}. ${request.reason}`
+          : `Question from Cowork. ${request.question}`
+      }
+      accessibilityLiveRegion="assertive"
+      collapsable={false}
       style={{
         gap: 12,
         borderRadius: radius.lg,
@@ -104,6 +119,8 @@ export function PendingRequestCard({
             onChangeText={onChangeAskDraft}
             placeholder="Type a response..."
             placeholderTextColor={theme.textTertiary}
+            accessibilityLabel="Response"
+            accessibilityHint="Type an answer for Cowork"
             style={{
               minHeight: 48,
               borderRadius: radius.md,
@@ -124,6 +141,8 @@ export function PendingRequestCard({
                 accessibilityRole="button"
                 accessibilityLabel={`Answer with ${option}`}
                 style={({ pressed }) => ({
+                  minHeight: minimumTouchTarget(),
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderCurve: "continuous",
                   borderWidth: 1,
@@ -137,10 +156,14 @@ export function PendingRequestCard({
               </Pressable>
             ))}
             <Pressable
+              disabled={!askDraft.trim()}
               onPress={onAnswerText}
               accessibilityRole="button"
               accessibilityLabel="Send answer"
+              accessibilityState={{ disabled: !askDraft.trim() }}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: radius.md,
                 borderCurve: "continuous",
                 backgroundColor: pressed ? theme.primaryMuted : theme.primary,
@@ -159,6 +182,8 @@ export function PendingRequestCard({
             accessibilityRole="button"
             accessibilityLabel="Approve command"
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: radius.md,
               borderCurve: "continuous",
               backgroundColor: pressed ? theme.primaryMuted : theme.primary,
@@ -173,6 +198,8 @@ export function PendingRequestCard({
             accessibilityRole="button"
             accessibilityLabel="Decline command"
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: radius.md,
               borderCurve: "continuous",
               borderWidth: 1,

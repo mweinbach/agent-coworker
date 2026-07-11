@@ -2,6 +2,10 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -68,9 +72,21 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
     <View style={{ gap: 4 }}>
       <Pressable
         onPress={() => setExpanded(!expanded)}
-        style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+        accessibilityRole={isLong ? "button" : undefined}
+        accessibilityLabel={
+          isLong ? `${expanded ? "Collapse" : "Expand"} ${label.toLowerCase()}` : undefined
+        }
+        accessibilityState={isLong ? { expanded } : undefined}
+        disabled={!isLong}
+        style={{
+          minHeight: isLong ? minimumTouchTarget() : undefined,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+        }}
       >
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textTertiary,
             fontSize: 11,
@@ -87,6 +103,7 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
         ) : null}
       </Pressable>
       <Text
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         selectable
         style={{
           fontFamily: theme.fontFamilyMono,
@@ -124,6 +141,7 @@ export function ToolCallCard({ name, state, args, result, approval }: ToolCallCa
     >
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.text,

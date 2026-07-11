@@ -1,7 +1,11 @@
 import { Link } from "expo-router";
 import type { ComponentProps } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 import { SFSymbol } from "./sf-symbol";
@@ -12,6 +16,7 @@ type HubLinkRowProps = {
   detail?: string;
   href: string;
   icon?: string;
+  isLast?: boolean;
 };
 
 export function HubLinkRow({
@@ -20,31 +25,35 @@ export function HubLinkRow({
   detail,
   href,
   icon = "square.grid.2x2",
+  isLast = false,
 }: HubLinkRowProps) {
   const theme = useAppTheme();
+  const accessibilityLabel = [label, detail, description].filter(Boolean).join(", ");
 
   return (
     <Link href={href as ComponentProps<typeof Link>["href"]} asChild>
       <Pressable
+        accessibilityHint="Opens a screen"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole="link"
         style={({ pressed }) => ({
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 14,
-          borderRadius: 20,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: pressed ? theme.primary : theme.borderMuted,
-          backgroundColor: pressed ? theme.surfaceMuted : theme.surfaceElevated,
-          paddingHorizontal: 14,
-          paddingVertical: 14,
+          gap: 12,
+          minHeight: minimumTouchTarget(),
+          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+          borderBottomColor: theme.borderMuted,
+          backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
+          paddingHorizontal: 16,
+          paddingVertical: 10,
         })}
       >
         <View
           style={{
-            width: 40,
-            height: 40,
-            borderRadius: 14,
+            width: 34,
+            height: 34,
+            borderRadius: 9,
             borderCurve: "continuous",
             alignItems: "center",
             justifyContent: "center",
@@ -53,17 +62,35 @@ export function HubLinkRow({
         >
           <SFSymbol name={icon} size={20} color={theme.primary} />
         </View>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>{label}</Text>
+        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+          <Text
+            allowFontScaling
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+            style={{ color: theme.text, fontSize: 17, fontWeight: "400" }}
+          >
+            {label}
+          </Text>
           {description ? (
-            <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}>
+            <Text
+              allowFontScaling
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+            >
               {description}
             </Text>
           ) : null}
         </View>
-        <View style={{ alignItems: "flex-end", gap: 4 }}>
+        <View style={{ maxWidth: "34%", alignItems: "flex-end", gap: 4 }}>
           {detail ? (
-            <Text style={{ color: theme.textTertiary, fontSize: 12, fontWeight: "600" }}>
+            <Text
+              allowFontScaling
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+              style={{
+                color: theme.textTertiary,
+                fontSize: 13,
+                textAlign: "right",
+              }}
+            >
               {detail}
             </Text>
           ) : null}

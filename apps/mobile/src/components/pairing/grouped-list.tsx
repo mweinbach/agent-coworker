@@ -5,12 +5,17 @@ import {
   ScrollView,
   type StyleProp,
   StyleSheet,
+  Switch,
   Text,
   View,
   type ViewStyle,
 } from "react-native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
 
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type GroupedScreenProps = PropsWithChildren<{
@@ -26,6 +31,7 @@ export function GroupedScreen({ children, contentStyle, refreshControl }: Groupe
       style={{ flex: 1, backgroundColor: theme.backgroundMuted }}
       contentContainerStyle={[{ paddingHorizontal: 20, paddingBottom: 32, gap: 22 }, contentStyle]}
       contentInsetAdjustmentBehavior="automatic"
+      automaticallyAdjustKeyboardInsets
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
       refreshControl={refreshControl}
@@ -57,6 +63,9 @@ export function GroupedSection({ title, footer, action, children }: GroupedSecti
         >
           {title ? (
             <Text
+              accessibilityRole="header"
+              allowFontScaling
+              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
               style={{
                 color: theme.textSecondary,
                 fontSize: 13,
@@ -85,6 +94,8 @@ export function GroupedSection({ title, footer, action, children }: GroupedSecti
       </View>
       {footer ? (
         <Text
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.textSecondary,
@@ -121,7 +132,7 @@ export function GroupedRow({
   const content = (
     <View
       style={{
-        minHeight: 44,
+        minHeight: minimumTouchTarget(),
         justifyContent: "center",
         paddingHorizontal: 16,
         paddingVertical: detail ? 10 : 12,
@@ -131,6 +142,8 @@ export function GroupedRow({
       }}
     >
       <Text
+        allowFontScaling
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         selectable
         style={{
           color: destructive ? theme.danger : theme.primary,
@@ -142,6 +155,8 @@ export function GroupedRow({
       </Text>
       {detail ? (
         <Text
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.textSecondary,
@@ -158,6 +173,8 @@ export function GroupedRow({
 
   const rowBody = onPress ? (
     <Pressable
+      accessibilityLabel={[label, detail].filter(Boolean).join(", ")}
+      accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => ({
         backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
@@ -213,21 +230,29 @@ export function GroupedValueRow({ label, value, isLast = false }: GroupedValueRo
         alignItems: "center",
         justifyContent: "space-between",
         gap: 12,
-        minHeight: 44,
+        flexWrap: "wrap",
+        minHeight: minimumTouchTarget(),
         paddingHorizontal: 16,
         paddingVertical: 10,
         borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
         borderBottomColor: theme.borderMuted,
       }}
     >
-      <Text selectable style={{ color: theme.text, fontSize: 17 }}>
+      <Text
+        allowFontScaling
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+        selectable
+        style={{ flexShrink: 1, color: theme.text, fontSize: 17 }}
+      >
         {label}
       </Text>
       <Text
+        allowFontScaling
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         selectable
-        numberOfLines={2}
         style={{
-          flexShrink: 1,
+          flex: 1,
+          minWidth: 120,
           color: theme.textSecondary,
           fontSize: 17,
           textAlign: "right",
@@ -236,6 +261,67 @@ export function GroupedValueRow({ label, value, isLast = false }: GroupedValueRo
       >
         {value}
       </Text>
+    </View>
+  );
+}
+
+type GroupedSwitchRowProps = {
+  label: string;
+  description?: string;
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  isLast?: boolean;
+};
+
+export function GroupedSwitchRow({
+  label,
+  description,
+  value,
+  onValueChange,
+  isLast = false,
+}: GroupedSwitchRowProps) {
+  const theme = useAppTheme();
+
+  return (
+    <View
+      style={{
+        minHeight: minimumTouchTarget(),
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+        borderBottomColor: theme.borderMuted,
+      }}
+    >
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <Text
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+          style={{ color: theme.text, fontSize: 17 }}
+        >
+          {label}
+        </Text>
+        {description ? (
+          <Text
+            allowFontScaling
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+            style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+          >
+            {description}
+          </Text>
+        ) : null}
+      </View>
+      <Switch
+        accessibilityLabel={label}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: value }}
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
+        ios_backgroundColor={theme.surfaceMuted}
+      />
     </View>
   );
 }

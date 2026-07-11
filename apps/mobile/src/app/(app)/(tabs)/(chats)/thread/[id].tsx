@@ -19,6 +19,11 @@ import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+  useReducedMotionEnabled,
+} from "@/features/accessibility/mobile-accessibility";
+import {
   buildChatRenderItems,
   latestRetryableActivityGroupId,
 } from "@/features/cowork/activityGroups";
@@ -31,6 +36,11 @@ import {
 } from "@/features/cowork/composer-policy";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getMobileListPerformanceContract } from "@/features/cowork/mobilePerformanceContracts";
+import {
+  describeComposerCapabilityAvailability,
+  resolveComposerCapabilityAvailability,
+} from "@/features/cowork/model-capability-availability";
+import { useProviderStore } from "@/features/cowork/providerStore";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import {
   copyPendingServerRequestIdentity,
@@ -62,6 +72,7 @@ import {
   type ThreadScrollMetrics,
 } from "@/features/cowork/threadScrollState";
 import { useThreadStore } from "@/features/cowork/threadStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "@/features/preferences/displayPreferencesStore";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -138,11 +149,19 @@ export default function ThreadDetailScreen() {
   const threadId = typeof params.id === "string" ? params.id : "";
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
+  const reducedMotionEnabled = useReducedMotionEnabled();
   const thread = useThreadStore((state) => state.getThread(threadId));
   const pendingRequest = useThreadStore((state) => state.getPendingRequest(threadId));
   const snapshotAgents = useThreadStore(
     (state) => state.snapshots?.[threadId]?.agents ?? EMPTY_AGENTS,
   );
+  const snapshotProvider = useThreadStore((state) => state.snapshots?.[threadId]?.provider ?? null);
+  const snapshotModel = useThreadStore((state) => state.snapshots?.[threadId]?.model ?? null);
+  const defaultProvider = useWorkspaceStore(
+    (state) => state.controlSnapshot?.config?.provider ?? null,
+  );
+  const defaultModel = useWorkspaceStore((state) => state.controlSnapshot?.config?.model ?? null);
+  const providerCatalog = useProviderStore((state) => state.catalog);
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
@@ -187,6 +206,36 @@ export default function ThreadDetailScreen() {
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
   const isOfflineReadOnly = !isConnected && !isDraftThread;
+  const capability = useMemo(
+    () =>
+      resolveComposerCapabilityAvailability({
+        connected: isConnected || isDraftThread,
+        providerId: snapshotProvider ?? defaultProvider,
+        modelId: snapshotModel ?? defaultModel,
+        catalog: providerCatalog,
+        attachmentPickerAvailable: false,
+      }),
+    [
+      defaultModel,
+      defaultProvider,
+      isConnected,
+      isDraftThread,
+      providerCatalog,
+      snapshotModel,
+      snapshotProvider,
+    ],
+  );
+  useAccessibilityAnnouncement(thread ? `Opened chat ${thread.title}` : null);
+  useAccessibilityAnnouncement(
+    actionError?.message ??
+      (pendingRequest?.kind === "approval"
+        ? "Approval needed"
+        : pendingRequest?.kind === "ask"
+          ? "Cowork needs your response"
+          : isStopping
+            ? "Stopping turn"
+            : null),
+  );
 
   useEffect(() => {
     if (scrollThreadIdRef.current === threadId) {
@@ -391,11 +440,11 @@ export default function ThreadDetailScreen() {
   );
 
   const scrollToLatest = useCallback(
-    (animated = true) => {
+    (animated = !reducedMotionEnabled) => {
       applyScrollEvent({ type: "jump" });
       beginProgrammaticScrollToEnd(animated);
     },
-    [applyScrollEvent, beginProgrammaticScrollToEnd],
+    [applyScrollEvent, beginProgrammaticScrollToEnd, reducedMotionEnabled],
   );
 
   const handleContentSizeChange = useCallback(
@@ -577,6 +626,15 @@ export default function ThreadDetailScreen() {
     isSubmitting,
     hasFailedSubmission: activeThread.composerSubmission?.status === "failed",
   });
+  const modelIsUnavailable = capability.model.availability === "unavailable";
+  const sessionHelperText = isOfflineReadOnly
+    ? "Showing cached messages. Connect to your desktop to send."
+    : isDraftThread
+      ? "This draft stays local until you pair with a desktop."
+      : null;
+  const composerHelperText = [sessionHelperText, describeComposerCapabilityAvailability(capability)]
+    .filter((value): value is string => value !== null)
+    .join(" ");
 
   function retryActionError(error: ThreadActionError): void {
     switch (error.kind) {
@@ -644,6 +702,7 @@ export default function ThreadDetailScreen() {
         }
       >
         <FlatList
+          accessibilityLabel={`${activeThread.title} conversation`}
           ref={listRef}
           style={{ flex: 1, backgroundColor: theme.background }}
           contentInsetAdjustmentBehavior="automatic"
@@ -802,8 +861,10 @@ export default function ThreadDetailScreen() {
                   ? `${scrollState.unseenKeys.length} new. Jump to latest messages`
                   : "Jump to latest messages"
               }
-              onPress={() => scrollToLatest(true)}
+              onPress={() => scrollToLatest()}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: 999,
                 borderCurve: "continuous",
                 borderWidth: 1,
@@ -842,6 +903,8 @@ export default function ThreadDetailScreen() {
           {actionError ? (
             <View
               testID="composer-recovery"
+              accessibilityLiveRegion="assertive"
+              accessibilityRole="alert"
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -868,6 +931,8 @@ export default function ThreadDetailScreen() {
                   retryActionError(actionError);
                 }}
                 style={({ pressed }) => ({
+                  minHeight: minimumTouchTarget(),
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderCurve: "continuous",
                   backgroundColor: pressed ? theme.primaryMuted : theme.primary,
@@ -889,17 +954,11 @@ export default function ThreadDetailScreen() {
               void interruptCurrentThread();
             }}
             canEdit={composerPolicy.canEdit}
-            canSubmit={composerPolicy.canSubmit}
+            canSubmit={composerPolicy.canSubmit && !modelIsUnavailable}
             isSubmitting={isSubmitting}
             isBusy={showStop}
             isStopping={isStopping}
-            helperText={
-              isOfflineReadOnly
-                ? "Showing cached messages. Connect to your desktop to send."
-                : isDraftThread
-                  ? "This draft stays local until you pair with a desktop."
-                  : null
-            }
+            helperText={composerHelperText}
             submitLabel={isDraftThread ? "Save draft" : "Send"}
           />
         </View>

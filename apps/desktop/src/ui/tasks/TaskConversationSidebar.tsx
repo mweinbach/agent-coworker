@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import type { TaskStatus } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { Button } from "../../components/ui/button";
 import {
   Dialog,
@@ -18,6 +19,7 @@ import { Input } from "../../components/ui/input";
 import { Spinner } from "../../components/ui/spinner";
 import { cn } from "../../lib/utils";
 import { ChatView } from "../ChatView";
+import { OperationFeedback } from "../OperationFeedback";
 
 function isTerminalTaskStatus(status: TaskStatus): boolean {
   return status === "completed" || status === "cancelled" || status === "failed";
@@ -54,6 +56,7 @@ export function TaskConversationSidebar() {
   const reopenTask = useAppStore((state) => state.reopenTask);
   const retryTask = useAppStore((state) => state.retryTask);
   const taskLifecycleRequestByTaskId = useAppStore((state) => state.taskLifecycleRequestByTaskId);
+  const operationsByKey = useAppStore((state) => state.operationsByKey);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
   const [creating, setCreating] = useState(false);
@@ -75,7 +78,9 @@ export function TaskConversationSidebar() {
       : "reopen"
     : null;
   const terminalActionPending =
-    terminalActionKind !== null && lifecycleRequest?.action === terminalActionKind;
+    operationsByKey[operationKey("task", "lifecycle", task.id)]?.status === "pending" ||
+    (terminalActionKind !== null && lifecycleRequest?.action === terminalActionKind);
+  const createThreadOperation = operationsByKey[operationKey("task", "thread", "create", task.id)];
 
   const restoreTaskWrites = async () => {
     if (!terminal || !terminalActionKind || terminalActionPending) return;
@@ -108,9 +113,11 @@ export function TaskConversationSidebar() {
     if (!title || creating || terminal) return;
     setCreating(true);
     try {
-      await createTaskThread(task.id, title);
-      setThreadTitle("");
-      setDialogOpen(false);
+      const result = await createTaskThread(task.id, title);
+      if (result.ok) {
+        setThreadTitle("");
+        setDialogOpen(false);
+      }
     } finally {
       setCreating(false);
     }
@@ -144,7 +151,7 @@ export function TaskConversationSidebar() {
         <Dialog
           open={dialogOpen}
           onOpenChange={(open) => {
-            if (!terminal) setDialogOpen(open);
+            if (!terminal && !creating) setDialogOpen(open);
           }}
         >
           <DialogTrigger asChild>
@@ -169,7 +176,7 @@ export function TaskConversationSidebar() {
             </Button>
           </DialogTrigger>
           <DialogContent>
-            <form onSubmit={submitThread}>
+            <form aria-busy={creating} onSubmit={submitThread}>
               <DialogHeader>
                 <DialogTitle>Add task thread</DialogTitle>
                 <DialogDescription>
@@ -185,12 +192,19 @@ export function TaskConversationSidebar() {
                     autoFocus
                     placeholder="Research implementation options"
                     value={threadTitle}
+                    disabled={creating}
                     onChange={(event) => setThreadTitle(event.target.value)}
                   />
                 </Field>
               </FieldGroup>
+              <OperationFeedback operation={createThreadOperation} />
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={creating}
+                  onClick={() => setDialogOpen(false)}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" disabled={!threadTitle.trim() || creating}>

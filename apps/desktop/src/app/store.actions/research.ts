@@ -15,7 +15,9 @@ import {
   ensureWorkspaceRuntime,
   makeId,
   nowIso,
+  operationKey,
   pushNotification,
+  runAcknowledgedOperation,
   syncDesktopStateCache,
   waitForControlSession,
 } from "../store.helpers";
@@ -671,68 +673,55 @@ export function createResearchActions(
 
   return {
     approveResearchPlan: async (researchId: string) => {
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return null;
-        }
-        const result = await requestResearchResult(
-          deps,
-          get,
-          set,
-          workspaceId,
-          "research/approvePlan",
-          {
-            researchId,
-          },
-        );
-        if (!result.research) {
-          return null;
-        }
-        applyResearchRecord(result.research);
-        await ensureResearchSubscription(workspaceId, result.research);
-        return result.research;
-      } catch (error) {
-        notify(
-          "error",
-          "Unable to approve plan",
-          error instanceof Error ? error.message : String(error),
-        );
-        return null;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "approve-plan", researchId),
+        label: "Approve research plan",
+        errorTitle: "Research plan not approved",
+        errorMessage: "Unable to approve the research plan.",
+        execute: async () => {
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Select a workspace before approving this plan.");
+          const result = await requestResearchResult(
+            deps,
+            get,
+            set,
+            workspaceId,
+            "research/approvePlan",
+            { researchId },
+          );
+          if (!result.research) throw new Error("Research plan was not found.");
+          applyResearchRecord(result.research);
+          await ensureResearchSubscription(workspaceId, result.research);
+          return result.research;
+        },
+      });
     },
 
     refineResearchPlan: async (researchId: string, input: string) => {
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return null;
-        }
-        const result = await requestResearchResult(
-          deps,
-          get,
-          set,
-          workspaceId,
-          "research/refinePlan",
-          {
-            researchId,
-            input,
-          },
-        );
-        if (!result.research) {
-          return null;
-        }
-        applyResearchRecord(result.research);
-        await ensureResearchSubscription(workspaceId, result.research);
-        return result.research;
-      } catch (error) {
-        notify(
-          "error",
-          "Unable to refine plan",
-          error instanceof Error ? error.message : String(error),
-        );
-        return null;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "refine-plan", researchId),
+        label: "Refine research plan",
+        errorTitle: "Research plan not refined",
+        errorMessage: "Unable to refine the research plan.",
+        execute: async () => {
+          const trimmed = input.trim();
+          if (!trimmed) throw new Error("Enter feedback for the research plan.");
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Select a workspace before refining this plan.");
+          const result = await requestResearchResult(
+            deps,
+            get,
+            set,
+            workspaceId,
+            "research/refinePlan",
+            { researchId, input: trimmed },
+          );
+          if (!result.research) throw new Error("Research plan was not found.");
+          applyResearchRecord(result.research);
+          await ensureResearchSubscription(workspaceId, result.research);
+          return result.research;
+        },
+      });
     },
 
     openResearch: async () => {
@@ -827,111 +816,120 @@ export function createResearchActions(
     },
 
     startResearch: async ({ input, title, files, settings }) => {
-      if (!hasGoogleResearchAccess()) {
-        notifyMissingGoogleApiKey();
-        return null;
-      }
-      let workspaceId: string | null = null;
-      let attachedFileIds: string[] = [];
-      let startRequested = false;
-      try {
-        workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return null;
-        }
-        set(() => ({
-          view: "research",
-          lastNonSettingsView: "research",
-          researchTransportWorkspaceId: workspaceId,
-        }));
-        deps.syncDesktopStateCache(get);
-        attachedFileIds = await uploadFiles(workspaceId, files);
-        startRequested = true;
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/start", {
-          input,
-          ...(title ? { title } : {}),
-          settings: {
-            ...get().researchDraftSettings,
-            ...(settings ?? {}),
-          },
-          ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
-        });
-        applyResearchRecord(result.research, { select: true });
-        await ensureResearchSubscription(workspaceId, result.research);
-        return result.research;
-      } catch (error) {
-        if (
-          workspaceId &&
-          startRequested &&
-          attachedFileIds.length > 0 &&
-          isConfirmedJsonRpcError(error)
-        ) {
-          await discardUploadedFiles(workspaceId, attachedFileIds);
-        }
-        notify(
-          "error",
-          "Unable to start research",
-          error instanceof Error ? error.message : String(error),
-        );
-        return null;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "start"),
+        label: "Start research",
+        errorTitle: "Research not started",
+        errorMessage: "Unable to start research.",
+        repairAction: "Check the research prompt and provider connection, then retry.",
+        execute: async () => {
+          if (!hasGoogleResearchAccess()) {
+            throw new Error("Add a Google API key in Settings → Providers to use Deep Research.");
+          }
+          const normalizedInput = input.trim();
+          if (!normalizedInput) throw new Error("Enter a research request.");
+          let workspaceId: string | null = null;
+          let attachedFileIds: string[] = [];
+          let startRequested = false;
+          try {
+            workspaceId = await ensureResearchTransportWorkspace();
+            if (!workspaceId) throw new Error("Select a workspace before starting research.");
+            set(() => ({
+              view: "research",
+              lastNonSettingsView: "research",
+              researchTransportWorkspaceId: workspaceId,
+            }));
+            deps.syncDesktopStateCache(get);
+            attachedFileIds = await uploadFiles(workspaceId, files);
+            startRequested = true;
+            const result = await requestResearchResult(
+              deps,
+              get,
+              set,
+              workspaceId,
+              "research/start",
+              {
+                input: normalizedInput,
+                ...(title ? { title } : {}),
+                settings: {
+                  ...get().researchDraftSettings,
+                  ...(settings ?? {}),
+                },
+                ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
+              },
+            );
+            applyResearchRecord(result.research, { select: true });
+            await ensureResearchSubscription(workspaceId, result.research);
+            return result.research;
+          } catch (error) {
+            if (
+              workspaceId &&
+              startRequested &&
+              attachedFileIds.length > 0 &&
+              isConfirmedJsonRpcError(error)
+            ) {
+              await discardUploadedFiles(workspaceId, attachedFileIds);
+            }
+            throw error;
+          }
+        },
+      });
     },
 
     cancelResearch: async (researchId) => {
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return;
-        }
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/cancel", {
-          researchId,
-        });
-        if (result.research) {
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "cancel", researchId),
+        label: "Cancel research",
+        errorTitle: "Research not cancelled",
+        errorMessage: "Unable to cancel research.",
+        execute: async () => {
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Research workspace not found.");
+          const result = await requestResearchResult(
+            deps,
+            get,
+            set,
+            workspaceId,
+            "research/cancel",
+            { researchId },
+          );
+          if (!result.research) throw new Error("Research was not found.");
           applyResearchRecord(result.research);
-        }
-      } catch (error) {
-        notify(
-          "error",
-          "Unable to cancel research",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+        },
+      });
     },
 
     renameResearch: async (researchId, title) => {
       const trimmed = title.trim();
-      if (!trimmed) {
-        return;
-      }
       const previous = get().researchById[researchId];
-      if (previous && previous.title === trimmed) {
-        return;
-      }
-      if (previous) {
-        applyResearchRecord({ ...previous, title: trimmed });
-      }
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return;
-        }
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/rename", {
-          researchId,
-          title: trimmed,
-        });
-        if (result.research) {
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "rename", researchId),
+        label: "Rename research",
+        errorTitle: "Research not renamed",
+        errorMessage: "Unable to rename research.",
+        optimistic: () => {
+          if (!previous || !trimmed || previous.title === trimmed) return;
+          applyResearchRecord({ ...previous, title: trimmed });
+          return () => applyResearchRecord(previous);
+        },
+        execute: async () => {
+          if (!trimmed) throw new Error("Enter a research title.");
+          if (!previous) throw new Error("Research was not found.");
+          if (previous.title === trimmed) return;
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Research workspace not found.");
+          const result = await requestResearchResult(
+            deps,
+            get,
+            set,
+            workspaceId,
+            "research/rename",
+            { researchId, title: trimmed },
+          );
+          if (!result.research) throw new Error("Research was not found.");
           applyResearchRecord(result.research);
-        }
-      } catch (error) {
-        if (previous) {
-          applyResearchRecord(previous);
-        }
-        notify(
-          "error",
-          "Unable to rename research",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+        },
+      });
     },
 
     deleteResearch: async (researchId) => {
@@ -961,89 +959,92 @@ export function createResearchActions(
           };
         });
       };
-      // Optimistic remove from list.
-      set((s) => {
-        const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
-        const researchOrder = orderResearchIds(researchById);
-        return {
-          researchById,
-          researchOrder,
-          selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
-        };
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "delete", researchId),
+        label: "Delete research",
+        errorTitle: "Research not deleted",
+        errorMessage: "Unable to delete research.",
+        optimistic: () => {
+          if (!previous) return;
+          set((s) => {
+            const researchById = removeResearchAndReparentChildren(s.researchById, researchId);
+            const researchOrder = orderResearchIds(researchById);
+            return {
+              researchById,
+              researchOrder,
+              selectedResearchId: s.selectedResearchId === researchId ? null : s.selectedResearchId,
+            };
+          });
+          return restoreOptimisticDelete;
+        },
+        execute: async () => {
+          if (!previous) throw new Error("Research was not found.");
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Research workspace not found.");
+          const result = await requestResearchResult(
+            deps,
+            get,
+            set,
+            workspaceId,
+            "research/delete",
+            { researchId },
+          );
+          if (!result.deleted) throw new Error("The server did not delete this research.");
+        },
       });
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          restoreOptimisticDelete();
-          return false;
-        }
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/delete", {
-          researchId,
-        });
-        if (!result.deleted && previous) {
-          restoreOptimisticDelete();
-          return false;
-        }
-        return result.deleted === true;
-      } catch (error) {
-        restoreOptimisticDelete();
-        notify(
-          "error",
-          "Unable to delete research",
-          error instanceof Error ? error.message : String(error),
-        );
-        return false;
-      }
     },
 
     sendResearchFollowUp: async ({ parentResearchId, input, title, files, settings }) => {
-      if (!hasGoogleResearchAccess()) {
-        notifyMissingGoogleApiKey();
-        return null;
-      }
-      let workspaceId: string | null = null;
-      let attachedFileIds: string[] = [];
-      let followUpRequested = false;
-      try {
-        workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return null;
-        }
-        attachedFileIds = await uploadFiles(workspaceId, files);
-        followUpRequested = true;
-        const result = await requestResearchResult(
-          deps,
-          get,
-          set,
-          workspaceId,
-          "research/followup",
-          {
-            parentResearchId,
-            input,
-            ...(title ? { title } : {}),
-            ...(settings ? { settings } : {}),
-            ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
-          },
-        );
-        applyResearchRecord(result.research, { select: true });
-        await ensureResearchSubscription(workspaceId, result.research);
-        return result.research;
-      } catch (error) {
-        if (
-          workspaceId &&
-          followUpRequested &&
-          attachedFileIds.length > 0 &&
-          isConfirmedJsonRpcError(error)
-        ) {
-          await discardUploadedFiles(workspaceId, attachedFileIds);
-        }
-        notify(
-          "error",
-          "Unable to send follow-up",
-          error instanceof Error ? error.message : String(error),
-        );
-        return null;
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "follow-up", parentResearchId),
+        label: "Send research follow-up",
+        errorTitle: "Research follow-up not sent",
+        errorMessage: "Unable to send the research follow-up.",
+        repairAction: "Check the follow-up and provider connection, then retry.",
+        execute: async () => {
+          if (!hasGoogleResearchAccess()) {
+            throw new Error("Add a Google API key in Settings → Providers to use Deep Research.");
+          }
+          const normalizedInput = input.trim();
+          if (!normalizedInput) throw new Error("Enter a follow-up request.");
+          let workspaceId: string | null = null;
+          let attachedFileIds: string[] = [];
+          let followUpRequested = false;
+          try {
+            workspaceId = await ensureResearchTransportWorkspace();
+            if (!workspaceId) throw new Error("Research workspace not found.");
+            attachedFileIds = await uploadFiles(workspaceId, files);
+            followUpRequested = true;
+            const result = await requestResearchResult(
+              deps,
+              get,
+              set,
+              workspaceId,
+              "research/followup",
+              {
+                parentResearchId,
+                input: normalizedInput,
+                ...(title ? { title } : {}),
+                ...(settings ? { settings } : {}),
+                ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
+              },
+            );
+            applyResearchRecord(result.research, { select: true });
+            await ensureResearchSubscription(workspaceId, result.research);
+            return result.research;
+          } catch (error) {
+            if (
+              workspaceId &&
+              followUpRequested &&
+              attachedFileIds.length > 0 &&
+              isConfirmedJsonRpcError(error)
+            ) {
+              await discardUploadedFiles(workspaceId, attachedFileIds);
+            }
+            throw error;
+          }
+        },
+      });
     },
 
     setResearchDraftSettings: (patch) => {
@@ -1056,48 +1057,47 @@ export function createResearchActions(
     },
 
     exportResearch: async (researchId, format) => {
-      try {
-        const workspaceId = await ensureResearchTransportWorkspace();
-        if (!workspaceId) {
-          return null;
-        }
-        set((s) => ({
-          researchExportPendingIds: s.researchExportPendingIds.includes(researchId)
-            ? s.researchExportPendingIds
-            : [...s.researchExportPendingIds, researchId],
-        }));
-        const result = await requestResearchResult(deps, get, set, workspaceId, "research/export", {
-          researchId,
-          format,
-        });
-        const outputPath = result.path;
-        const defaultFileName = buildResearchExportFileName(
-          get().researchById[researchId]?.title,
-          format,
-        );
-        const savedPath = await deps.saveExportedFile({
-          sourcePath: outputPath,
-          defaultFileName,
-        });
-        if (!savedPath) {
-          return null;
-        }
-        notify("info", "Research exported", savedPath);
-        return savedPath;
-      } catch (error) {
-        notify(
-          "error",
-          "Unable to export research",
-          error instanceof Error ? error.message : String(error),
-        );
-        return null;
-      } finally {
-        set((s) => ({
-          researchExportPendingIds: s.researchExportPendingIds.filter(
-            (pendingId) => pendingId !== researchId,
-          ),
-        }));
-      }
+      return await runAcknowledgedOperation(get, set, {
+        key: operationKey("research", "export", researchId, format),
+        label: "Export research",
+        errorTitle: "Research not exported",
+        errorMessage: "Unable to export research.",
+        execute: async () => {
+          const workspaceId = await ensureResearchTransportWorkspace();
+          if (!workspaceId) throw new Error("Research workspace not found.");
+          set((s) => ({
+            researchExportPendingIds: s.researchExportPendingIds.includes(researchId)
+              ? s.researchExportPendingIds
+              : [...s.researchExportPendingIds, researchId],
+          }));
+          try {
+            const result = await requestResearchResult(
+              deps,
+              get,
+              set,
+              workspaceId,
+              "research/export",
+              { researchId, format },
+            );
+            const defaultFileName = buildResearchExportFileName(
+              get().researchById[researchId]?.title,
+              format,
+            );
+            const savedPath = await deps.saveExportedFile({
+              sourcePath: result.path,
+              defaultFileName,
+            });
+            if (savedPath) notify("info", "Research exported", savedPath);
+            return savedPath;
+          } finally {
+            set((s) => ({
+              researchExportPendingIds: s.researchExportPendingIds.filter(
+                (pendingId) => pendingId !== researchId,
+              ),
+            }));
+          }
+        },
+      });
     },
   };
 }

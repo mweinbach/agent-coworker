@@ -9,6 +9,10 @@ import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { normalizeWorkspaceUserProfile } from "../types";
 import {
+  type ControlEventAcknowledgementDecoder,
+  decodeControlEventAcknowledgement,
+} from "./controlEventAcknowledgement";
+import {
   applyPluginsCatalogEvent,
   applySkillsCatalogEvent,
   resolveClearedPluginInstallWaiter,
@@ -60,6 +64,7 @@ type ControlSocketHelperOptions = {
 
 type RequestJsonRpcControlEventOptions = {
   beforeApplyEvent?: (event: SessionEvent) => void;
+  decodeAcknowledgement?: ControlEventAcknowledgementDecoder;
   shouldApplyEvent?: (event: SessionEvent) => boolean;
 };
 
@@ -1941,11 +1946,14 @@ export function createControlSocketHelpers(
         }
         options.beforeApplyEvent?.(nextEvent);
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
-        if (nextEvent.type === "error") {
+        const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
+        const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
+        const rejection = [acknowledgement, operationAcknowledgement].find(
+          (candidate) => candidate && !candidate.ok,
+        );
+        if (rejection && !rejection.ok) {
           ok = false;
-          if (typeof (nextEvent as Extract<SessionEvent, { type: "error" }>).message === "string") {
-            setErrorDetail((nextEvent as Extract<SessionEvent, { type: "error" }>).message);
-          }
+          setErrorDetail(rejection.message);
         }
       }
       return ok;

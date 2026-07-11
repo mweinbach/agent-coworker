@@ -208,7 +208,7 @@ describe("skill detail dialog", () => {
     revealPathMock.mockClear();
 
     const previousState = useAppStore.getState();
-    const deleteSkillInstallationMock = mock(async () => {});
+    const deleteSkillInstallationMock = mock(async () => ({ ok: true as const, value: undefined }));
     const selectSkillInstallationMock = mock(async () => {});
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 

@@ -2,6 +2,7 @@ import { PaperclipIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import {
@@ -14,6 +15,7 @@ import {
   MessageComposerTextarea,
   MessageComposerTools,
 } from "../composer/MessageComposer";
+import { OperationFeedback } from "../OperationFeedback";
 import { useResearchAttachments } from "./useResearchAttachments";
 
 export function ResearchFollowUpComposer({
@@ -32,6 +34,9 @@ export function ResearchFollowUpComposer({
   className?: string;
 }) {
   const sendResearchFollowUp = useAppStore((s) => s.sendResearchFollowUp);
+  const operation = useAppStore(
+    (state) => state.operationsByKey[operationKey("research", "follow-up", parentResearchId)],
+  );
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -51,7 +56,7 @@ export function ResearchFollowUpComposer({
         input: trimmed,
         files: attachments.map((attachment) => attachment.file),
       });
-      if (created) {
+      if (created.ok) {
         setInput("");
         clearAttachments();
         onSubmitted?.();
@@ -87,6 +92,7 @@ export function ResearchFollowUpComposer({
           <MessageComposerAttachments
             attachments={attachmentPreviews}
             onRemove={removeAttachment}
+            disabled={disabled || submitting}
           />
           <MessageComposerBody>
             <MessageComposerTextarea
@@ -119,12 +125,14 @@ export function ResearchFollowUpComposer({
           </MessageComposerFooter>
         </MessageComposerForm>
       </MessageComposerRoot>
+      <OperationFeedback operation={operation} className="mt-2" />
 
       <input
         ref={fileInputRef}
         type="file"
         className="hidden"
         multiple
+        disabled={disabled || submitting}
         onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : [];
           addFiles(files);

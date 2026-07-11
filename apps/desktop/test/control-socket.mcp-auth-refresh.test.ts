@@ -12,6 +12,49 @@ import {
 describe("control socket MCP OAuth refresh", () => {
   registerControlSocketLifecycleHooks();
 
+  test("MCP auth negative acknowledgments return the domain failure", async () => {
+    const workspaceId = "ws-mcp-auth-rejected";
+    const { state, get, set } = createState(workspaceId);
+    installFakeSocket(workspaceId, async (method) => {
+      if (method !== "cowork/mcp/server/auth/callback") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        event: {
+          type: "mcp_server_auth_result",
+          sessionId: "jsonrpc-control",
+          name: "DS Dev MCP",
+          ok: false,
+          mode: "error",
+          message: "The authorization code was rejected.",
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const errorDetail: { message?: string } = {};
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/mcp/server/auth/callback",
+      {
+        cwd: "/tmp/workspace",
+        name: "DS Dev MCP",
+        source: "user",
+        code: "invalid-code",
+      },
+      errorDetail,
+    );
+
+    expect(ok).toBe(false);
+    expect(errorDetail.message).toBe("The authorization code was rejected.");
+    expect(state.workspaceRuntimeById[workspaceId].mcpLastAuthResult).toMatchObject({
+      type: "mcp_server_auth_result",
+      ok: false,
+    });
+  });
+
   test("auto auth challenge starts polling MCP servers until OAuth completes", async () => {
     const workspaceId = "ws-mcp-oauth-poll";
     const { state, get, set } = createState(workspaceId);

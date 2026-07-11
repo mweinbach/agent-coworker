@@ -335,7 +335,7 @@ describe("workspace MCP editor flow", () => {
       },
     }));
 
-    await useAppStore.getState().upsertWorkspaceMcpServer(
+    const result = await useAppStore.getState().upsertWorkspaceMcpServer(
       workspaceId,
       {
         name: "local",
@@ -346,6 +346,7 @@ describe("workspace MCP editor flow", () => {
       "user",
     );
 
+    expect(result).toMatchObject({ ok: true });
     const request = jsonRpcRequests.find((entry) => entry.method === "cowork/mcp/server/upsert");
     expect(request?.params).toMatchObject({
       cwd: "/tmp/workspace",
@@ -358,6 +359,71 @@ describe("workspace MCP editor flow", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(runtime?.mcpServers).toHaveLength(1);
     expect(runtime?.mcpServers[0]?.name).toBe("local");
+  });
+
+  test("upsertWorkspaceMcpServer returns the server failure for an editor to retain its draft", async () => {
+    jsonRpcHandlers.set("cowork/mcp/server/upsert", async () => {
+      throw new Error("Connector file is read-only.");
+    });
+
+    const result = await useAppStore.getState().upsertWorkspaceMcpServer(
+      workspaceId,
+      {
+        name: "local",
+        transport: { type: "stdio", command: "echo", args: ["ok"] },
+        auth: { type: "none" },
+      },
+      undefined,
+      "user",
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "Connector file is read-only.",
+        retryable: true,
+      },
+    });
+    expect(useAppStore.getState().operationsByKey[`mcp:save:${workspaceId}`]).toMatchObject({
+      status: "error",
+      error: { message: "Connector file is read-only." },
+    });
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      title: "Connector not saved",
+      audience: "foreground",
+    });
+  });
+
+  test("MCP auth adapter returns a negative domain acknowledgment as an operation error", async () => {
+    jsonRpcHandlers.set("cowork/mcp/server/auth/callback", async () => ({
+      event: {
+        type: "mcp_server_auth_result",
+        sessionId: "jsonrpc-control",
+        name: "grep",
+        ok: false,
+        mode: "error",
+        message: "The authorization code expired.",
+      },
+    }));
+
+    const result = await useAppStore
+      .getState()
+      .callbackWorkspaceMcpServerAuth(workspaceId, "grep", "expired-code", "workspace");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "The authorization code expired.",
+      },
+    });
+    expect(
+      useAppStore.getState().operationsByKey[`mcp:callback:${workspaceId}:workspace:grep`],
+    ).toMatchObject({
+      status: "error",
+      error: {
+        message: "The authorization code expired.",
+      },
+    });
   });
 
   test("setWorkspaceMcpServerEnabled sends source metadata and applies the returned snapshot", async () => {
@@ -411,6 +477,67 @@ describe("workspace MCP editor flow", () => {
     expect(runtime?.mcpServers[0]).toMatchObject({
       name: "figma-mcp",
       enabled: false,
+    });
+  });
+
+  test("setWorkspaceMcpServerEnabled rolls back and returns the server failure", async () => {
+    act(() => {
+      useAppStore.setState((state) => ({
+        workspaceRuntimeById: {
+          ...state.workspaceRuntimeById,
+          [workspaceId]: {
+            ...state.workspaceRuntimeById[workspaceId],
+            mcpServers: [
+              {
+                name: "figma-mcp",
+                transport: { type: "stdio", command: "figma-mcp" },
+                enabled: true,
+                source: "plugin",
+                inherited: false,
+                pluginId: "plugin-1",
+                pluginName: "figma-toolkit",
+                pluginDisplayName: "Figma Toolkit",
+                pluginScope: "workspace",
+                authMode: "none",
+                authScope: "workspace",
+                authMessage: "",
+              },
+            ],
+          },
+        },
+      }));
+    });
+    jsonRpcHandlers.set("cowork/mcp/server/setEnabled", async () => {
+      throw new Error("Connector policy rejected the update.");
+    });
+
+    const result = await useAppStore.getState().setWorkspaceMcpServerEnabled(workspaceId, {
+      name: "figma-mcp",
+      source: "plugin",
+      enabled: false,
+      pluginId: "plugin-1",
+      pluginScope: "workspace",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "Connector policy rejected the update.",
+      },
+    });
+    expect(
+      useAppStore
+        .getState()
+        .workspaceRuntimeById[workspaceId]?.mcpServers.find(
+          (server) => server.name === "figma-mcp",
+        ),
+    ).toMatchObject({
+      name: "figma-mcp",
+      enabled: true,
+    });
+    expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+      title: "Connector not updated",
+      audience: "foreground",
     });
   });
 });

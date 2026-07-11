@@ -304,7 +304,7 @@ describe("desktop task actions", () => {
       },
     });
 
-    expect(created?.id).toBe("task-1");
+    expect(created).toMatchObject({ ok: true, value: { id: "task-1" } });
     expect(harness.state.view).toBe("task");
     expect(harness.state.selectedTaskId).toBe("task-1");
     expect(harness.state.selectedThreadId).toBe("task-session-1");
@@ -557,7 +557,7 @@ describe("desktop task actions", () => {
       { questionId: "question-1", optionId: "internal" },
     ]);
 
-    expect(result).toBe("queued");
+    expect(result).toEqual({ ok: true, value: "queued" });
     expect(requestJsonRpc.mock.calls.at(-1)?.slice(3)).toEqual([
       "task/questions/resolve",
       {
@@ -621,10 +621,12 @@ describe("desktop task actions", () => {
       throw new Error("Task revision conflict");
     });
 
-    await expect(actions.updateTaskBrief("task-1", { title: "Unsaved title" })).resolves.toBe(
-      false,
-    );
-    expect(harness.state.taskError).toContain("revision conflict");
+    await expect(
+      actions.updateTaskBrief("task-1", { title: "Unsaved title" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "Task revision conflict" },
+    });
   });
 
   test("retries a failed task and stores the working task returned by the harness", async () => {
@@ -637,7 +639,7 @@ describe("desktop task actions", () => {
       retryStatus: "queued",
     }));
 
-    await expect(actions.retryTask("task-1")).resolves.toBe(true);
+    await expect(actions.retryTask("task-1")).resolves.toMatchObject({ ok: true });
     expect(requestJsonRpc.mock.calls.at(-1)?.slice(3)).toEqual([
       "task/retry",
       {
@@ -650,7 +652,7 @@ describe("desktop task actions", () => {
     expect(harness.state.tasksById["task-1"]?.revision).toBe(8);
   });
 
-  test("deduplicates current lifecycle requests and replaces stale actions", async () => {
+  test("deduplicates task lifecycle requests until the acknowledged action settles", async () => {
     const harness = createHarness();
     const actions = createTaskActions(harness.set as never, harness.get as never, deps);
     Object.assign(harness.state, actions);
@@ -671,31 +673,33 @@ describe("desktop task actions", () => {
 
     const duplicateReopen = actions.reopenTask("task-1");
     harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 7 });
-    const retry = actions.retryTask("task-1");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await expect(duplicateReopen).resolves.toBeUndefined();
-    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
-    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
-      action: "retry",
-      expectedRevision: 7,
+    const blockedRetry = actions.retryTask("task-1");
+    await expect(duplicateReopen).resolves.toMatchObject({
+      ok: false,
+      error: { code: "duplicate" },
     });
-    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
-    await expect(actions.retryTask("task-1")).resolves.toBe(false);
-    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
-
-    reopenResult.reject(new Error("Task revision conflict"));
-    await expect(first).resolves.toBeUndefined();
-    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toMatchObject({
-      action: "retry",
-      expectedRevision: 7,
+    await expect(blockedRetry).resolves.toMatchObject({
+      ok: false,
+      error: { code: "duplicate" },
     });
+    expect(requestJsonRpc).toHaveBeenCalledTimes(1);
     expect(harness.state.notifications).toHaveLength(0);
 
+    reopenResult.resolve({
+      task: taskRecord({ status: "working", revision: 8 }),
+    });
+    await expect(first).resolves.toMatchObject({ ok: true });
+    expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
+
+    harness.state.tasksById["task-1"] = taskRecord({ status: "failed", revision: 8 });
+    const retry = actions.retryTask("task-1");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     retryResult.resolve({
       task: taskRecord({ status: "working", revision: 9 }),
       retryStatus: "queued",
     });
-    await expect(retry).resolves.toBe(true);
+    await expect(retry).resolves.toMatchObject({ ok: true });
     expect(requestJsonRpc).toHaveBeenCalledTimes(2);
     expect(harness.state.taskLifecycleRequestByTaskId["task-1"]).toBeUndefined();
     expect(harness.state.tasksById["task-1"]?.revision).toBe(9);
@@ -880,7 +884,7 @@ describe("desktop task actions", () => {
     );
 
     expect(harness.state.taskError).toBeNull();
-    expect(detail?.activeRevision?.id).toBe("revision-1");
+    expect(detail.ok && detail.value.activeRevision?.id).toBe("revision-1");
     expect(requestJsonRpc.mock.calls.at(-1)?.[4]).toEqual({
       taskId: "task-1",
       artifactId: "artifact-1",
@@ -907,8 +911,10 @@ describe("desktop task actions", () => {
 
     const result = await actions.restoreTaskArtifactVersion("task-1", "artifact-1", "version-1");
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "Task revision conflict" },
+    });
     expect(requestJsonRpc).toHaveBeenCalledTimes(1);
-    expect(harness.state.taskError).toContain("revision conflict");
   });
 });

@@ -3,6 +3,7 @@ import { type FormEvent, useId, useMemo, useState } from "react";
 
 import type { TaskQuestion, TaskQuestionAnswerInput } from "../../../../../src/shared/tasks";
 import { useAppStore } from "../../app/store";
+import { operationKey } from "../../app/store.helpers";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -16,6 +17,7 @@ import {
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group";
 import { Textarea } from "../../components/ui/textarea";
+import { OperationFeedback } from "../OperationFeedback";
 
 type AnswerDraft = {
   optionId: string | null;
@@ -26,11 +28,13 @@ function QuestionField({
   index,
   question,
   draft,
+  disabled,
   onChange,
 }: {
   index: number;
   question: TaskQuestion;
   draft: AnswerDraft;
+  disabled: boolean;
   onChange: (draft: AnswerDraft) => void;
 }) {
   const fieldId = useId();
@@ -54,6 +58,7 @@ function QuestionField({
         <RadioGroup
           aria-label={question.question}
           value={draft.optionId ?? ""}
+          disabled={disabled}
           onValueChange={(optionId) => onChange({ optionId, text: "" })}
         >
           {question.options.map((option, optionIndex) => {
@@ -92,6 +97,7 @@ function QuestionField({
           className="min-h-20"
           placeholder="Add the decision or context the task needs."
           value={draft.text}
+          disabled={disabled}
           onChange={(event) => onChange({ optionId: null, text: event.target.value })}
         />
       </div>
@@ -112,6 +118,9 @@ export function TaskQuestionsCard({
   questions: TaskQuestion[];
 }) {
   const resolveTaskQuestions = useAppStore((state) => state.resolveTaskQuestions);
+  const operation = useAppStore(
+    (state) => state.operationsByKey[operationKey("task", "questions", taskId)],
+  );
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});
@@ -140,7 +149,7 @@ export function TaskQuestionsCard({
     setSubmitting(true);
     try {
       const result = await resolveTaskQuestions(taskId, answers);
-      if (result) {
+      if (result.ok) {
         setDrafts({});
         setOpen(false);
       }
@@ -190,10 +199,19 @@ export function TaskQuestionsCard({
         </div>
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!submitting) setOpen(nextOpen);
+        }}
+      >
         {open ? (
           <DialogContent forceMount className="max-h-[85vh] sm:max-w-2xl">
-            <form className="flex min-h-0 flex-col gap-4" onSubmit={submitAnswers}>
+            <form
+              className="flex min-h-0 flex-col gap-4"
+              aria-busy={submitting}
+              onSubmit={submitAnswers}
+            >
               <DialogHeader>
                 <DialogTitle>Answer task questions</DialogTitle>
                 <DialogDescription>
@@ -207,14 +225,21 @@ export function TaskQuestionsCard({
                     index={index}
                     question={question}
                     draft={drafts[question.id] ?? { optionId: null, text: "" }}
+                    disabled={submitting}
                     onChange={(draft) =>
                       setDrafts((current) => ({ ...current, [question.id]: draft }))
                     }
                   />
                 ))}
               </FieldGroup>
+              <OperationFeedback operation={operation} />
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={submitting}
+                  onClick={() => setOpen(false)}
+                >
                   Close
                 </Button>
                 <Button type="submit" disabled={answerCount === 0 || submitting}>

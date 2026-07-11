@@ -674,10 +674,53 @@ export type LmStudioStartModalState = {
   } | null;
 };
 
+export type OperationErrorCode = "duplicate" | "invalid_input" | "not_connected" | "request_failed";
+
+export type OperationError = {
+  code: OperationErrorCode;
+  message: string;
+  retryable: boolean;
+  repairAction?: string;
+};
+
+export type OperationResult<T = void> =
+  | { ok: true; value: T }
+  | { ok: false; error: OperationError };
+
+export type OperationState =
+  | {
+      status: "pending";
+      key: string;
+      label: string;
+      startedAt: string;
+      error: null;
+    }
+  | {
+      status: "success";
+      key: string;
+      label: string;
+      startedAt: string;
+      finishedAt: string;
+      error: null;
+    }
+  | {
+      status: "error";
+      key: string;
+      label: string;
+      startedAt: string;
+      finishedAt: string;
+      error: OperationError;
+    };
+
 export type Notification = {
   id: string;
   ts: string;
   kind: "info" | "error";
   title: string;
   detail?: string;
+  /**
+   * Only background outcomes may be mirrored to the operating system. Missing
+   * values are treated as foreground so old callers fail closed.
+   */
+  audience?: "foreground" | "background";
 };

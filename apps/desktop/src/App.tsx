@@ -750,11 +750,15 @@ export default function App() {
         continue;
       }
       seenNotificationIds.current.add(notification.id);
+      const appIsForegrounded = document.visibilityState === "visible" && document.hasFocus();
+      if (notification.audience !== "background" || appIsForegrounded) {
+        continue;
+      }
       void showNotification({
         title: notification.title,
         body: notification.detail,
       }).catch(() => {
-        // Browser-style in-app notifications already exist; OS toast is best effort.
+        // The in-app notification remains available; OS delivery is best effort.
       });
     }
   }, [notifications, windowMode]);

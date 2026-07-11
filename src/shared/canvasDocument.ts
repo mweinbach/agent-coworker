@@ -1,12 +1,9 @@
+import type { FileChangeVersion } from "./fileVersion";
+
 export const CANVAS_DOCUMENT_DEFAULT_MAX_BYTES = 256 * 1024;
 export const CANVAS_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
 
-export type CanvasDocumentRevision = {
-  modifiedAtMs: number;
-  changeTimeMs: number;
-  size: number;
-  fingerprint: string;
-};
+export type CanvasDocumentRevision = FileChangeVersion;
 
 export type CanvasDocumentSessionRef = {
   documentId: string;

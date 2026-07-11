@@ -3,7 +3,7 @@ import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { ExternalLinkIcon } from "lucide-react";
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { getPreferredFileApp, openPath, readFileForPreview } from "../lib/desktopCommands";
+import { getPreferredFileApp, openPath } from "../lib/desktopCommands";
 import {
   type DocxPreviewLayout,
   decorateDocxPreviewHtml,
@@ -29,6 +29,13 @@ import {
   isCanvasSupportedFile,
   mimeForPreviewKind,
 } from "../lib/filePreviewKind";
+import {
+  type BlobResourceLease,
+  loadFilePreviewResource,
+  previewBlobResources,
+  workspaceFileChangeEvents,
+} from "../lib/filePreviewResource";
+import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
 import { CodeFilePreview } from "./CodeFilePreview";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
@@ -238,6 +245,8 @@ export function FilePreviewModal() {
 
   const path = filePreview?.path ?? null;
   const kind = path ? getFilePreviewKind(path) : "unknown";
+  const isCanvasFile = Boolean(path && isCanvasSupportedFile(path) && canvasEnabled);
+  const fileChangeRevision = useFileChangeRevision(path);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -247,16 +256,10 @@ export function FilePreviewModal() {
   const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
   const [preferredFileApp, setPreferredFileApp] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-
-  const revokeBlob = useCallback(() => {
-    setBlobUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-  }, []);
+  const [loadedPath, setLoadedPath] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!path) {
+    if (!path || isCanvasFile) {
       setLoading(false);
       setError(null);
       setTruncated(false);
@@ -264,11 +267,16 @@ export function FilePreviewModal() {
       setDocxHtml(null);
       setDocxLayout(null);
       setPreferredFileApp(null);
-      revokeBlob();
+      setBlobUrl(null);
+      setLoadedPath(null);
       return;
     }
 
     const controller = new AbortController();
+    const loadRevision = fileChangeRevision;
+    const isCurrentLoad = () =>
+      workspaceFileChangeEvents.getRevision(path) === loadRevision && !controller.signal.aborted;
+    let blobLease: BlobResourceLease | null = null;
     setLoading(true);
     setError(null);
     setTruncated(false);
@@ -276,52 +284,61 @@ export function FilePreviewModal() {
     setDocxHtml(null);
     setDocxLayout(null);
     setPreferredFileApp(null);
-    revokeBlob();
+    setBlobUrl(null);
+    setLoadedPath(null);
 
     void (async () => {
       try {
         const previewKind = getFilePreviewKind(path);
         const preferredAppPromise = getPreferredFileApp({ path }).catch(() => null);
 
-        if (previewKind === "csv" || previewKind === "xlsx") {
+        if (previewKind === "csv" || previewKind === "xlsx" || previewKind === "pptx") {
           const preferredApp = await preferredAppPromise;
-          if (controller.signal.aborted) return;
+          if (!isCurrentLoad()) return;
           setPreferredFileApp(preferredApp);
+          setLoadedPath(path);
           setLoading(false);
           return;
         }
 
         const [result, preferredApp] = await Promise.all([
-          readFileForPreview({ path }),
+          loadFilePreviewResource({ path, signal: controller.signal }),
           preferredAppPromise,
         ]);
-        if (controller.signal.aborted) return;
-        setTruncated(result.truncated);
+        if (!isCurrentLoad()) return;
+        setTruncated(result.value.truncated);
         setPreferredFileApp(preferredApp);
-        const bytes = result.bytes;
+        const bytes = result.value.bytes;
 
         if (previewKind === "pdf" || previewKind === "image") {
           const mime = mimeForPreviewKind(previewKind, getExtensionLower(path));
-          const blob = new Blob([bytes as BlobPart], { type: mime });
-          const url = URL.createObjectURL(blob);
-          if (controller.signal.aborted) {
-            URL.revokeObjectURL(url);
+          blobLease = previewBlobResources.acquire({
+            bytes,
+            mime,
+            path: result.path,
+            version: result.version,
+          });
+          if (!isCurrentLoad()) {
+            blobLease.release();
+            blobLease = null;
             return;
           }
-          setBlobUrl(url);
+          setBlobUrl(blobLease.url);
+          setLoadedPath(path);
           setLoading(false);
           return;
         }
 
         if (previewKind === "markdown" || previewKind === "text") {
           setTextContent(decodeUtf8(bytes));
+          setLoadedPath(path);
           setLoading(false);
           return;
         }
 
         if (previewKind === "docx") {
           const { default: mammoth } = await import("mammoth");
-          if (controller.signal.aborted) return;
+          if (!isCurrentLoad()) return;
           const arrayBuffer = bytes.buffer.slice(
             bytes.byteOffset,
             bytes.byteOffset + bytes.byteLength,
@@ -333,16 +350,18 @@ export function FilePreviewModal() {
             ),
             loadDocxPreviewLayout(arrayBuffer),
           ]);
-          if (controller.signal.aborted) return;
+          if (!isCurrentLoad()) return;
           const sanitized = await sanitizePreviewHtml(htmlResult.value);
-          if (controller.signal.aborted) return;
+          if (!isCurrentLoad()) return;
           setDocxHtml(decorateDocxPreviewHtml(sanitized));
           setDocxLayout(layout);
+          setLoadedPath(path);
           setLoading(false);
           return;
         }
 
         if (previewKind === "unsupported") {
+          setLoadedPath(path);
           setLoading(false);
           return;
         }
@@ -350,24 +369,21 @@ export function FilePreviewModal() {
         if (looksMostlyText(bytes)) {
           setTextContent(decodeUtf8(bytes));
         }
+        setLoadedPath(path);
         setLoading(false);
       } catch (e) {
-        if (controller.signal.aborted) return;
+        if (!isCurrentLoad()) return;
         setError(e instanceof Error ? e.message : String(e));
+        setLoadedPath(path);
         setLoading(false);
       }
     })();
 
     return () => {
       controller.abort();
+      blobLease?.release();
     };
-  }, [path, revokeBlob]);
-
-  useEffect(() => {
-    return () => {
-      revokeBlob();
-    };
-  }, [revokeBlob]);
+  }, [fileChangeRevision, isCanvasFile, path]);
 
   const titleName = path ? basenamePath(path) : "";
 
@@ -405,31 +421,52 @@ export function FilePreviewModal() {
     ];
   }, [path]);
 
-  const isCanvasFile = path && isCanvasSupportedFile(path) && canvasEnabled;
   const isOpen = path !== null && !isCanvasFile;
+  const loadedCurrentPath = loadedPath === path;
+  const visibleBlobUrl = loadedCurrentPath ? blobUrl : null;
+  const visibleDocxHtml = loadedCurrentPath ? docxHtml : null;
+  const visibleDocxLayout = loadedCurrentPath ? docxLayout : null;
+  const visibleTextContent = loadedCurrentPath ? textContent : null;
+  const visibleError = loadedCurrentPath ? error : null;
+  const visiblePreferredFileApp = loadedCurrentPath ? preferredFileApp : null;
+  const visibleTruncated = loadedCurrentPath && truncated;
+  const visibleLoading = isOpen && (!loadedCurrentPath || loading);
 
   const showFallback =
-    !loading && !error && kind === "unsupported" && !textContent && !docxHtml && !blobUrl;
+    !visibleLoading &&
+    !visibleError &&
+    kind === "unsupported" &&
+    !visibleTextContent &&
+    !visibleDocxHtml &&
+    !visibleBlobUrl;
 
   const showUnknownAsText =
-    !loading && !error && kind === "unknown" && textContent !== null && !blobUrl;
+    !visibleLoading &&
+    !visibleError &&
+    kind === "unknown" &&
+    visibleTextContent !== null &&
+    !visibleBlobUrl;
 
   const showUnknownFallback =
-    !loading && !error && kind === "unknown" && textContent === null && !blobUrl;
+    !visibleLoading &&
+    !visibleError &&
+    kind === "unknown" &&
+    visibleTextContent === null &&
+    !visibleBlobUrl;
 
-  const openButtonLabel = preferredFileApp ? `Open in ${preferredFileApp}` : "Open";
+  const openButtonLabel = visiblePreferredFileApp ? `Open in ${visiblePreferredFileApp}` : "Open";
 
   const docxPreviewStyle = useMemo(() => {
-    if (!docxHtml) return undefined;
+    if (!visibleDocxHtml) return undefined;
     return {
-      fontFamily: `'${docxLayout?.fontFamily ?? "Aptos"}', 'Aptos Display', 'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif`,
-      ["--docx-accent" as string]: docxLayout?.accentColor ?? "var(--accent)",
-      ["--docx-title" as string]: docxLayout?.titleColor ?? "var(--text-primary)",
-      ["--docx-body" as string]: docxLayout?.bodyColor ?? "var(--text-primary)",
-      ["--docx-muted" as string]: docxLayout?.mutedColor ?? "var(--text-muted)",
-      ["--docx-divider" as string]: docxLayout?.dividerColor ?? "var(--warning)",
+      fontFamily: `'${visibleDocxLayout?.fontFamily ?? "Aptos"}', 'Aptos Display', 'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif`,
+      ["--docx-accent" as string]: visibleDocxLayout?.accentColor ?? "var(--accent)",
+      ["--docx-title" as string]: visibleDocxLayout?.titleColor ?? "var(--text-primary)",
+      ["--docx-body" as string]: visibleDocxLayout?.bodyColor ?? "var(--text-primary)",
+      ["--docx-muted" as string]: visibleDocxLayout?.mutedColor ?? "var(--text-muted)",
+      ["--docx-divider" as string]: visibleDocxLayout?.dividerColor ?? "var(--warning)",
     } satisfies CSSProperties;
-  }, [docxHtml, docxLayout]);
+  }, [visibleDocxHtml, visibleDocxLayout]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -474,7 +511,7 @@ export function FilePreviewModal() {
               </Button>
             </div>
           </div>
-          {truncated ? (
+          {visibleTruncated ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <span>
                 Preview truncated — only the first portion of this file is shown. Open the file in
@@ -499,29 +536,29 @@ export function FilePreviewModal() {
           className={cn(
             "min-h-0 flex-1",
             kind === "pdf" ? "overflow-hidden p-0" : "overflow-y-auto px-5 py-4",
-            kind === "docx" && docxHtml && "bg-background px-6 py-6",
+            kind === "docx" && visibleDocxHtml && "bg-background px-6 py-6",
           )}
         >
-          {loading ? (
+          {visibleLoading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading preview…</div>
-          ) : error ? (
+          ) : visibleError ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-              {error}
+              {visibleError}
             </div>
-          ) : kind === "pdf" && blobUrl ? (
+          ) : kind === "pdf" && visibleBlobUrl ? (
             <embed
-              src={blobUrl}
+              src={visibleBlobUrl}
               type="application/pdf"
               className="h-full w-full"
               title={titleName}
             />
-          ) : kind === "image" && blobUrl ? (
+          ) : kind === "image" && visibleBlobUrl ? (
             <img
-              src={blobUrl}
+              src={visibleBlobUrl}
               alt={titleName}
               className="mx-auto block max-h-[min(72vh,720px)] max-w-full object-contain"
             />
-          ) : (kind === "markdown" || kind === "text") && textContent !== null ? (
+          ) : (kind === "markdown" || kind === "text") && visibleTextContent !== null ? (
             kind === "markdown" ? (
               <div data-file-preview-markdown-shell="true" className="mx-auto w-full max-w-[78ch]">
                 <Streamdown
@@ -531,13 +568,13 @@ export function FilePreviewModal() {
                   remarkPlugins={mdRemarkPlugins}
                   rehypePlugins={defaultDesktopRehypePlugins}
                 >
-                  {textContent}
+                  {visibleTextContent}
                 </Streamdown>
               </div>
             ) : (
-              <CodeFilePreview content={textContent} filePath={path ?? ""} />
+              <CodeFilePreview content={visibleTextContent} filePath={path ?? ""} />
             )
-          ) : kind === "docx" && docxHtml ? (
+          ) : kind === "docx" && visibleDocxHtml ? (
             <div
               className={cn(
                 "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-card px-[1in] py-[1in] text-foreground shadow-sm",
@@ -562,27 +599,27 @@ export function FilePreviewModal() {
               )}
               style={docxPreviewStyle}
             >
-              {docxLayout?.headerImageSrc ? (
+              {visibleDocxLayout?.headerImageSrc ? (
                 <div className="mb-6">
                   <img
-                    src={docxLayout.headerImageSrc}
+                    src={visibleDocxLayout.headerImageSrc}
                     alt="Document header"
                     className="block h-auto max-w-full"
                     style={
-                      docxLayout.headerImageWidthPx
-                        ? { width: `${docxLayout.headerImageWidthPx}px` }
+                      visibleDocxLayout.headerImageWidthPx
+                        ? { width: `${visibleDocxLayout.headerImageWidthPx}px` }
                         : undefined
                     }
                   />
                 </div>
               ) : null}
-              <div dangerouslySetInnerHTML={{ __html: docxHtml }} />
-              {docxLayout?.footerText ? (
+              <div dangerouslySetInnerHTML={{ __html: visibleDocxHtml }} />
+              {visibleDocxLayout?.footerText ? (
                 <div
                   data-file-preview-docx-footer="true"
                   className="mt-10 text-[8pt] leading-[1.3] text-[var(--docx-muted)]"
                 >
-                  {docxLayout.footerText}
+                  {visibleDocxLayout.footerText}
                 </div>
               ) : null}
             </div>
@@ -595,7 +632,7 @@ export function FilePreviewModal() {
               <PptxPreview key={path} path={path} />
             </InlineErrorBoundary>
           ) : showUnknownAsText ? (
-            <CodeFilePreview content={textContent} filePath={path ?? ""} />
+            <CodeFilePreview content={visibleTextContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (
             <div className="space-y-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">

@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import type * as Electron from "electron";
 
 import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
+import type { WorkspaceFileChangeEvent } from "../../../../src/shared/fileVersion";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
 import {
   type AuthorizeUploadSourceInput,
@@ -16,6 +17,7 @@ import {
   type CopyFileToWorkspaceUploadsOutput,
   type CopyPathInput,
   type CreateDirectoryInput,
+  DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type ListDirectoryInput,
   type OpenPathInput,
@@ -53,7 +55,11 @@ import {
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
-import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
+import {
+  DEFAULT_PREVIEW_MAX_BYTES,
+  readCappedFilePreview,
+  readFileChangeVersion,
+} from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
@@ -155,6 +161,15 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
   return uploadSourceIdentityFromStat(sourceStat);
 }
 
+function sendWorkspaceFileChanged(
+  event: Electron.IpcMainInvokeEvent,
+  change: WorkspaceFileChangeEvent,
+): void {
+  if (typeof event.sender?.send === "function") {
+    event.sender.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, change);
+  }
+}
+
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
@@ -251,11 +266,16 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     return { content: await fs.readFile(safePath, "utf8") };
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (_event, args: WriteFileInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (event, args: WriteFileInput) => {
     const input = parseWithSchema(writeFileInputSchema, args, "writeFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     await fs.writeFile(safePath, input.content, "utf8");
+    sendWorkspaceFileChanged(event, {
+      kind: "changed",
+      path: safePath,
+      version: await readFileChangeVersion(safePath),
+    });
   });
 
   handleDesktopInvoke(
@@ -472,7 +492,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (_event, args: RenamePathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (event, args: RenamePathInput) => {
     const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const roots = workspaceRoots.getApprovedWorkspaceRoots();
@@ -480,9 +500,19 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const targetPath = path.join(path.dirname(safePath), input.newName);
     resolveAllowedPath(roots, targetPath);
     await fs.rename(safePath, targetPath);
+    sendWorkspaceFileChanged(event, {
+      kind: "deleted",
+      path: safePath,
+      version: null,
+    });
+    sendWorkspaceFileChanged(event, {
+      kind: "changed",
+      path: targetPath,
+      version: await readFileChangeVersion(targetPath),
+    });
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (_event, args: TrashPathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (event, args: TrashPathInput) => {
     const input = parseWithSchema(trashPathInputSchema, args, "trashPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
@@ -492,6 +522,11 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
       const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
       throw new Error(`Unable to move to Trash: ${trashDetail}`);
     }
+    sendWorkspaceFileChanged(event, {
+      kind: "deleted",
+      path: safePath,
+      version: null,
+    });
   });
 }
 

@@ -195,6 +195,7 @@ export interface JsonRpcRouteContext {
   };
   lmstudioLocal?: LmStudioLocalService;
   jsonrpc: {
+    broadcast?(method: string, params: unknown): void;
     send(ws: StartServerSocket, payload: unknown): void;
     sendResult(ws: StartServerSocket, id: JsonRpcLiteId, result: unknown): void;
     sendError(ws: StartServerSocket, id: JsonRpcLiteId | null, error: JsonRpcLiteError): void;

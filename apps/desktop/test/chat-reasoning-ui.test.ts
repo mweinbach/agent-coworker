@@ -1,8 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-
 import {
+  __internalFilePreviewResources,
+  workspaceFileChangeEvents,
+} from "../src/lib/filePreviewResource";
+import {
+  buildOverflowCitationPathSignature,
   canClearSessionHardCap,
   composerBusyHint,
   filterFeedForDeveloperMode,
@@ -17,6 +21,22 @@ import {
   shouldToggleReasoningExpanded,
 } from "../src/ui/ChatView";
 import { ChatThreadHeader } from "../src/ui/chat/ChatThreadHeader";
+
+function citationPreview(path: string, content: string, revision = 1) {
+  const bytes = new TextEncoder().encode(content);
+  return {
+    path,
+    bytes,
+    byteLength: bytes.byteLength,
+    truncated: false,
+    version: {
+      modifiedAtMs: revision,
+      changeTimeMs: revision,
+      size: bytes.byteLength,
+      fingerprint: `${revision}:${revision}:${bytes.byteLength}`,
+    },
+  };
+}
 
 describe("desktop reasoning UI helpers", () => {
   test("maps reasoning mode to labels", () => {
@@ -454,7 +474,7 @@ describe("desktop reasoning UI helpers", () => {
       [["assistant-1", "/tmp/exa-results.json"]],
       async ({ path }) => {
         expect(path).toBe("/tmp/exa-results.json");
-        return spillContent;
+        return citationPreview(path, spillContent);
       },
     );
 
@@ -505,7 +525,7 @@ describe("desktop reasoning UI helpers", () => {
       ],
       async ({ path }) => {
         expect(path).toBe("/tmp/exa-results.json");
-        return spillContent;
+        return citationPreview(path, spillContent);
       },
     );
 
@@ -538,6 +558,62 @@ describe("desktop reasoning UI helpers", () => {
         ],
       ]),
     );
+  });
+
+  test("reuses one versioned citation read across unchanged streaming derivations", async () => {
+    __internalFilePreviewResources.clear();
+    const path = "/tmp/streaming-exa-results.json";
+    const spillContent = JSON.stringify({
+      provider: "exa",
+      response: { results: [{ title: "NVIDIA", url: "https://nvidia.com" }] },
+    });
+    const reader = mock(async () => citationPreview(path, spillContent));
+    const firstEntries: Array<[string, string]> = [["assistant-streaming", path]];
+    const nextEntries: Array<[string, string]> = [["assistant-streaming", path]];
+
+    expect(buildOverflowCitationPathSignature(firstEntries)).toBe(
+      buildOverflowCitationPathSignature(nextEntries),
+    );
+    await loadOverflowCitationContext(firstEntries, reader);
+    await loadOverflowCitationContext(nextEntries, reader);
+
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  test("reloads a cached citation after a file change event", async () => {
+    __internalFilePreviewResources.clear();
+    const path = "/tmp/changing-exa-results.json";
+    const firstPreview = citationPreview(
+      path,
+      JSON.stringify({
+        provider: "exa",
+        response: { results: [{ title: "First", url: "https://first.example" }] },
+      }),
+    );
+    const secondPreview = citationPreview(
+      path,
+      JSON.stringify({
+        provider: "exa",
+        response: { results: [{ title: "Second", url: "https://second.example" }] },
+      }),
+      2,
+    );
+    const reader = mock()
+      .mockImplementationOnce(async () => firstPreview)
+      .mockImplementationOnce(async () => secondPreview);
+    const entries: Array<[string, string]> = [["assistant", path]];
+
+    const first = await loadOverflowCitationContext(entries, reader);
+    workspaceFileChangeEvents.publish({
+      kind: "changed",
+      path,
+      version: secondPreview.version,
+    });
+    const second = await loadOverflowCitationContext(entries, reader);
+
+    expect(first.urlsByMessageId.get("assistant")?.get(1)).toBe("https://first.example");
+    expect(second.urlsByMessageId.get("assistant")?.get(1)).toBe("https://second.example");
+    expect(reader).toHaveBeenCalledTimes(2);
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {

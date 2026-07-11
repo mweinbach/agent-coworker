@@ -838,6 +838,7 @@ export async function createAgentServerRuntime(
     },
     lmstudioLocal: createLmStudioLocalService({ env }),
     jsonrpc: {
+      broadcast: broadcastJsonRpcNotification,
       send: sendJsonRpc,
       sendResult: (ws, id, result) => sendJsonRpc(ws, buildJsonRpcResultResponse(id, result)),
       sendError: (ws, id, error) => sendJsonRpc(ws, buildJsonRpcErrorResponse(id, error)),

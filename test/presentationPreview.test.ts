@@ -269,6 +269,98 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
     });
   });
 
+  test("does not load cached slides from an adjacent directory outside the workspace", async () => {
+    await withTempDir(async (dir) => {
+      const workspace = path.join(dir, "workspace");
+      const outsidePreviewDir = path.join(dir, "preview");
+      await fs.mkdir(workspace);
+      await fs.mkdir(outsidePreviewDir);
+      await fs.writeFile(path.join(workspace, "deck.pptx"), "fake-pptx-bytes", "utf8");
+      await fs.writeFile(path.join(outsidePreviewDir, "slide-1.png"), "outside-slide", "utf8");
+
+      const result = await previewPresentationFile({
+        cwd: workspace,
+        filePath: "deck.pptx",
+        builtInDir: workspace,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.kind).toBe("compile_error");
+        expect(result.error.message).toContain("Slide rendering script not found");
+      }
+    });
+  });
+
+  test("does not follow cached slide symlinks outside the workspace", async () => {
+    await withTempDir(async (dir) => {
+      const workspace = path.join(dir, "workspace");
+      const previewDir = path.join(workspace, "preview");
+      const outsideSlide = path.join(dir, "outside-slide.png");
+      await fs.mkdir(previewDir, { recursive: true });
+      await fs.writeFile(path.join(workspace, "deck.pptx"), "fake-pptx-bytes", "utf8");
+      await fs.writeFile(outsideSlide, "outside-slide", "utf8");
+      try {
+        await fs.symlink(outsideSlide, path.join(previewDir, "slide-1.png"));
+      } catch {
+        return;
+      }
+
+      const result = await previewPresentationFile({
+        cwd: workspace,
+        filePath: "deck.pptx",
+        builtInDir: workspace,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.kind).toBe("compile_error");
+        expect(result.error.message).toContain("Slide rendering script not found");
+      }
+    });
+  });
+
+  test("does not render slide module symlinks outside the workspace", async () => {
+    await withTempDir(async (dir) => {
+      const workspace = path.join(dir, "workspace");
+      const slidesDir = path.join(workspace, "slides");
+      const outsideSlide = path.join(dir, "slide-1.mjs");
+      await fs.mkdir(slidesDir, { recursive: true });
+      await fs.writeFile(path.join(workspace, "deck.pptx"), "fake-pptx-bytes", "utf8");
+      await fs.writeFile(outsideSlide, "export default {}", "utf8");
+      try {
+        await fs.symlink(outsideSlide, path.join(slidesDir, "slide-1.mjs"));
+      } catch {
+        return;
+      }
+
+      const scriptDir = path.join(workspace, "skills/presentations/scripts");
+      await fs.mkdir(scriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(scriptDir, "render_artifact_slide.mjs"),
+        `
+          import fs from "node:fs";
+          const outIdx = process.argv.indexOf("--output");
+          fs.writeFileSync(process.argv[outIdx + 1], "outside-slide");
+        `,
+        "utf8",
+      );
+
+      const result = await previewPresentationFile({
+        cwd: workspace,
+        filePath: "deck.pptx",
+        builtInDir: workspace,
+        env: localRuntimeEnv(workspace),
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.kind).toBe("no_slides");
+        expect(result.error.message).toContain("No slide source modules");
+      }
+    });
+  });
+
   test("rejects paths outside the workspace root", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-presentation-outside-"));

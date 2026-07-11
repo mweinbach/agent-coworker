@@ -1,3 +1,5 @@
+import type { FileChangeVersion } from "./fileVersion";
+
 export type SpreadsheetFileKind = "csv" | "xlsx";
 
 export type SpreadsheetPreviewViewport = {
@@ -95,12 +97,7 @@ type SpreadsheetWorkbookFailure = {
 
 // ---- Full-workbook snapshot (Univer canvas source) ----
 
-export type SpreadsheetFileVersion = {
-  modifiedAtMs: number;
-  changeTimeMs: number;
-  size: number;
-  fingerprint: string;
-};
+export type SpreadsheetFileVersion = FileChangeVersion;
 
 export type SpreadsheetFileVersionResult =
   | { ok: true; version: SpreadsheetFileVersion }

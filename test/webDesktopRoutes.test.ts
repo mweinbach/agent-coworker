@@ -995,6 +995,37 @@ describe("web desktop routes", () => {
     expect(oversized?.status).toBe(413);
   });
 
+  test("returns canonical version metadata for contained previews and rejects escaping symlinks", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-preview-");
+    const outside = await makeTempDir("cowork-web-desktop-preview-outside-");
+    const filePath = path.join(workspace, "notes.md");
+    const outsidePath = path.join(outside, "secret.md");
+    const linkPath = path.join(workspace, "secret-link.md");
+    await fs.writeFile(filePath, "# preview", "utf8");
+    await fs.writeFile(outsidePath, "# secret", "utf8");
+
+    const preview = await handleWebDesktopRoute(
+      new Request(`http://localhost/cowork/fs/preview?path=${encodeURIComponent(filePath)}`),
+      { cwd: workspace },
+    );
+    expect(preview?.status).toBe(200);
+    expect(decodeURIComponent(preview?.headers.get("x-cowork-file-path") ?? "")).toBe(filePath);
+    expect(Number(preview?.headers.get("x-cowork-file-size"))).toBe(9);
+    expect(preview?.headers.get("x-cowork-file-fingerprint")).toBeTruthy();
+
+    try {
+      await fs.symlink(outsidePath, linkPath);
+    } catch {
+      return;
+    }
+    const escaped = await handleWebDesktopRoute(
+      new Request(`http://localhost/cowork/fs/preview?path=${encodeURIComponent(linkPath)}`),
+      { cwd: workspace },
+    );
+    expect(escaped?.status).not.toBe(200);
+    expect(await escaped?.text()).toContain("outside allowed workspace roots");
+  });
+
   test("serves active-content files as attachments while keeping plain text inline", async () => {
     const workspace = await makeTempDir("cowork-web-desktop-open-");
     const htmlPath = path.join(workspace, "preview.html");

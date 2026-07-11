@@ -30,6 +30,7 @@ import { workspaceSupportsToolRetryLineage } from "../app/store.helpers/jsonRpcS
 import { Button } from "../components/ui/button";
 import { buildComposerAttachmentSignature } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
+import { useFileChangeRevisionSignature } from "../lib/useFileChangeRevision";
 import type { ProviderName } from "../lib/wsProtocol";
 import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
 import { CancelSubagentsDialog } from "./chat/CancelSubagentsDialog";
@@ -48,7 +49,10 @@ import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatR
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import { selectFeedDerivationWindow } from "./chat/feedWindow";
 import { NewChatLanding } from "./chat/NewChatLanding";
-import { loadOverflowCitationContext } from "./chat/overflowCitationContext";
+import {
+  buildOverflowCitationPathSignature,
+  loadOverflowCitationContext,
+} from "./chat/overflowCitationContext";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { recordDesktopRenderMetric } from "./renderDiagnostics";
 
@@ -82,7 +86,10 @@ export {
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "./chat/chatLogic";
-export { loadOverflowCitationContext } from "./chat/overflowCitationContext";
+export {
+  buildOverflowCitationPathSignature,
+  loadOverflowCitationContext,
+} from "./chat/overflowCitationContext";
 
 type ChatViewReadOnlyNotice = {
   id?: string;
@@ -397,6 +404,19 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => buildCitationOverflowFilePathsByMessageId(visibleFeed),
     [visibleFeed],
   );
+  const citationOverflowEntries = useMemo(
+    () => [...citationOverflowFilePathsByMessageId.entries()],
+    [citationOverflowFilePathsByMessageId],
+  );
+  const citationOverflowPathSignature = useMemo(
+    () => buildOverflowCitationPathSignature(citationOverflowEntries),
+    [citationOverflowEntries],
+  );
+  const citationOverflowFileRevisionSignature = useFileChangeRevisionSignature(
+    citationOverflowEntries.map(([, filePath]) => filePath),
+  );
+  const citationOverflowEntriesRef = useRef(citationOverflowEntries);
+  citationOverflowEntriesRef.current = citationOverflowEntries;
   const citationUrlsByMessageId = useMemo(() => {
     const merged = new Map(inlineCitationUrlsByMessageId);
     for (const [messageId, urls] of overflowCitationUrlsByMessageId) {
@@ -566,9 +586,8 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   );
 
   useEffect(() => {
-    let cancelled = false;
-
-    const entries = [...citationOverflowFilePathsByMessageId.entries()];
+    const controller = new AbortController();
+    const entries = citationOverflowEntriesRef.current;
     if (entries.length === 0) {
       if (overflowCitationUrlsRef.current.size > 0) {
         setOverflowCitationUrlsByMessageId(new Map());
@@ -580,18 +599,24 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     }
 
     void (async () => {
-      const { urlsByMessageId, sourcesByMessageId } = await loadOverflowCitationContext(entries);
-
-      if (!cancelled) {
+      try {
+        const { urlsByMessageId, sourcesByMessageId } = await loadOverflowCitationContext(
+          entries,
+          undefined,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
         setOverflowCitationUrlsByMessageId(urlsByMessageId);
         setOverflowCitationSourcesByMessageId(sourcesByMessageId);
+      } catch {
+        // Cancellation is expected when the citation path set changes.
       }
     })();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [citationOverflowFilePathsByMessageId]);
+  }, [citationOverflowFileRevisionSignature, citationOverflowPathSignature]);
 
   const didAutoFocusRef = useRef(false);
   useEffect(() => {

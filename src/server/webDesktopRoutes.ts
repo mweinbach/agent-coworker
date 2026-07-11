@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { TRANSCRIPT_REQUEST_BODY_MAX_BYTES } from "../shared/transcriptBatchProtocol";
+import { readCappedFilePreview } from "../utils/filePreviewRead";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS } from "./transcriptInbox";
 import { TRANSCRIPT_BATCH_ID_PATTERN, type WebDesktopServiceLike } from "./webDesktopService";
 
@@ -73,32 +74,6 @@ function assertValidFileName(name: string, label: string): void {
 
 function isExplorerEntryHidden(name: string): boolean {
   return name.startsWith(".") || name.startsWith("~$");
-}
-
-async function readCappedFilePreview(
-  absPath: string,
-  maxBytes: number,
-): Promise<{ bytes: Uint8Array; byteLength: number; truncated: boolean }> {
-  const stat = await fsp.stat(absPath);
-  if (!stat.isFile()) {
-    throw new Error("Path is not a file");
-  }
-
-  const toRead = Math.min(maxBytes, stat.size);
-  const handle = await fsp.open(absPath, "r");
-  try {
-    const buffer = Buffer.alloc(toRead);
-    const { bytesRead } = await handle.read(buffer, 0, toRead, 0);
-    const bytes = new Uint8Array(bytesRead);
-    bytes.set(buffer.subarray(0, bytesRead));
-    return {
-      bytes,
-      byteLength: bytesRead,
-      truncated: stat.size > bytesRead,
-    };
-  } finally {
-    await handle.close();
-  }
 }
 
 async function listDirectoryEntries(
@@ -648,8 +623,13 @@ export async function handleWebDesktopRoute(
         headers: {
           "Content-Type": "application/octet-stream",
           "Cache-Control": "no-store",
+          "X-Cowork-File-Path": encodeURIComponent(preview.path),
           "X-Cowork-Byte-Length": String(preview.byteLength),
           "X-Cowork-Truncated": preview.truncated ? "1" : "0",
+          "X-Cowork-File-Modified-At": String(preview.version.modifiedAtMs),
+          "X-Cowork-File-Change-Time": String(preview.version.changeTimeMs),
+          "X-Cowork-File-Size": String(preview.version.size),
+          "X-Cowork-File-Fingerprint": preview.version.fingerprint,
         },
       });
     }

@@ -4,6 +4,10 @@ import type {
   DesktopFeatureFlags,
 } from "../../../../src/shared/featureFlags";
 import type {
+  FileChangeVersion,
+  WorkspaceFileChangeEvent,
+} from "../../../../src/shared/fileVersion";
+import type {
   ProductAnalyticsEnvironment,
   ProductAnalyticsEventName,
   ProductAnalyticsProperties,
@@ -289,9 +293,11 @@ export type ReadFileForPreviewInput = {
 };
 
 export type ReadFileForPreviewOutput = {
+  path: string;
   bytes: Uint8Array;
   byteLength: number;
   truncated: boolean;
+  version: FileChangeVersion;
 };
 
 export type CopyPathInput = {
@@ -645,6 +651,7 @@ export interface DesktopApi {
   ): () => void;
   onWorkspaceServerExited(listener: (event: WorkspaceServerExitedEvent) => void): () => void;
   onWindowCloseRequested?(listener: (request: WindowCloseRequest) => void): () => void;
+  onWorkspaceFileChanged?(listener: (event: WorkspaceFileChangeEvent) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
   onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
@@ -726,6 +733,7 @@ export const DESKTOP_EVENT_CHANNELS = {
   workspaceServerStartupProgress: "desktop:event:workspaceServerStartupProgress",
   workspaceServerExited: "desktop:event:workspaceServerExited",
   windowCloseRequested: "desktop:event:windowCloseRequested",
+  workspaceFileChanged: "desktop:event:workspaceFileChanged",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
   mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
 } as const;

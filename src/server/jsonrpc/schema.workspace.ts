@@ -45,7 +45,7 @@ const spreadsheetCellStylePatchSchema = z
   .strict()
   .refine((style) => Object.keys(style).length > 0, "style must include at least one change");
 
-const spreadsheetFileVersionSchema = z
+const fileChangeVersionSchema = z
   .object({
     modifiedAtMs: z.number().nonnegative(),
     changeTimeMs: z.number().nonnegative(),
@@ -54,14 +54,8 @@ const spreadsheetFileVersionSchema = z
   })
   .strict();
 
-const canvasDocumentRevisionSchema = z
-  .object({
-    modifiedAtMs: z.number().nonnegative(),
-    changeTimeMs: z.number().nonnegative(),
-    size: z.number().int().nonnegative(),
-    fingerprint: nonEmptyTrimmedStringSchema,
-  })
-  .strict();
+const spreadsheetFileVersionSchema = fileChangeVersionSchema;
+const canvasDocumentRevisionSchema = fileChangeVersionSchema;
 
 const canvasDocumentSessionRefSchema = z
   .object({
@@ -374,7 +368,9 @@ const presentationPreviewResultSchema = z.discriminatedUnion("ok", [
   z
     .object({
       ok: z.literal(true),
+      path: nonEmptyTrimmedStringSchema,
       slides: z.array(presentationSlideSchema),
+      version: fileChangeVersionSchema,
     })
     .strict(),
   z
@@ -492,4 +488,25 @@ export const jsonRpcWorkspaceResultSchemas = {
   "cowork/workspace/spreadsheet/version": spreadsheetFileVersionResultSchema,
   "cowork/workspace/spreadsheet/patch": spreadsheetEditResultSchema,
   "cowork/workspace/presentation/preview": presentationPreviewResultSchema,
+} as const;
+
+export const jsonRpcWorkspaceNotificationSchemas = {
+  "cowork/workspace/fileChanged": z.discriminatedUnion("kind", [
+    z
+      .object({
+        cwd: nonEmptyTrimmedStringSchema,
+        kind: z.literal("changed"),
+        path: nonEmptyTrimmedStringSchema,
+        version: fileChangeVersionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        cwd: nonEmptyTrimmedStringSchema,
+        kind: z.literal("deleted"),
+        path: nonEmptyTrimmedStringSchema,
+        version: z.null(),
+      })
+      .strict(),
+  ]),
 } as const;

@@ -1,7 +1,7 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
 import { unhandledEventSystemLine } from "../../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../../store.helpers";
-import { getModelStreamRuntime } from "../../runtimeState";
+import { getEffectiveThreadLastEventSeq, getModelStreamRuntime } from "../../runtimeState";
 import type { ThreadEventReducerContext } from "../context";
 import type { FeedProjectionModule } from "../feedProjection";
 import type { MessagingModule } from "../messaging";
@@ -58,13 +58,23 @@ export function createHandlersModule(
       moduleContext.recordPendingThreadEvent(get, set, threadId);
     } else {
       moduleContext.flushPendingContentForThread(set, threadId);
-      set((s) => ({
-        threads: s.threads.map((thread) =>
-          thread.id === threadId
-            ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
-            : thread,
-        ),
-      }));
+      set((s) => {
+        const nextLastEventSeq = getEffectiveThreadLastEventSeq(s, threadId) + 1;
+        const runtime = s.threadRuntimeById[threadId];
+        return {
+          threads: s.threads.map((thread) =>
+            thread.id === threadId ? { ...thread, lastEventSeq: nextLastEventSeq } : thread,
+          ),
+          ...(runtime
+            ? {
+                threadRuntimeById: {
+                  ...s.threadRuntimeById,
+                  [threadId]: { ...runtime, lastEventSeq: nextLastEventSeq },
+                },
+              }
+            : {}),
+        };
+      });
       void ctx.deps.persist(get);
     }
 

@@ -1,14 +1,18 @@
 {
   "deltaBurst": {
-    "chatFeedRenders": 8,
-    "contentPublications": 6,
+    "backgroundChatFeedRenders": 0,
+    "backgroundSidebarRowRenders": 0,
+    "chatFeedRenders": 280,
+    "composerInputMs": 1000,
+    "contentPublications": 280,
     "desktopMarkdownRenders": 2,
-    "feedRowRenders": 6,
+    "feedRowRenders": 280,
     "maxFeedDerivationItems": 80,
-    "reactCommits": 16,
-    "storePublications": 10,
-    "streamingMarkdownRenders": 4,
-    "unrelatedSidebarRowRenders": 0
+    "reactCommits": 320,
+    "storePublications": 320,
+    "streamingMarkdownRenders": 280,
+    "threadNavigationMs": 1500,
+    "unrelatedSidebarRowRenders": 6
   },
   "fileTree": {
     "filesystemRequests": 2,

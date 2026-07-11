@@ -20,6 +20,7 @@ const RESEARCH_ID = "quality-research";
 
 export type QualityGateMetrics = {
   chatFeedRenders: number;
+  chatFeedRendersByThreadId: Record<string, number>;
   contentPublications: number;
   desktopMarkdownRenders: number;
   feedRowRenders: number;
@@ -33,6 +34,7 @@ export type QualityGateMetrics = {
 export type QualityGateRuntime = {
   getFileCount(): number;
   getFeedText(itemId: string): string | null;
+  getFeedTextByPrefix(prefix: string): string | null;
   getMetrics(): QualityGateMetrics;
   isReady(): boolean;
   openSettings(page: SettingsPageId): void;
@@ -55,6 +57,7 @@ declare global {
 
 let metrics: QualityGateMetrics = {
   chatFeedRenders: 0,
+  chatFeedRendersByThreadId: {},
   contentPublications: 0,
   desktopMarkdownRenders: 0,
   feedRowRenders: 0,
@@ -159,6 +162,10 @@ function recordRenderMetric(event: DesktopRenderMetricEvent): void {
   switch (event.metric) {
     case "chat-feed":
       metrics.chatFeedRenders += 1;
+      if (event.id) {
+        metrics.chatFeedRendersByThreadId[event.id] =
+          (metrics.chatFeedRendersByThreadId[event.id] ?? 0) + 1;
+      }
       return;
     case "desktop-markdown":
       metrics.desktopMarkdownRenders += 1;
@@ -212,6 +219,19 @@ export function installQualityGateRuntime(): void {
       const item = runtime?.feed.find((entry) => entry.id === itemId);
       return item?.kind === "message" ? item.text : null;
     },
+    getFeedTextByPrefix: (prefix) => {
+      const state = useAppStore.getState();
+      for (const runtime of Object.values(state.threadRuntimeById)) {
+        const item = runtime.feed.find(
+          (entry) =>
+            entry.kind === "message" && entry.role === "assistant" && entry.text.startsWith(prefix),
+        );
+        if (item?.kind === "message") {
+          return item.text;
+        }
+      }
+      return null;
+    },
     getMetrics: () => ({ ...metrics }),
     isReady: () => {
       const state = useAppStore.getState();
@@ -246,6 +266,7 @@ export function installQualityGateRuntime(): void {
     resetMetrics: () => {
       metrics = {
         chatFeedRenders: 0,
+        chatFeedRendersByThreadId: {},
         contentPublications: 0,
         desktopMarkdownRenders: 0,
         feedRowRenders: 0,

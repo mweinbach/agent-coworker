@@ -828,6 +828,13 @@ export function buildSyntheticServerHelloFromJsonRpcThread(
   thread: JsonRpcThreadRecord,
   opts?: { isResume?: boolean },
 ) {
+  const activeTurnId =
+    thread.status &&
+    "turnId" in thread.status &&
+    typeof thread.status.turnId === "string" &&
+    thread.status.turnId.trim()
+      ? thread.status.turnId
+      : null;
   return {
     type: "server_hello" as const,
     sessionId: thread.id,
@@ -836,7 +843,13 @@ export function buildSyntheticServerHelloFromJsonRpcThread(
       model: thread.model,
       workingDirectory: thread.cwd,
     },
-    ...(opts?.isResume ? { isResume: true, busy: thread.status?.type === "running" } : {}),
+    ...(opts?.isResume
+      ? {
+          isResume: true,
+          busy: thread.status?.type === "running",
+          ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        }
+      : {}),
   };
 }
 

@@ -14,7 +14,12 @@ import {
 } from "../../store.feedMapping";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, SessionSnapshot } from "../../types";
-import { clearPendingThreadSteer, hasPendingThreadSteer, RUNTIME } from "../runtimeState";
+import {
+  clearPendingThreadSteer,
+  getEffectiveThreadLastEventSeq,
+  hasPendingThreadSteer,
+  RUNTIME,
+} from "../runtimeState";
 import { MAX_FEED_ITEMS } from "../threadEventReducerContext";
 import type { ThreadEventReducerContext } from "./context";
 import type { WorkspaceStateHelpers } from "./workspaceState";
@@ -224,44 +229,33 @@ export function createFeedProjectionModule(
     batch.set((state) => {
       let nextRuntimeById = state.threadRuntimeById;
       let runtimeChanged = false;
-      const eventSequenceIncrements = new Map<string, number>();
 
       for (const [threadId, pending] of batch.threads) {
         const runtime = state.threadRuntimeById[threadId];
-        if (runtime && pending.operations.length > 0) {
-          const nextFeed = applyPendingContentOperations(runtime.feed, pending.operations);
-          if (nextFeed !== runtime.feed) {
-            if (!runtimeChanged) {
-              nextRuntimeById = { ...state.threadRuntimeById };
-              runtimeChanged = true;
-            }
-            nextRuntimeById[threadId] = { ...runtime, feed: nextFeed };
-          }
+        if (!runtime) continue;
+        const nextFeed =
+          pending.operations.length > 0
+            ? applyPendingContentOperations(runtime.feed, pending.operations)
+            : runtime.feed;
+        const nextLastEventSeq =
+          pending.eventSequenceIncrements > 0
+            ? getEffectiveThreadLastEventSeq(state, threadId) + pending.eventSequenceIncrements
+            : runtime.lastEventSeq;
+        if (nextFeed === runtime.feed && nextLastEventSeq === runtime.lastEventSeq) {
+          continue;
         }
-        if (pending.eventSequenceIncrements > 0) {
-          eventSequenceIncrements.set(threadId, pending.eventSequenceIncrements);
+        if (!runtimeChanged) {
+          nextRuntimeById = { ...state.threadRuntimeById };
+          runtimeChanged = true;
         }
+        nextRuntimeById[threadId] = {
+          ...runtime,
+          feed: nextFeed,
+          lastEventSeq: nextLastEventSeq,
+        };
       }
 
-      let threadsChanged = false;
-      const nextThreads =
-        eventSequenceIncrements.size === 0
-          ? state.threads
-          : state.threads.map((thread) => {
-              const increment = eventSequenceIncrements.get(thread.id) ?? 0;
-              if (increment === 0) return thread;
-              threadsChanged = true;
-              return {
-                ...thread,
-                lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + increment)),
-              };
-            });
-
-      if (!runtimeChanged && !threadsChanged) return {};
-      return {
-        ...(runtimeChanged ? { threadRuntimeById: nextRuntimeById } : {}),
-        ...(threadsChanged ? { threads: nextThreads } : {}),
-      };
+      return runtimeChanged ? { threadRuntimeById: nextRuntimeById } : {};
     });
     if (batch.get) {
       void ctx.deps.persist(batch.get);
@@ -593,6 +587,9 @@ export function createFeedProjectionModule(
           updates: [updateItem],
         });
       },
+      flushPendingContent: () => {
+        flushPendingContentForThread(set, threadId);
+      },
       onToolTerminal: () => {
         flushPendingContentForThread(set, threadId);
         const thread = get().threads.find((t) => t.id === threadId);
@@ -702,18 +699,19 @@ export function createFeedProjectionModule(
       if (!runtime || !thread) {
         return {};
       }
+      const currentLastEventSeq = getEffectiveThreadLastEventSeq(s, threadId);
       const preserveCurrentFeed =
         opts?.forceFeed === true
           ? false
           : shouldPreserveCurrentFeed(
               threadId,
               runtime.busy,
-              thread.lastEventSeq,
+              currentLastEventSeq,
               runtime.feed,
               snapshot,
             );
       const nextLastEventSeq = preserveCurrentFeed
-        ? Math.max(normalizeEventSeq(thread.lastEventSeq), normalizeEventSeq(snapshot.lastEventSeq))
+        ? Math.max(currentLastEventSeq, normalizeEventSeq(snapshot.lastEventSeq))
         : normalizeEventSeq(snapshot.lastEventSeq);
       const nextMessageCount = preserveCurrentFeed
         ? Math.max(thread.messageCount ?? 0, normalizeEventSeq(snapshot.messageCount))
@@ -746,6 +744,7 @@ export function createFeedProjectionModule(
           [threadId]: {
             ...runtime,
             sessionId: snapshot.sessionId,
+            lastEventSeq: nextLastEventSeq,
             sessionKind: snapshot.sessionKind,
             parentSessionId: snapshot.parentSessionId,
             role: snapshot.role,

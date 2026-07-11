@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AppStoreState, StoreSet } from "../src/app/store.helpers";
 import { defaultThreadRuntime } from "../src/app/store.helpers";
+import { __internal as persistenceInternal } from "../src/app/store.helpers/persistence";
 import { createThreadEventReducerContext } from "../src/app/store.helpers/threadEventReducer/context";
 import {
   composeFeedItemUpdates,
   createFeedProjectionModule,
 } from "../src/app/store.helpers/threadEventReducer/feedProjection";
+import { createHandlersModule } from "../src/app/store.helpers/threadEventReducer/handlers";
+import { createMessagingModule } from "../src/app/store.helpers/threadEventReducer/messaging";
+import { createWorkspaceStateHelpers } from "../src/app/store.helpers/threadEventReducer/workspaceState";
 import type { FeedItem, ThreadRecord } from "../src/app/types";
 
 const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
@@ -62,6 +66,7 @@ function createFeedHarness(threadIds: string[]) {
     notifications: [],
     workspaceExplorerRefreshById: {},
     refreshWorkspaceFiles: async () => {},
+    applyWorkspaceDefaultsToThread: async () => {},
     selectedThreadId: threadIds[0] ?? null,
   } as unknown as AppStoreState;
   const set: StoreSet = (partial) => {
@@ -78,12 +83,14 @@ function createFeedHarness(threadIds: string[]) {
     normalizeThreadTitleSource: () => "manual",
     shouldAdoptServerTitle: () => true,
   });
-  const feed = createFeedProjectionModule(ctx, {
-    resetLiveModelStreamRuntime: () => {},
-  });
+  const workspace = createWorkspaceStateHelpers(ctx);
+  const feed = createFeedProjectionModule(ctx, workspace);
+  const messaging = createMessagingModule(ctx, workspace, feed);
+  const handlers = createHandlersModule(ctx, workspace, feed, messaging);
   return {
     feed,
     get: () => state,
+    handleThreadEvent: handlers.handleThreadEvent,
     publications: () => publications,
     resetPublications: () => {
       publications = 0;
@@ -103,6 +110,13 @@ function messageText(state: AppStoreState, threadId: string, itemId: string): st
 function reasoningText(state: AppStoreState, threadId: string, itemId: string): string | null {
   const item = state.threadRuntimeById[threadId]?.feed.find((entry) => entry.id === itemId);
   return item?.kind === "reasoning" ? item.text : null;
+}
+
+function assistantText(state: AppStoreState, threadId: string): string | null {
+  const item = state.threadRuntimeById[threadId]?.feed.find(
+    (entry) => entry.kind === "message" && entry.role === "assistant",
+  );
+  return item?.kind === "message" ? item.text : null;
 }
 
 afterEach(() => {
@@ -209,6 +223,193 @@ describe("model-stream feed update coalescing", () => {
     expect(messageText(harness.get(), "thread-1", "assistant-1")).toBe("first");
     expect(messageText(harness.get(), "thread-2", "assistant-2")).toBe("second");
     expect(harness.get().threadRuntimeById["thread-3"]).toBe(untouchedRuntime);
+  });
+
+  test("keeps legacy chunk and raw background publications off global thread state", () => {
+    const animationFrame = installFakeAnimationFrame();
+    const harness = createFeedHarness(["thread-1", "thread-2", "thread-3"]);
+    const threads = harness.get().threads;
+    const selectedRuntime = harness.get().threadRuntimeById["thread-1"];
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-2", {
+      type: "model_stream_chunk",
+      sessionId: "thread-2",
+      turnId: "chunk-turn",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: "chunk-stream", text: "chunk-background" },
+    });
+    harness.handleThreadEvent(harness.get, harness.set, "thread-3", {
+      type: "model_stream_raw",
+      sessionId: "thread-3",
+      turnId: "raw-turn",
+      index: 0,
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "raw-stream", type: "message", role: "assistant", content: [] },
+      },
+    });
+    harness.handleThreadEvent(harness.get, harness.set, "thread-3", {
+      type: "model_stream_raw",
+      sessionId: "thread-3",
+      turnId: "raw-turn",
+      index: 1,
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.content_part.added",
+        output_index: 0,
+        content_index: 0,
+        item_id: "raw-stream",
+        part: { type: "output_text", text: "", annotations: [] },
+      },
+    });
+    harness.handleThreadEvent(harness.get, harness.set, "thread-3", {
+      type: "model_stream_raw",
+      sessionId: "thread-3",
+      turnId: "raw-turn",
+      index: 2,
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_text.delta",
+        output_index: 0,
+        content_index: 0,
+        item_id: "raw-stream",
+        delta: "raw-background",
+      },
+    });
+
+    expect(harness.publications()).toBe(0);
+    animationFrame.flushFrame();
+
+    expect(harness.publications()).toBe(1);
+    expect(harness.get().threads).toBe(threads);
+    expect(harness.get().threadRuntimeById["thread-1"]).toBe(selectedRuntime);
+    expect(assistantText(harness.get(), "thread-2")).toBe("chunk-background");
+    expect(assistantText(harness.get(), "thread-3")).toBe("raw-background");
+    expect(harness.get().threadRuntimeById["thread-2"]?.lastEventSeq).toBe(1);
+    expect(harness.get().threadRuntimeById["thread-3"]?.lastEventSeq).toBe(3);
+
+    const persistedThreads = persistenceInternal.buildPersistableThreads(harness.get());
+    expect(persistedThreads.find((thread) => thread.id === "thread-2")?.lastEventSeq).toBe(1);
+    expect(persistedThreads.find((thread) => thread.id === "thread-3")?.lastEventSeq).toBe(3);
+  });
+
+  test("flushes an existing streamed tool immediately when approval is requested", () => {
+    const animationFrame = installFakeAnimationFrame();
+    const harness = createFeedHarness(["thread-1"]);
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "model_stream_chunk",
+      sessionId: "thread-1",
+      turnId: "tool-turn",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "tool_input_start",
+      part: { id: "tool-1", toolName: "bash", input: { command: "bun test" } },
+    });
+    animationFrame.flushFrame();
+    harness.resetPublications();
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "model_stream_chunk",
+      sessionId: "thread-1",
+      turnId: "tool-turn",
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "tool_approval_request",
+      part: {
+        approvalId: "approval-1",
+        toolCall: { toolName: "bash", input: { command: "bun test" } },
+      },
+    });
+
+    const tool = harness
+      .get()
+      .threadRuntimeById["thread-1"]?.feed.find((item) => item.kind === "tool");
+    expect(tool).toMatchObject({
+      kind: "tool",
+      state: "approval-requested",
+      approval: { approvalId: "approval-1" },
+    });
+    expect(harness.publications()).toBe(1);
+
+    animationFrame.flushFrame();
+    expect(harness.publications()).toBe(1);
+  });
+
+  test("keeps one legacy assistant stream across a busy thread resume", () => {
+    const animationFrame = installFakeAnimationFrame();
+    const harness = createFeedHarness(["thread-1", "thread-2"]);
+    const turnId = "switch-turn";
+    const streamId = "switch-stream";
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "session_busy",
+      sessionId: "thread-1",
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "model_stream_chunk",
+      sessionId: "thread-1",
+      turnId,
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: streamId, text: "before-switch" },
+    });
+    animationFrame.flushFrame();
+
+    harness.selectThread("thread-2");
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "server_hello",
+      sessionId: "thread-1",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/workspace",
+      },
+      isResume: true,
+      busy: true,
+      turnId,
+    });
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "model_stream_chunk",
+      sessionId: "thread-1",
+      turnId,
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: streamId, text: "-after-switch" },
+    });
+    animationFrame.flushFrame();
+
+    const assistantItems =
+      harness
+        .get()
+        .threadRuntimeById["thread-1"]?.feed.filter(
+          (item) => item.kind === "message" && item.role === "assistant",
+        ) ?? [];
+    expect(assistantItems).toHaveLength(1);
+    expect(assistantItems[0]).toMatchObject({ text: "before-switch-after-switch" });
   });
 
   test("flushes pending content synchronously before completion", () => {

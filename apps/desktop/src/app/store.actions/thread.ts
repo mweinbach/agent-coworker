@@ -32,6 +32,7 @@ import {
   ensureThreadSocket,
   ensureWorkspaceRuntime,
   extractUsageStateFromTranscript,
+  getEffectiveThreadLastEventSeq,
   isCurrentThreadSelectionRequest,
   makeId,
   nowIso,
@@ -249,7 +250,7 @@ export async function hydrateThreadSelection(
   const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
     updatedAt: candidate.lastMessageAt,
     messageCount: candidate.messageCount,
-    lastEventSeq: candidate.lastEventSeq,
+    lastEventSeq: getEffectiveThreadLastEventSeq(get(), candidate.id),
   });
 
   const fingerprintMatches = (
@@ -314,6 +315,7 @@ export async function hydrateThreadSelection(
           [selectedThreadId]: {
             ...currentRuntime,
             sessionId,
+            lastEventSeq: snapshot.lastEventSeq,
             sessionKind: snapshot.sessionKind,
             parentSessionId: snapshot.parentSessionId,
             role: snapshot.role,
@@ -483,7 +485,9 @@ export async function hydrateThreadSelection(
   const shouldFetchHarnessSnapshot =
     Boolean(sessionId) &&
     !skipHarnessSnapshotFetch &&
-    (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
+    (thread.messageCount > 0 ||
+      getEffectiveThreadLastEventSeq(get(), thread.id) > 0 ||
+      Boolean(thread.legacyTranscriptId));
 
   if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);

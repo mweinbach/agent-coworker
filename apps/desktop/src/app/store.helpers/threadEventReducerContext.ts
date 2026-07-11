@@ -4,6 +4,8 @@ import type { Notification, ThreadAgentSummary, ThreadTitleSource } from "../typ
 export const MAX_FEED_ITEMS = 2000;
 
 export const JSONRPC_THREAD_EVENT_METHODS = new Set([
+  "model_stream_chunk",
+  "model_stream_raw",
   "cowork/session/settings",
   "cowork/session/info",
   "cowork/session/configUpdated",

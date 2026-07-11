@@ -1,5 +1,6 @@
 import {
   AlertTriangleIcon,
+  ArrowDownIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -13,8 +14,8 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, WheelEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolFeedState } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -35,6 +36,14 @@ import {
   formatActivityElapsedMs,
   summarizeActivityGroup,
 } from "./activityGroups";
+import {
+  captureScrollAnchor,
+  countNewIds,
+  isNearScrollEnd,
+  restoreScrollAnchor,
+  type ScrollAnchorPosition,
+  scrollViewportToEnd,
+} from "./scrollOwnership";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 /* ── Small helpers ──────────────────────────────────────────────────────────── */
@@ -99,6 +108,7 @@ function TimelineNode({
 }
 
 type ReasoningSection = {
+  id: string;
   title: string;
   body: string;
 };
@@ -122,10 +132,17 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   }
 
   if (matches.length === 0) {
-    return [{ title: "", body: normalized }];
+    return [{ id: "body:0", title: "", body: normalized }];
   }
 
   const sections: ReasoningSection[] = [];
+  if (matches[0].index > 0) {
+    const leadingBody = normalized.slice(0, matches[0].index).trim();
+    if (leadingBody) {
+      sections.push({ id: "section:0", title: "", body: leadingBody });
+    }
+  }
+
   for (let i = 0; i < matches.length; i++) {
     const currentMatch = matches[i];
     const nextMatch = matches[i + 1];
@@ -135,35 +152,27 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     const body = normalized.slice(contentStart, contentEnd).trim();
 
     sections.push({
+      id: `section:${sections.length}`,
       title: currentMatch.title,
       body,
     });
-  }
-
-  if (matches[0].index > 0) {
-    const leadingBody = normalized.slice(0, matches[0].index).trim();
-    if (leadingBody) {
-      sections.unshift({ title: "", body: leadingBody });
-    }
   }
 
   return sections;
 }
 
 function ReasoningSectionNode({
+  disclosureId,
   title,
   body,
   isMostRecent,
 }: {
+  disclosureId: string;
   title: string;
   body: string;
   isMostRecent: boolean;
 }) {
   const [open, setOpen] = useState(isMostRecent);
-
-  useEffect(() => {
-    setOpen(isMostRecent);
-  }, [isMostRecent]);
 
   if (!title) {
     return (
@@ -180,7 +189,9 @@ function ReasoningSectionNode({
     <div className="min-w-0 py-1 border-b border-border/12 last:border-b-0 pb-3 last:pb-0 mb-2.5 last:mb-0">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        aria-controls={disclosureId}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
         className="flex items-center gap-1.5 text-left text-[13px] font-medium text-foreground outline-none hover:text-foreground/80"
       >
         <span>{title}</span>
@@ -192,7 +203,10 @@ function ReasoningSectionNode({
         />
       </button>
       {open && body && (
-        <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground/80 pl-0.5 select-text">
+        <div
+          id={disclosureId}
+          className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground/80 pl-0.5 select-text"
+        >
           <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
             {body}
           </DesktopMarkdown>
@@ -203,11 +217,13 @@ function ReasoningSectionNode({
 }
 
 function ReasoningTimelineNode({
+  sourceId,
   text,
   isLast,
   live,
   isMostRecent,
 }: {
+  sourceId: string;
   text: string;
   isLast: boolean;
   live?: boolean;
@@ -237,7 +253,8 @@ function ReasoningTimelineNode({
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
           return (
             <ReasoningSectionNode
-              key={`${section.title || "reasoning"}-${section.body.slice(0, 32)}`}
+              key={`${sourceId}:${section.id}`}
+              disclosureId={`activity-reasoning-${encodeURIComponent(sourceId)}-${encodeURIComponent(section.id)}`}
               title={section.title}
               body={section.body}
               isMostRecent={isSectionMostRecent}
@@ -284,9 +301,14 @@ function ToolTimelineNode({
     item.state === "output-error" ||
     item.state === "output-denied";
   const [open, setOpen] = useState(shouldAutoExpand && hasDetails);
+  const userToggledRef = useRef(false);
+  const handleOpenChange = (nextOpen: boolean) => {
+    userToggledRef.current = true;
+    setOpen(nextOpen);
+  };
 
   useEffect(() => {
-    if (shouldAutoExpand && hasDetails) {
+    if (!userToggledRef.current && shouldAutoExpand && hasDetails) {
       setOpen(true);
     }
   }, [hasDetails, shouldAutoExpand]);
@@ -299,7 +321,7 @@ function ToolTimelineNode({
       isLast={isLast}
     >
       {hasDetails ? (
-        <Collapsible open={open} onOpenChange={setOpen}>
+        <Collapsible open={open} onOpenChange={handleOpenChange}>
           <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-muted/20 focus-visible:ring-1 focus-visible:ring-ring/40">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
@@ -412,24 +434,96 @@ function ToolTimelineNode({
 
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const stickToBottomRef = useRef(true);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [following, setFollowing] = useState(true);
+  const [newActivityCount, setNewActivityCount] = useState(0);
+  const followingRef = useRef(following);
+  const anchorRef = useRef<ScrollAnchorPosition | null>(null);
+  const entryIds = useMemo(() => summary.entries.map((entry) => entry.item.id), [summary.entries]);
+  const previousEntryIdsRef = useRef(entryIds);
+  followingRef.current = following;
 
-  useEffect(() => {
+  const setFollowTail = useCallback((nextFollowing: boolean) => {
+    followingRef.current = nextFollowing;
+    setFollowing(nextFollowing);
+  }, []);
+
+  const captureAnchor = useCallback(() => {
     const node = containerRef.current;
-    if (!node) return;
-    const onScroll = () => {
-      const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-      stickToBottomRef.current = distanceFromBottom < 48;
-    };
-    node.addEventListener("scroll", onScroll, { passive: true });
-    return () => node.removeEventListener("scroll", onScroll);
+    const content = contentRef.current;
+    if (!node || !content) return;
+    anchorRef.current = captureScrollAnchor(node, content);
   }, []);
 
   useEffect(() => {
-    if (!live || !containerRef.current || !summary) return;
-    if (!stickToBottomRef.current) return;
-    containerRef.current.scrollTop = containerRef.current.scrollHeight;
-  }, [live, summary]);
+    const addedCount = countNewIds(previousEntryIdsRef.current, entryIds);
+    previousEntryIdsRef.current = entryIds;
+    if (!followingRef.current && addedCount > 0) {
+      setNewActivityCount((current) => current + addedCount);
+    }
+    if (!live || !followingRef.current || !containerRef.current) return;
+    scrollViewportToEnd(containerRef.current);
+  }, [entryIds, live]);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    let resizeFrame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        const node = containerRef.current;
+        const currentContent = contentRef.current;
+        if (!node || !currentContent) return;
+        if (followingRef.current) {
+          scrollViewportToEnd(node);
+          return;
+        }
+        const anchor = anchorRef.current;
+        if (anchor) {
+          restoreScrollAnchor(node, currentContent, anchor);
+          captureAnchor();
+        }
+      });
+    });
+    observer.observe(content);
+    return () => {
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      observer.disconnect();
+    };
+  }, [captureAnchor]);
+
+  const handleScroll = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    if (isNearScrollEnd(node)) {
+      setFollowTail(true);
+      setNewActivityCount(0);
+    } else {
+      setFollowTail(false);
+      captureAnchor();
+    }
+  }, [captureAnchor, setFollowTail]);
+
+  const handleWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (event.deltaY < 0) {
+        setFollowTail(false);
+        captureAnchor();
+      }
+    },
+    [captureAnchor, setFollowTail],
+  );
+
+  const jumpToLatest = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    scrollViewportToEnd(node);
+    setFollowTail(true);
+    setNewActivityCount(0);
+    anchorRef.current = null;
+  }, [setFollowTail]);
 
   const lastReasoningEntryId = useMemo(() => {
     const reasoningEntries = summary.entries.filter((e) => e.kind === "reasoning");
@@ -442,34 +536,73 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   );
 
   return (
-    <div ref={containerRef} className="max-h-[26rem] overflow-y-auto pr-0.5">
-      {summary.entries.map((entry, i) => {
-        const isLast = i === summary.entries.length - 1;
+    <div className="relative">
+      <div
+        ref={containerRef}
+        data-slot="activity-timeline-viewport"
+        className="max-h-[26rem] overflow-y-auto pr-0.5 [overflow-anchor:none]"
+        onScroll={handleScroll}
+        onWheel={handleWheel}
+      >
+        <div ref={contentRef} data-slot="activity-timeline-content">
+          {summary.entries.map((entry, i) => {
+            const isLast = i === summary.entries.length - 1;
 
-        if (entry.kind === "reasoning") {
-          const isMostRecent = entry.item.id === lastReasoningEntryId;
-          return (
-            <div key={entry.item.id} data-activity-entry-kind="reasoning">
-              <ReasoningTimelineNode
-                text={entry.item.text}
-                isLast={isLast}
-                live={live}
-                isMostRecent={isMostRecent}
-              />
-            </div>
-          );
-        }
+            if (entry.kind === "reasoning") {
+              const isMostRecent = entry.item.id === lastReasoningEntryId;
+              return (
+                <div
+                  key={entry.item.id}
+                  data-activity-entry-kind="reasoning"
+                  data-scroll-anchor-id={entry.item.id}
+                >
+                  <ReasoningTimelineNode
+                    sourceId={entry.item.id}
+                    text={entry.item.text}
+                    isLast={isLast}
+                    live={live}
+                    isMostRecent={isMostRecent}
+                  />
+                </div>
+              );
+            }
 
-        return (
-          <div key={entry.item.id} data-activity-entry-kind="tool">
-            <ToolTimelineNode
-              item={entry.item}
-              isLast={isLast}
-              recovered={recoveredToolIds.has(entry.item.id)}
-            />
-          </div>
-        );
-      })}
+            return (
+              <div
+                key={entry.item.id}
+                data-activity-entry-kind="tool"
+                data-scroll-anchor-id={entry.item.id}
+              >
+                <ToolTimelineNode
+                  item={entry.item}
+                  isLast={isLast}
+                  recovered={recoveredToolIds.has(entry.item.id)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {!following ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="xs"
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 gap-1.5 border border-border bg-background shadow-sm"
+          aria-label={
+            newActivityCount > 0
+              ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}. Jump to latest`
+              : "Jump to latest activity"
+          }
+          aria-live="polite"
+          onClick={jumpToLatest}
+        >
+          <ArrowDownIcon data-icon="inline-start" />
+          {newActivityCount > 0
+            ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}`
+            : "Jump to latest"}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -542,7 +675,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   };
 
   useEffect(() => {
-    if (shouldAutoExpand) {
+    if (!userToggledRef.current && shouldAutoExpand) {
       setExpanded(true);
     }
     // Do not auto-collapse on complete — users often want the audit trail.

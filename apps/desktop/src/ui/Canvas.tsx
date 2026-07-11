@@ -38,6 +38,7 @@ import { runCanvasSaveAs } from "../lib/canvasSaveAs";
 import { confirmAction, openPath, pickCanvasSavePath, revealPath } from "../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
+import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
 import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
@@ -205,6 +206,7 @@ export function Canvas({ path }: { path: string }) {
       ? canvasState.problem.message
       : null;
   const saveStatus = canvasState.saveStatus;
+  const fileChangeRevision = useFileChangeRevision(canvasState.document?.path ?? path);
 
   useEffect(() => {
     contentRef.current = content;
@@ -256,6 +258,11 @@ export function Canvas({ path }: { path: string }) {
       window.removeEventListener("focus", pollOnFocus);
     };
   }, [canvasState.document, controller, isPptx, isSpreadsheet]);
+
+  useEffect(() => {
+    if (fileChangeRevision === 0 || !canvasState.document || isSpreadsheet || isPptx) return;
+    void controller.poll();
+  }, [canvasState.document, controller, fileChangeRevision, isPptx, isSpreadsheet]);
 
   useEffect(() => {
     if (canvasState.document?.revision.fingerprint) {

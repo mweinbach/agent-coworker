@@ -14,6 +14,7 @@ import type {
   SessionSnapshotLike,
   WorkspaceSummary,
 } from "./protocolTypes";
+import type { PendingServerRequestIdentity } from "./server-request-identity";
 import {
   applyAgentDelta,
   applyProjectedCompletion,
@@ -47,24 +48,24 @@ export type MobileThreadSummary = {
 
 export type MobileThreadFeedEntry = SessionFeedItem;
 
-export type PendingServerRequest =
-  | {
-      requestId: string | number;
-      kind: "ask";
-      threadId: string;
-      itemId: string;
-      question: string;
-      options: string[];
-    }
-  | {
-      requestId: string | number;
-      kind: "approval";
-      threadId: string;
-      itemId: string;
-      command: string;
-      reason: string;
-      dangerous: boolean;
-    };
+export type PendingServerRequest = PendingServerRequestIdentity &
+  (
+    | {
+        kind: "ask";
+        threadId: string;
+        itemId: string;
+        question: string;
+        options: string[];
+      }
+    | {
+        kind: "approval";
+        threadId: string;
+        itemId: string;
+        command: string;
+        reason: string;
+        dangerous: boolean;
+      }
+  );
 
 type ThreadStoreState = {
   snapshots: Record<string, SessionSnapshotLike>;

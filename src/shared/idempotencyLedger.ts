@@ -3,19 +3,19 @@ export type IdempotencyOutcome<T> =
   | { status: "rejected"; message: string };
 
 export type IdempotencyClaim<T> =
-  | { kind: "owner"; key: string }
+  | { kind: "owner"; key: string; fingerprint: string }
   | { kind: "replay"; key: string; outcome: Promise<IdempotencyOutcome<T>> };
 
 type PendingEntry<T> = {
   status: "pending";
-  fingerprint: string | null;
+  fingerprint: string;
   resolve: (outcome: IdempotencyOutcome<T>) => void;
   outcome: Promise<IdempotencyOutcome<T>>;
 };
 
 type AcceptedEntry<T> = {
   status: "accepted";
-  fingerprint: string | null;
+  fingerprint: string;
   value: T;
 };
 
@@ -31,12 +31,10 @@ export class IdempotencyConflictError extends Error {
 export class IdempotencyLedger<T> {
   private readonly entries = new Map<string, Entry<T>>();
 
-  constructor(private readonly maxAcceptedEntries = 1_024) {}
-
   claim(key: string, fingerprint: string): IdempotencyClaim<T> {
     const existing = this.entries.get(key);
     if (existing) {
-      if (existing.fingerprint !== null && existing.fingerprint !== fingerprint) {
+      if (existing.fingerprint !== fingerprint) {
         throw new IdempotencyConflictError(key);
       }
       return {
@@ -59,7 +57,7 @@ export class IdempotencyLedger<T> {
       resolve: resolveOutcome,
       outcome,
     });
-    return { kind: "owner", key };
+    return { kind: "owner", key, fingerprint };
   }
 
   accept(key: string, value: T): void {
@@ -72,7 +70,6 @@ export class IdempotencyLedger<T> {
       fingerprint: existing.fingerprint,
       value,
     });
-    this.evictAcceptedEntries();
   }
 
   reject(key: string, message: string): void {
@@ -82,28 +79,12 @@ export class IdempotencyLedger<T> {
     existing.resolve({ status: "rejected", message });
   }
 
-  seedAccepted(key: string, value: T): void {
+  seedAccepted(key: string, fingerprint: string, value: T): void {
     if (this.entries.has(key)) return;
     this.entries.set(key, {
       status: "accepted",
-      fingerprint: null,
+      fingerprint,
       value,
     });
-    this.evictAcceptedEntries();
-  }
-
-  private evictAcceptedEntries(): void {
-    let acceptedCount = 0;
-    for (const entry of this.entries.values()) {
-      if (entry.status === "accepted") acceptedCount += 1;
-    }
-    if (acceptedCount <= this.maxAcceptedEntries) return;
-
-    for (const [key, entry] of this.entries) {
-      if (entry.status !== "accepted") continue;
-      this.entries.delete(key);
-      acceptedCount -= 1;
-      if (acceptedCount <= this.maxAcceptedEntries) return;
-    }
   }
 }

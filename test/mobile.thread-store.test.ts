@@ -509,7 +509,9 @@ describe("mobile thread store offline draft preservation", () => {
 
     store.setPendingRequest({
       requestId: "req-123",
+      requestFingerprint: "req-123",
       kind: "ask",
+      method: "item/tool/requestUserInput",
       threadId: "remote-1",
       itemId: "item-1",
       question: "Continue?",

@@ -26,6 +26,11 @@ import {
 } from "@/features/cowork/composer-policy";
 import { filterFeedForDisplay } from "@/features/cowork/feedDisplay";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
+import {
+  copyPendingServerRequestIdentity,
+  hasPendingServerRequestIdentity,
+  type PendingServerRequestIdentity,
+} from "@/features/cowork/server-request-identity";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -49,7 +54,7 @@ type ThreadActionError =
       kind: "respond";
       message: string;
       response: {
-        requestId: string | number;
+        identity: PendingServerRequestIdentity;
         result: unknown;
       };
     }
@@ -182,6 +187,13 @@ export default function ThreadDetailScreen() {
     };
   }, [loadThreadFeed]);
 
+  const showStop = turnActive || (isConnected && pendingRequest !== null);
+  useEffect(() => {
+    if (showStop) return;
+    stoppingRef.current = false;
+    setIsStopping(false);
+  }, [showStop]);
+
   const renderItems = useMemo(
     () => buildChatRenderItems(filterFeedForDisplay(thread?.feed ?? [], showDebugMessages)),
     [thread?.feed, showDebugMessages],
@@ -244,43 +256,53 @@ export default function ThreadDetailScreen() {
     stoppingRef.current = true;
     setIsStopping(true);
     setActionError((current) => (current?.kind === "interrupt" ? null : current));
-    try {
-      if (runtimeClient && !isDraftThread) {
+    if (runtimeClient && !isDraftThread) {
+      try {
         await runtimeClient.interruptTurn(activeThread.id);
+      } catch (error) {
+        stoppingRef.current = false;
+        setIsStopping(false);
+        setActionError({
+          kind: "interrupt",
+          message: describeError(error, "Failed to stop this turn."),
+        });
+        return;
+      }
+      try {
         const reread = await runtimeClient.readThread(activeThread.id, { includeTurns: true });
         if (reread.coworkSnapshot) {
           useThreadStore.getState().hydrate(reread.coworkSnapshot);
         }
         reconcileActiveTurn(activeThread.id, reread.thread.turns);
-        return;
+      } catch (error) {
+        setActionError({
+          kind: "load",
+          message: describeError(error, "Stop sent. Failed to refresh this conversation."),
+        });
       }
-      interruptThread(activeThread.id);
-    } catch (error) {
-      setActionError({
-        kind: "interrupt",
-        message: describeError(error, "Failed to stop this turn."),
-      });
-    } finally {
-      stoppingRef.current = false;
-      setIsStopping(false);
+      return;
     }
+    interruptThread(activeThread.id);
   }
 
-  async function answerServerRequest(requestId: string | number, result: unknown) {
+  async function answerServerRequest(identity: PendingServerRequestIdentity, result: unknown) {
     const client = getActiveCoworkJsonRpcClient();
     if (!client) {
       return false;
     }
     setActionError((current) => (current?.kind === "respond" ? null : current));
     try {
-      await client.respondServerRequest(requestId, result);
-      clearPendingRequest(activeThread.id);
+      await client.respondServerRequest(identity.requestId, result);
+      const currentRequest = useThreadStore.getState().getPendingRequest(activeThread.id);
+      if (currentRequest && hasPendingServerRequestIdentity(currentRequest, identity)) {
+        clearPendingRequest(activeThread.id);
+      }
       return true;
     } catch (error) {
       setActionError({
         kind: "respond",
         message: describeError(error, "Failed to send your response."),
-        response: { requestId, result },
+        response: { identity, result },
       });
       return false;
     }
@@ -335,7 +357,6 @@ export default function ThreadDetailScreen() {
   }
 
   const activePendingRequest = isConnected ? pendingRequest : null;
-  const showStop = turnActive || activePendingRequest !== null;
   const isSubmitting = activeThread.composerSubmission?.status === "submitting";
   const composerPolicy = getComposerPolicy({
     connected: isConnected,
@@ -358,8 +379,18 @@ export default function ThreadDetailScreen() {
         void retryFailedComposerSubmission();
         return;
       case "respond": {
-        const requestId = activePendingRequest?.requestId ?? error.response.requestId;
-        void answerServerRequest(requestId, error.response.result);
+        if (
+          !activePendingRequest ||
+          !hasPendingServerRequestIdentity(activePendingRequest, error.response.identity)
+        ) {
+          setActionError({
+            ...error,
+            message:
+              "That request is no longer pending. Review the current request before responding.",
+          });
+          return;
+        }
+        void answerServerRequest(error.response.identity, error.response.result);
         return;
       }
       case "interrupt":
@@ -421,7 +452,7 @@ export default function ThreadDetailScreen() {
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
           ListHeaderComponent={
-            showSessionBadge || actionError || normalizedAgents.length > 0
+            showSessionBadge || normalizedAgents.length > 0
               ? () => (
                   <View style={{ gap: 10, paddingBottom: 4 }}>
                     {normalizedAgents.length > 0 ? <SubagentBar agents={normalizedAgents} /> : null}
@@ -437,44 +468,6 @@ export default function ThreadDetailScreen() {
                         {activePendingRequest ? (
                           <StatusPill label="needs response" tone="warning" />
                         ) : null}
-                      </View>
-                    ) : null}
-                    {actionError ? (
-                      <View
-                        style={{
-                          gap: 10,
-                          borderRadius: 16,
-                          borderCurve: "continuous",
-                          borderWidth: 1,
-                          borderColor: theme.danger,
-                          backgroundColor: theme.dangerMuted,
-                          paddingHorizontal: 14,
-                          paddingVertical: 12,
-                        }}
-                      >
-                        <Text
-                          selectable
-                          style={{ color: theme.danger, fontSize: 14, lineHeight: 20 }}
-                        >
-                          {actionError.message}
-                        </Text>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={`Retry ${actionError.kind}`}
-                          onPress={() => {
-                            retryActionError(actionError);
-                          }}
-                          style={({ pressed }) => ({
-                            alignSelf: "flex-start",
-                            borderRadius: 999,
-                            borderCurve: "continuous",
-                            backgroundColor: pressed ? theme.primaryMuted : theme.primary,
-                            paddingHorizontal: 14,
-                            paddingVertical: 8,
-                          })}
-                        >
-                          <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Retry</Text>
-                        </Pressable>
                       </View>
                     ) : null}
                   </View>
@@ -510,20 +503,24 @@ export default function ThreadDetailScreen() {
                   askDraft={askDraft}
                   onChangeAskDraft={setAskDraft}
                   onAnswerOption={(answer) => {
-                    void answerServerRequest(request.requestId, { answer });
+                    void answerServerRequest(copyPendingServerRequestIdentity(request), { answer });
                   }}
                   onAnswerText={() => {
-                    void answerServerRequest(request.requestId, { answer: askDraft || "ok" }).then(
-                      (sent) => {
-                        if (sent) setAskDraft("");
-                      },
-                    );
+                    void answerServerRequest(copyPendingServerRequestIdentity(request), {
+                      answer: askDraft || "ok",
+                    }).then((sent) => {
+                      if (sent) setAskDraft("");
+                    });
                   }}
                   onApprove={() => {
-                    void answerServerRequest(request.requestId, { decision: "accept" });
+                    void answerServerRequest(copyPendingServerRequestIdentity(request), {
+                      decision: "accept",
+                    });
                   }}
                   onReject={() => {
-                    void answerServerRequest(request.requestId, { decision: "reject" });
+                    void answerServerRequest(copyPendingServerRequestIdentity(request), {
+                      decision: "reject",
+                    });
                   }}
                 />
               );
@@ -581,12 +578,53 @@ export default function ThreadDetailScreen() {
             bottom: 0,
             alignSelf: "stretch",
             width: "100%",
+            gap: 8,
             paddingHorizontal: 16,
             paddingTop: 8,
             paddingBottom: Math.max(insets.bottom, 8),
             backgroundColor: "transparent",
           }}
         >
+          {actionError ? (
+            <View
+              testID="composer-recovery"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 16,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: theme.danger,
+                backgroundColor: theme.dangerMuted,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+              }}
+            >
+              <Text
+                selectable
+                style={{ flex: 1, color: theme.danger, fontSize: 13, lineHeight: 18 }}
+              >
+                {actionError.message}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Retry ${actionError.kind}`}
+                onPress={() => {
+                  retryActionError(actionError);
+                }}
+                style={({ pressed }) => ({
+                  borderRadius: 999,
+                  borderCurve: "continuous",
+                  backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                })}
+              >
+                <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <ComposerBar
             value={activeThread.composerDraft}
             onChangeText={(text) => setComposerDraft(activeThread.id, text)}

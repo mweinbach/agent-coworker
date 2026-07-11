@@ -158,7 +158,9 @@ describe("mobile offline cache", () => {
           pendingPrompt: true,
           pendingServerRequest: {
             kind: "ask",
+            method: "item/tool/requestUserInput",
             requestId: "req-1",
+            requestFingerprint: "req-1",
             threadId: "thread-cache-1",
             itemId: "item-1",
             question: "Continue?",

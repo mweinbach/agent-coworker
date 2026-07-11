@@ -195,15 +195,10 @@ export class TurnExecutionManager {
       return;
     }
     const turnPromise = this.userMessageTurnRunner
-      .sendUserMessage(
-        text,
-        clientMessageId,
-        displayText,
-        attachments,
-        inputParts,
-        references,
-        opts,
-      )
+      .sendUserMessage(text, clientMessageId, displayText, attachments, inputParts, references, {
+        allowThreadManagementTools: opts?.allowThreadManagementTools,
+        ...(claim?.kind === "owner" ? { idempotencyFingerprint: claim.fingerprint } : {}),
+      })
       .finally(() => {
         if (claim) {
           this.userMessageLedger.reject(
@@ -252,19 +247,17 @@ export class TurnExecutionManager {
     if (!sessionDb) return;
     const events = sessionDb.listThreadJournalEvents(this.context.id);
     for (const event of events) {
-      if (event.eventType !== "item/started") continue;
+      if (event.eventType !== "internal/userMessageAccepted") continue;
       const payload =
         event.payload && typeof event.payload === "object"
           ? (event.payload as Record<string, unknown>)
           : null;
-      const item =
-        payload?.item && typeof payload.item === "object"
-          ? (payload.item as Record<string, unknown>)
-          : null;
-      if (item?.type !== "userMessage" || typeof item.clientMessageId !== "string") continue;
+      const clientMessageId =
+        typeof payload?.clientMessageId === "string" ? payload.clientMessageId : null;
+      const fingerprint = typeof payload?.fingerprint === "string" ? payload.fingerprint : null;
       const turnId = typeof payload?.turnId === "string" ? payload.turnId : event.turnId;
-      if (!turnId) continue;
-      this.userMessageLedger.seedAccepted(item.clientMessageId, { turnId });
+      if (!clientMessageId || !fingerprint || !turnId) continue;
+      this.userMessageLedger.seedAccepted(clientMessageId, fingerprint, { turnId });
     }
   }
 

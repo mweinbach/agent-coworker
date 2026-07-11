@@ -69,7 +69,10 @@ export type UserMessageTurnRunner = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      idempotencyFingerprint?: string;
+    },
   ) => Promise<void>;
 };
 
@@ -188,7 +191,10 @@ export function createUserMessageTurnRunner(
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      idempotencyFingerprint?: string;
+    },
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -325,6 +331,10 @@ export function createUserMessageTurnRunner(
         sessionId: context.id,
         text: visibleText,
         clientMessageId,
+        turnId,
+        ...(opts?.idempotencyFingerprint
+          ? { idempotencyFingerprint: opts.idempotencyFingerprint }
+          : {}),
       });
       onUserMessageAccepted?.(clientMessageId, turnId);
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);

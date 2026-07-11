@@ -306,7 +306,14 @@ export type SessionEvent =
       clientMessageId?: string;
       steerRequestId?: string;
     }
-  | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+      type: "user_message";
+      sessionId: string;
+      text: string;
+      clientMessageId?: string;
+      turnId?: string;
+      idempotencyFingerprint?: string;
+    }
   | {
       type: "model_stream_chunk";
       sessionId: string;

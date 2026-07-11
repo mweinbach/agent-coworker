@@ -153,9 +153,11 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         if (request.method === "item/tool/requestUserInput") {
           threadStore.setPendingRequest({
             kind: "ask",
+            method: request.method,
             threadId: request.params.threadId,
             itemId: request.params.itemId,
             requestId: request.id,
+            requestFingerprint: request.params.requestId,
             question: request.params.question,
             options: request.params.options ?? [],
           });
@@ -163,9 +165,11 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         }
         threadStore.setPendingRequest({
           kind: "approval",
+          method: request.method,
           threadId: request.params.threadId,
           itemId: request.params.itemId,
           requestId: request.id,
+          requestFingerprint: request.params.requestId,
           command: request.params.command,
           reason: request.params.reason,
           dangerous: request.params.dangerous,

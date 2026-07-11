@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { act, createElement } from "react";
+import { act, createElement, forwardRef } from "react";
 import { createRoot } from "react-dom/client";
 import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 
@@ -30,6 +30,48 @@ function mockLocalModule(alias: string, relativePath: string, factory: () => any
   mock.module(resolved + ".ts", factory);
   mock.module(resolved + ".tsx", factory);
 }
+
+const actualReactNative = require("react-native");
+const testFlatList = forwardRef(function TestFlatList(props: any, _ref) {
+  const Header = props.ListHeaderComponent;
+  const Empty = props.ListEmptyComponent;
+  const items = Array.isArray(props.data) ? props.data : [];
+  return createElement(
+    "div",
+    { "data-testid": "flat-list" },
+    Header ? createElement(Header) : null,
+    items.length === 0 && Empty ? createElement(Empty) : null,
+    ...items.map((item: any, index: number) => props.renderItem({ item, index, separators: {} })),
+  );
+});
+mockLocalModule("react-native", "apps/mobile/node_modules/react-native", () => ({
+  ...actualReactNative,
+  FlatList: testFlatList,
+  KeyboardAvoidingView: ({ behavior: _behavior, children, ...props }: any) =>
+    createElement("div", props, children),
+  Text: ({ children, selectable: _selectable, ...props }: any) =>
+    createElement("span", props, children),
+  View: ({ children, pointerEvents: _pointerEvents, testID, ...props }: any) =>
+    createElement("div", { ...props, "data-testid": testID }, children),
+  Pressable: ({
+    accessibilityLabel,
+    accessibilityRole: _accessibilityRole,
+    children,
+    onPress,
+    style,
+    ...props
+  }: any) =>
+    createElement(
+      "button",
+      {
+        ...props,
+        "aria-label": accessibilityLabel,
+        onClick: onPress,
+        style: typeof style === "function" ? style({ pressed: false }) : style,
+      },
+      children,
+    ),
+}));
 
 // Mock expo-router
 const toolbarMock = Object.assign(
@@ -144,6 +186,7 @@ const threadStoreMock = () => ({
     {
       getState: () => ({
         hydrate: mockHydrate,
+        getPendingRequest: () => mockPendingRequest,
         getActiveTurnStartedAt: () => mockActiveTurnStartedAt,
         markTurnStarted: mockMarkTurnStarted,
         markTurnCompleted: mockMarkTurnCompleted,
@@ -195,10 +238,11 @@ mockLocalModule(
 
 // Mock components
 let latestComposerProps: any = null;
+let latestPendingRequestProps: any = null;
 mockLocalModule("@/components/ComposerBar", "apps/mobile/src/components/ComposerBar", () => ({
   ComposerBar: (props: any) => {
     latestComposerProps = props;
-    return null;
+    return createElement("div", { "data-testid": "composer-bar" });
   },
 }));
 mockLocalModule(
@@ -211,7 +255,12 @@ mockLocalModule(
 mockLocalModule(
   "@/components/thread/pending-request-card",
   "apps/mobile/src/components/thread/pending-request-card",
-  () => ({ PendingRequestCard: () => null }),
+  () => ({
+    PendingRequestCard: (props: any) => {
+      latestPendingRequestProps = props;
+      return null;
+    },
+  }),
 );
 mockLocalModule(
   "@/components/thread/markdown-text",
@@ -268,6 +317,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockActiveTurnStartedAt = null;
     mockPendingRequest = null;
     latestComposerProps = null;
+    latestPendingRequestProps = null;
     mockResumeThread.mockClear();
     mockReadThread.mockClear();
     mockReadThread.mockImplementation(async (threadId: string) => ({
@@ -430,6 +480,12 @@ describe("mobile ThreadDetailScreen", () => {
         "send rejected",
       );
       expect(mockSetComposerDraft).not.toHaveBeenCalled();
+      const recovery = container.querySelector(
+        '[data-testid="composer-recovery"], [testid="composer-recovery"]',
+      );
+      const composer = container.querySelector('[data-testid="composer-bar"]');
+      expect(recovery).not.toBeNull();
+      expect(recovery?.parentElement).toBe(composer?.parentElement);
     } finally {
       if (root) {
         await act(async () => {
@@ -533,6 +589,75 @@ describe("mobile ThreadDetailScreen", () => {
     }
   });
 
+  test("never redirects a failed response retry to a newer server request", async () => {
+    mockPendingRequest = {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      threadId: "test-thread-123",
+      itemId: "ask-item-1",
+      requestId: "ask-rpc-1",
+      requestFingerprint: "ask-request-1",
+      question: "Choose one",
+      options: ["a", "b"],
+    };
+    mockRespondServerRequest.mockImplementationOnce(async () => {
+      throw new Error("response failed");
+    });
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await act(async () => {
+        latestPendingRequestProps?.onAnswerOption("a");
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockRespondServerRequest).toHaveBeenCalledWith("ask-rpc-1", { answer: "a" });
+
+      mockPendingRequest = {
+        kind: "approval",
+        method: "item/commandExecution/requestApproval",
+        threadId: "test-thread-123",
+        itemId: "approval-item-2",
+        requestId: "approval-rpc-2",
+        requestFingerprint: "approval-request-2",
+        command: "rm temp.txt",
+        reason: "cleanup",
+        dangerous: true,
+      };
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+
+      const retryButton = container.querySelector(
+        '[aria-label="Retry respond"], [accessibilitylabel="Retry respond"]',
+      );
+      if (!(retryButton instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing response retry button");
+      }
+      await act(async () => {
+        retryButton.click();
+        await Promise.resolve();
+      });
+
+      expect(mockRespondServerRequest).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("sends one interrupt while Stop is already in flight", async () => {
     mockActiveTurnStartedAt = "2026-07-10T00:00:00.000Z";
     let resolveInterrupt: (() => void) | undefined;
@@ -566,6 +691,13 @@ describe("mobile ThreadDetailScreen", () => {
       await act(async () => {
         resolveInterrupt?.();
         await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(latestComposerProps?.isStopping).toBe(true);
+
+      mockActiveTurnStartedAt = null;
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
         await Promise.resolve();
       });
       expect(latestComposerProps?.isStopping).toBe(false);

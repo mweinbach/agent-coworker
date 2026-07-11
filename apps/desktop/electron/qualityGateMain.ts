@@ -1289,7 +1289,11 @@ async function createWindow(
   return win;
 }
 
-async function handleIpc(channel: string, input: unknown): Promise<unknown> {
+async function handleIpc(
+  channel: string,
+  input: unknown,
+  sourceWindow: Electron.BrowserWindow | null,
+): Promise<unknown> {
   switch (channel) {
     case DESKTOP_IPC_CHANNELS.loadState:
       if (!bootstrapReleased) {
@@ -1418,6 +1422,7 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
       mainWindow?.minimize();
       return undefined;
     case DESKTOP_IPC_CHANNELS.windowClose:
+      sourceWindow?.close();
       return undefined;
     default:
       return undefined;
@@ -1425,7 +1430,11 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
 }
 
 for (const channel of Object.values(DESKTOP_IPC_CHANNELS)) {
-  ipcMain.handle(channel, async (_event, input: unknown) => await handleIpc(channel, input));
+  ipcMain.handle(
+    channel,
+    async (event, input: unknown) =>
+      await handleIpc(channel, input, BrowserWindow.fromWebContents(event.sender)),
+  );
 }
 
 process.on("uncaughtException", (error) => {

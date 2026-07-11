@@ -43,6 +43,7 @@ import {
   isAbsoluteDesktopPath,
 } from "../../lib/mediaProtocol";
 import { cn } from "../../lib/utils";
+import { useOverlayOwner } from "../OverlayStack";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
 const streamdownPlugins = { cjk, code, math, mermaid };
@@ -311,6 +312,12 @@ function DesktopCitationChip({
   const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
+  useOverlayOwner({
+    active: open,
+    label: "Citation sources",
+    onDismiss: () => setOpen(false),
+    restoreFocus: () => buttonRef.current,
+  });
 
   const cancelScheduledHoverClose = () => {
     if (hoverCloseTimerRef.current !== null) {
@@ -438,10 +445,6 @@ function DesktopCitationChip({
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        return;
-      }
       if (sources.length <= 1) {
         return;
       }

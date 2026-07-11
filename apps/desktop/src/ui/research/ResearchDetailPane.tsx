@@ -16,6 +16,7 @@ import { formatRelativeAge } from "../../lib/time";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { useOverlayOwner } from "../OverlayStack";
 import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
@@ -111,11 +112,20 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const prefersReducedMotion = usePrefersReducedMotion();
   const sourcesPanelId = useId();
   const detailBodyRef = useRef<HTMLDivElement | null>(null);
+  const sourcesTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineInput, setRefineInput] = useState("");
   const [planActionLoading, setPlanActionLoading] = useState(false);
   const detailBodyWidth = useElementWidth(detailBodyRef);
+  const sourcesOverlay =
+    detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
+  useOverlayOwner({
+    active: sourcesOpen && sourcesOverlay && (research?.sources.length ?? 0) > 0,
+    label: "Research sources",
+    onDismiss: () => setSourcesOpen(false),
+    restoreFocus: () => sourcesTriggerRef.current,
+  });
 
   if (!research) {
     return (
@@ -131,8 +141,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
   const showSourcesPanel = sourcesOpen && sourceCount > 0;
-  const sourcesOverlay =
-    detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
   const sourcesPanelStyle = {
     "--research-sources-panel-width": RESEARCH_SOURCES_PANEL_WIDTH,
     flexBasis: sourcesOverlay
@@ -194,6 +202,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
             {sourceCount > 0 ? (
               <Button
+                ref={sourcesTriggerRef}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -338,6 +347,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           {sourceCount > 0 ? (
             <aside
               id={sourcesPanelId}
+              role={sourcesOverlay ? "dialog" : undefined}
               data-sources-presentation={sourcesOverlay ? "overlay" : "inline"}
               className={cn(
                 "min-h-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color,transform] ease-out",
@@ -384,6 +394,13 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
   const [expanded, setExpanded] = useState(false);
   const prefersReducedMotion = usePrefersReducedMotion();
   const composerShellRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const followUpOwner = useOverlayOwner({
+    active: expanded,
+    label: "Research follow-up",
+    onDismiss: () => setExpanded(false),
+    restoreFocus: () => triggerRef.current,
+  });
 
   useEffect(() => {
     if (!expanded) {
@@ -392,7 +409,11 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setExpanded(false);
+        if (!followUpOwner?.handleEscape(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          setExpanded(false);
+        }
       }
     };
 
@@ -413,7 +434,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("mousedown", onPointerDown);
     };
-  }, [expanded]);
+  }, [expanded, followUpOwner]);
 
   const springTransition = prefersReducedMotion
     ? { duration: 0 }
@@ -426,6 +447,8 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
           <motion.div
             key="composer"
             ref={composerShellRef}
+            role="dialog"
+            aria-label="Research follow-up"
             layout
             className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
@@ -453,6 +476,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
             whileTap={prefersReducedMotion ? undefined : { scale: 0.94 }}
           >
             <Button
+              ref={triggerRef}
               type="button"
               size="icon"
               onClick={() => setExpanded(true)}

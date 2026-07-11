@@ -55,10 +55,32 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   await expect(page.getByText("The quality review is in progress.")).toBeVisible();
   await expect(page.getByText("bun run desktop:quality")).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop generating response" })).toBeVisible();
+
+  const composer = page.getByRole("combobox", { name: "Message input" });
+  await composer.focus();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        key: "k",
+      }),
+    );
+  });
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+  await expect(page.getByText("Stop current turn", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("Search chats, workspaces, settings, skills…")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(0);
+
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(0);
   await page.getByRole("button", { name: "Keep blocked" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
 
-  const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Prioritize the accessibility findings.");
   await expect(composer).toHaveValue("Prioritize the accessibility findings.");
   await page.getByRole("button", { name: "Steer current response" }).click();
@@ -126,6 +148,23 @@ test("covers persistent disconnect recovery, tool failures, and quick chat", asy
   });
   await expect(quickWindow.getByRole("button", { name: "Open full app" })).toBeVisible();
   await expect(quickWindow.getByRole("group", { name: "Message composer" })).toBeVisible();
+
+  const quickComposer = quickWindow.getByRole("combobox", { name: "Message input" });
+  await quickComposer.fill("@");
+  await expect(quickWindow.getByRole("listbox")).toBeVisible();
+  await expect(quickComposer).toBeFocused();
+  await quickWindow.keyboard.press("Escape");
+  await expect(quickWindow.getByRole("listbox")).toHaveCount(0);
+  await expect(quickComposer).toBeFocused();
+  expect(quickWindow.isClosed()).toBe(false);
+
+  await quickWindow.keyboard.press("Escape");
+  expect(quickWindow.isClosed()).toBe(false);
+
+  const quickWindowClosed = quickWindow.waitForEvent("close");
+  await quickWindow.getByRole("button", { name: "Close quick chat" }).focus();
+  await quickWindow.keyboard.press("Escape");
+  await quickWindowClosed;
 });
 
 test("covers file preview, Canvas popout, and resizers with bounded filesystem work", async ({

@@ -44,6 +44,7 @@ import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { DesktopMarkdown } from "./markdown";
+import { useOverlayOwner } from "./OverlayStack";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 
@@ -485,6 +486,12 @@ export function Canvas({ path }: { path: string }) {
     clearSelectionState();
     window.getSelection()?.removeAllRanges();
   }, [clearSelectionState]);
+  const selectionEditorOwner = useOverlayOwner({
+    active: floatingCoords !== null,
+    label: "Canvas selection editor",
+    onDismiss: clearSelection,
+    restoreFocus: () => sourceTextareaRef.current,
+  });
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
@@ -1045,6 +1052,8 @@ export function Canvas({ path }: { path: string }) {
         createPortal(
           <div
             ref={floatingRef}
+            role="dialog"
+            aria-label="Edit selected canvas text"
             className="fixed bg-popover text-popover-foreground border border-border shadow-lg rounded-xl p-1.5 flex flex-col gap-1.5 min-w-[320px] max-w-[420px] animate-in fade-in zoom-in-95 duration-100 select-none"
             style={{
               left: `${floatingCoords.x}px`,
@@ -1129,7 +1138,11 @@ export function Canvas({ path }: { path: string }) {
                     e.preventDefault();
                     void handleSendPrompt(floatingPromptText);
                   } else if (e.key === "Escape") {
-                    clearSelection();
+                    if (!selectionEditorOwner?.handleEscape(e)) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      clearSelection();
+                    }
                   }
                 }}
                 placeholder="How should the model edit this selection?"

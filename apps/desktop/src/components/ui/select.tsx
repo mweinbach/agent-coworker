@@ -3,11 +3,37 @@
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Select as SelectPrimitive } from "radix-ui";
 import type * as React from "react";
+import { createContext, useContext } from "react";
 
 import { cn } from "@/lib/utils";
+import {
+  OverlayLayerBoundary,
+  type OverlayRootState,
+  useOverlayOwner,
+  useOverlayRootState,
+} from "@/ui/OverlayStack";
 
-function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />;
+const SelectOverlayContext = createContext<OverlayRootState | null>(null);
+
+function Select({
+  defaultOpen,
+  onOpenChange,
+  open,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  const state = useOverlayRootState({ defaultOpen, onOpenChange, open });
+  return (
+    <SelectOverlayContext.Provider value={state}>
+      <OverlayLayerBoundary>
+        <SelectPrimitive.Root
+          data-slot="select"
+          open={state.open}
+          onOpenChange={state.setOpen}
+          {...props}
+        />
+      </OverlayLayerBoundary>
+    </SelectOverlayContext.Provider>
+  );
 }
 
 function SelectGroup({ ...props }: React.ComponentProps<typeof SelectPrimitive.Group>) {
@@ -49,8 +75,17 @@ function SelectContent({
   children,
   position = "item-aligned",
   align = "center",
+  onEscapeKeyDown,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  const owner = useContext(SelectOverlayContext);
+  const ownership = useOverlayOwner({
+    active: owner?.open ?? false,
+    label: "Select menu",
+    onDismiss: () => owner?.setOpen(false),
+    restoreFocus: () => owner?.restoreFocusRef.current ?? null,
+  });
+
   return (
     <SelectPrimitive.Portal
       container={typeof globalThis.document === "undefined" ? undefined : globalThis.document.body}
@@ -65,6 +100,10 @@ function SelectContent({
         )}
         position={position}
         align={align}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          ownership?.handleEscape(event);
+        }}
         {...props}
       >
         <SelectScrollUpButton />

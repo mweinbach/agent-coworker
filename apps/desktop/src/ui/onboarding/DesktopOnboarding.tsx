@@ -40,6 +40,7 @@ import {
 import { cn } from "../../lib/utils";
 import type { ProviderName, SessionEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
+import { useOverlayOwner } from "../OverlayStack";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -1053,9 +1054,11 @@ export function DesktopOnboarding() {
   const [completionError, setCompletionError] = useState<string | null>(null);
 
   useFocusTrap(cardRef, visible);
-
-  // Escape is owned by App.tsx so incomplete first-run setup can confirm
-  // before dismiss. Keep local close affordances (X button) for explicit skip.
+  useOverlayOwner({
+    active: visible,
+    label: "Onboarding",
+    onDismiss: requestDismiss,
+  });
 
   const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
 

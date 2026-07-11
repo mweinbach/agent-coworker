@@ -8,6 +8,7 @@ import { showMainWindow, windowClose } from "../../lib/desktopCommands";
 import { getDesktopWindowThreadId, shouldStartNewQuickChatThread } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { isEditableEscapeTarget, useOverlayStack } from "../OverlayStack";
 
 type QuickChatShellProps = {
   init: () => Promise<void>;
@@ -16,6 +17,7 @@ type QuickChatShellProps = {
 };
 
 export function QuickChatShell({ init, ready, startupError }: QuickChatShellProps) {
+  const { hasOpenOverlay } = useOverlayStack();
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -99,13 +101,21 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
       if (event.key !== "Escape") {
         return;
       }
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        hasOpenOverlay() ||
+        isEditableEscapeTarget(event.target)
+      ) {
+        return;
+      }
       event.preventDefault();
       void windowClose();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [hasOpenOverlay]);
 
   return (
     <div className="flex h-screen min-h-0 min-w-0 overflow-hidden bg-transparent p-0 text-foreground">

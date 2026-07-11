@@ -132,6 +132,7 @@ export function clearFailedMutationSend(
   detail: string,
   overrides?: Partial<WorkspaceRuntime>,
   domain: MutationDomain = "skill",
+  notify = true,
 ): void {
   const pendingField = mutationPendingField(domain);
   set((s) => ({
@@ -147,13 +148,17 @@ export function clearFailedMutationSend(
         ...(overrides ?? {}),
       },
     },
-    notifications: pushNotification(s.notifications, {
-      id: makeId(),
-      ts: nowIso(),
-      kind: "error",
-      title: "Not connected",
-      detail,
-    }),
+    ...(notify
+      ? {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail,
+          }),
+        }
+      : {}),
   }));
 }
 

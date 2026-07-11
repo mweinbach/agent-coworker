@@ -349,7 +349,7 @@ describe("marketplace store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].marketplaceMutationError).toBeNull();
   });
 
-  test("addMarketplace surfaces the server error message and rethrows", async () => {
+  test("addMarketplace surfaces the server error in its acknowledged result", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId] = {
       ...defaultWorkspaceRuntime(),
@@ -368,9 +368,14 @@ describe("marketplace store actions", () => {
       close: () => {},
     } as unknown as JsonRpcSocket);
 
-    await expect(createMarketplaceActions(set, get).addMarketplace("not a repo")).rejects.toThrow(
-      'Failed to add marketplace: Unrecognized marketplace source "not a repo".',
-    );
+    const result = await createMarketplaceActions(set, get).addMarketplace("not a repo");
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: 'Failed to add marketplace: Unrecognized marketplace source "not a repo".',
+      }),
+    });
 
     expect(state.workspaceRuntimeById[workspaceId].marketplaceMutationError).toBe(
       'Failed to add marketplace: Unrecognized marketplace source "not a repo".',
@@ -378,7 +383,7 @@ describe("marketplace store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].marketplaceMutationPendingKeys).toEqual({});
     expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
-    expect(state.notifications.at(-1)?.detail).toBe(
+    expect(state.notifications.at(-1)?.detail).toContain(
       'Failed to add marketplace: Unrecognized marketplace source "not a repo".',
     );
   });

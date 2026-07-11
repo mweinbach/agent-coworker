@@ -218,7 +218,14 @@ function draftProfile() {
 
 describe("subagents settings page", () => {
   test("reports failed saves without discarding the draft", async () => {
-    const upsertAgentProfile = mock(async () => false);
+    const upsertAgentProfile = mock(async () => ({
+      ok: false as const,
+      error: {
+        code: "request_failed" as const,
+        message: "The profile could not be saved.",
+        retryable: true,
+      },
+    }));
 
     const result = await saveAgentProfileDraft(draftProfile(), upsertAgentProfile);
 
@@ -243,7 +250,7 @@ describe("subagents settings page", () => {
   });
 
   test("keeps valid built-in tools outside the selected base role before saving", async () => {
-    const upsertAgentProfile = mock(async () => true);
+    const upsertAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     const draft = {
       ...draftProfile(),
       baseRole: "reviewer" as const,
@@ -262,7 +269,7 @@ describe("subagents settings page", () => {
   });
 
   test("clears unsupported reasoning while preserving hidden task and context defaults", async () => {
-    const upsertAgentProfile = mock(async () => true);
+    const upsertAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     const draft = {
       ...draftProfile(),
       model: "google:gemini-3-flash-preview",
@@ -285,7 +292,7 @@ describe("subagents settings page", () => {
   });
 
   test("keeps reasoning for explicit OpenAI-compatible profile model targets", async () => {
-    const upsertAgentProfile = mock(async () => true);
+    const upsertAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     const draft = {
       ...draftProfile(),
       model: "openai:gpt-5.4",
@@ -304,7 +311,7 @@ describe("subagents settings page", () => {
   });
 
   test("keeps locked profiles enabled before saving", async () => {
-    const upsertAgentProfile = mock(async () => true);
+    const upsertAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     const draft = {
       ...draftProfile(),
       id: "default",
@@ -328,7 +335,7 @@ describe("subagents settings page", () => {
   });
 
   test("generates profile ids from profile names before saving", async () => {
-    const upsertAgentProfile = mock(async () => true);
+    const upsertAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     const draft = {
       ...draftProfile(),
       id: "",
@@ -777,7 +784,10 @@ describe("subagents settings page", () => {
 
   test("workspace tab exposes per-workspace availability toggles for global subagents", async () => {
     const project = workspaceRecord("project-1", "Project", "project");
-    const setAgentProfileWorkspaceAvailability = mock(async () => true);
+    const setAgentProfileWorkspaceAvailability = mock(async () => ({
+      ok: true as const,
+      value: undefined,
+    }));
     const researchEntry = {
       ...catalogEntry("global", "research", "Research"),
       builtIn: true,
@@ -1051,7 +1061,7 @@ describe("subagents settings page", () => {
 
   test("switches to the copied profile destination scope", async () => {
     const project = workspaceRecord("project-1", "Project", "project");
-    const copyAgentProfile = mock(async () => true);
+    const copyAgentProfile = mock(async () => ({ ok: true as const, value: undefined }));
     resetSubagentsStore({
       copyAgentProfile,
       refreshAgentProfilesCatalog: mock(async () => {}),

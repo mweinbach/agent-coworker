@@ -2,6 +2,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -12,6 +13,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
+import { OperationFeedback } from "../../OperationFeedback";
 import {
   actionPending,
   normalizeDisplayContent,
@@ -31,6 +33,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   const copySkillInstallation = useAppStore((s) => s.copySkillInstallation);
   const checkSkillInstallationUpdate = useAppStore((s) => s.checkSkillInstallationUpdate);
   const updateSkillInstallation = useAppStore((s) => s.updateSkillInstallation);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const rt = wsRtById[workspaceId];
   const skills = rt?.skills ?? [];
@@ -42,6 +45,15 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   const deletePending = selectedInstallation
     ? actionPending(rt, "delete", selectedInstallation.installationId)
     : false;
+  const selectedOperation = selectedInstallation
+    ? ["delete", "disable", "enable", "update", "copy:project", "copy:global"]
+        .map(
+          (action) =>
+            operationsByKey[operationKey("skill", action, selectedInstallation.installationId)],
+        )
+        .find((operation) => operation?.status === "pending" || operation?.status === "error")
+    : undefined;
+  const operationPending = selectedOperation?.status === "pending";
   const isDismissedAfterDelete =
     selectedSkillInstallationId !== null && dismissedInstallationId === selectedSkillInstallationId;
   const isOpen =
@@ -57,7 +69,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   }, [deletePending, dismissedInstallationId, selectedSkillInstallationId]);
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) {
+    if (!open && !operationPending) {
       void selectSkillInstallation(null);
     }
   };
@@ -210,7 +222,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               </div>
             </div>
 
-            <div className="p-4 border-t border-border/50 bg-muted/10 flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-muted/10 p-4">
               <div className="flex items-center gap-2">
                 {selectedInstallation?.writable && !selectedInstallation.plugin ? (
                   <Button
@@ -229,8 +241,12 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                         defaultAction: "cancel",
                       });
                       if (!confirmed) return;
-                      setDismissedInstallationId(selectedInstallation.installationId);
-                      void deleteSkillInstallation(selectedInstallation.installationId);
+                      const result = await deleteSkillInstallation(
+                        selectedInstallation.installationId,
+                      );
+                      if (result.ok) {
+                        setDismissedInstallationId(selectedInstallation.installationId);
+                      }
                     }}
                   >
                     Uninstall
@@ -270,6 +286,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                 ) : null}
               </div>
 
+              <OperationFeedback operation={selectedOperation} className="order-first basis-full" />
               <div className="flex items-center gap-2">
                 {selectedInstallation?.writable && !selectedInstallation.plugin && (
                   <>
@@ -327,7 +344,11 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                     </>
                   )}
 
-                <Button size="sm" onClick={() => handleOpenChange(false)}>
+                <Button
+                  size="sm"
+                  disabled={operationPending}
+                  onClick={() => handleOpenChange(false)}
+                >
                   Close
                 </Button>
               </div>

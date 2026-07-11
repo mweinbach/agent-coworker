@@ -7,8 +7,8 @@ import { cn } from "../lib/utils";
 const MAX_VISIBLE_TOASTS = 3;
 
 /**
- * Lightweight in-app toast stack for store notifications. The main window also
- * mirrors these to OS notices; this surface keeps them dismissible inside the app.
+ * Keyboard-dismissible in-app outcomes. Notifications never move focus, while
+ * their per-toast live-region semantics announce errors more urgently.
  */
 export function InAppToasts() {
   const notifications = useAppStore((s) => s.notifications);
@@ -31,15 +31,16 @@ export function InAppToasts() {
   if (visible.length === 0) return null;
 
   return (
-    <div
+    <section
       className="pointer-events-none fixed bottom-4 right-4 z-[80] flex w-[min(100vw-2rem,22rem)] flex-col gap-2"
-      aria-live="polite"
-      aria-relevant="additions"
+      aria-label="Activity notifications"
     >
       {visible.map((notification) => (
         <div
           key={notification.id}
-          role="status"
+          role={notification.kind === "error" ? "alert" : "status"}
+          aria-live={notification.kind === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
           data-slot="in-app-toast"
           className={cn(
             "pointer-events-auto flex items-start gap-2 rounded-lg border bg-background/95 p-3 text-sm shadow-lg backdrop-blur",
@@ -75,6 +76,6 @@ export function InAppToasts() {
           </Button>
         </div>
       ))}
-    </div>
+    </section>
   );
 }

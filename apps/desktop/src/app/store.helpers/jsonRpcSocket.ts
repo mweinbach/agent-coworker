@@ -18,9 +18,10 @@ import { JsonRpcSocket } from "../../lib/agentSocket";
 import { writeRendererLog } from "../../lib/desktopCommands";
 import { withBrowserAccessToken } from "../../lib/webAdapter";
 import type { TurnReference } from "../../lib/wsProtocol";
-import type { StoreGet, StoreSet } from "../store.helpers";
+import type { AbortableActionOptions, StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
 import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
+import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import {
   bumpWorkspaceJsonRpcSocketGeneration,
   getWorkspaceJsonRpcSocketGeneration,
@@ -29,7 +30,13 @@ import {
 
 type JsonRpcNotification =
   | { kind: "notification"; method: string; params?: unknown }
-  | { kind: "request"; id: string | number; method: string; params?: unknown };
+  | { kind: "request"; id: string | number; method: string; params?: unknown }
+  | {
+      kind: "response";
+      id: string | number;
+      result?: unknown;
+      error?: { code: number; message: string; data?: unknown };
+    };
 
 type WorkspaceNotificationRouter = (message: JsonRpcNotification) => void;
 type WorkspaceLifecycleListener = {
@@ -437,6 +444,21 @@ export function ensureWorkspaceJsonRpcSocket(
         params: message.params,
       });
     },
+    onServerResponse: (message: {
+      id: string | number;
+      result?: unknown;
+      error?: { code: number; message: string; data?: unknown };
+    }) => {
+      if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
+        return;
+      }
+      emitToWorkspaceRouters(workspaceId, {
+        kind: "response",
+        id: message.id,
+        ...(message.result !== undefined ? { result: message.result } : {}),
+        ...(message.error ? { error: message.error } : {}),
+      });
+    },
     onOpen: () => {
       socket.__coworkOpened = true;
       socket.__coworkReconnectPending = false;
@@ -523,12 +545,18 @@ export async function requestJsonRpc<T = Record<string, unknown>>(
   workspaceId: string,
   method: string,
   params?: unknown,
+  options: AbortableActionOptions = {},
 ): Promise<T> {
+  throwIfOperationAborted(options.signal);
   const socket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   if (!socket) {
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
-  return (await socket.request(method, params, getJsonRpcRequestRetryOptions(method, params))) as T;
+  throwIfOperationAborted(options.signal);
+  return (await waitForOperation(
+    socket.request(method, params, getJsonRpcRequestRetryOptions(method, params)),
+    options.signal,
+  )) as T;
 }
 
 function hasStableStringKey(params: unknown, key: string): boolean {
@@ -680,6 +708,12 @@ export async function startJsonRpcTurn(
   });
 }
 
+export type JsonRpcTurnSteerResult = {
+  turnId: string;
+  steerRequestId: string;
+  replayed?: boolean;
+};
+
 export async function steerJsonRpcTurn(
   get: StoreGet,
   set: StoreSet | undefined,
@@ -690,7 +724,7 @@ export async function steerJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
   references?: TurnReference[],
-): Promise<unknown> {
+): Promise<JsonRpcTurnSteerResult> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
     input.push({ type: "text", text });
@@ -714,13 +748,27 @@ export async function steerJsonRpcTurn(
       }
     }
   }
-  return await requestJsonRpc(get, set, workspaceId, "turn/steer", {
+  const result = await requestJsonRpc(get, set, workspaceId, "turn/steer", {
     threadId,
     turnId,
     input,
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(references && references.length > 0 ? { references } : {}),
   });
+  if (
+    !result ||
+    typeof result !== "object" ||
+    typeof (result as Record<string, unknown>).turnId !== "string" ||
+    typeof (result as Record<string, unknown>).steerRequestId !== "string"
+  ) {
+    throw new Error("turn/steer returned an invalid result.");
+  }
+  const record = result as Record<string, unknown>;
+  return {
+    turnId: record.turnId as string,
+    steerRequestId: record.steerRequestId as string,
+    ...(typeof record.replayed === "boolean" ? { replayed: record.replayed } : {}),
+  };
 }
 
 export async function interruptJsonRpcTurn(
@@ -738,13 +786,21 @@ export async function uploadJsonRpcWorkspaceFile(
   workspaceId: string,
   filename: string,
   contentBase64: string,
+  options: AbortableActionOptions = {},
 ): Promise<{ filename: string; path: string }> {
   const workspace = getWorkspaceById(get, workspaceId);
-  const result = await requestJsonRpc(get, set, workspaceId, "cowork/session/file/upload", {
-    cwd: workspace?.path,
-    filename,
-    contentBase64,
-  });
+  const result = await requestJsonRpc(
+    get,
+    set,
+    workspaceId,
+    "cowork/session/file/upload",
+    {
+      cwd: workspace?.path,
+      filename,
+      contentBase64,
+    },
+    options,
+  );
   const event = isRecord(result) && isRecord(result.event) ? result.event : null;
   return {
     filename: typeof event?.filename === "string" ? event.filename : filename,

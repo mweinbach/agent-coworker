@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers/operations";
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -35,6 +36,7 @@ import {
   DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
   type LibreOfficeRuntimeDiagnostic,
 } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import {
   SettingsPage,
   SettingsRow,
@@ -81,6 +83,7 @@ export function DeveloperPage() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
   const checkLibreOfficeRuntime = useAppStore((s) => s.checkLibreOfficeRuntime);
   const [libreOfficeStatus, setLibreOfficeStatus] = useState<LibreOfficeRuntimeDiagnostic | null>(
     null,
@@ -156,6 +159,10 @@ export function DeveloperPage() {
     overflowEnabled &&
     parsedOverflowThreshold !== null &&
     parsedOverflowThreshold !== persistedOverflowThreshold;
+  const workspaceDefaultsOperation = workspace
+    ? operationsByKey[operationKey("workspace-defaults", workspace.id, "settings")]
+    : undefined;
+  const workspaceDefaultsPending = workspaceDefaultsOperation?.status === "pending";
   const libreOfficePill = libreOfficeStatusPill(libreOfficeStatus);
   const libreOfficeHealthy = libreOfficeStatus?.status === "available";
 
@@ -491,6 +498,7 @@ export function DeveloperPage() {
               control={
                 <Switch
                   checked={overflowEnabled}
+                  disabled={workspaceDefaultsPending}
                   aria-label="Save oversized tool output to scratch files"
                   onCheckedChange={(checked) => {
                     if (checked) {
@@ -523,7 +531,7 @@ export function DeveloperPage() {
                   pattern="[0-9]*"
                   aria-label="Spill after this many characters"
                   value={overflowThresholdDraft}
-                  disabled={!overflowEnabled}
+                  disabled={!overflowEnabled || workspaceDefaultsPending}
                   onChange={(event) => setOverflowThresholdDraft(event.target.value)}
                 />
                 {overflowThresholdError ? (
@@ -537,7 +545,11 @@ export function DeveloperPage() {
                 <div className="flex flex-wrap gap-2 pt-1">
                   <Button
                     type="button"
-                    disabled={!overflowThresholdDirty || !!overflowThresholdError}
+                    disabled={
+                      !overflowThresholdDirty ||
+                      !!overflowThresholdError ||
+                      workspaceDefaultsPending
+                    }
                     onClick={() => {
                       if (parsedOverflowThreshold === null) return;
                       setOverflowThresholdDraft(String(parsedOverflowThreshold));
@@ -551,7 +563,9 @@ export function DeveloperPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={overflowEnabled && overflowUsesInheritedDefault}
+                    disabled={
+                      workspaceDefaultsPending || (overflowEnabled && overflowUsesInheritedDefault)
+                    }
                     onClick={() => {
                       if (overflowEnabled) {
                         setOverflowThresholdDraft(String(nextEnabledOverflowThreshold));
@@ -566,6 +580,7 @@ export function DeveloperPage() {
                     {overflowEnabled ? "Inherit default" : "Enable default"}
                   </Button>
                 </div>
+                <OperationFeedback operation={workspaceDefaultsOperation} />
               </div>
             </SettingsRow>
           </>

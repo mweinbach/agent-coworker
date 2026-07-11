@@ -6,23 +6,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cowork Desktop</title>
     <script>
-      // Apply theme before first paint to avoid FOUC. Prefer the last resolved
-      // theme written by the app (covers forced light/dark); fall back to OS.
+      // Resolve the theme and standalone-window surface before CSS or React paint.
       (() => {
+        const root = document.documentElement;
+        const params = new URLSearchParams(window.location.search);
+        const requestedWindowMode = params.get("window");
+        const windowMode =
+          requestedWindowMode === "quick-chat" ||
+          requestedWindowMode === "utility" ||
+          requestedWindowMode === "canvas"
+            ? requestedWindowMode
+            : "main";
+        let themeSource = "system";
+        let prefersDark = false;
+        let forcedColors = false;
         try {
-          const stored = localStorage.getItem("cowork.resolvedTheme");
-          const prefersDark =
-            window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
-          const dark = stored === "dark" || (stored !== "light" && prefersDark);
-          const root = document.documentElement;
-          root.dataset.systemTheme = prefersDark ? "dark" : "light";
-          root.dataset.theme = dark ? "dark" : "light";
-          if (dark) root.classList.add("dark");
-          else root.classList.remove("dark");
-          root.style.colorScheme = dark ? "dark" : "light";
+          const storedThemeSource = localStorage.getItem("cowork.themeSource");
+          themeSource =
+            storedThemeSource === "light" || storedThemeSource === "dark"
+              ? storedThemeSource
+              : "system";
         } catch {
-          /* ignore pre-paint theme probe failures */
+          // Persisted preference is optional; continue with the system media probes.
         }
+        try {
+          prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+          forcedColors = window.matchMedia?.("(forced-colors: active)").matches === true;
+        } catch {
+          // Media probes are optional; the light system fallback is safe.
+        }
+
+        const dark = themeSource === "dark" || (themeSource === "system" && prefersDark);
+        const theme = dark ? "dark" : "light";
+        root.dataset.systemTheme = theme;
+        root.dataset.theme = theme;
+        root.dataset.themeSource = themeSource;
+        root.dataset.highContrast = forcedColors ? "true" : "false";
+        root.dataset.windowMode = windowMode;
+        root.classList.toggle("dark", dark);
+        root.classList.toggle("light", !dark);
+
+        if (windowMode === "canvas") {
+          const canvasPath = params.get("path") || "";
+          root.dataset.canvasSurface = /\.(?:csv|xlsx)$/i.test(canvasPath)
+            ? "spreadsheet"
+            : "document";
+        }
+        root.style.colorScheme = forcedColors
+          ? "light dark"
+          : root.dataset.canvasSurface === "spreadsheet"
+            ? "light"
+            : theme;
       })();
     </script>
   </head>

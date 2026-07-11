@@ -29,6 +29,10 @@ import {
   waitForWorkspaceServerRestartBackoff,
 } from "../store.helpers";
 import { resolveCurrentWorkspaceDefaultsSource } from "../store.helpers/oneOffWorkspaceRecord";
+import {
+  invalidateNavigationIntent,
+  isCreationNavigationIntentCurrent,
+} from "../store.helpers/operationIntent";
 import { isStandardChatThread } from "../threadFilters";
 import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { WorkspaceRecord } from "../types";
@@ -118,9 +122,12 @@ export function createWorkspaceActions(
   const isWorkspaceLifecycleEnabled = () => get().desktopFeatureFlags.workspaceLifecycle !== false;
 
   return {
-    addWorkspace: async () => {
+    addWorkspace: async (options = {}) => {
       if (!isWorkspaceLifecycleEnabled()) return;
       if (RUNTIME.workspacePickerOpen) return;
+      if (!options.intent) invalidateNavigationIntent();
+      const canNavigate = () =>
+        !options.intent || isCreationNavigationIntentCurrent(options.intent);
       RUNTIME.workspacePickerOpen = true;
 
       let dir: string | null = null;
@@ -133,7 +140,7 @@ export function createWorkspaceActions(
 
       const existing = get().workspaces.find((w) => w.path === dir);
       if (existing) {
-        await get().selectWorkspace(existing.id);
+        await get().selectWorkspace(existing.id, { intent: options.intent });
         return;
       }
 
@@ -172,11 +179,16 @@ export function createWorkspaceActions(
         yolo: source?.yolo ?? true,
       };
 
-      set((s) => ({
-        workspaces: [ws, ...s.workspaces],
-        selectedWorkspaceId: ws.id,
-        view: stayInSettings ? "settings" : "chat",
-      }));
+      set((s) => {
+        const next = { workspaces: [ws, ...s.workspaces] };
+        return canNavigate()
+          ? {
+              ...next,
+              selectedWorkspaceId: ws.id,
+              view: stayInSettings ? ("settings" as const) : ("chat" as const),
+            }
+          : next;
+      });
       captureProductEvent("workspace_added", {
         eventSource: "renderer",
         workspaceCount: get().workspaces.length,
@@ -278,7 +290,11 @@ export function createWorkspaceActions(
     },
 
     selectWorkspace: async (workspaceId: string, options = {}) => {
-      const isCurrent = () => options.signal?.aborted !== true;
+      if (options.signal?.aborted) return;
+      if (!options.intent) invalidateNavigationIntent();
+      const isCurrent = () =>
+        options.signal?.aborted !== true &&
+        (!options.intent || isCreationNavigationIntentCurrent(options.intent));
       if (!isCurrent()) return;
       const wasSelected = get().selectedWorkspaceId === workspaceId;
       const currentState = get();

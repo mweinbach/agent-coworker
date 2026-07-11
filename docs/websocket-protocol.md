@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.46`
+- Current protocol version: `7.47`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -239,7 +239,9 @@ must remain disabled after that fallback.
 - `cowork/workspace/spreadsheet/patch`
 - `cowork/workspace/presentation/preview`
 
-`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, or references is rejected. Clients must retain the same key, text, attachments, and references until the first request is accepted.
+`thread/start` accepts optional `clientThreadId`. Clients that create local draft threads should pass a stable draft id so reconnect retries return the already-created live thread instead of creating a duplicate. `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream. For `turn/start`, the key is idempotent within a thread: retrying the exact request returns the original turn with `replayed: true` on the `turn/start` result (never on the `turn/started` notification), including after a WebSocket reconnect or server restart, instead of appending another user message or starting another model run. The server retains the accepted key and payload fingerprint for the full retained thread journal horizon; reusing a key with different text, attachments, or references is rejected.
+
+For `turn/steer`, `clientMessageId` is an idempotency key for the active thread session. Retrying the exact turn id, text, attachments, input parts, and references replays `{ turnId, steerRequestId, replayed: true }` without admitting a second steer; changing that payload rejects the reused key. The first accepted result is `{ turnId, steerRequestId }`. `steerRequestId` remains stable through the accepted notification, projected user-message materialization, and any later projected dropped-steer error. If an accepted queued steer is dropped before materialization, the server releases its provisional claim so the client can retry the exact draft. Clients must retain the same key and payload until the steer materializes or reports a correlated error.
 
 After negotiating `toolRetryLineage`, `turn/start` also accepts
 `retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server
@@ -526,6 +528,22 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - MCP management
 - memories
 
+Server-initiated interactions use JSON-RPC requests: `item/tool/requestUserInput` for asks and
+`item/commandExecution/requestApproval` for approvals. Each request is independently identified by
+its thread and request ID. Pending interactions replay in their original arrival order after
+`thread/resume`, with the same request IDs; replay does not collapse or replace sibling requests.
+Clients should disable an interaction's response controls after the first send, but keep the item
+until the server emits `serverRequest/resolved`. A local send failure remains retryable with the
+same response, while an invalid response remains pending and may be corrected. The server journals
+each accepted response as a bounded receipt containing the request ID and canonical ask/approval
+result. For five minutes (up to 128 retained receipts), `thread/resume` replays
+`serverRequest/resolved`, including its `response`, so an acknowledgement lost during disconnect
+cannot leave the interaction stuck. Repeating the same response returns that prior resolution;
+reusing the request ID with a different response returns `-32602` with
+`error.data.category: "interaction_response_conflict"` and never changes the committed result. A
+terminal `turn/completed` notification expires any requests that remain outstanding for that turn,
+including requests ended by cancellation or the server-side prompt timeout.
+
 `cowork/plugins/read`, `cowork/plugins/enable`, `cowork/plugins/disable`, `cowork/plugins/delete`, `cowork/plugins/checkUpdate`, and `cowork/plugins/update` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes. Plugin catalog snapshots keep installed plugins in `plugins`; built-in remote marketplace offers live in `availablePlugins`, use `installed: false`, include `installSource`, and do not expose local paths until installed.
 
 A marketplace `marketplace.json` may include `sourceHash: "sha256:<64 hex chars>"` on plugin and standalone skill entries. Installed marketplace copies report `installedSourceHash`, `latestSourceHash`, and `updateAvailable` when Cowork can compare the stored install hash with the latest marketplace hash. Updates stay opt-in: clients should offer `cowork/plugins/update` or `cowork/skills/installation/update` only when the catalog or explicit check says an update is available.
@@ -648,7 +666,8 @@ write attempts fail closed with the same structured `task_locked` data rather th
 the eventual terminal `task/updated` notification. A `turn/steer` request that was already accepted
 for an active turn can still be dropped asynchronously if a task lock closes before the steer is
 actually committed; in that case the request result stays accepted, but the conversation feed emits
-one projected `error` item with `code: "task_locked"` and the structured `data` described above. No
+one projected `error` item with `code: "task_locked"`, the original `clientMessageId`, the stable
+`steerRequestId`, and the structured `data` described above. No
 queued user message, referenced plugin context, history append, or provider continuation is committed
 for that dropped steer batch.
 
@@ -890,6 +909,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
 - `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice. The result includes `replayHealth: { trusted, snapshotRequired, reason, tailSeq, failedWriteCount, droppedEventCount }`; when `snapshotRequired` is true, clients must treat the stream as discontinuous and call `thread/read` to refresh `coworkSnapshot`.
+- Recent `serverRequest/resolved` notifications replay independently of `afterSeq` for the bounded response-receipt horizon. Their optional `response` is `{ kind: "ask", answer }` or `{ kind: "approval", approved }`; clients may use the request ID alone to settle the exact interaction.
 - `thread/unsubscribe` returns an unsubscribe status and emits `thread/closed` with `{ threadId }` after the connection is detached from a live subscription
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - `cowork/workspace/spreadsheet/workbook` returns full workbook snapshots for embedded spreadsheet editors while preserving native workbook objects in the source file.
@@ -989,6 +1009,13 @@ The remainder of this document describes the JSON-RPC method and notification pa
 - [Session event payload shapes](#session-event-payload-shapes)
 
 ## Protocol v7 Notes
+
+Changes in `7.47`:
+- `turn/steer` now claims `clientMessageId` with an exact payload fingerprint and returns a stable
+  `steerRequestId`; exact response-loss retries replay the original acceptance without duplicating
+  guidance.
+- Accepted queued steers carry both identifiers through materialization or a projected dropped-steer
+  error. A drop releases the provisional claim so the exact client submission remains retryable.
 
 Changes in `7.46`:
 - Added negotiated `toolRetryLineage` support. Opted-in clients may send exact failed projected
@@ -2547,7 +2574,7 @@ Acknowledges that a `steer_message` was accepted for the active turn. The steer 
 | `turnId` | `string` | Active turn identifier |
 | `text` | `string` | Accepted steer text |
 | `clientMessageId` | `string?` | Echoed from the original `steer_message` if provided |
-| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id for matching concurrent `turn/steer` outcomes; clients should continue to use `clientMessageId` for optimistic UI reconciliation |
+| `steerRequestId` | `string?` | Stable server-generated JSON-RPC correlation id for matching a `turn/steer` acceptance, materialization, or later dropped-queue error |
 
 ---
 
@@ -2565,6 +2592,7 @@ Echoed/accepted user message. Sent when a `user_message` or `execute_command` cl
 | `sessionId` | `string` | Session identifier |
 | `text` | `string` | The user message text (for `execute_command`, this is the slash command display text) |
 | `clientMessageId` | `string?` | Echoed from the client message if provided |
+| `steerRequestId` | `string?` | Stable steer correlation id when this user message materializes accepted guidance |
 
 ---
 
@@ -4101,7 +4129,8 @@ Structured error event. Can be emitted in response to any client message or duri
 | `code` | `ServerErrorCode` | Machine-readable error code (see [ServerErrorCode](#servererrorcode)) |
 | `source` | `ServerErrorSource` | Error origin (see [ServerErrorSource](#servererrorsource)) |
 | `data` | `ServerErrorData?` | Optional structured error payload, for example task lock data with `lockKind`, `taskId`, and `taskStatus` |
-| `steerRequestId` | `string?` | Server-generated JSON-RPC correlation id when the error is the direct outcome of a `turn/steer` request |
+| `clientMessageId` | `string?` | Original client id when the error drops an already accepted queued steer |
+| `steerRequestId` | `string?` | Stable correlation id when the error is a direct or asynchronous `turn/steer` outcome |
 
 ---
 

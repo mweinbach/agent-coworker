@@ -8,6 +8,7 @@ const workspaceId = "ws-memory-actions";
 function createState() {
   return {
     notifications: [],
+    operationsByKey: {},
     threads: [],
     workspaces: [
       {
@@ -123,6 +124,76 @@ describe("memory store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(false);
   });
 
+  test("upsertWorkspaceMemory returns acknowledged success and failure results", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "memory_list",
+            sessionId: "control-session",
+            memories: [],
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+
+    const saved = await actions.upsertWorkspaceMemory(
+      workspaceId,
+      "workspace",
+      "project-guidance",
+      "Prefer acknowledged saves.",
+      { cwd: "/tmp/proj" },
+    );
+
+    expect(saved).toMatchObject({ ok: true });
+    expect(requests.at(-1)).toEqual({
+      method: "cowork/memory/upsert",
+      params: {
+        cwd: "/tmp/proj",
+        scope: "workspace",
+        id: "project-guidance",
+        content: "Prefer acknowledged saves.",
+      },
+    });
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => {
+        throw new Error("Memory file is read-only.");
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+    const failed = await actions.upsertWorkspaceMemory(
+      workspaceId,
+      "workspace",
+      "project-guidance",
+      "Keep this draft.",
+      { cwd: "/tmp/proj" },
+    );
+
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        code: "request_failed",
+        message: "Memory file is read-only.",
+      },
+    });
+    expect(state.notifications.at(-1)).toMatchObject({
+      title: "Memory not saved",
+      audience: "foreground",
+    });
+  });
+
   test("advanced memory actions hit the advanced JSON-RPC methods", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
@@ -187,7 +258,7 @@ describe("memory store actions", () => {
       close: () => {},
     } as any);
 
-    const ok = await createWorkspaceMemoryActions(
+    const result = await createWorkspaceMemoryActions(
       set as any,
       get as any,
     ).generateAdvancedMemoryForThread(workspaceId, "thread-1", {
@@ -195,7 +266,7 @@ describe("memory store actions", () => {
       folder: "proj",
     });
 
-    expect(ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(requests).toEqual([
       {
         method: "cowork/memory/advanced/folder/generate",
@@ -332,13 +403,13 @@ describe("memory store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillImprovementPendingActionKeys).toEqual({
       "run:other": true,
     });
-    const runOk = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
-    const restoreOk = await actions.restoreSkillImprovement(workspaceId, "alpha", {
+    const runResult = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
+    const restoreResult = await actions.restoreSkillImprovement(workspaceId, "alpha", {
       cwd: "/tmp/proj",
     });
 
-    expect(runOk).toBe(true);
-    expect(restoreOk).toBe(true);
+    expect(runResult).toMatchObject({ ok: true });
+    expect(restoreResult).toMatchObject({ ok: true });
     expect(requests).toEqual([
       {
         method: "cowork/skills/improvement/status",
@@ -398,9 +469,9 @@ describe("memory store actions", () => {
     } as any);
 
     const actions = createWorkspaceMemoryActions(set as any, get as any);
-    const ok = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
+    const result = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
 
-    expect(ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     // The stale background entry must not be reported as this run's outcome.
     expect(state.notifications.at(-1)).toMatchObject({
       kind: "info",
@@ -422,6 +493,58 @@ describe("memory store actions", () => {
       kind: "info",
       title: "Skill improvement complete",
       detail: "alpha: improved",
+    });
+  });
+
+  test("runSkillImprovement returns a new failed status using its error detail", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "skill_improvement_status",
+          sessionId: "control-session",
+          enabled: true,
+          scope: "user",
+          excludedSkills: [],
+          busy: false,
+          blockReason: null,
+          pendingJobs: [],
+          runHistory: [
+            {
+              id: "manual-failure",
+              skillName: "alpha",
+              status: "failed",
+              startedAt: new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+              message: "The improvement run failed.",
+              error: "The selected model is unavailable.",
+              usageCount: 1,
+            },
+          ],
+          backups: [],
+          skills: [],
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+    const result = await actions.runSkillImprovement(workspaceId, "alpha", { cwd: "/tmp/proj" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "alpha: The selected model is unavailable.",
+      },
+    });
+    expect(state.notifications.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Unable to improve skill",
+      audience: "foreground",
     });
   });
 

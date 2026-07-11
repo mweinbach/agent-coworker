@@ -316,7 +316,10 @@ describe("plugin store actions", () => {
 
     await expect(
       createPluginActions(set, get).installPlugins("owner/repo", "user"),
-    ).rejects.toThrow("request failed");
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "request failed" },
+    });
 
     expect(waiterPendingKey).toBe("plugin:install:user");
     expect(requestedParams).toEqual({
@@ -366,14 +369,19 @@ describe("plugin store actions", () => {
 
     await expect(
       createPluginActions(set, get).installPlugins("owner/repo", "user"),
-    ).rejects.toThrow("Ambiguous plugin source; choose workspace or global explicitly.");
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        message: "Ambiguous plugin source; choose workspace or global explicitly.",
+      },
+    });
 
     expect(state.workspaceRuntimeById[managementWorkspaceId].pluginMutationError).toBe(
       "Ambiguous plugin source; choose workspace or global explicitly.",
     );
     expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationError).toBeNull();
     expect(state.workspaceRuntimeById[managementWorkspaceId].pluginsError).toBeNull();
-    expect(state.notifications.at(-1)?.detail).toBe(
+    expect(state.notifications.at(-1)?.detail).toContain(
       "Ambiguous plugin source; choose workspace or global explicitly.",
     );
   });
@@ -569,7 +577,7 @@ describe("plugin store actions", () => {
     );
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-    expect(state.notifications.at(-1)?.detail).toBe("Plugin is shadowed by a global install.");
+    expect(state.notifications.at(-1)?.detail).toContain("Plugin is shadowed by a global install.");
 
     await createPluginActions(set, get).disablePlugin("plugin-1", "workspace");
     expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toBe(
@@ -577,7 +585,7 @@ describe("plugin store actions", () => {
     );
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
-    expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
+    expect(state.notifications.at(-1)?.detail).toContain("Plugin is already disabled.");
   });
 
   test("deletePlugin keeps the selected plugin visible when the server returns an error", async () => {

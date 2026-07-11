@@ -197,6 +197,30 @@ async function flushUi() {
   await Promise.resolve();
 }
 
+type InputChangeProps = {
+  onChange?: (event: { target: HTMLInputElement; currentTarget: HTMLInputElement }) => void;
+};
+
+function setInputValue(
+  harness: ReturnType<typeof setupJsdom>,
+  input: HTMLInputElement,
+  value: string,
+) {
+  const prototypeValueSetter = Object.getOwnPropertyDescriptor(
+    harness.dom.window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  prototypeValueSetter?.call(input, value);
+  // The Bun preload imports React before jsdom exists, so direct DOM events
+  // alone do not reliably drive controlled fields; call the React prop too.
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey
+    ? ((input as unknown as Record<string, unknown>)[propsKey] as InputChangeProps)
+    : {};
+  props.onChange?.({ target: input, currentTarget: input });
+  input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+}
+
 describe("Canvas hooks stability across file-type switches", () => {
   beforeEach(() => {
     previewResult = makePreviewResult("# Heading\n\n1. one\n2. two\n");
@@ -436,6 +460,141 @@ describe("Canvas hooks stability across file-type switches", () => {
             root!.unmount();
           });
         } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("retains the prompt and announces a rejected send", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const sendMessageMock = mock(async () => false);
+    useAppStore.setState({ sendMessage: sendMessageMock } as Partial<AppStoreState>);
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root!.render(
+          createElement(Canvas, {
+            path: "/Users/mweinbach/Projects/preview-workspace/notes.md",
+          }),
+        );
+        await flushUi();
+      });
+
+      const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+        'input[placeholder="Ask model to edit this document..."]',
+      );
+      expect(input).not.toBeNull();
+      await act(async () => {
+        if (!input) return;
+        input.focus();
+        setInputValue(harness, input, "Tighten the introduction");
+        input.dispatchEvent(
+          new harness.dom.window.InputEvent("input", {
+            bubbles: true,
+            inputType: "insertText",
+            data: "Tighten the introduction",
+          }),
+        );
+        input.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        await flushUi();
+      });
+
+      const sendButton = input?.parentElement?.querySelector<HTMLButtonElement>("button");
+      expect(sendButton).not.toBeNull();
+      expect(input?.value).toBe("Tighten the introduction");
+      expect(sendButton?.disabled).toBe(false);
+      await act(async () => {
+        sendButton?.click();
+        await flushUi();
+      });
+
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(input?.value).toBe("Tighten the introduction");
+      const alert = harness.dom.window.document.querySelector('[role="alert"]');
+      expect(alert?.textContent).toContain("The request was not sent");
+      expect(alert?.getAttribute("aria-live")).toBe("assertive");
+      expect(alert?.getAttribute("aria-atomic")).toBe("true");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("clears the prompt only after the send is acknowledged", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const sendResult = Promise.withResolvers<boolean>();
+    const sendMessageMock = mock(async () => await sendResult.promise);
+    useAppStore.setState({ sendMessage: sendMessageMock } as Partial<AppStoreState>);
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root!.render(
+          createElement(Canvas, {
+            path: "/Users/mweinbach/Projects/preview-workspace/notes.md",
+          }),
+        );
+        await flushUi();
+      });
+
+      const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+        'input[placeholder="Ask model to edit this document..."]',
+      );
+      expect(input).not.toBeNull();
+      await act(async () => {
+        if (!input) return;
+        input.focus();
+        setInputValue(harness, input, "Add a concise summary");
+        input.dispatchEvent(
+          new harness.dom.window.InputEvent("input", {
+            bubbles: true,
+            inputType: "insertText",
+            data: "Add a concise summary",
+          }),
+        );
+        input.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        await flushUi();
+      });
+
+      const sendButton = input?.parentElement?.querySelector<HTMLButtonElement>("button");
+      expect(sendButton).not.toBeNull();
+      expect(input?.value).toBe("Add a concise summary");
+      expect(sendButton?.disabled).toBe(false);
+      await act(async () => {
+        sendButton?.click();
+        await flushUi();
+      });
+
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(input?.value).toBe("Add a concise summary");
+      expect(input?.disabled).toBe(true);
+      expect(sendButton?.disabled).toBe(true);
+
+      sendResult.resolve(true);
+      await act(async () => {
+        await sendResult.promise;
+        await flushUi();
+      });
+
+      expect(input?.value).toBe("");
+      expect(input?.disabled).toBe(false);
+      expect(harness.dom.window.document.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
       }
       harness.restore();
     }

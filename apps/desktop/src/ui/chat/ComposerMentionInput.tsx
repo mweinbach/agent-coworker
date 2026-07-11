@@ -10,6 +10,7 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { MessageComposerTextarea } from "@/ui/composer/MessageComposer";
+import { useOverlayOwner } from "@/ui/OverlayStack";
 import { ComposerHighlightOverlay } from "./ComposerHighlightOverlay";
 import { ComposerMentionMenu } from "./ComposerMentionMenu";
 import {
@@ -70,6 +71,12 @@ export function ComposerMentionInput(props: {
   const [items, setItems] = useState<MentionItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [query, setQuery] = useState("");
+  const mentionMenuOwner = useOverlayOwner({
+    active: menuOpen,
+    label: "Composer mentions",
+    onDismiss: () => setMenuOpen(false),
+    restoreFocus: () => textareaRef.current,
+  });
 
   const syncScroll = useCallback(() => {
     const textarea = textareaRef.current;
@@ -111,6 +118,14 @@ export function ComposerMentionInput(props: {
     refreshMenu(textarea.value, textarea.selectionStart ?? textarea.value.length);
   }, [refreshMenu, textareaRef]);
 
+  const handleKeyUp = useCallback(
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Escape") return;
+      refreshFromCaret();
+    },
+    [refreshFromCaret],
+  );
+
   const handleSelect = useCallback(
     (item: MentionItem) => {
       const textarea = textareaRef.current;
@@ -137,9 +152,7 @@ export function ComposerMentionInput(props: {
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (menuOpen) {
         if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          setMenuOpen(false);
+          mentionMenuOwner?.handleEscape(event);
           return;
         }
         if (event.key === "Tab") {
@@ -168,7 +181,7 @@ export function ComposerMentionInput(props: {
       }
       onKeyDown(event);
     },
-    [activeIndex, handleSelect, items, menuOpen, onKeyDown],
+    [activeIndex, handleSelect, items, mentionMenuOwner, menuOpen, onKeyDown],
   );
 
   const handlePaste = useCallback(
@@ -218,7 +231,7 @@ export function ComposerMentionInput(props: {
           );
         }}
         onKeyDown={handleKeyDown}
-        onKeyUp={refreshFromCaret}
+        onKeyUp={handleKeyUp}
         onClick={refreshFromCaret}
         onScroll={syncScroll}
         onPaste={handlePaste}
@@ -233,6 +246,7 @@ export function ComposerMentionInput(props: {
           query={query}
           onSelect={handleSelect}
           onHover={setActiveIndex}
+          zIndex={mentionMenuOwner?.zIndex}
         />
       ) : null}
     </div>

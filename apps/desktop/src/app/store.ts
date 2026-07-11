@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { onTranscriptDeliveryFailure } from "../lib/desktopCommands";
+import { createEmptyCreationDrafts } from "./creationDrafts";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createAppActions } from "./store.actions";
@@ -12,11 +13,13 @@ import {
 } from "./store.helpers";
 import {
   DEFAULT_RESEARCH_SETTINGS,
+  type Notification,
   normalizeCloudSyncSettings,
   normalizeDesktopSettings,
   normalizePrivacyTelemetrySettings,
 } from "./types";
 
+const initialCreationDrafts = createEmptyCreationDrafts();
 const initialState: AppStoreDataState = {
   ready: false,
   bootstrapPhase: "idle",
@@ -47,14 +50,14 @@ const initialState: AppStoreDataState = {
   workspaceExplorerById: {},
   workspaceExplorerRefreshById: {},
 
-  promptModal: null,
+  interactionsByThread: {},
   lmStudioStartModal: null,
-  sandboxApprovalsByThread: {},
   filePreview: null,
   canvasActiveTab: "preview",
   canvasShowFormattingBar: true,
   isCanvasMaximized: false,
   notifications: [],
+  operationsByKey: {},
 
   providerStatusByName: {},
   providerStatusLastUpdatedAt: null,
@@ -73,7 +76,9 @@ const initialState: AppStoreDataState = {
   composerDraftsByKey: {},
   composerDraftRevisionFloorByKey: {},
   composerAttachmentIngestionCountByKey: {},
+  composerSubmissionsByKey: {},
   newChatLandingTarget: null,
+  ...initialCreationDrafts,
   injectContext: false,
   developerMode: false,
   showHiddenFiles: false,
@@ -124,6 +129,19 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
 
+export function publishForegroundNotification(
+  notification: Pick<Notification, "kind" | "title" | "detail">,
+): void {
+  useAppStore.setState((state) => ({
+    notifications: pushNotification(state.notifications, {
+      ...notification,
+      id: crypto.randomUUID(),
+      ts: new Date().toISOString(),
+      audience: "foreground",
+    }),
+  }));
+}
+
 onTranscriptDeliveryFailure((failure) => {
   const notificationId = `transcript-delivery-${failure.recoveryId ?? failure.batchId ?? failure.reason}`;
   useAppStore.setState((state) => ({
@@ -135,6 +153,7 @@ onTranscriptDeliveryFailure((failure) => {
         kind: "error",
         title: "Transcript sync needs attention",
         detail: failure.message,
+        audience: "background",
       },
     ),
   }));

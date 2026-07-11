@@ -62,6 +62,7 @@ export function createSessionEventHandler(
             state.activeTurnId,
             event.text,
             typeof event.clientMessageId === "string" ? event.clientMessageId : null,
+            typeof event.steerRequestId === "string" ? event.steerRequestId : null,
             event.annotations ?? null,
           );
           return;
@@ -69,6 +70,8 @@ export function createSessionEventHandler(
         state.lastUserMessageText = event.text;
         state.lastUserMessageClientMessageId =
           typeof event.clientMessageId === "string" ? event.clientMessageId : null;
+        state.lastUserMessageSteerRequestId =
+          typeof event.steerRequestId === "string" ? event.steerRequestId : null;
         state.lastUserMessageAnnotations = event.annotations ?? null;
         return;
       case "session_busy":
@@ -85,10 +88,12 @@ export function createSessionEventHandler(
               state.activeTurnId,
               state.lastUserMessageText,
               state.lastUserMessageClientMessageId,
+              state.lastUserMessageSteerRequestId,
               state.lastUserMessageAnnotations,
             );
             state.lastUserMessageText = null;
             state.lastUserMessageClientMessageId = null;
+            state.lastUserMessageSteerRequestId = null;
             state.lastUserMessageAnnotations = null;
           }
           return;

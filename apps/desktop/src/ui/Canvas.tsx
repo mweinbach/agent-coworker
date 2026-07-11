@@ -44,6 +44,7 @@ import { CanvasElectronTitlebar } from "./canvas/CanvasElectronTitlebar";
 import { CanvasFilePreviewLayout } from "./canvas/CanvasFilePreviewLayout";
 import { LazyUniverSpreadsheetCanvas } from "./LazyUniverSpreadsheetCanvas";
 import { DesktopMarkdown } from "./markdown";
+import { useOverlayOwner } from "./OverlayStack";
 import { PptxPreview } from "./PptxPreview";
 import { SlidePreview } from "./SlidePreview";
 
@@ -151,6 +152,7 @@ export function Canvas({ path }: { path: string }) {
   const [floatingCoords, setFloatingCoords] = useState<{ x: number; y: number } | null>(null);
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [promptSending, setPromptSending] = useState(false);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -485,6 +487,12 @@ export function Canvas({ path }: { path: string }) {
     clearSelectionState();
     window.getSelection()?.removeAllRanges();
   }, [clearSelectionState]);
+  const selectionEditorOwner = useOverlayOwner({
+    active: floatingCoords !== null,
+    label: "Canvas selection editor",
+    onDismiss: clearSelection,
+    restoreFocus: () => sourceTextareaRef.current,
+  });
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) return;
@@ -552,12 +560,13 @@ export function Canvas({ path }: { path: string }) {
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
-    if (!textToSend) return;
+    if (!textToSend || promptSending) return;
     if (!selectedThreadId) {
       setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
     setPromptError(null);
+    setPromptSending(true);
 
     const filename = basenamePath(documentPath);
     const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
@@ -569,23 +578,25 @@ export function Canvas({ path }: { path: string }) {
       request: textToSend,
     });
 
-    const originalPrompt = promptText;
-    if (explicitPrompt !== undefined) {
-      setFloatingPromptText("");
-    } else {
-      setPromptText("");
-    }
-    clearSelection();
-
     try {
-      await sendMessage(promptWithContext);
+      const acknowledged = await sendMessage(promptWithContext);
+      if (!acknowledged) {
+        setPromptError(
+          "The request was not sent. The chat may be busy, reconnecting, or missing an active session. Try again when it is ready.",
+        );
+        return;
+      }
+      if (explicitPrompt !== undefined) {
+        setFloatingPromptText("");
+      } else {
+        setPromptText("");
+      }
+      clearSelection();
     } catch (err) {
       console.error("Failed to send collaborative edit instructions:", err);
-      if (explicitPrompt !== undefined) {
-        setFloatingPromptText(explicitPrompt);
-      } else {
-        setPromptText(originalPrompt);
-      }
+      setPromptError("The request was not sent. Check the chat connection and try again.");
+    } finally {
+      setPromptSending(false);
     }
   };
 
@@ -620,10 +631,10 @@ export function Canvas({ path }: { path: string }) {
   return (
     <div
       className={cn(
-        "app-canvas flex h-full w-full flex-col text-foreground overflow-hidden",
-        isCanvasMode ? "bg-transparent" : "bg-background",
+        "app-canvas flex h-full w-full flex-col overflow-hidden bg-canvas text-canvas-foreground",
         !isCanvasMode && "border-l border-border/50",
       )}
+      data-canvas-surface="document"
     >
       <style>{`
         ::highlight(canvas-temp-highlight) {
@@ -804,16 +815,16 @@ export function Canvas({ path }: { path: string }) {
 
         <div className="min-h-0 flex-1 relative">
           {loading ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground bg-background">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas text-sm text-muted-foreground">
               <Loader2Icon className="size-6 animate-spin text-primary" />
               <span>Reading file...</span>
             </div>
           ) : error ? (
-            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold">Failed to load content</div>
-                <p className="mt-1 text-xs">{error}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{error}</p>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={handleRetryPersistence}>
                 <RefreshCwIcon data-icon="inline-start" />
@@ -901,7 +912,7 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent
                       forceMount
                       value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                      className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
@@ -920,7 +931,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your markdown here..."
-                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -937,7 +948,7 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent
                       forceMount
                       value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                      className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
@@ -955,13 +966,13 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your slide code here..."
-                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
                   </>
                 ) : (
-                  <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
+                  <div className="flex h-full flex-col gap-2 bg-canvas pb-2.5 pt-1.5">
                     <div
                       className={cn(
                         "text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0",
@@ -981,7 +992,7 @@ export function Canvas({ path }: { path: string }) {
                         onBlur={handleBlur}
                         readOnly={contentTruncated}
                         placeholder="Type your text here..."
-                        className="w-full h-full resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                        className="h-full w-full resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                       />
                     </div>
                   </div>
@@ -1002,8 +1013,10 @@ export function Canvas({ path }: { path: string }) {
           {promptError ? (
             <div
               role="alert"
+              aria-atomic="true"
+              aria-live="assertive"
               data-testid="canvas-prompt-error"
-              className="absolute -top-2 left-0 right-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+              className="absolute -top-2 right-0 left-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-foreground"
             >
               {promptError}
             </div>
@@ -1011,6 +1024,7 @@ export function Canvas({ path }: { path: string }) {
           <Input
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}
+            disabled={promptSending}
             onFocus={applyTempHighlight}
             onBlur={removeTempHighlight}
             onKeyDown={(e) => {
@@ -1028,7 +1042,8 @@ export function Canvas({ path }: { path: string }) {
             variant="ghost"
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => handleSendPrompt()}
-            disabled={!promptText.trim()}
+            disabled={promptSending || !promptText.trim()}
+            aria-label="Send Canvas prompt"
             className={cn(
               "absolute right-1.5 size-8.5 rounded-lg transition-all duration-150 shrink-0",
               promptText.trim()
@@ -1045,12 +1060,14 @@ export function Canvas({ path }: { path: string }) {
         createPortal(
           <div
             ref={floatingRef}
+            role="dialog"
+            aria-label="Edit selected canvas text"
             className="fixed bg-popover text-popover-foreground border border-border shadow-lg rounded-xl p-1.5 flex flex-col gap-1.5 min-w-[320px] max-w-[420px] animate-in fade-in zoom-in-95 duration-100 select-none"
             style={{
               left: `${floatingCoords.x}px`,
               top: `${floatingCoords.y}px`,
               transform: "translate(-50%, -100%) translateY(-10px)",
-              zIndex: 100,
+              zIndex: selectionEditorOwner?.zIndex ?? 100,
             }}
           >
             {showFormattingBar && isMarkdown && activeTab === "edit" && (
@@ -1116,6 +1133,7 @@ export function Canvas({ path }: { path: string }) {
               <Input
                 value={floatingPromptText}
                 onChange={(e) => setFloatingPromptText(e.target.value)}
+                disabled={promptSending}
                 onFocus={applyTempHighlight}
                 onBlur={removeTempHighlight}
                 onPointerDown={(e) => {
@@ -1125,11 +1143,12 @@ export function Canvas({ path }: { path: string }) {
                   e.stopPropagation();
                 }}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void handleSendPrompt(floatingPromptText);
                   } else if (e.key === "Escape") {
-                    clearSelection();
+                    selectionEditorOwner?.handleEscape(e);
                   }
                 }}
                 placeholder="How should the model edit this selection?"

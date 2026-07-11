@@ -2,6 +2,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import {
@@ -17,6 +18,7 @@ import {
   isInstalledPluginCatalogEntry,
   type SkillInstallationEntry,
 } from "../../../lib/wsProtocol";
+import { OperationFeedback } from "../../OperationFeedback";
 import { EntityIcon, SettingsStatTile } from "../SettingsPrimitives";
 import { pluginIcon, pluginSkillDisplayName, skillIcon } from "./catalogShared";
 import { actionPending } from "./skillUtils";
@@ -40,6 +42,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
   const updatePlugin = useAppStore((s) => s.updatePlugin);
   const enableSkillInstallation = useAppStore((s) => s.enableSkillInstallation);
   const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
+  const operationsByKey = useAppStore((s) => s.operationsByKey);
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
@@ -110,9 +113,19 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
         "plugin",
       )
     : false;
+  const selectedOperation = plugin
+    ? [
+        operationsByKey[operationKey("plugin", "install")],
+        operationsByKey[operationKey("plugin", "enable", plugin.scope, plugin.id)],
+        operationsByKey[operationKey("plugin", "disable", plugin.scope, plugin.id)],
+        operationsByKey[operationKey("plugin", "delete", plugin.scope, plugin.id)],
+        operationsByKey[operationKey("plugin", "update", plugin.scope, plugin.id)],
+      ].find((operation) => operation?.status === "pending" || operation?.status === "error")
+    : undefined;
+  const operationPending = selectedOperation?.status === "pending";
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) {
+    if (!open && !operationPending) {
       void selectPlugin(null);
     }
   };
@@ -204,6 +217,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   {pluginError}
                 </div>
               ) : null}
+              <OperationFeedback operation={selectedOperation} />
               <div className="flex flex-wrap gap-2">
                 <Badge variant={installedPlugin?.enabled ? "default" : "secondary"}>
                   {installedPlugin
@@ -243,11 +257,28 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     {installedPlugin.skills.map((skill) => {
                       const displayName = pluginSkillDisplayName(installedPlugin.id, skill);
                       const installation = skillInstallationsByName.get(skill.name) ?? null;
+                      const operation = installation
+                        ? ["enable", "disable"]
+                            .map(
+                              (action) =>
+                                operationsByKey[
+                                  operationKey("skill", action, installation.installationId)
+                                ],
+                            )
+                            .find(
+                              (candidate) =>
+                                candidate?.status === "pending" || candidate?.status === "error",
+                            )
+                        : undefined;
                       const togglePending = installation
-                        ? skillTogglePending(installation.installationId)
+                        ? skillTogglePending(installation.installationId) ||
+                          operation?.status === "pending"
                         : false;
                       return (
-                        <div key={skill.name} className="flex items-center gap-3 px-4 py-3">
+                        <div
+                          key={skill.name}
+                          className="flex flex-wrap items-center gap-3 px-4 py-3"
+                        >
                           <EntityIcon src={skillIcon(skill)} name={displayName} />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm font-medium text-foreground">
@@ -270,6 +301,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                               }
                             }}
                           />
+                          <OperationFeedback operation={operation} className="basis-full" />
                         </div>
                       );
                     })}
@@ -396,7 +428,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   </Button>
                 ) : null}
               </div>
-              <Button size="sm" onClick={() => handleOpenChange(false)}>
+              <Button size="sm" disabled={operationPending} onClick={() => handleOpenChange(false)}>
                 Close
               </Button>
             </div>

@@ -57,6 +57,7 @@ export type ComposerDraftsByKey = Record<string, ComposerDraft>;
 export type ComposerDraftRevision = {
   key: string;
   revision: number;
+  submissionId?: string;
 };
 
 export type ComposerDraftRevisionFloor = {
@@ -403,13 +404,14 @@ export function hasComposerDraftContent(draft: ComposerDraft | undefined): boole
   return Boolean(draft && (draft.text.length > 0 || draft.attachments.length > 0));
 }
 
-function hasComposerDraftState(draft: ComposerDraft): boolean {
+export function hasComposerDraftState(draft: ComposerDraft | undefined): boolean {
   return Boolean(
-    hasComposerDraftContent(draft) ||
-      draft.references.length > 0 ||
-      draft.provider ||
-      draft.model ||
-      draft.reasoningEffort,
+    draft &&
+      (hasComposerDraftContent(draft) ||
+        draft.references.length > 0 ||
+        draft.provider ||
+        draft.model ||
+        draft.reasoningEffort),
   );
 }
 

@@ -184,7 +184,7 @@ describe("OpenAI native connector actions", () => {
       throw new Error("Unable to write connector config.");
     });
 
-    await useAppStore
+    const result = await useAppStore
       .getState()
       .setOpenAiNativeConnectorEnabled(workspaceId, "connector_gmail", false);
 
@@ -198,11 +198,17 @@ describe("OpenAI native connector actions", () => {
         },
       },
     ]);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "Unable to write connector config." },
+    });
     expect(useAppStore.getState().notifications).toEqual([
       expect.objectContaining({
         kind: "error",
-        title: "Connector setting failed",
-        detail: "Unable to write connector config.",
+        title: "Connector setting not saved",
+        detail:
+          "Unable to write connector config.\nVerify the connector is accessible in ChatGPT, then retry.",
+        audience: "foreground",
       }),
     ]);
   });

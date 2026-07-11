@@ -32,6 +32,8 @@ describe("advanced memory panel", () => {
               body: longBody,
             },
             saving: false,
+            operation: undefined,
+            isDirty: true,
             setDraft: mock(() => {}),
             onCancel: mock(() => {}),
             onSave: mock(() => {}),
@@ -65,6 +67,67 @@ describe("advanced memory panel", () => {
       const footer = dialogContent.querySelector('[data-slot="dialog-footer"]');
       expect(footer?.className).toContain("shrink-0");
       expect(footer?.className).toContain("border-t");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("failed saves keep the draft editable beside an assertive error", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AdvancedMemoryEditorDialog, {
+            open: true,
+            editingSlug: null,
+            draft: {
+              slug: "",
+              name: "Retained name",
+              description: "Retained description",
+              type: "feedback",
+              body: "Retained body",
+            },
+            saving: false,
+            operation: {
+              status: "error",
+              key: "memory:advanced-save:workspace",
+              label: "Save advanced memory",
+              startedAt: "2026-07-11T00:00:00.000Z",
+              finishedAt: "2026-07-11T00:00:01.000Z",
+              error: {
+                code: "request_failed",
+                message: "Memory file is read-only.",
+                retryable: true,
+                repairAction: "Review the memory fields and retry.",
+              },
+            },
+            isDirty: true,
+            setDraft: mock(() => {}),
+            onCancel: mock(() => {}),
+            onSave: mock(() => {}),
+          }),
+        );
+      });
+
+      const name = harness.dom.window.document.getElementById("adv-memory-name");
+      const body = harness.dom.window.document.getElementById("adv-memory-body");
+      const failure = harness.dom.window.document.querySelector('[data-slot="alert"]');
+      expect(name).toBeInstanceOf(harness.dom.window.HTMLInputElement);
+      expect(body).toBeInstanceOf(harness.dom.window.HTMLTextAreaElement);
+      expect((name as HTMLInputElement).value).toBe("Retained name");
+      expect((body as HTMLTextAreaElement).value).toBe("Retained body");
+      expect((name as HTMLInputElement).disabled).toBe(false);
+      expect((body as HTMLTextAreaElement).disabled).toBe(false);
+      expect(failure?.getAttribute("aria-live")).toBe("assertive");
+      expect(failure?.textContent).toContain("Memory file is read-only.");
 
       await act(async () => {
         root.unmount();

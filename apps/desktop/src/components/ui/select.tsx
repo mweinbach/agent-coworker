@@ -3,11 +3,45 @@
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Select as SelectPrimitive } from "radix-ui";
 import type * as React from "react";
+import { createContext, useContext } from "react";
 
 import { cn } from "@/lib/utils";
+import {
+  type OverlayOwnership,
+  type OverlayRootState,
+  useOverlayOwner,
+  useOverlayRootState,
+} from "@/ui/OverlayStack";
 
-function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />;
+type SelectOverlayState = OverlayRootState & {
+  ownership: OverlayOwnership | null;
+};
+
+const SelectOverlayContext = createContext<SelectOverlayState | null>(null);
+
+function Select({
+  defaultOpen,
+  onOpenChange,
+  open,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  const state = useOverlayRootState({ defaultOpen, onOpenChange, open });
+  const ownership = useOverlayOwner({
+    active: state.open,
+    label: "Select menu",
+    onDismiss: () => state.setOpen(false),
+    restoreFocus: () => state.restoreFocusRef.current,
+  });
+  return (
+    <SelectOverlayContext.Provider value={{ ...state, ownership }}>
+      <SelectPrimitive.Root
+        data-slot="select"
+        open={state.open}
+        onOpenChange={state.setOpen}
+        {...props}
+      />
+    </SelectOverlayContext.Provider>
+  );
 }
 
 function SelectGroup({ ...props }: React.ComponentProps<typeof SelectPrimitive.Group>) {
@@ -49,8 +83,13 @@ function SelectContent({
   children,
   position = "item-aligned",
   align = "center",
+  onEscapeKeyDown,
+  style,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  const owner = useContext(SelectOverlayContext);
+  const ownership = owner?.ownership;
+
   return (
     <SelectPrimitive.Portal
       container={typeof globalThis.document === "undefined" ? undefined : globalThis.document.body}
@@ -63,8 +102,13 @@ function SelectContent({
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className,
         )}
+        style={{ ...style, zIndex: ownership?.zIndex ?? style?.zIndex }}
         position={position}
         align={align}
+        onEscapeKeyDown={(event) => {
+          onEscapeKeyDown?.(event);
+          ownership?.handleEscape(event);
+        }}
         {...props}
       >
         <SelectScrollUpButton />

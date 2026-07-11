@@ -1,12 +1,12 @@
 import type { WindowsBackgroundMaterial } from "../../src/lib/desktopApi";
+import { NATIVE_THEME_TOKENS } from "../../src/styles/tokens/native";
 import { getPlatformChrome } from "./windowChrome/platformChrome";
-
-const LIGHT_SHELL_BACKGROUND = "#dfe2cc";
-const DARK_SHELL_BACKGROUND = "#171d13";
 
 /** Solid shell tint behind web content (no Electron imports — safe for unit tests). */
 export function desktopShellBackgroundColor(useDarkColors: boolean): string {
-  return useDarkColors ? DARK_SHELL_BACKGROUND : LIGHT_SHELL_BACKGROUND;
+  return useDarkColors
+    ? NATIVE_THEME_TOKENS.shellSurface.dark
+    : NATIVE_THEME_TOKENS.shellSurface.light;
 }
 
 export function windowsBackgroundMaterialForPlatform(
@@ -20,6 +20,7 @@ export type WindowChromePaintInput = {
   platform: NodeJS.Platform;
   useDarkColors: boolean;
   useMacosNativeGlass: boolean;
+  backgroundColor?: string;
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
@@ -37,9 +38,10 @@ export function resolveWindowChromePaint(input: WindowChromePaintInput): WindowC
   const backgroundMaterial =
     input.backgroundMaterial ?? windowsBackgroundMaterialForPlatform(platform);
   const backgroundColor =
-    platform === "darwin" && useMacosNativeGlass
-      ? "#00000000"
-      : desktopShellBackgroundColor(useDarkColors);
+    input.backgroundColor ??
+    (platform === "darwin" && useMacosNativeGlass
+      ? NATIVE_THEME_TOKENS.transparentSurface
+      : desktopShellBackgroundColor(useDarkColors));
 
   return {
     backgroundColor,

@@ -104,11 +104,20 @@ export type MobileRelayTrustedPhoneDevice = {
   permissions: MobileRelayTrustedDevicePermissions;
 };
 
-export type MobileRelayForgetTrustedPhoneInput = {
-  deviceId?: string;
-};
+export type MobileRelayForgetTrustedPhoneInput =
+  | {
+      workspaceId: string;
+      scope: "device";
+      deviceId: string;
+    }
+  | {
+      workspaceId: string;
+      scope: "all";
+      expectedDeviceIds: string[];
+    };
 
 export type MobileRelayUpdateTrustedPhonePermissionsInput = {
+  workspaceId: string;
   deviceId: string;
   permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>;
 };
@@ -571,7 +580,7 @@ export interface DesktopApi {
   refreshMobileRelayTrustedPhones(): Promise<MobileRelayBridgeState>;
   rotateMobileRelaySession(): Promise<MobileRelayBridgeState>;
   forgetMobileRelayTrustedPhone(
-    opts?: MobileRelayForgetTrustedPhoneInput,
+    opts: MobileRelayForgetTrustedPhoneInput,
   ): Promise<MobileRelayBridgeState>;
   updateMobileRelayTrustedPhonePermissions(
     opts: MobileRelayUpdateTrustedPhonePermissionsInput,

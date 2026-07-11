@@ -2,24 +2,37 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import { operationKey } from "../src/app/store.helpers/operations";
 import type { TelemetryStatusInput } from "../src/lib/desktopApi";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock, DEFAULT_TELEMETRY_STATUS } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
 const getTelemetryStatusMock = mock(async () => DEFAULT_TELEMETRY_STATUS);
+const saveStateMock = mock(async () => {});
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
     getTelemetryStatus: getTelemetryStatusMock,
+    saveState: saveStateMock,
   }),
 );
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
-const { useAppStore } = await import("../src/app/store");
-const { PrivacyTelemetryPage } = await import("../src/ui/settings/pages/PrivacyTelemetryPage");
+async function importPrivacyTelemetryPageForTest() {
+  const importHarness = setupJsdom();
+  try {
+    const { useAppStore } = await import("../src/app/store");
+    const { PrivacyTelemetryPage } = await import("../src/ui/settings/pages/PrivacyTelemetryPage");
+    return { useAppStore, PrivacyTelemetryPage };
+  } finally {
+    importHarness.restore();
+  }
+}
+
+const { useAppStore, PrivacyTelemetryPage } = await importPrivacyTelemetryPageForTest();
 
 const defaultStoreActions = {
   setCrashReportsEnabled: useAppStore.getState().setCrashReportsEnabled,
@@ -31,16 +44,17 @@ const defaultStoreActions = {
 describe("privacy telemetry settings page", () => {
   beforeEach(() => {
     getTelemetryStatusMock.mockImplementation(async () => DEFAULT_TELEMETRY_STATUS);
-    useAppStore.setState(defaultStoreActions);
+    saveStateMock.mockImplementation(async () => {});
+    useAppStore.setState({ ...defaultStoreActions, operationsByKey: {} });
   });
 
   afterEach(() => {
-    useAppStore.setState(defaultStoreActions);
+    useAppStore.setState({ ...defaultStoreActions, operationsByKey: {} });
   });
 
   test("renders privacy telemetry toggles and disables AI payloads until traces are enabled", async () => {
-    const setCrashReportsEnabled = mock(() => {});
-    const setAiTracePayloadsEnabled = mock(() => {});
+    const setCrashReportsEnabled = mock(async () => ({ ok: true as const, value: undefined }));
+    const setAiTracePayloadsEnabled = mock(async () => ({ ok: true as const, value: undefined }));
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -70,23 +84,23 @@ describe("privacy telemetry settings page", () => {
       expect(container.textContent).toContain("Crash reports");
       expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain(
-        "Sends crash/error reports and basic technical metadata.",
+        "Sends sanitized errors, stack traces, app version, platform, and architecture to the configured Sentry destination.",
       );
       expect(container.textContent).toContain("Anonymous product analytics");
       expect(container.textContent).toContain(
-        "Sends event counts like app opened, workspace added, turn completed. Never sends prompts, file contents, shell commands, or file paths.",
+        "Sends fixed event names, safe counts, app version, platform, and feature states to the configured PostHog destination.",
       );
       expect(container.textContent).toContain("AI trace diagnostics");
       expect(container.textContent).toContain(
-        "Sends high-level model/turn/tool timing metadata for debugging AI behavior.",
+        "Sends model, provider, turn/tool timing, token counts, and status metadata to the configured Langfuse/OpenTelemetry destination.",
       );
       expect(container.textContent).toContain("Include prompts and responses in AI traces");
       expect(container.textContent).toContain(
-        "Off by default. Only available when AI trace diagnostics is enabled. Strong warning: this may include prompts, responses, commands, logs, file paths or names, and other content.",
+        "Secret-keyed option fields are redacted, but credentials typed into messages or returned content may still be included.",
       );
       expect(container.textContent).toContain("Diagnostics upload");
       expect(container.textContent).toContain(
-        "Allow optional diagnostics bundles to be prepared for support. Keeps content local until you explicitly share a package.",
+        "Turning this on never creates or uploads a bundle by itself.",
       );
       expect(container.querySelector('[aria-label="Diagnostics upload"]')).toBeTruthy();
       expect(container.textContent).not.toContain("Telemetry status");
@@ -260,8 +274,11 @@ describe("privacy telemetry settings page", () => {
     }
   });
 
-  test("enables AI payload toggle when AI trace diagnostics are enabled", async () => {
-    const setAiTracePayloadsEnabled = mock(() => {});
+  test("requires an accessible full-payload acknowledgment and restores focus on cancel", async () => {
+    const setAiTracePayloadsEnabled = mock(async () => ({
+      ok: true as const,
+      value: undefined,
+    }));
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -294,6 +311,7 @@ describe("privacy telemetry settings page", () => {
       }
 
       expect(aiPayloadSwitch.hasAttribute("disabled")).toBe(false);
+      aiPayloadSwitch.focus();
 
       await act(async () => {
         aiPayloadSwitch.dispatchEvent(
@@ -301,7 +319,113 @@ describe("privacy telemetry settings page", () => {
         );
       });
 
+      const dialog = harness.dom.window.document.querySelector('[role="alertdialog"]');
+      expect(dialog?.getAttribute("aria-labelledby")).toBeTruthy();
+      expect(dialog?.getAttribute("aria-describedby")).toBeTruthy();
+      expect(dialog?.textContent).toContain("Enable full-payload AI traces?");
+      expect(dialog?.textContent).toContain("configured Langfuse/OpenTelemetry destination");
+      expect(dialog?.textContent).toContain("credentials inside message or response content");
+      expect(setAiTracePayloadsEnabled).not.toHaveBeenCalled();
+
+      const cancelButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Keep metadata only",
+      );
+      if (!(cancelButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing full-payload cancel button");
+      }
+      await act(async () => {
+        cancelButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(harness.dom.window.document.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(aiPayloadSwitch);
+      expect(setAiTracePayloadsEnabled).not.toHaveBeenCalled();
+
+      await act(async () => {
+        aiPayloadSwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
+      });
+      const confirmButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Enable full payloads",
+      );
+      if (!(confirmButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing full-payload confirm button");
+      }
+      await act(async () => {
+        confirmButton.click();
+      });
+
       expect(setAiTracePayloadsEnabled).toHaveBeenCalledWith(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("rolls back full-payload traces and retains an inline error when persistence fails", async () => {
+    saveStateMock.mockImplementationOnce(async () => {
+      throw new Error("privacy settings are read-only");
+    });
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...defaultStoreActions,
+          operationsByKey: {},
+          notifications: [],
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: false,
+            aiTraceTelemetryEnabled: true,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: false,
+            cloudSyncEnabled: false,
+          },
+        });
+        root.render(createElement(PrivacyTelemetryPage));
+      });
+
+      const aiPayloadSwitch = container.querySelector(
+        '[aria-label="Include prompts and responses in AI traces"]',
+      );
+      if (!(aiPayloadSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing AI trace payload switch");
+      }
+      await act(async () => {
+        aiPayloadSwitch.click();
+      });
+      const confirmButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Enable full payloads",
+      );
+      if (!(confirmButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing full-payload confirm button");
+      }
+
+      await act(async () => {
+        confirmButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(useAppStore.getState().privacyTelemetrySettings.aiTracePayloadsEnabled).toBe(false);
+      expect(
+        useAppStore.getState().operationsByKey[
+          operationKey("privacy-telemetry", "ai-trace-payloads")
+        ],
+      ).toMatchObject({
+        status: "error",
+        error: { message: "privacy settings are read-only" },
+      });
+      expect(container.textContent).toContain("privacy settings are read-only");
+      expect(container.textContent).toContain("Review the preference and retry.");
 
       await act(async () => {
         root.unmount();
@@ -495,6 +619,74 @@ describe("privacy telemetry settings page", () => {
 
       await act(async () => {
         root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("persists diagnostics upload consent and rolls back a failed toggle", async () => {
+    const harness = setupJsdom();
+    try {
+      await act(async () => {
+        useAppStore.setState({
+          ...defaultStoreActions,
+          operationsByKey: {},
+          notifications: [],
+          privacyTelemetrySettings: {
+            crashReportsEnabled: false,
+            productAnalyticsEnabled: false,
+            aiTraceTelemetryEnabled: false,
+            aiTracePayloadsEnabled: false,
+            diagnosticsUploadEnabled: false,
+            cloudSyncEnabled: false,
+          },
+        });
+      });
+
+      let enabledResult: Awaited<
+        ReturnType<typeof defaultStoreActions.setDiagnosticsUploadEnabled>
+      > | null = null;
+      await act(async () => {
+        enabledResult = await useAppStore.getState().setDiagnosticsUploadEnabled(true);
+      });
+
+      expect(enabledResult).toMatchObject({ ok: true });
+      expect(useAppStore.getState().privacyTelemetrySettings.diagnosticsUploadEnabled).toBe(true);
+      expect(saveStateMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          privacyTelemetrySettings: expect.objectContaining({
+            diagnosticsUploadEnabled: true,
+          }),
+        }),
+      );
+
+      saveStateMock.mockImplementationOnce(async () => {
+        throw new Error("disk unavailable");
+      });
+      let disabledResult: Awaited<
+        ReturnType<typeof defaultStoreActions.setDiagnosticsUploadEnabled>
+      > | null = null;
+      await act(async () => {
+        disabledResult = await useAppStore.getState().setDiagnosticsUploadEnabled(false);
+      });
+
+      expect(disabledResult).toMatchObject({
+        ok: false,
+        error: { message: "disk unavailable" },
+      });
+      expect(useAppStore.getState().privacyTelemetrySettings.diagnosticsUploadEnabled).toBe(true);
+      expect(
+        useAppStore.getState().operationsByKey[
+          operationKey("privacy-telemetry", "diagnostics-upload")
+        ],
+      ).toMatchObject({
+        status: "error",
+        error: { message: "disk unavailable" },
+      });
+      expect(useAppStore.getState().notifications.at(-1)).toMatchObject({
+        title: "Diagnostics upload preference not saved",
+        audience: "foreground",
       });
     } finally {
       harness.restore();

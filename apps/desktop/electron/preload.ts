@@ -317,7 +317,7 @@ function assertMobileRelayStartInput(opts: MobileRelayStartInput): void {
   parseWithSchema(mobileRelayStartInputSchema, opts, "mobileRelay.start options");
 }
 
-function assertMobileRelayForgetTrustedPhoneInput(opts?: MobileRelayForgetTrustedPhoneInput): void {
+function assertMobileRelayForgetTrustedPhoneInput(opts: MobileRelayForgetTrustedPhoneInput): void {
   parseWithSchema(
     mobileRelayForgetTrustedPhoneInputSchema,
     opts,
@@ -496,7 +496,7 @@ const desktopApi = Object.freeze<DesktopApi>({
     return state;
   },
 
-  forgetMobileRelayTrustedPhone: async (opts?: MobileRelayForgetTrustedPhoneInput) => {
+  forgetMobileRelayTrustedPhone: async (opts: MobileRelayForgetTrustedPhoneInput) => {
     assertMobileRelayForgetTrustedPhoneInput(opts);
     const state = await ipcRenderer.invoke(
       DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone,

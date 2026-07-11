@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { operationKey } from "../src/app/store.helpers/operations";
+import type {
+  MobileRelayForgetTrustedPhoneInput,
+  MobileRelayUpdateTrustedPhonePermissionsInput,
+} from "../src/lib/desktopApi";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -54,6 +61,7 @@ function buildMobileRelayState(
       lastPairedAt: string | null;
       lastConnectedAt: string | null;
       permissions: {
+        conversations: boolean;
         turns: boolean;
         serverRequests: boolean;
         providerAuth: boolean;
@@ -93,6 +101,39 @@ function buildMobileRelayState(
     ...overrides,
   };
 }
+
+const TRUSTED_PHONE_ONE = {
+  deviceId: "phone-1",
+  fingerprint: "fingerprint-1",
+  displayName: "Pixel 9",
+  lastPairedAt: "2026-07-10T12:00:00.000Z",
+  lastConnectedAt: "2026-07-11T12:00:00.000Z",
+  permissions: {
+    conversations: true,
+    turns: true,
+    serverRequests: true,
+    providerAuth: false,
+    mcpAuth: false,
+    workspaceSettings: false,
+    backups: false,
+  },
+};
+
+const TRUSTED_PHONE_TWO = {
+  ...TRUSTED_PHONE_ONE,
+  deviceId: "phone-2",
+  fingerprint: "fingerprint-2",
+  displayName: "iPhone 17",
+};
+
+const getMobileRelayStateMock = mock(async () => buildMobileRelayState());
+const refreshMobileRelayTrustedPhonesMock = mock(async () => buildMobileRelayState());
+const forgetMobileRelayTrustedPhoneMock = mock(async (_input: MobileRelayForgetTrustedPhoneInput) =>
+  buildMobileRelayState(),
+);
+const updateMobileRelayTrustedPhonePermissionsMock = mock(
+  async (_input: MobileRelayUpdateTrustedPhonePermissionsInput) => buildMobileRelayState(),
+);
 
 mock.module("../src/lib/desktopCommands", () =>
   createDesktopCommandsMock({
@@ -144,38 +185,57 @@ mock.module("../src/lib/desktopCommands", () =>
         spkiSha256: null,
         hostHints: [],
       }),
-    getMobileRelayState: async () =>
-      buildMobileRelayState({
-        trustedPhoneDeviceId: "phone-1",
-        trustedPhoneFingerprint: "abc123",
-      }),
-    refreshMobileRelayTrustedPhones: async () =>
-      buildMobileRelayState({
-        trustedPhoneDeviceId: "phone-1",
-        trustedPhoneFingerprint: "abc123",
-      }),
+    getMobileRelayState: getMobileRelayStateMock,
+    refreshMobileRelayTrustedPhones: refreshMobileRelayTrustedPhonesMock,
     rotateMobileRelaySession: async () =>
       buildMobileRelayState({
         trustedPhoneDeviceId: "phone-1",
         trustedPhoneFingerprint: "abc123",
       }),
-    forgetMobileRelayTrustedPhone: async () =>
-      buildMobileRelayState({
-        pairingPayload: null,
-      }),
-    updateMobileRelayTrustedPhonePermissions: async () => buildMobileRelayState(),
+    forgetMobileRelayTrustedPhone: forgetMobileRelayTrustedPhoneMock,
+    updateMobileRelayTrustedPhonePermissions: updateMobileRelayTrustedPhonePermissionsMock,
     copyText: async () => {},
     onMobileRelayStateChanged: () => () => {},
   }),
 );
 
-const { useAppStore } = await import("../src/app/store");
-const { RemoteAccessPage, describeRelaySource } = await import(
-  "../src/ui/settings/pages/RemoteAccessPage"
-);
+async function importRemoteAccessPageForTest() {
+  const importHarness = setupJsdom();
+  try {
+    const { useAppStore } = await import("../src/app/store");
+    const { RemoteAccessPage, describeRelaySource } = await import(
+      "../src/ui/settings/pages/RemoteAccessPage"
+    );
+    return { useAppStore, RemoteAccessPage, describeRelaySource };
+  } finally {
+    importHarness.restore();
+  }
+}
+
+const { useAppStore, RemoteAccessPage, describeRelaySource } =
+  await importRemoteAccessPageForTest();
 
 describe("desktop remote access page", () => {
   beforeEach(() => {
+    const trustedState = buildMobileRelayState({
+      trustedPhoneDeviceId: TRUSTED_PHONE_ONE.deviceId,
+      trustedPhoneFingerprint: TRUSTED_PHONE_ONE.fingerprint,
+      trustedPhoneDevices: [TRUSTED_PHONE_ONE, TRUSTED_PHONE_TWO],
+    });
+    getMobileRelayStateMock.mockImplementation(async () => trustedState);
+    refreshMobileRelayTrustedPhonesMock.mockImplementation(async () => trustedState);
+    forgetMobileRelayTrustedPhoneMock.mockImplementation(async () =>
+      buildMobileRelayState({
+        trustedPhoneDeviceId: TRUSTED_PHONE_TWO.deviceId,
+        trustedPhoneFingerprint: TRUSTED_PHONE_TWO.fingerprint,
+        trustedPhoneDevices: [TRUSTED_PHONE_TWO],
+      }),
+    );
+    updateMobileRelayTrustedPhonePermissionsMock.mockImplementation(async () => trustedState);
+    getMobileRelayStateMock.mockClear();
+    refreshMobileRelayTrustedPhonesMock.mockClear();
+    forgetMobileRelayTrustedPhoneMock.mockClear();
+    updateMobileRelayTrustedPhonePermissionsMock.mockClear();
     useAppStore.setState({
       ready: true,
       settingsPage: "remoteAccess",
@@ -192,6 +252,8 @@ describe("desktop remote access page", () => {
         },
       ],
       selectedWorkspaceId: "ws-1",
+      operationsByKey: {},
+      notifications: [],
     });
   });
 
@@ -208,6 +270,230 @@ describe("desktop remote access page", () => {
     expect(html).not.toContain("Remodex-backed");
     expect(html).not.toContain("Remodex service:");
     expect(html).not.toContain("phodex.app");
+  });
+
+  test("names the exact device, cancels safely, restores focus, and records success", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(RemoteAccessPage));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      const forgetButton = container.querySelector('[aria-label="Forget Pixel 9"]');
+      if (!(forgetButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing named forget button");
+      }
+      forgetButton.focus();
+      await act(async () => {
+        forgetButton.click();
+      });
+
+      const dialog = harness.dom.window.document.querySelector('[role="alertdialog"]');
+      expect(dialog?.getAttribute("aria-labelledby")).toBeTruthy();
+      expect(dialog?.getAttribute("aria-describedby")).toBeTruthy();
+      expect(dialog?.textContent).toContain("Forget Pixel 9?");
+      expect(dialog?.textContent).toContain("Workspace 1");
+      expect(dialog?.textContent).toContain("Other trusted devices are unchanged");
+
+      const cancelButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Keep device",
+      );
+      if (!(cancelButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing keep device button");
+      }
+      await act(async () => {
+        cancelButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(forgetMobileRelayTrustedPhoneMock).not.toHaveBeenCalled();
+      expect(harness.dom.window.document.activeElement).toBe(forgetButton);
+
+      await act(async () => {
+        forgetButton.click();
+      });
+      const confirmButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Forget device",
+      );
+      if (!(confirmButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing forget device confirmation");
+      }
+      await act(async () => {
+        confirmButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(forgetMobileRelayTrustedPhoneMock).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        scope: "device",
+        deviceId: "phone-1",
+      });
+      expect(container.textContent).not.toContain("Pixel 9");
+      expect(container.textContent).toContain("iPhone 17");
+      expect(
+        useAppStore.getState().operationsByKey[
+          operationKey("remote-access", "forget", "ws-1", "device")
+        ],
+      ).toMatchObject({
+        status: "success",
+        label: "Forget trusted device",
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("counts and scopes forget-all to the confirmed workspace device set", async () => {
+    forgetMobileRelayTrustedPhoneMock.mockImplementationOnce(async () =>
+      buildMobileRelayState({
+        trustedPhoneDeviceId: null,
+        trustedPhoneFingerprint: null,
+        trustedPhoneDevices: [],
+      }),
+    );
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(RemoteAccessPage));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      const forgetAllButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Forget all devices",
+      );
+      if (!(forgetAllButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing forget all button");
+      }
+      await act(async () => {
+        forgetAllButton.click();
+      });
+
+      const dialog = harness.dom.window.document.querySelector('[role="alertdialog"]');
+      expect(dialog?.textContent).toContain("Forget all 2 trusted devices?");
+      expect(dialog?.textContent).toContain("Workspace 1");
+      expect(dialog?.textContent).toContain("2 phones");
+      const confirmButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Forget all 2",
+      );
+      if (!(confirmButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing forget all confirmation");
+      }
+      await act(async () => {
+        confirmButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(forgetMobileRelayTrustedPhoneMock).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        scope: "all",
+        expectedDeviceIds: ["phone-1", "phone-2"],
+      });
+      expect(container.textContent).toContain("No trusted device yet");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("retains trusted devices and an inline repair error when revoke fails", async () => {
+    forgetMobileRelayTrustedPhoneMock.mockImplementationOnce(async () => {
+      throw new Error("revoke failed");
+    });
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(RemoteAccessPage));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      const forgetButton = container.querySelector('[aria-label="Forget Pixel 9"]');
+      if (!(forgetButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing named forget button");
+      }
+      await act(async () => {
+        forgetButton.click();
+      });
+      const confirmButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent === "Forget device",
+      );
+      if (!(confirmButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing forget device confirmation");
+      }
+      await act(async () => {
+        confirmButton.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(container.textContent).toContain("Pixel 9");
+      expect(container.textContent).toContain("iPhone 17");
+      expect(container.textContent).toContain("revoke failed");
+      expect(container.textContent).toContain("Review the trusted device list and retry.");
+      expect(
+        useAppStore.getState().operationsByKey[
+          operationKey("remote-access", "forget", "ws-1", "device")
+        ],
+      ).toMatchObject({
+        status: "error",
+        error: { message: "revoke failed" },
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("does not render trusted-device mutations for a different workspace target", async () => {
+    const otherWorkspaceState = buildMobileRelayState({
+      workspaceId: "ws-2",
+      workspacePath: "/tmp/other-workspace",
+      trustedPhoneDeviceId: TRUSTED_PHONE_ONE.deviceId,
+      trustedPhoneFingerprint: TRUSTED_PHONE_ONE.fingerprint,
+      trustedPhoneDevices: [TRUSTED_PHONE_ONE],
+    });
+    getMobileRelayStateMock.mockImplementation(async () => otherWorkspaceState);
+    refreshMobileRelayTrustedPhonesMock.mockImplementation(async () => otherWorkspaceState);
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(RemoteAccessPage));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(container.textContent).toContain("running bridge belongs to another workspace");
+      expect(container.querySelector('[aria-label="Forget Pixel 9"]')).toBeNull();
+      expect(container.textContent).not.toContain("Forget all devices");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
   });
 
   test("describes the managed relay source", () => {

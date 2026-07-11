@@ -886,12 +886,24 @@ const mobileRelayTrustedPhoneDeviceSchema = z.object({
 });
 
 export const mobileRelayForgetTrustedPhoneInputSchema: z.ZodType<MobileRelayForgetTrustedPhoneInput> =
-  z
-    .object({
-      deviceId: optionalNonEmptyStringSchema,
-    })
-    .optional()
-    .default({});
+  z.discriminatedUnion("scope", [
+    z.object({
+      workspaceId: safeIdSchema,
+      scope: z.literal("device"),
+      deviceId: nonEmptyStringSchema,
+    }),
+    z.object({
+      workspaceId: safeIdSchema,
+      scope: z.literal("all"),
+      expectedDeviceIds: z
+        .array(nonEmptyStringSchema)
+        .min(1)
+        .max(1_000)
+        .refine((deviceIds) => new Set(deviceIds).size === deviceIds.length, {
+          message: "must not contain duplicate device ids",
+        }),
+    }),
+  ]);
 
 const mobileRelayTrustedDevicePermissionsPatchSchema = z
   .object(
@@ -909,6 +921,7 @@ const mobileRelayTrustedDevicePermissionsPatchSchema = z
 
 export const mobileRelayUpdateTrustedPhonePermissionsInputSchema: z.ZodType<MobileRelayUpdateTrustedPhonePermissionsInput> =
   z.object({
+    workspaceId: safeIdSchema,
     deviceId: nonEmptyStringSchema,
     permissions: mobileRelayTrustedDevicePermissionsPatchSchema,
   });

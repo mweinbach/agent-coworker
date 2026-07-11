@@ -165,7 +165,7 @@ describe("mobile relay IPC", () => {
   });
 
   test("updates trusted phone permissions through the relay bridge", async () => {
-    const updateTrustedPhonePermissions = mock(async () => ({
+    const trustedPhoneState = {
       status: "connected",
       workspaceId: "ws_1",
       workspacePath: "/approved/workspace",
@@ -202,7 +202,8 @@ describe("mobile relay IPC", () => {
       spkiSha256: null,
       hostHints: ["127.0.0.1"],
       lastError: null,
-    }));
+    } as const;
+    const updateTrustedPhonePermissions = mock(async () => trustedPhoneState);
     const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
 
     registerMobileRelayIpc({
@@ -214,7 +215,7 @@ describe("mobile relay IPC", () => {
           start: async () => ({}),
           stop: async () => ({}),
           getSnapshot: () => ({}),
-          refreshTrustedPhones: async () => ({}),
+          refreshTrustedPhones: async () => trustedPhoneState,
           rotateSession: async () => ({}),
           forgetTrustedPhone: async () => ({}),
           updateTrustedPhonePermissions,
@@ -233,11 +234,114 @@ describe("mobile relay IPC", () => {
     expect(handler).toBeTruthy();
 
     await handler?.(null, {
+      workspaceId: "ws_1",
       deviceId: "phone-1",
       permissions: { turns: true },
     });
 
     expect(updateTrustedPhonePermissions).toHaveBeenCalledWith("phone-1", { turns: true });
+  });
+
+  test("forgets only the explicitly scoped workspace device set", async () => {
+    const device = (deviceId: string) => ({
+      deviceId,
+      fingerprint: `fingerprint-${deviceId}`,
+      displayName: deviceId,
+      lastPairedAt: null,
+      lastConnectedAt: null,
+      permissions: {
+        conversations: false,
+        turns: false,
+        serverRequests: false,
+        providerAuth: false,
+        mcpAuth: false,
+        workspaceSettings: false,
+        backups: false,
+      },
+    });
+    const currentState = {
+      status: "connected",
+      workspaceId: "ws_1",
+      workspacePath: "/approved/workspace",
+      relaySource: "direct",
+      relaySourceMessage: "direct",
+      relayServiceStatus: "running",
+      relayServiceMessage: "running",
+      relayServiceUpdatedAt: null,
+      relayUrl: "https://127.0.0.1:34443",
+      sessionId: null,
+      pairingPayload: null,
+      trustedPhoneDeviceId: "phone-1",
+      trustedPhoneFingerprint: "fingerprint-phone-1",
+      trustedPhoneDevices: [device("phone-1"), device("phone-2")],
+      directUrl: "https://127.0.0.1:34443",
+      ticketUrl: null,
+      certSha256: null,
+      spkiSha256: null,
+      hostHints: ["127.0.0.1"],
+      lastError: null,
+    } as const;
+    const forgetTrustedPhone = mock(async (deviceId?: string) => ({
+      ...currentState,
+      trustedPhoneDeviceId: deviceId === "phone-1" ? "phone-2" : null,
+      trustedPhoneFingerprint: deviceId === "phone-1" ? "fingerprint-phone-2" : null,
+      trustedPhoneDevices: deviceId === "phone-1" ? [device("phone-2")] : [],
+    }));
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          on() {},
+          initialize() {},
+          start: async () => ({}),
+          stop: async () => ({}),
+          getSnapshot: () => currentState,
+          refreshTrustedPhones: async () => currentState,
+          rotateSession: async () => ({}),
+          forgetTrustedPhone,
+          updateTrustedPhonePermissions: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {} as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone);
+    expect(handler).toBeTruthy();
+
+    await expect(
+      handler?.(null, {
+        workspaceId: "ws_2",
+        scope: "device",
+        deviceId: "phone-1",
+      }),
+    ).rejects.toThrow("Remote access is active for a different workspace.");
+    await expect(
+      handler?.(null, {
+        workspaceId: "ws_1",
+        scope: "all",
+        expectedDeviceIds: ["phone-1"],
+      }),
+    ).rejects.toThrow("The trusted device list changed.");
+    expect(forgetTrustedPhone).not.toHaveBeenCalled();
+
+    await expect(
+      handler?.(null, {
+        workspaceId: "ws_1",
+        scope: "device",
+        deviceId: "phone-1",
+      }),
+    ).resolves.toMatchObject({
+      trustedPhoneDevices: [expect.objectContaining({ deviceId: "phone-2" })],
+    });
+    expect(forgetTrustedPhone).toHaveBeenCalledWith("phone-1");
   });
 
   test("returns an unavailable state when remote access is disabled", async () => {

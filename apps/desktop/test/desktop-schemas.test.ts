@@ -479,18 +479,56 @@ describe("desktop persisted-state schema defaults", () => {
   });
 
   test("accepts mobile relay trusted-device commands", () => {
-    expect(mobileRelayForgetTrustedPhoneInputSchema.parse({ deviceId: "phone-1" })).toEqual({
+    expect(
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "device",
+        deviceId: "phone-1",
+      }),
+    ).toEqual({
+      workspaceId: "ws_1",
+      scope: "device",
       deviceId: "phone-1",
     });
     expect(
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "all",
+        expectedDeviceIds: ["phone-1", "phone-2"],
+      }),
+    ).toEqual({
+      workspaceId: "ws_1",
+      scope: "all",
+      expectedDeviceIds: ["phone-1", "phone-2"],
+    });
+    expect(
       mobileRelayUpdateTrustedPhonePermissionsInputSchema.parse({
+        workspaceId: "ws_1",
         deviceId: "phone-1",
         permissions: { turns: true },
       }),
     ).toEqual({
+      workspaceId: "ws_1",
       deviceId: "phone-1",
       permissions: { turns: true },
     });
+  });
+
+  test("rejects unscoped or stale-shaped mobile relay trust mutations", () => {
+    expect(() => mobileRelayForgetTrustedPhoneInputSchema.parse({ deviceId: "phone-1" })).toThrow();
+    expect(() =>
+      mobileRelayForgetTrustedPhoneInputSchema.parse({
+        workspaceId: "ws_1",
+        scope: "all",
+        expectedDeviceIds: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      mobileRelayUpdateTrustedPhonePermissionsInputSchema.parse({
+        deviceId: "phone-1",
+        permissions: { turns: true },
+      }),
+    ).toThrow();
   });
 
   test("rejects legacy mobile relay bridge pairing payloads", () => {

@@ -12,6 +12,18 @@ import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { operationKey } from "../../../app/store.helpers/operations";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Separator } from "../../../components/ui/separator";
@@ -21,17 +33,15 @@ import type {
   MobileRelayTrustedPhoneDevice,
 } from "../../../lib/desktopApi";
 import {
-  confirmAction,
   copyText,
-  forgetMobileRelayTrustedPhone,
   getMobileRelayState,
   onMobileRelayStateChanged,
   refreshMobileRelayTrustedPhones,
   rotateMobileRelaySession,
   startMobileRelay,
   stopMobileRelay,
-  updateMobileRelayTrustedPhonePermissions,
 } from "../../../lib/desktopCommands";
+import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import { SettingsSection } from "../SettingsPrimitives";
 
@@ -97,6 +107,13 @@ export function RemoteAccessPage() {
       state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null,
   );
   const desktopFeatureFlags = useAppStore((state) => state.desktopFeatureFlags);
+  const operationsByKey = useAppStore((state) => state.operationsByKey);
+  const forgetRemoteAccessTrustedPhones = useAppStore(
+    (state) => state.forgetRemoteAccessTrustedPhones,
+  );
+  const updateRemoteAccessTrustedPhonePermissions = useAppStore(
+    (state) => state.updateRemoteAccessTrustedPhonePermissions,
+  );
   const [state, setState] = useState<Awaited<ReturnType<typeof getMobileRelayState>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -215,7 +232,68 @@ export function RemoteAccessPage() {
   }, [settingsChrome, selectedWorkspace, state, busyAction, desktopFeatureFlags, runAction]);
 
   const qrValue = useMemo(() => state?.ticketUrl ?? null, [state?.ticketUrl]);
-  const trustedDevices = state?.trustedPhoneDevices ?? [];
+  const relayMatchesSelectedWorkspace =
+    selectedWorkspace !== null && state?.workspaceId === selectedWorkspace.id;
+  const trustedDevices = relayMatchesSelectedWorkspace ? (state?.trustedPhoneDevices ?? []) : [];
+  const forgetDeviceOperation = selectedWorkspace
+    ? operationsByKey[operationKey("remote-access", "forget", selectedWorkspace.id, "device")]
+    : undefined;
+  const forgetAllOperation = selectedWorkspace
+    ? operationsByKey[operationKey("remote-access", "forget", selectedWorkspace.id, "all")]
+    : undefined;
+  const permissionsOperation = selectedWorkspace
+    ? operationsByKey[operationKey("remote-access", "permissions", selectedWorkspace.id)]
+    : undefined;
+  const trustedDeviceMutationPending =
+    forgetDeviceOperation?.status === "pending" ||
+    forgetAllOperation?.status === "pending" ||
+    permissionsOperation?.status === "pending";
+
+  async function forgetTrustedDevice(device: MobileRelayTrustedPhoneDevice) {
+    if (!selectedWorkspace || !relayMatchesSelectedWorkspace) {
+      return;
+    }
+    const result = await forgetRemoteAccessTrustedPhones({
+      workspaceId: selectedWorkspace.id,
+      scope: "device",
+      deviceId: device.deviceId,
+    });
+    if (result.ok) {
+      setState(result.value);
+    }
+  }
+
+  async function forgetAllTrustedDevices() {
+    if (!selectedWorkspace || !relayMatchesSelectedWorkspace || trustedDevices.length === 0) {
+      return;
+    }
+    const result = await forgetRemoteAccessTrustedPhones({
+      workspaceId: selectedWorkspace.id,
+      scope: "all",
+      expectedDeviceIds: trustedDevices.map((device) => device.deviceId),
+    });
+    if (result.ok) {
+      setState(result.value);
+    }
+  }
+
+  async function updateTrustedDevicePermission(
+    deviceId: string,
+    permission: MobileRelayTrustedDevicePermissionKey,
+    enabled: boolean,
+  ) {
+    if (!selectedWorkspace || !relayMatchesSelectedWorkspace) {
+      return;
+    }
+    const result = await updateRemoteAccessTrustedPhonePermissions({
+      workspaceId: selectedWorkspace.id,
+      deviceId,
+      permissions: { [permission]: enabled },
+    });
+    if (result.ok) {
+      setState(result.value);
+    }
+  }
 
   async function copyPairingKey() {
     if (!qrValue) {
@@ -346,10 +424,18 @@ export function RemoteAccessPage() {
 
         <SettingsSection
           title="Trusted devices"
-          description="Cowork Desktop keeps direct pairing trust state in `~/.cowork/mobile-pairing`, outside the renderer."
+          description="Trust is scoped to the workspace named in each confirmation. Revoked phones lose remote access immediately and must scan a new QR code to reconnect."
         >
           <div className="space-y-4 px-4 py-4">
-            {trustedDevices.length > 0 ? (
+            {state?.workspaceId && !relayMatchesSelectedWorkspace ? (
+              <div
+                role="status"
+                className="rounded-lg border border-dashed border-border/60 bg-background/35 p-4 text-sm text-muted-foreground"
+              >
+                The running bridge belongs to another workspace. Select that workspace or restart
+                the bridge here before changing trusted devices.
+              </div>
+            ) : trustedDevices.length > 0 ? (
               <div className="space-y-3">
                 {trustedDevices.map((device, index) => (
                   <div
@@ -374,32 +460,42 @@ export function RemoteAccessPage() {
                           <div>Last seen: {formatDeviceTimestamp(device.lastConnectedAt)}</div>
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        aria-label={`Forget ${describeTrustedDevice(device)}`}
-                        onClick={() =>
-                          void (async () => {
-                            const confirmed = await confirmAction({
-                              title: "Forget this device?",
-                              message: `Remove trusted access for ${describeTrustedDevice(device)}?`,
-                              detail: "It will need to scan the QR again to reconnect.",
-                              confirmLabel: "Forget device",
-                              cancelLabel: "Cancel",
-                              kind: "warning",
-                              defaultAction: "cancel",
-                            });
-                            if (!confirmed) return;
-                            await runAction(`forget:${device.deviceId}`, async () => {
-                              await forgetMobileRelayTrustedPhone({ deviceId: device.deviceId });
-                            });
-                          })()
-                        }
-                        disabled={busyAction !== null}
-                      >
-                        <Trash2Icon data-icon />
-                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            aria-label={`Forget ${describeTrustedDevice(device)}`}
+                            disabled={busyAction !== null || trustedDeviceMutationPending}
+                          >
+                            <Trash2Icon data-icon />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent size="sm">
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>
+                              Forget {describeTrustedDevice(device)}?
+                            </AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This revokes this phone&apos;s access to{" "}
+                              <strong>{selectedWorkspace?.name}</strong>. It will need to scan a new
+                              QR code before it can reconnect. Other trusted devices are unchanged.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Keep device</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              onClick={() => {
+                                void forgetTrustedDevice(device);
+                              }}
+                            >
+                              Forget device
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
 
                     <Separator />
@@ -423,19 +519,15 @@ export function RemoteAccessPage() {
                               <Switch
                                 size="sm"
                                 checked={device.permissions[permission.key]}
-                                disabled={busyAction !== null}
+                                disabled={busyAction !== null || trustedDeviceMutationPending}
                                 aria-labelledby={permissionLabelId}
-                                onCheckedChange={(checked) =>
-                                  runAction(
-                                    `permission:${device.deviceId}:${permission.key}`,
-                                    async () => {
-                                      await updateMobileRelayTrustedPhonePermissions({
-                                        deviceId: device.deviceId,
-                                        permissions: { [permission.key]: checked === true },
-                                      });
-                                    },
-                                  )
-                                }
+                                onCheckedChange={(checked) => {
+                                  void updateTrustedDevicePermission(
+                                    device.deviceId,
+                                    permission.key,
+                                    checked === true,
+                                  );
+                                }}
                               />
                             </div>
                           );
@@ -444,31 +536,45 @@ export function RemoteAccessPage() {
                     </div>
                   </div>
                 ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() =>
-                    void (async () => {
-                      const confirmed = await confirmAction({
-                        title: "Forget all trusted devices?",
-                        message: "Remove remote access for every paired phone?",
-                        detail: "Every device will need to scan the QR code again to reconnect.",
-                        confirmLabel: "Forget all",
-                        cancelLabel: "Cancel",
-                        kind: "warning",
-                        defaultAction: "cancel",
-                      });
-                      if (!confirmed) return;
-                      await runAction("forget-all", async () => {
-                        await forgetMobileRelayTrustedPhone();
-                      });
-                    })()
-                  }
-                  disabled={busyAction !== null}
-                >
-                  <Trash2Icon data-icon />
-                  Forget all devices
-                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={busyAction !== null || trustedDeviceMutationPending}
+                    >
+                      <Trash2Icon data-icon="inline-start" />
+                      Forget all devices
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent size="sm">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        Forget all {trustedDevices.length} trusted{" "}
+                        {trustedDevices.length === 1 ? "device" : "devices"}?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This revokes remote access to <strong>{selectedWorkspace?.name}</strong> for{" "}
+                        {trustedDevices.length} {trustedDevices.length === 1 ? "phone" : "phones"}.
+                        Every phone must scan a new QR code to reconnect.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Keep devices</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        onClick={() => {
+                          void forgetAllTrustedDevices();
+                        }}
+                      >
+                        Forget all {trustedDevices.length}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+                <OperationFeedback operation={forgetDeviceOperation} />
+                <OperationFeedback operation={forgetAllOperation} />
+                <OperationFeedback operation={permissionsOperation} />
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-border/60 bg-background/35 p-4 text-sm text-muted-foreground">

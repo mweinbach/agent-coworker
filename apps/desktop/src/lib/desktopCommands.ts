@@ -398,7 +398,7 @@ export async function rotateMobileRelaySession(): Promise<
 }
 
 export async function forgetMobileRelayTrustedPhone(
-  opts?: import("./desktopApi").MobileRelayForgetTrustedPhoneInput,
+  opts: import("./desktopApi").MobileRelayForgetTrustedPhoneInput,
 ): Promise<import("./desktopApi").MobileRelayBridgeState> {
   return await requireDesktopApi().forgetMobileRelayTrustedPhone(opts);
 }

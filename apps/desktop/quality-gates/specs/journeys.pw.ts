@@ -54,19 +54,29 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   await quality.emitStreamingActivity();
   await expect(page.getByText("The quality review is in progress.")).toBeVisible();
   await expect(page.getByText("bun run desktop:quality")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop generating response" })).toBeVisible();
+  const stopButton = page.getByRole("button", { name: "Stop current response" });
+  await expect(stopButton).toBeVisible();
+  await expect(stopButton).toBeEnabled();
   await page.getByRole("button", { name: "Keep blocked" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).approvalResponses).toBe(1);
 
   const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Prioritize the accessibility findings.");
   await expect(composer).toHaveValue("Prioritize the accessibility findings.");
-  await page.getByRole("button", { name: "Steer current response" }).click();
+  await page.getByRole("button", { name: "Send guidance to current response" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).turnSteerRequests).toBe(1);
+  await expect(
+    page.getByText("Guidance accepted. Restore it to edit and send as a follow-up."),
+  ).toBeVisible();
+  await expect(stopButton).toBeVisible();
+  await expect(stopButton).toBeEnabled();
+  await page.getByRole("button", { name: "Edit as follow-up" }).click();
+  await expect(composer).toHaveValue("Prioritize the accessibility findings.");
+  await expect(stopButton).toBeEnabled();
 
-  await page.getByRole("button", { name: "Stop generating response" }).click();
+  await stopButton.click();
   await expect.poll(async () => (await quality.getMainMetrics()).turnInterruptRequests).toBe(1);
-  await expect(page.getByRole("button", { name: "Stop generating response" })).toHaveCount(0);
+  await expect(stopButton).toHaveCount(0);
 
   await quality.emitStreamingActivity();
   await quality.emitCompletion();

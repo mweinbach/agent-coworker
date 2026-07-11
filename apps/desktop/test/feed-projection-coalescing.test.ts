@@ -412,6 +412,49 @@ describe("model-stream feed update coalescing", () => {
     expect(assistantItems[0]).toMatchObject({ text: "before-switch-after-switch" });
   });
 
+  test("keeps an interrupt claim only when reconnecting to the same live turn", () => {
+    const harness = createFeedHarness(["thread-1"]);
+    harness.set((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-1": {
+          ...state.threadRuntimeById["thread-1"]!,
+          busy: true,
+          activeTurnId: "turn-1",
+          interruptPending: true,
+        },
+      },
+    }));
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "server_hello",
+      sessionId: "thread-1",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/workspace",
+      },
+      isResume: true,
+      busy: true,
+      turnId: "turn-1",
+    });
+    expect(harness.get().threadRuntimeById["thread-1"]?.interruptPending).toBe(true);
+
+    harness.handleThreadEvent(harness.get, harness.set, "thread-1", {
+      type: "server_hello",
+      sessionId: "thread-1",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/workspace",
+      },
+      isResume: true,
+      busy: true,
+      turnId: "turn-2",
+    });
+    expect(harness.get().threadRuntimeById["thread-1"]?.interruptPending).toBe(false);
+  });
+
   test("flushes pending content synchronously before completion", () => {
     const animationFrame = installFakeAnimationFrame();
     const harness = createFeedHarness(["thread-1"]);

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox";
 import {
   AppearancePreferences,
   normalizeThemeSource,
@@ -14,7 +14,11 @@ async function createPreferences(): Promise<{
   directory: string;
   preferences: AppearancePreferences;
 }> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-appearance-"));
+  const [scratchRoot] = scratchRoots();
+  if (!scratchRoot) {
+    throw new Error("No platform scratch root is available for appearance preference tests.");
+  }
+  const directory = await fs.mkdtemp(path.join(scratchRoot, "cowork-appearance-"));
   temporaryDirectories.push(directory);
   return {
     directory,

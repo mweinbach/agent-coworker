@@ -26,6 +26,9 @@ import type {
 import type { TaskCreationInput } from "../../../../src/shared/tasks";
 import {
   createDefaultUpdaterState,
+  type MobileRelayBridgeState,
+  type MobileRelayForgetTrustedPhoneInput,
+  type MobileRelayUpdateTrustedPhonePermissionsInput,
   type UpdaterState,
   type WorkspaceServerExitedEvent,
   type WorkspaceServerStartupProgress,
@@ -429,13 +432,21 @@ export type AppStoreState = {
   setQuickChatShortcutEnabled: (enabled: boolean) => void;
   setQuickChatShortcutAccelerator: (accelerator: string) => void;
   setSidebarSectionOrder: (orderedSections: SidebarSectionKey[]) => void;
-  setCrashReportsEnabled: (enabled: boolean) => void;
-  setProductAnalyticsEnabled: (enabled: boolean) => void;
-  setAiTraceTelemetryEnabled: (enabled: boolean) => void;
-  setAiTracePayloadsEnabled: (enabled: boolean) => void;
-  setDiagnosticsUploadEnabled: (enabled: boolean) => void;
-  setCloudSyncEnabled: (enabled: boolean) => void;
-  setPrivacyTelemetrySettings: (patch: PersistedPrivacyTelemetrySettings) => void;
+  setCrashReportsEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setProductAnalyticsEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setAiTraceTelemetryEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setAiTracePayloadsEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setDiagnosticsUploadEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setCloudSyncEnabled: (enabled: boolean) => Promise<OperationResult>;
+  setPrivacyTelemetrySettings: (
+    patch: PersistedPrivacyTelemetrySettings,
+  ) => Promise<OperationResult>;
+  forgetRemoteAccessTrustedPhones: (
+    input: MobileRelayForgetTrustedPhoneInput,
+  ) => Promise<OperationResult<MobileRelayBridgeState>>;
+  updateRemoteAccessTrustedPhonePermissions: (
+    input: MobileRelayUpdateTrustedPhonePermissionsInput,
+  ) => Promise<OperationResult<MobileRelayBridgeState>>;
   setDesktopFeatureFlagOverride: (flagId: DesktopFeatureFlagId, enabled: boolean) => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;

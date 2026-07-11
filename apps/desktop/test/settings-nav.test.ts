@@ -590,8 +590,8 @@ describe("settings nav (store)", () => {
     expect(savedStates.at(-1)?.desktopSettings?.sidebarSectionOrder).toEqual(["chats", "projects"]);
   });
 
-  test("setPrivacyTelemetrySettings normalizes and persists privacy settings", () => {
-    useAppStore.getState().setPrivacyTelemetrySettings({
+  test("setPrivacyTelemetrySettings normalizes and persists privacy settings", async () => {
+    await useAppStore.getState().setPrivacyTelemetrySettings({
       crashReportsEnabled: true,
       aiTracePayloadsEnabled: true,
     });
@@ -608,14 +608,14 @@ describe("settings nav (store)", () => {
     });
   });
 
-  test("disabling AI trace diagnostics clears persisted AI trace payloads", () => {
-    useAppStore.getState().setPrivacyTelemetrySettings({
+  test("disabling AI trace diagnostics clears persisted AI trace payloads", async () => {
+    await useAppStore.getState().setPrivacyTelemetrySettings({
       aiTraceTelemetryEnabled: true,
       aiTracePayloadsEnabled: true,
     });
     expect(useAppStore.getState().privacyTelemetrySettings.aiTracePayloadsEnabled).toBe(true);
 
-    useAppStore.getState().setAiTraceTelemetryEnabled(false);
+    await useAppStore.getState().setAiTraceTelemetryEnabled(false);
 
     expect(useAppStore.getState().privacyTelemetrySettings).toMatchObject({
       aiTraceTelemetryEnabled: false,

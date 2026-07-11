@@ -3,6 +3,7 @@ import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags"
 import {
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
+  type MobileRelayBridgeState,
   type MobileRelayForgetTrustedPhoneInput,
   type MobileRelayStartInput,
   type MobileRelayUpdateTrustedPhonePermissionsInput,
@@ -24,6 +25,26 @@ function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
     }
     window.webContents.send(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, payload);
   }
+}
+
+function assertTrustedPhoneMutationTarget(
+  workspaceId: string,
+  state: MobileRelayBridgeState,
+): void {
+  if (state.workspaceId !== workspaceId) {
+    throw new Error("Remote access is active for a different workspace.");
+  }
+  if (state.lastError) {
+    throw new Error(state.lastError);
+  }
+}
+
+function sameDeviceIds(actual: string[], expected: string[]): boolean {
+  if (actual.length !== expected.length) {
+    return false;
+  }
+  const actualIds = new Set(actual);
+  return expected.every((deviceId) => actualIds.has(deviceId));
 }
 
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): () => void {
@@ -128,16 +149,45 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): () => 
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone,
-    async (_event, args?: MobileRelayForgetTrustedPhoneInput) => {
+    async (_event, args: MobileRelayForgetTrustedPhoneInput) => {
       await assertRemoteAccessEnabled();
       const input = parseWithSchema(
         mobileRelayForgetTrustedPhoneInputSchema,
         args,
         "mobileRelay.forgetTrustedPhone options",
       );
-      return mobileRelayBridgeStateSchema.parse(
-        await deps.mobileRelayBridge.forgetTrustedPhone(input.deviceId),
+      const current = await deps.mobileRelayBridge.refreshTrustedPhones();
+      assertTrustedPhoneMutationTarget(input.workspaceId, current);
+
+      if (input.scope === "device") {
+        if (!current.trustedPhoneDevices.some((device) => device.deviceId === input.deviceId)) {
+          throw new Error("The selected device is no longer trusted.");
+        }
+      } else if (
+        !sameDeviceIds(
+          current.trustedPhoneDevices.map((device) => device.deviceId),
+          input.expectedDeviceIds,
+        )
+      ) {
+        throw new Error("The trusted device list changed. Review it and confirm again.");
+      }
+
+      const next = mobileRelayBridgeStateSchema.parse(
+        await deps.mobileRelayBridge.forgetTrustedPhone(
+          input.scope === "device" ? input.deviceId : undefined,
+        ),
       );
+      if (next.lastError) {
+        throw new Error(next.lastError);
+      }
+      if (
+        input.scope === "device"
+          ? next.trustedPhoneDevices.some((device) => device.deviceId === input.deviceId)
+          : next.trustedPhoneDevices.length > 0
+      ) {
+        throw new Error("The trusted device revoke was not acknowledged.");
+      }
+      return next;
     },
   );
 
@@ -150,12 +200,21 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): () => 
         args,
         "mobileRelay.updateTrustedPhonePermissions options",
       );
-      return mobileRelayBridgeStateSchema.parse(
+      const current = await deps.mobileRelayBridge.refreshTrustedPhones();
+      assertTrustedPhoneMutationTarget(input.workspaceId, current);
+      if (!current.trustedPhoneDevices.some((device) => device.deviceId === input.deviceId)) {
+        throw new Error("The selected device is no longer trusted.");
+      }
+      const next = mobileRelayBridgeStateSchema.parse(
         await deps.mobileRelayBridge.updateTrustedPhonePermissions(
           input.deviceId,
           input.permissions,
         ),
       );
+      if (next.lastError) {
+        throw new Error(next.lastError);
+      }
+      return next;
     },
   );
 

@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { redactSensitiveText } from "./sensitiveText";
+
 export type DiagnosticsRedactionContext = {
   homeDir?: string | null;
   workspacePaths?: readonly string[];
@@ -16,14 +18,6 @@ const SECRET_KEY_PATTERN =
   /(?:token|secret|authorization|api[_-]?key|apikey|cookie|password|private[_-]?key|privatekey|credential|session[_-]?id|refresh[_-]?token|access[_-]?token|id[_-]?token)/i;
 const BODY_KEY_PATTERN =
   /(?:prompt|completion|stdout|stderr|command|file[_-]?content|contents|transcript|messages|request[_-]?body|response[_-]?body|body|form[_-]?data|payload|response)/i;
-const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi;
-const ASSIGNMENT_SECRET_PATTERN =
-  /\b([A-Za-z0-9_.-]*(?:token|secret|api[_-]?key|apikey|password|authorization|cookie)[A-Za-z0-9_.-]*)\s*[:=]\s*["']?[^"'\s,;}{]{6,}/gi;
-const BODY_ASSIGNMENT_PATTERN =
-  /\b(?:prompt|completion|stdout|stderr|command|file[_-]?content|contents|transcript|messages|request[_-]?body|response[_-]?body|body|form[_-]?data|payload|response)(?:tail|text|json|data|content|line)?\b\s*[:=]\s*[^\n\r]*/gim;
-const COMMON_SECRET_VALUE_PATTERN =
-  /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[0-9A-Z]{16})\b/g;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -81,29 +75,9 @@ function redactPathLikeText(value: string): string {
     );
 }
 
-function redactSecretLikeText(value: string): string {
-  return value
-    .replace(BEARER_PATTERN, "Bearer [redacted]")
-    .replace(ASSIGNMENT_SECRET_PATTERN, "$1=[redacted]")
-    .replace(COMMON_SECRET_VALUE_PATTERN, "[redacted-secret]");
-}
-
-function redactBodyAssignmentText(value: string): string {
-  return value.replace(BODY_ASSIGNMENT_PATTERN, "[redacted-body]");
-}
-
 function truncateLongString(value: string, maxStringLength: number): string {
   if (value.length <= maxStringLength) return value;
   return `${value.slice(0, Math.max(0, maxStringLength - 32))}[redacted-long-string:${value.length}]`;
-}
-
-function looksLikeJsonBody(value: string): boolean {
-  const trimmed = value.trim();
-  if (trimmed.length < 24) return false;
-  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return false;
-  return /"(?:prompt|completion|messages|body|payload|response|token|api[_-]?key|secret)"/i.test(
-    trimmed,
-  );
 }
 
 export function redactDiagnosticText(
@@ -124,12 +98,7 @@ export function redactDiagnosticText(
 
   next = redactPathLikeText(next);
   next = redactLocalUsername(next, homeDir);
-  next = next.replace(EMAIL_PATTERN, "[redacted-email]");
-  next = redactSecretLikeText(next);
-  next = redactBodyAssignmentText(next);
-  if (looksLikeJsonBody(next)) {
-    return "[redacted-json-body]";
-  }
+  next = redactSensitiveText(next);
   return truncateLongString(next, maxStringLength);
 }
 

@@ -872,6 +872,12 @@ describe("app window-mode notification routing", () => {
         root.render(createElement(App));
       });
 
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            harness.dom.window.requestAnimationFrame(() => resolve());
+          }),
+      );
       const approvalDialog = harness.dom.window.document.querySelector(
         '[data-slot="dialog-content"][data-state="open"]',
       );

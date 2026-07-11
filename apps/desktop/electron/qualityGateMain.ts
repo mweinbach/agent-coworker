@@ -15,16 +15,29 @@ import {
 } from "../quality-gates/fixtureData";
 import type { PersistedState } from "../src/app/types";
 import {
+  getCanvasCaptionSymbolTone,
+  getCanvasNativeBackgroundColor,
+} from "../src/lib/canvasAppearance";
+import {
   createDefaultUpdaterState,
+  DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
   type ExplorerEntry,
   type PlatformChromeInfo,
   type SystemAppearance,
 } from "../src/lib/desktopApi";
+import { NATIVE_THEME_TOKENS } from "../src/styles/tokens/native";
+import {
+  applySystemAppearanceToWindow,
+  registerWindowAppearanceProfile,
+} from "./services/appearance";
+import { desktopShellBackgroundColor } from "./services/windowAppearancePaint";
 import { getPlatformChrome } from "./services/windowChrome/platformChrome";
 
 const nodeRequire = createRequire(import.meta.url);
-const { app, BrowserWindow, ipcMain, session } = nodeRequire("electron") as typeof Electron;
+const { app, BrowserWindow, ipcMain, nativeTheme, session } = nodeRequire(
+  "electron",
+) as typeof Electron;
 const { WebSocket, WebSocketServer } = nodeRequire("ws") as typeof Ws;
 const qualityGateDir = path.dirname(fileURLToPath(import.meta.url));
 const FIXED_NOW = "2026-07-09T12:00:00.000Z";
@@ -33,6 +46,9 @@ const QUICK_WORKSPACE_ID = "quality-quick";
 const QUICK_THREAD_ID = "quality-quick-thread";
 const qualityPlatform = hostPlatform();
 const EXTERNAL_NETWORK_PROOF_URL = "https://example.invalid/quality-gate-network-proof";
+const PRESENTATION_SLIDE_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.background}"/><text x="80" y="190" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.foreground}" font-family="sans-serif" font-size="56" font-weight="700">Canvas presentation</text><text x="80" y="270" fill="${NATIVE_THEME_TOKENS.canvasDocument.light.mutedForeground}" font-family="sans-serif" font-size="28">Theme-aware Electron preview</text></svg>`,
+).toString("base64")}`;
 
 type QualityMode = "light" | "dark" | "reduced-motion" | "forced-colors";
 type QualityScenario = "first-launch" | "product";
@@ -86,15 +102,17 @@ type QualityMainControl = {
   getMetrics(): QualityMainMetrics;
   getDeltaBurstProgress(itemId: string): { count: number; emitted: number };
   getRendererLogs(): unknown[];
+  openCanvas(path: string): Promise<void>;
   releaseBootstrap(): void;
   resetMetrics(): void;
+  setTheme(theme: "light" | "dark"): void;
 };
 
 declare global {
   var __coworkQualityGateMain: QualityMainControl | undefined;
 }
 
-const qualityMode = parseQualityMode(process.env.COWORK_QUALITY_MODE);
+let qualityMode = parseQualityMode(process.env.COWORK_QUALITY_MODE);
 const qualityScenario = parseQualityScenario(process.env.COWORK_QUALITY_SCENARIO);
 const contentWidth = parseDimension(process.env.COWORK_QUALITY_WIDTH, 1240);
 const contentHeight = parseDimension(process.env.COWORK_QUALITY_HEIGHT, 820);
@@ -111,6 +129,7 @@ app.commandLine.appendSwitch("force-device-scale-factor", "1");
 app.commandLine.appendSwitch("force-color-profile", "srgb");
 app.commandLine.appendSwitch("disable-lcd-text");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
+nativeTheme.themeSource = qualityMode === "dark" ? "dark" : "light";
 process.env.COWORK_IS_PACKAGED = "false";
 process.env.COWORK_DESKTOP_QUALITY_GATE = "1";
 process.env.COWORK_CRASH_REPORTS_ENABLED = "false";
@@ -187,6 +206,9 @@ globalThis.__coworkQualityGateMain = {
     return { count: pending.descriptor.count, emitted: pending.emitted };
   },
   getRendererLogs: () => structuredClone(rendererLogs),
+  openCanvas: async (path) => {
+    await createWindow("canvas", { path });
+  },
   releaseBootstrap: () => {
     if (bootstrapReleased) {
       return;
@@ -212,6 +234,9 @@ globalThis.__coworkQualityGateMain = {
       turnSteerRequests: 0,
       websocketRequests: 0,
     };
+  },
+  setTheme: (theme) => {
+    setQualityTheme(theme);
   },
 };
 
@@ -363,6 +388,19 @@ function createAppearance(): SystemAppearance {
     prefersReducedTransparency: qualityMode === "reduced-motion",
     inForcedColorsMode: forcedColors,
   };
+}
+
+function setQualityTheme(theme: "light" | "dark"): void {
+  qualityMode = theme;
+  nativeTheme.themeSource = theme;
+  const appearance = createAppearance();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) {
+      continue;
+    }
+    applySystemAppearanceToWindow(win, appearance);
+    win.webContents.send(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
+  }
 }
 
 function createPlatformChrome(): PlatformChromeInfo {
@@ -1015,6 +1053,133 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       researchRecords.set(record.id, record);
       return { research: record };
     }
+    case "cowork/workspace/document/open": {
+      const filePath =
+        typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
+      if (filePath.endsWith("/canvas-error.md")) {
+        return {
+          ok: false,
+          documentId:
+            typeof params.documentId === "string" ? params.documentId : "quality-document-error",
+          generation: typeof params.generation === "number" ? params.generation : 1,
+          path: filePath,
+          error: {
+            kind: "read_error",
+            message: "Quality fixture could not read this document.",
+          },
+        };
+      }
+      const isMarkdown = filePath.toLowerCase().endsWith(".md");
+      const content = isMarkdown
+        ? "# Electron Canvas\n\nSemantic surfaces stay readable while the system theme changes."
+        : "Electron Canvas\n\nTheme-aware plain text editor";
+      return {
+        ok: true,
+        document: {
+          documentId:
+            typeof params.documentId === "string" ? params.documentId : "quality-document",
+          generation: typeof params.generation === "number" ? params.generation : 1,
+          path: filePath,
+          content,
+          truncated: false,
+          revision: {
+            modifiedAtMs: Date.parse(FIXED_NOW),
+            changeTimeMs: Date.parse(FIXED_NOW),
+            size: content.length,
+            fingerprint: `sha256:${path.basename(filePath)}`,
+          },
+        },
+      };
+    }
+    case "cowork/workspace/document/revision": {
+      const filePath =
+        typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
+      return {
+        ok: true,
+        documentId: typeof params.documentId === "string" ? params.documentId : "quality-document",
+        generation: typeof params.generation === "number" ? params.generation : 1,
+        path: filePath,
+        revision: {
+          modifiedAtMs: Date.parse(FIXED_NOW),
+          changeTimeMs: Date.parse(FIXED_NOW),
+          size: 80,
+          fingerprint: `sha256:${path.basename(filePath)}`,
+        },
+      };
+    }
+    case "cowork/workspace/document/close":
+      return {
+        ok: true,
+        documentId: typeof params.documentId === "string" ? params.documentId : "quality-document",
+        generation: typeof params.generation === "number" ? params.generation : 1,
+      };
+    case "cowork/workspace/spreadsheet/workbook": {
+      const filePath =
+        typeof params.path === "string" ? params.path : "/quality/project/report.csv";
+      const filename = path.basename(filePath);
+      return {
+        ok: true,
+        workbook: {
+          kind: filePath.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv",
+          path: filePath,
+          filename,
+          fileVersion: {
+            modifiedAtMs: Date.parse(FIXED_NOW),
+            changeTimeMs: Date.parse(FIXED_NOW),
+            size: 128,
+            fingerprint: "sha256:quality-spreadsheet",
+          },
+          sheets: [
+            {
+              id: "quality-sheet",
+              name: "Summary",
+              rowCount: 4,
+              colCount: 3,
+              cells: [
+                { row: 0, col: 0, address: "A1", value: "Metric", rawValue: "Metric" },
+                { row: 0, col: 1, address: "B1", value: "Light", rawValue: "Light" },
+                { row: 0, col: 2, address: "C1", value: "Dark", rawValue: "Dark" },
+                { row: 1, col: 0, address: "A2", value: "Contrast", rawValue: "Contrast" },
+                { row: 1, col: 1, address: "B2", value: "13.6", rawValue: 13.6 },
+                { row: 1, col: 2, address: "C2", value: "12.9", rawValue: 12.9 },
+              ],
+              mergedCells: [],
+              columnWidths: [
+                { col: 0, widthPx: 180 },
+                { col: 1, widthPx: 120 },
+                { col: 2, widthPx: 120 },
+              ],
+              tables: [],
+              charts: [],
+            },
+          ],
+          activeSheetName: "Summary",
+          warnings: [],
+        },
+      };
+    }
+    case "cowork/workspace/spreadsheet/version":
+      return {
+        ok: true,
+        version: {
+          modifiedAtMs: Date.parse(FIXED_NOW),
+          changeTimeMs: Date.parse(FIXED_NOW),
+          size: 128,
+          fingerprint: "sha256:quality-spreadsheet",
+        },
+      };
+    case "cowork/workspace/presentation/preview":
+      return {
+        ok: true,
+        slides: [
+          {
+            slideIndex: 0,
+            slideId: "quality-slide-1",
+            title: "Canvas presentation",
+            pngBase64: PRESENTATION_SLIDE_DATA_URL,
+          },
+        ],
+      };
     case "task/list":
       return { tasks: [createQualityTaskFixture()] };
     case "task/read":
@@ -1046,6 +1211,13 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
     default:
       return {};
   }
+}
+
+function shouldHoldCanvasLoadingResponse(method: string, rawParams: unknown): boolean {
+  if (method !== "cowork/workspace/document/open") {
+    return false;
+  }
+  return asRecord(rawParams).path === "/quality/project/canvas-loading.md";
 }
 
 async function startMockServer(): Promise<void> {
@@ -1095,10 +1267,14 @@ async function startMockServer(): Promise<void> {
       ) {
         return;
       }
+      const params = "params" in message ? message.params : undefined;
+      if (shouldHoldCanvasLoadingResponse(message.method, params)) {
+        return;
+      }
       socket.send(
         JSON.stringify({
           id: message.id,
-          result: jsonRpcResult(message.method, "params" in message ? message.params : undefined),
+          result: jsonRpcResult(message.method, params),
         }),
       );
     });
@@ -1251,6 +1427,10 @@ async function createWindow(
   deferLoad = false,
 ): Promise<Electron.BrowserWindow> {
   const isMain = mode === "main";
+  const backgroundColor =
+    mode === "canvas"
+      ? getCanvasNativeBackgroundColor(options?.path ?? "", qualityMode === "dark")
+      : desktopShellBackgroundColor(qualityMode === "dark");
   const win = new BrowserWindow({
     title:
       mode === "quick-chat" ? "Cowork Quick Chat" : mode === "canvas" ? "Cowork Canvas" : "Cowork",
@@ -1260,7 +1440,7 @@ async function createWindow(
     show: false,
     frame: false,
     resizable: true,
-    backgroundColor: qualityMode === "dark" ? "#1f1d1a" : "#f5f0e5",
+    backgroundColor,
     webPreferences: {
       preload: path.join(qualityGateDir, "../preload/preload.js"),
       contextIsolation: true,
@@ -1273,6 +1453,17 @@ async function createWindow(
       devTools: false,
     },
   });
+
+  if (mode === "canvas") {
+    const canvasPath = options?.path ?? "";
+    registerWindowAppearanceProfile(win, {
+      backgroundColor: (useDarkColors) => getCanvasNativeBackgroundColor(canvasPath, useDarkColors),
+      captionSymbolTone: (useDarkColors) => getCanvasCaptionSymbolTone(canvasPath, useDarkColors),
+      useMacosNativeGlass: false,
+      ...(qualityPlatform === "win32" ? { backgroundMaterial: "none" } : {}),
+    });
+    applySystemAppearanceToWindow(win, createAppearance());
+  }
 
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event, url) => {
@@ -1404,9 +1595,13 @@ async function handleIpc(channel: string, input: unknown): Promise<unknown> {
     case DESKTOP_IPC_CHANNELS.showQuickChatWindow:
       await createWindow("quick-chat", { threadId: QUICK_THREAD_ID });
       return undefined;
-    case DESKTOP_IPC_CHANNELS.showCanvasWindow:
-      await createWindow("canvas", { path: "/quality/project/quality-gate-report.md" });
+    case DESKTOP_IPC_CHANNELS.showCanvasWindow: {
+      const params = asRecord(input);
+      const canvasPath =
+        typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
+      await createWindow("canvas", { path: canvasPath });
       return undefined;
+    }
     case DESKTOP_IPC_CHANNELS.showMainWindow:
       mainWindow?.show();
       mainWindow?.focus();

@@ -620,10 +620,10 @@ export function Canvas({ path }: { path: string }) {
   return (
     <div
       className={cn(
-        "app-canvas flex h-full w-full flex-col text-foreground overflow-hidden",
-        isCanvasMode ? "bg-transparent" : "bg-background",
+        "app-canvas flex h-full w-full flex-col overflow-hidden bg-canvas text-canvas-foreground",
         !isCanvasMode && "border-l border-border/50",
       )}
+      data-canvas-surface="document"
     >
       <style>{`
         ::highlight(canvas-temp-highlight) {
@@ -804,16 +804,16 @@ export function Canvas({ path }: { path: string }) {
 
         <div className="min-h-0 flex-1 relative">
           {loading ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground bg-background">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas text-sm text-muted-foreground">
               <Loader2Icon className="size-6 animate-spin text-primary" />
               <span>Reading file...</span>
             </div>
           ) : error ? (
-            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold">Failed to load content</div>
-                <p className="mt-1 text-xs">{error}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{error}</p>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={handleRetryPersistence}>
                 <RefreshCwIcon data-icon="inline-start" />
@@ -901,7 +901,7 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent
                       forceMount
                       value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                      className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
@@ -920,7 +920,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your markdown here..."
-                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -937,7 +937,7 @@ export function Canvas({ path }: { path: string }) {
                     <TabsContent
                       forceMount
                       value="edit"
-                      className="h-full m-0 p-0 outline-none bg-background data-[state=inactive]:hidden"
+                      className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
                         <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
@@ -955,13 +955,13 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your slide code here..."
-                          className="flex-1 min-h-0 resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
                   </>
                 ) : (
-                  <div className="h-full flex flex-col pb-2.5 pt-1.5 gap-2 bg-background">
+                  <div className="flex h-full flex-col gap-2 bg-canvas pb-2.5 pt-1.5">
                     <div
                       className={cn(
                         "text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0",
@@ -981,7 +981,7 @@ export function Canvas({ path }: { path: string }) {
                         onBlur={handleBlur}
                         readOnly={contentTruncated}
                         placeholder="Type your text here..."
-                        className="w-full h-full resize-none font-mono text-sm leading-relaxed p-4 bg-background/50 border border-border/60 focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary/80"
+                        className="h-full w-full resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                       />
                     </div>
                   </div>
@@ -1003,7 +1003,7 @@ export function Canvas({ path }: { path: string }) {
             <div
               role="alert"
               data-testid="canvas-prompt-error"
-              className="absolute -top-2 left-0 right-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+              className="absolute -top-2 right-0 left-0 -translate-y-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-foreground"
             >
               {promptError}
             </div>

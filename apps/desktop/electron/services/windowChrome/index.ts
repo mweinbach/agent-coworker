@@ -1,5 +1,6 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
 
+import { hostPlatform } from "../../../../../src/platform/host";
 import darwinWindowChrome from "./darwin";
 import linuxWindowChrome from "./linux";
 import { parseBooleanEnv } from "./shared";
@@ -29,14 +30,17 @@ function resolveWindowChromeContext(
   platform: NodeJS.Platform,
   options: Omit<WindowChromeOptions, "platform"> = {},
 ): WindowChromeContext {
+  const useDarkColors = options.useDarkColors ?? false;
   return {
-    useDarkColors: options.useDarkColors ?? false,
+    ...(options.backgroundColor ? { backgroundColor: options.backgroundColor } : {}),
+    captionSymbolTone: options.captionSymbolTone ?? (useDarkColors ? "light" : "dark"),
+    useDarkColors,
     useMacosNativeGlass: options.useMacosNativeGlass ?? shouldUseMacosNativeGlass(platform),
   };
 }
 
 export function shouldUseMacosNativeGlass(
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform(),
   env: NodeJS.ProcessEnv = process.env,
   options: { prefersReducedTransparency?: boolean } = {},
 ): boolean {
@@ -50,7 +54,7 @@ export function shouldUseMacosNativeGlass(
 }
 
 export function getPlatformBrowserWindowOptions(
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform(),
   options: Omit<WindowChromeOptions, "platform"> = {},
 ): Partial<BrowserWindowConstructorOptions> {
   return getWindowChromeModule(platform).getBrowserWindowOptions(
@@ -59,7 +63,7 @@ export function getPlatformBrowserWindowOptions(
 }
 
 export function macosBrowserWindowOptions(
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform(),
   options: Omit<WindowChromeOptions, "platform"> = {},
 ): Partial<BrowserWindowConstructorOptions> {
   return getPlatformBrowserWindowOptions(platform, options);
@@ -67,7 +71,7 @@ export function macosBrowserWindowOptions(
 
 export function applyPlatformWindowCreated(
   win: BrowserWindow,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform(),
 ): void {
   getWindowChromeModule(platform).applyWindowCreated?.(win);
 }
@@ -76,7 +80,7 @@ export function syncWindowChromeAppearance(
   win: BrowserWindow,
   options: WindowChromeOptions = {},
 ): void {
-  const platform = options.platform ?? process.platform;
+  const platform = options.platform ?? hostPlatform();
   getWindowChromeModule(platform).syncAppearance?.(
     win,
     resolveWindowChromeContext(platform, options),

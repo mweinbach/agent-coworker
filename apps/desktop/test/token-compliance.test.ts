@@ -12,6 +12,7 @@ const allowedLiteralColorFiles = new Set([
   resolve(desktopSrcDir, "components/ui/chart.tsx"),
   resolve(desktopSrcDir, "styles/theme-bridge.css"),
   resolve(desktopSrcDir, "styles/tokens/base.css"),
+  resolve(desktopSrcDir, "styles/tokens/native.ts"),
   resolve(desktopSrcDir, "styles/tokens/platform.css"),
 ]);
 const allowedColorMixFiles = new Set(allowedLiteralColorFiles);

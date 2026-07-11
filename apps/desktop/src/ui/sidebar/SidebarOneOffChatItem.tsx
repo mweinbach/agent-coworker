@@ -1,4 +1,6 @@
 import { type MouseEvent, memo, type RefObject } from "react";
+import { composerDraftKeyForThread, hasComposerDraftContent } from "../../app/composerDrafts";
+import { useAppStore } from "../../app/store";
 import type { ThreadRecord, ThreadRuntime } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -56,6 +58,9 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
   const isEditing = editingThreadId === thread.id;
   const displayTitle = thread.title || "New chat";
   const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+  const hasDraft = useAppStore((state) =>
+    hasComposerDraftContent(state.composerDraftsByKey[composerDraftKeyForThread(thread.id)]),
+  );
 
   if (isEditing) {
     return (
@@ -109,6 +114,13 @@ export const SidebarOneOffChatItem = memo(function SidebarOneOffChatItem({
             <span
               className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
               aria-hidden="true"
+            />
+          ) : hasDraft ? (
+            <span
+              className="size-1.5 rounded-full bg-muted-foreground/70"
+              role="status"
+              aria-label="Unsent draft"
+              title="Unsent draft"
             />
           ) : ageLabel ? (
             <span

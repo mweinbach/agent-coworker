@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { composerDraftKeyForThread, hasComposerDraftContent } from "../../app/composerDrafts";
 import { useAppStore } from "../../app/store";
 import type { TaskSummary, ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../../app/types";
 import { Button } from "../../components/ui/button";
@@ -136,6 +137,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   const [renderThreadRegion, setRenderThreadRegion] = useState(expanded);
   const [threadRegionOpen, setThreadRegionOpen] = useState(expanded);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags?.tasks === true);
+  const composerDraftsByKey = useAppStore((s) => s.composerDraftsByKey);
   const visibleTasks = tasksEnabled ? tasks : EMPTY_TASK_SUMMARIES;
 
   useLayoutEffect(() => {
@@ -356,6 +358,9 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       const isEditing = editingThreadId === thread.id;
                       const displayTitle = thread.title || "New chat";
                       const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+                      const hasDraft = hasComposerDraftContent(
+                        composerDraftsByKey[composerDraftKeyForThread(thread.id)],
+                      );
 
                       return isEditing ? (
                         <div
@@ -410,6 +415,13 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                                 <span
                                   className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
                                   aria-hidden="true"
+                                />
+                              ) : hasDraft ? (
+                                <span
+                                  className="size-1.5 rounded-full bg-muted-foreground/70"
+                                  role="status"
+                                  aria-label="Unsent draft"
+                                  title="Unsent draft"
                                 />
                               ) : ageLabel ? (
                                 <span

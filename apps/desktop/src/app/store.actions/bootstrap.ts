@@ -20,6 +20,13 @@ import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
 import { normalizeQuickChatShortcutAccelerator } from "../../lib/quickChatShortcut";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
+import {
+  hydrateComposerDrafts,
+  pruneComposerDrafts,
+  resolveActiveComposerDraftKey,
+  revokeComposerDraftAttachmentPreviews,
+  sanitizePersistedComposerDrafts,
+} from "../composerDrafts";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -381,6 +388,13 @@ const persistedUiSchema = z.preprocess(
       contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
       canvasSidebarWidth: normalizedUiWidthSchema(200, 900, 500).optional(),
       messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
+      newChatLandingTarget: z
+        .union([
+          z.object({ kind: z.literal("oneOff") }),
+          z.object({ kind: z.literal("project"), workspaceId: z.string().min(1) }),
+        ])
+        .nullable()
+        .optional(),
     })
     .passthrough()
     .transform(
@@ -397,6 +411,7 @@ const persistedUiSchema = z.preprocess(
         contextSidebarWidth: ui.contextSidebarWidth ?? 300,
         canvasSidebarWidth: ui.canvasSidebarWidth ?? 500,
         messageBarHeight: ui.messageBarHeight ?? 96,
+        newChatLandingTarget: ui.newChatLandingTarget ?? null,
       }),
     ),
 );
@@ -498,6 +513,7 @@ const persistedStateSchema = z
         .passthrough()
         .optional(),
     ),
+    composerDrafts: z.unknown().optional(),
   })
   .passthrough()
   .transform((state) => {
@@ -527,6 +543,7 @@ const persistedStateSchema = z
       providerState,
       providerUiState,
       onboarding,
+      composerDrafts: sanitizePersistedComposerDrafts(state.composerDrafts),
     };
   });
 
@@ -589,9 +606,10 @@ function buildResolvedDesktopUiState(
         ?.id ??
       null)
     : null;
-  const selectedThreadId = migratedSelectedThreadId
-    ? migratedSelectedThreadId
-    : fallbackSelectedThreadId;
+  const selectedThreadId =
+    normalizedUi.selectedThreadId === null && normalizedUi.newChatLandingTarget
+      ? null
+      : (migratedSelectedThreadId ?? fallbackSelectedThreadId);
   const fallbackLastNonSettingsView =
     normalizedUi.view === "settings" ? "chat" : (normalizedUi.view ?? "chat");
   const rawLastNonSettingsView =
@@ -616,7 +634,38 @@ function buildResolvedDesktopUiState(
     contextSidebarWidth: normalizedUi.contextSidebarWidth ?? 300,
     canvasSidebarWidth: normalizedUi.canvasSidebarWidth ?? 500,
     messageBarHeight: normalizedUi.messageBarHeight ?? 96,
+    newChatLandingTarget: normalizedUi.newChatLandingTarget ?? null,
   };
+}
+
+function buildRestoredComposerDrafts(
+  persistedDrafts: HydratedPersistedDesktopState["composerDrafts"],
+  workspaces: WorkspaceRecord[],
+  threads: ThreadRecord[],
+  selection: {
+    selectedThreadId: string | null;
+    selectedWorkspaceId: string | null;
+    newChatLandingTarget: CachedDesktopUiState["newChatLandingTarget"];
+  },
+): AppStoreDataState["composerDraftsByKey"] {
+  const drafts = hydrateComposerDrafts(persistedDrafts);
+  const activeKey = resolveActiveComposerDraftKey({
+    selectedThreadId: selection.selectedThreadId,
+    selectedWorkspaceId: selection.selectedWorkspaceId,
+    newChatLandingTarget: selection.newChatLandingTarget ?? null,
+    workspaces,
+  });
+  const pruned = pruneComposerDrafts(drafts, {
+    validThreadIds: new Set(threads.map((thread) => thread.id)),
+    validProjectWorkspaceIds: new Set(
+      workspaces
+        .filter((workspace) => workspace.workspaceKind !== "oneOffChat")
+        .map((workspace) => workspace.id),
+    ),
+    activeKey,
+  });
+  revokeComposerDraftAttachmentPreviews(pruned.removedAttachments);
+  return pruned.drafts;
 }
 
 function extractCachedDesktopState(value: unknown): {
@@ -717,6 +766,19 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
       selectedTaskId: ui.selectedTaskId,
+      composerDraftRevisionFloorByKey: {},
+      composerAttachmentIngestionCountByKey: {},
+      composerDraftsByKey: buildRestoredComposerDrafts(
+        state.composerDrafts,
+        state.workspaces,
+        state.threads,
+        {
+          selectedThreadId: ui.selectedThreadId,
+          selectedWorkspaceId: ui.selectedWorkspaceId,
+          newChatLandingTarget: ui.newChatLandingTarget,
+        },
+      ),
+      newChatLandingTarget: ui.newChatLandingTarget,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
       providerConnected: connectedProviders,
@@ -797,13 +859,14 @@ export function createBootstrapActions(
     const startupSelectionContext = getThreadSelectionContext(ui.view, ui.lastNonSettingsView);
 
     if (ui.selectedThreadId && ui.view === "chat") {
+      const selectedThreadId = ui.selectedThreadId;
       if (!isCurrent()) return;
       set((state) => ({
         threadRuntimeById: {
           ...state.threadRuntimeById,
-          [ui.selectedThreadId]: {
+          [selectedThreadId]: {
             ...defaultThreadRuntime(),
-            ...state.threadRuntimeById[ui.selectedThreadId],
+            ...state.threadRuntimeById[selectedThreadId],
             hydrating: true,
           },
         },
@@ -813,10 +876,10 @@ export function createBootstrapActions(
         return;
       }
       const current = get();
-      if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
+      if (current.selectedThreadId !== selectedThreadId || current.view !== "chat") {
         return;
       }
-      await current.selectThread(ui.selectedThreadId, { signal });
+      await current.selectThread(selectedThreadId, { signal });
       return;
     }
 
@@ -924,6 +987,7 @@ export function createBootstrapActions(
               contextSidebarWidth: get().contextSidebarWidth,
               canvasSidebarWidth: get().canvasSidebarWidth,
               messageBarHeight: get().messageBarHeight,
+              newChatLandingTarget: get().newChatLandingTarget,
             },
           );
           const connectedProviders = deriveConnectedProviders(
@@ -986,12 +1050,30 @@ export function createBootstrapActions(
           if (!isCurrent()) {
             return;
           }
+          const restoredComposerDrafts = buildRestoredComposerDrafts(
+            state.composerDrafts,
+            state.workspaces,
+            finalThreads,
+            {
+              selectedThreadId: ui.selectedThreadId,
+              selectedWorkspaceId: ui.selectedWorkspaceId,
+              newChatLandingTarget: ui.newChatLandingTarget,
+            },
+          );
+          const previousDrafts = get().composerDraftsByKey;
+          revokeComposerDraftAttachmentPreviews(
+            Object.values(previousDrafts).flatMap((draft) => draft.attachments),
+          );
           set({
             workspaces: state.workspaces,
             threads: finalThreads,
             selectedWorkspaceId: ui.selectedWorkspaceId,
             selectedThreadId: ui.selectedThreadId,
             selectedTaskId: ui.selectedTaskId,
+            composerDraftRevisionFloorByKey: {},
+            composerAttachmentIngestionCountByKey: {},
+            composerDraftsByKey: restoredComposerDrafts,
+            newChatLandingTarget: ui.newChatLandingTarget,
             providerStatusByName: state.providerState?.statusByName ?? {},
             providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
             providerConnected: connectedProviders,

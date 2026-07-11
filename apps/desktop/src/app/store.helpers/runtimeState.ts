@@ -1,5 +1,6 @@
 import type { JsonRpcSocket } from "../../lib/agentSocket";
 import type { ProviderName, TurnReference } from "../../lib/wsProtocol";
+import type { ComposerDraftRevision } from "../composerDrafts";
 import type { ReasoningEffortValue } from "../openaiCompatibleProviderOptions";
 import {
   clearThreadModelStreamRuntime,
@@ -46,6 +47,7 @@ export type PendingThreadMessage = {
    * and the server echo dedups against it.
    */
   clientMessageId?: string;
+  draftSubmission?: ComposerDraftRevision;
 };
 
 export type RuntimeMaps = {
@@ -79,6 +81,8 @@ export type RuntimeMaps = {
   mcpOAuthRefreshPollGenerations: Map<string, number>;
   /** Per-workspace counter used to ignore stale subagent profile catalog reads after mutations. */
   agentProfilesCatalogGenerations: Map<string, number>;
+  /** Serializes persisted attachment conversion so cross-draft byte reservations cannot race. */
+  composerAttachmentIngestionTail: Promise<void> | null;
 };
 
 export const RUNTIME: RuntimeMaps = {
@@ -104,6 +108,7 @@ export const RUNTIME: RuntimeMaps = {
   providerStatusRefreshGeneration: 0,
   mcpOAuthRefreshPollGenerations: new Map(),
   agentProfilesCatalogGenerations: new Map(),
+  composerAttachmentIngestionTail: null,
 };
 
 export function getAgentProfilesCatalogGeneration(workspaceId: string): number {
@@ -139,11 +144,16 @@ export function queuePendingThreadMessage(
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
   references?: TurnReference[],
   clientMessageId?: string,
+  draftSubmission?: ComposerDraftRevision,
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existing.push({ text: trimmed, ...(clientMessageId ? { clientMessageId } : {}) });
+  existing.push({
+    text: trimmed,
+    ...(clientMessageId ? { clientMessageId } : {}),
+    ...(draftSubmission ? { draftSubmission } : {}),
+  });
   RUNTIME.pendingThreadMessages.set(threadId, existing);
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.push(attachments && attachments.length > 0 ? attachments : undefined);
@@ -197,11 +207,16 @@ export function prependPendingThreadMessageWithAttachments(
   attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
   references?: TurnReference[],
   clientMessageId?: string,
+  draftSubmission?: ComposerDraftRevision,
 ) {
   const trimmed = text.trim();
   if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existingMessages = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existingMessages.unshift({ text: trimmed, ...(clientMessageId ? { clientMessageId } : {}) });
+  existingMessages.unshift({
+    text: trimmed,
+    ...(clientMessageId ? { clientMessageId } : {}),
+    ...(draftSubmission ? { draftSubmission } : {}),
+  });
   RUNTIME.pendingThreadMessages.set(threadId, existingMessages);
   const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
   existingAttachments.unshift(attachments && attachments.length > 0 ? attachments : undefined);

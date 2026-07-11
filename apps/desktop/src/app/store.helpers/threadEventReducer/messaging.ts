@@ -1,6 +1,7 @@
 import { parseLmStudioUnreachableError } from "../../../lib/lmStudioLocalError";
 import type { TurnReference } from "../../../lib/wsProtocol";
 import { buildAttachmentSignature, buildUserInputDisplayText } from "../../attachmentInputs";
+import type { ComposerDraftRevision } from "../../composerDrafts";
 import type { StoreGet, StoreSet } from "../../store.helpers";
 import type { FeedItem, ThreadBusyPolicy } from "../../types";
 import {
@@ -251,6 +252,7 @@ export function createMessagingModule(
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
+    draftSubmission?: ComposerDraftRevision,
   ) {
     void startJsonRpcTurn(
       get,
@@ -261,43 +263,47 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
-    ).catch((error) => {
-      const lmStudio = parseLmStudioUnreachableError(error);
-      if (lmStudio) {
-        // The server rejected the turn before it reached the session, so the
-        // send is retry-safe: keep the optimistic bubble, unblock the
-        // composer, and open the start-LM-Studio modal holding the retry
-        // payload (same clientMessageId dedups the re-send).
-        set((s) => {
-          const rt = s.threadRuntimeById[threadId];
-          const pendingCleared =
-            rt && rt.pendingTurnStart?.clientMessageId === clientMessageId
-              ? {
-                  threadRuntimeById: {
-                    ...s.threadRuntimeById,
-                    [threadId]: { ...rt, pendingTurnStart: null },
-                  },
-                }
-              : {};
-          return {
-            ...pendingCleared,
-            lmStudioStartModal: {
-              threadId,
-              workspaceId,
-              baseUrl: lmStudio.baseUrl,
-              installed: lmStudio.installed,
-              canAutoStart: lmStudio.canAutoStart,
-              phase: "prompt",
-              retry: { text, clientMessageId, attachments, references },
-            },
-          };
+    )
+      .then(() => {
+        if (draftSubmission) get().clearComposerDraft(draftSubmission);
+      })
+      .catch((error) => {
+        const lmStudio = parseLmStudioUnreachableError(error);
+        if (lmStudio) {
+          // The server rejected the turn before it reached the session, so the
+          // send is retry-safe: keep the optimistic bubble, unblock the
+          // composer, and open the start-LM-Studio modal holding the retry
+          // payload (same clientMessageId dedups the re-send).
+          set((s) => {
+            const rt = s.threadRuntimeById[threadId];
+            const pendingCleared =
+              rt && rt.pendingTurnStart?.clientMessageId === clientMessageId
+                ? {
+                    threadRuntimeById: {
+                      ...s.threadRuntimeById,
+                      [threadId]: { ...rt, pendingTurnStart: null },
+                    },
+                  }
+                : {};
+            return {
+              ...pendingCleared,
+              lmStudioStartModal: {
+                threadId,
+                workspaceId,
+                baseUrl: lmStudio.baseUrl,
+                installed: lmStudio.installed,
+                canAutoStart: lmStudio.canAutoStart,
+                phase: "prompt",
+                retry: { text, clientMessageId, attachments, references, draftSubmission },
+              },
+            };
+          });
+          return;
+        }
+        surfaceJsonRpcTurnSendFailure(set, threadId, {
+          pendingTurnStartClientMessageId: clientMessageId,
         });
-        return;
-      }
-      surfaceJsonRpcTurnSendFailure(set, threadId, {
-        pendingTurnStartClientMessageId: clientMessageId,
       });
-    });
   }
 
   function dispatchJsonRpcTurnSteer(
@@ -311,6 +317,7 @@ export function createMessagingModule(
     clientMessageId: string,
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
+    draftSubmission?: ComposerDraftRevision,
   ) {
     void steerJsonRpcTurn(
       get,
@@ -322,9 +329,13 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
-    ).catch(() => {
-      surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
-    });
+    )
+      .then(() => {
+        if (draftSubmission) get().clearComposerDraft(draftSubmission);
+      })
+      .catch(() => {
+        surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
+      });
   }
 
   // `true` means the reducer accepted the message locally; JSON-RPC failures
@@ -338,6 +349,7 @@ export function createMessagingModule(
     attachments?: FileAttachmentInput[],
     references?: TurnReference[],
     presetClientMessageId?: string,
+    draftSubmission?: ComposerDraftRevision,
   ): boolean {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
@@ -362,7 +374,14 @@ export function createMessagingModule(
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
-        queuePendingThreadMessage(threadId, trimmed, attachments, references);
+        queuePendingThreadMessage(
+          threadId,
+          trimmed,
+          attachments,
+          references,
+          undefined,
+          draftSubmission,
+        );
         return true;
       }
 
@@ -422,6 +441,7 @@ export function createMessagingModule(
           clientMessageId,
           attachments,
           references,
+          draftSubmission,
         );
         return true;
       }
@@ -481,6 +501,7 @@ export function createMessagingModule(
       clientMessageId,
       attachments,
       references,
+      draftSubmission,
     );
     return true;
   }
@@ -502,6 +523,7 @@ export function createMessagingModule(
       queuedAttachments,
       queuedReferences,
       next.clientMessageId,
+      next.draftSubmission,
     );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(
@@ -510,6 +532,7 @@ export function createMessagingModule(
         queuedAttachments,
         queuedReferences,
         next.clientMessageId,
+        next.draftSubmission,
       );
     }
     return accepted;

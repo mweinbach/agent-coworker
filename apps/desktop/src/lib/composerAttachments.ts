@@ -15,27 +15,17 @@ export type ComposerAttachmentFile = {
   mimeType: string;
   size: number;
   file: File;
-  previewUrl?: string;
   signature: string;
 };
 
 export function createComposerAttachmentFile(file: File): ComposerAttachmentFile {
-  const previewUrl =
-    file.type.startsWith("image/") && file instanceof Blob ? URL.createObjectURL(file) : undefined;
   return {
     filename: file.name,
     mimeType: file.type || "application/octet-stream",
     size: file.size,
     file,
-    previewUrl,
     signature: `${file.name}\u0000${file.type}\u0000${file.size}\u0000${file.lastModified}`,
   };
-}
-
-export function revokeComposerAttachmentPreview(attachment: ComposerAttachmentFile) {
-  if (attachment.previewUrl) {
-    URL.revokeObjectURL(attachment.previewUrl);
-  }
 }
 
 export function buildComposerAttachmentSignature(

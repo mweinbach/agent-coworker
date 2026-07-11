@@ -460,7 +460,7 @@ describe("desktop JSON-RPC event mapping", () => {
         providerAuthMethodsByProvider: {},
         providerLastAuthChallenge: null,
         providerLastAuthResult: null,
-        composerText: "",
+        composerDraftsByKey: {},
         injectContext: false,
         developerMode: false,
         showHiddenFiles: false,

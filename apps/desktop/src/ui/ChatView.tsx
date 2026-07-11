@@ -8,10 +8,14 @@ import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
 } from "../../../../src/shared/displayCitationMarkers";
+import { buildAttachmentSignature } from "../app/attachmentInputs";
 import {
-  buildAttachmentSignature,
-  getAttachmentPickerValidationMessage,
-} from "../app/attachmentInputs";
+  type ComposerDraftAttachment,
+  type ComposerDraftRevision,
+  getComposerDraftAttachmentValidationMessage,
+  resolveActiveComposerDraftKey,
+  selectActiveComposerDraft,
+} from "../app/composerDrafts";
 import {
   getWorkspaceGoogleReasoningEffort,
   type ReasoningEffortValue,
@@ -26,10 +30,7 @@ import { Button } from "../components/ui/button";
 import {
   appendAttachmentSkippedNotes,
   buildComposerAttachmentSignature,
-  type ComposerAttachmentFile,
-  createComposerAttachmentFile,
   resolveComposerAttachmentsForWorkspace,
-  revokeComposerAttachmentPreview,
 } from "../lib/composerAttachments";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
@@ -117,7 +118,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     if (!s.selectedThreadId) return null;
     return s.threadRuntimeById[s.selectedThreadId] ?? null;
   });
-  const composerText = useAppStore((s) => s.composerText);
+  const composerDraft = useAppStore(selectActiveComposerDraft);
+  const composerDraftKey = useAppStore(resolveActiveComposerDraftKey);
+  const attachmentIngestionPending = useAppStore(
+    (state) => (state.composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0,
+  );
+  const composerText = composerDraft.text;
+  const pendingAttachments = composerDraft.attachments;
   const composerWorkspaceId = thread?.workspaceId ?? "";
   const workspaceSkills = useAppStore((s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills);
   const workspacePluginsCatalog = useAppStore(
@@ -206,18 +213,67 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     Map<string, CitationSource[]>
   >(() => new Map());
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
-  const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachmentFile[]>([]);
-  const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
-  const [preparingAttachments, setPreparingAttachments] = useState(false);
+  const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
+  const [preparingDraftKeys, setPreparingDraftKeys] = useState<Set<string>>(() => new Set());
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(composerOverlayMinHeight);
-  const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(
-    null,
+  const [submittedAttachmentSignatures, setSubmittedAttachmentSignatures] = useState<
+    Record<string, string>
+  >({});
+  const attachmentPickerError = attachmentPickerErrors[composerDraftKey] ?? null;
+  const preparingAttachments =
+    preparingDraftKeys.has(composerDraftKey) || attachmentIngestionPending;
+  const submittedAttachmentSignature = submittedAttachmentSignatures[composerDraftKey] ?? null;
+  const setAttachmentPickerError = useCallback(
+    (message: string | null) => {
+      setAttachmentPickerErrors((current) => {
+        if (message === null) {
+          if (!(composerDraftKey in current)) return current;
+          const next = { ...current };
+          delete next[composerDraftKey];
+          return next;
+        }
+        return { ...current, [composerDraftKey]: message };
+      });
+    },
+    [composerDraftKey],
   );
-
+  const setPreparingAttachments = useCallback(
+    (preparing: boolean) => {
+      setPreparingDraftKeys((current) => {
+        const next = new Set(current);
+        if (preparing) next.add(composerDraftKey);
+        else next.delete(composerDraftKey);
+        return next;
+      });
+    },
+    [composerDraftKey],
+  );
+  const setSubmittedAttachmentSignature = useCallback(
+    (signature: string | null) => {
+      setSubmittedAttachmentSignatures((current) => {
+        if (signature === null) {
+          if (!(composerDraftKey in current)) return current;
+          const next = { ...current };
+          delete next[composerDraftKey];
+          return next;
+        }
+        return { ...current, [composerDraftKey]: signature };
+      });
+    },
+    [composerDraftKey],
+  );
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
   const isUploading = preparingAttachments || pendingTurnStart?.status === "sending";
 
   const setComposerText = useAppStore((s) => s.setComposerText);
+  const updateComposerText = useCallback(
+    (text: string) => {
+      setComposerText(text, extractReferencesFromText(text, mentionCatalog));
+    },
+    [mentionCatalog, setComposerText],
+  );
+  const addComposerAttachments = useAppStore((s) => s.addComposerAttachments);
+  const removeComposerAttachment = useAppStore((s) => s.removeComposerAttachment);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const setThreadReasoningEffort = useAppStore((s) => s.setThreadReasoningEffort);
@@ -240,19 +296,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const submitInFlightRef = useRef(false);
+  const submitInFlightRef = useRef(new Set<string>());
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,
   );
   const messageBarOverlayRef = useCallback((element: HTMLDivElement | null) => {
     setMessageBarOverlayElement(element);
   }, []);
-  const pendingAttachmentsRef = useRef<ComposerAttachmentFile[]>([]);
-
-  useEffect(() => {
-    pendingAttachmentsRef.current = pendingAttachments;
-  }, [pendingAttachments]);
-
   useLayoutEffect(() => {
     const el = messageBarOverlayElement;
     if (!el) {
@@ -278,32 +328,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     return () => observer.disconnect();
   }, [composerOverlayMinHeight, messageBarOverlayElement, readOnlyNotice, sourceTask]);
 
-  useEffect(() => {
-    return () => {
-      pendingAttachmentsRef.current.forEach(revokeComposerAttachmentPreview);
-    };
-  }, []);
-
-  const clearPendingAttachments = useCallback(() => {
-    setPendingAttachments((current) => {
-      current.forEach(revokeComposerAttachmentPreview);
-      return [];
-    });
-    setSubmittedAttachmentSignature(null);
-  }, []);
-
-  useEffect(() => {
-    clearPendingAttachments();
-    setAttachmentPickerError(null);
-    setPreparingAttachments(false);
-  }, [clearPendingAttachments, selectedThreadId]);
-
   const ingestAttachmentFiles = useCallback(
     async (selectedFiles: File[]) => {
       if (selectedFiles.length === 0) return;
 
-      const validationMessage = getAttachmentPickerValidationMessage(
-        pendingAttachments,
+      const validationMessage = getComposerDraftAttachmentValidationMessage(
+        useAppStore.getState().composerDraftsByKey,
+        composerDraftKey,
         selectedFiles,
       );
       if (validationMessage) {
@@ -313,12 +344,18 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
       setAttachmentPickerError(null);
       setSubmittedAttachmentSignature(null);
-      setPendingAttachments((prev) => [
-        ...prev,
-        ...selectedFiles.map(createComposerAttachmentFile),
-      ]);
+      try {
+        await addComposerAttachments(selectedFiles);
+      } catch (error) {
+        setAttachmentPickerError(error instanceof Error ? error.message : String(error));
+      }
     },
-    [pendingAttachments],
+    [
+      addComposerAttachments,
+      composerDraftKey,
+      setAttachmentPickerError,
+      setSubmittedAttachmentSignature,
+    ],
   );
 
   const handleFileSelect = useCallback(
@@ -331,18 +368,14 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [ingestAttachmentFiles],
   );
 
-  const removeAttachment = useCallback((index: number) => {
-    setAttachmentPickerError(null);
-    setSubmittedAttachmentSignature(null);
-    setPendingAttachments((prev) => {
-      const next = [...prev];
-      const [removed] = next.splice(index, 1);
-      if (removed) {
-        revokeComposerAttachmentPreview(removed);
-      }
-      return next;
-    });
-  }, []);
+  const removeAttachment = useCallback(
+    (index: number) => {
+      setAttachmentPickerError(null);
+      setSubmittedAttachmentSignature(null);
+      removeComposerAttachment(index);
+    },
+    [removeComposerAttachment, setAttachmentPickerError, setSubmittedAttachmentSignature],
+  );
 
   const feed = rt?.feed ?? [];
   const normalizedFeed = useMemo(
@@ -577,7 +610,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     async (
       workspaceId: string,
       threadId: string,
-      attachments: readonly ComposerAttachmentFile[],
+      attachments: readonly ComposerDraftAttachment[],
     ): Promise<{ attachments: FileAttachmentInput[]; skippedNotes: string[] }> => {
       // Soft-skip failed attachments (same policy as NewChatLanding): keep successful
       // uploads and append skip notes to the message instead of hard-failing the send.
@@ -601,37 +634,44 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const submitComposer = useCallback(
     (busyPolicy: "reject" | "steer") => {
       if (!thread) return;
-      if (submitInFlightRef.current) return;
+      if (submitInFlightRef.current.has(composerDraftKey)) return;
       if (preparingAttachments) return;
+      if (
+        (useAppStore.getState().composerAttachmentIngestionCountByKey[composerDraftKey] ?? 0) > 0
+      ) {
+        return;
+      }
       if (pendingTurnStart?.status === "sending") return;
       if (!composerText.trim() && pendingAttachments.length === 0) return;
 
       const targetThreadId = thread.id;
       const targetWorkspaceId = thread.workspaceId;
-      submitInFlightRef.current = true;
+      const draftSubmission: ComposerDraftRevision = {
+        key: composerDraftKey,
+        revision: composerDraft.revision,
+      };
+      const submittedText = composerText;
+      const submittedAttachments = [...pendingAttachments];
+      const submittedReferences = composerDraft.references.map((reference) => ({ ...reference }));
+      submitInFlightRef.current.add(composerDraftKey);
       setPreparingAttachments(true);
       setAttachmentPickerError(null);
       void (async () => {
         try {
-          let messageText = composerText;
+          let messageText = submittedText;
           let attachments: FileAttachmentInput[] | undefined;
-          if (pendingAttachments.length > 0) {
+          if (submittedAttachments.length > 0) {
             const resolved = await resolvePendingAttachmentsForSend(
               targetWorkspaceId,
               targetThreadId,
-              pendingAttachments,
+              submittedAttachments,
             );
             attachments = resolved.attachments.length > 0 ? resolved.attachments : undefined;
-            messageText = appendAttachmentSkippedNotes(composerText, resolved.skippedNotes);
+            messageText = appendAttachmentSkippedNotes(submittedText, resolved.skippedNotes);
           }
           const attachmentSignature =
             attachments && attachments.length > 0 ? buildAttachmentSignature(attachments) : null;
           setSubmittedAttachmentSignature(attachmentSignature);
-
-          if (useAppStore.getState().selectedThreadId !== targetThreadId) {
-            setSubmittedAttachmentSignature(null);
-            return;
-          }
 
           // Soft-skip may leave only notes (no files and no user text). Still send so the
           // model learns what failed; otherwise require real content.
@@ -640,18 +680,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             return;
           }
 
-          const references = extractReferencesFromText(composerText, mentionCatalog);
           const accepted = await sendMessage(
             messageText,
             busyPolicy,
             attachments,
-            references.length > 0 ? references : undefined,
+            submittedReferences.length > 0 ? submittedReferences : undefined,
+            { targetThreadId, draftSubmission },
           );
-          if (accepted && busyPolicy !== "steer") {
-            clearPendingAttachments();
-            setAttachmentPickerError(null);
-            return;
-          }
           if (!accepted) {
             setSubmittedAttachmentSignature(null);
           }
@@ -660,36 +695,26 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           const message = error instanceof Error ? error.message : String(error);
           setAttachmentPickerError(message);
         } finally {
-          submitInFlightRef.current = false;
+          submitInFlightRef.current.delete(composerDraftKey);
           setPreparingAttachments(false);
         }
       })();
     },
     [
-      clearPendingAttachments,
+      composerDraft,
+      composerDraftKey,
       composerText,
-      mentionCatalog,
       pendingAttachments,
       pendingTurnStart?.status,
       preparingAttachments,
       resolvePendingAttachmentsForSend,
       sendMessage,
+      setAttachmentPickerError,
+      setPreparingAttachments,
+      setSubmittedAttachmentSignature,
       thread,
     ],
   );
-
-  useEffect(() => {
-    if (pendingAttachments.length === 0) return;
-    if (rt?.pendingSteer?.status !== "accepted") return;
-    if ((rt.pendingSteer.attachmentSignature ?? "") !== pendingAttachmentSignature) return;
-    clearPendingAttachments();
-    setAttachmentPickerError(null);
-  }, [
-    clearPendingAttachments,
-    pendingAttachmentSignature,
-    pendingAttachments.length,
-    rt?.pendingSteer,
-  ]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -739,7 +764,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         const end = textarea.selectionEnd;
         const value = textarea.value;
         const newValue = `${value.substring(0, start)}\n${value.substring(end)}`;
-        setComposerText(newValue);
+        updateComposerText(newValue);
         requestAnimationFrame(() => {
           textarea.selectionStart = textarea.selectionEnd = start + 1;
         });
@@ -757,22 +782,19 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       rt?.busy,
       rt?.pendingSteer,
       rt?.sessionId,
-      setComposerText,
       sourceTask,
       submitComposer,
       thread?.status,
+      updateComposerText,
     ],
   );
 
   const retryFailedTurn = useCallback(async (): Promise<boolean> => {
     if (!thread || useAppStore.getState().selectedThreadId !== thread.id) return false;
-    const draftBeforeRetry = useAppStore.getState().composerText;
-    const accepted = await sendMessage(HIDDEN_RETRY_TURN_PROMPT, "reject");
-    if (accepted && draftBeforeRetry && useAppStore.getState().composerText === "") {
-      setComposerText(draftBeforeRetry);
-    }
-    return accepted;
-  }, [sendMessage, setComposerText, thread]);
+    return sendMessage(HIDDEN_RETRY_TURN_PROMPT, "reject", undefined, undefined, {
+      targetThreadId: thread.id,
+    });
+  }, [sendMessage, thread]);
 
   if (!selectedThreadId || !thread) {
     return <NewChatLanding />;
@@ -917,7 +939,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             composerSubmitState={composerSubmitState}
             attachmentPickerError={attachmentPickerError}
             composerText={composerText}
-            setComposerText={setComposerText}
+            setComposerText={updateComposerText}
             onComposerKeyDown={onComposerKeyDown}
             mentionCatalog={mentionCatalog}
             placeholder={placeholder}

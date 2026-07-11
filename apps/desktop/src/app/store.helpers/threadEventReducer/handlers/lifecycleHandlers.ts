@@ -317,19 +317,6 @@ export function handleLifecycleThreadEvent(
         };
       });
     }
-    const activeThreadId = get().selectedThreadId;
-    const composerText = get().composerText.trim();
-    if (
-      activeThreadId === threadId &&
-      composerText.length > 0 &&
-      composerText === evt.text.trim()
-    ) {
-      set((state) => {
-        const nextById = { ...state.composerTextByThreadId };
-        if (state.selectedThreadId) delete nextById[state.selectedThreadId];
-        return { composerText: "", composerTextByThreadId: nextById };
-      });
-    }
     return true;
   }
 

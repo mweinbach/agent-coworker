@@ -656,6 +656,7 @@ export function createWorkspaceDefaultsActions(
       queuedAttachments,
       queuedReferences,
       next.clientMessageId,
+      next.draftSubmission,
     );
     if (!accepted) {
       prependPendingThreadMessageWithAttachments(
@@ -664,6 +665,7 @@ export function createWorkspaceDefaultsActions(
         queuedAttachments,
         queuedReferences,
         next.clientMessageId,
+        next.draftSubmission,
       );
     }
     return accepted;

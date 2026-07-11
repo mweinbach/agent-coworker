@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { composerDraftKeyForThread, createEmptyComposerDraft } from "../src/app/composerDrafts";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
@@ -121,7 +122,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
     providerAuthMethodsByProvider: {},
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
-    composerText: "",
+    composerDraftsByKey: {},
     injectContext: false,
     developerMode: false,
     showHiddenFiles: false,
@@ -212,6 +213,42 @@ describe("desktop sidebar", () => {
 
   afterEach(() => {
     useAppStore.setState(defaultStoreState);
+  });
+
+  test.serial("shows a subtle indicator only for chats with unsent draft content", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(2),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-1",
+          composerDraftsByKey: {
+            [composerDraftKeyForThread("thread-2")]: {
+              ...createEmptyComposerDraft("2026-03-24T10:00:00.000Z"),
+              revision: 1,
+              text: "unsent",
+            },
+          },
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const indicators = container.querySelectorAll('[aria-label="Unsent draft"]');
+      expect(indicators).toHaveLength(1);
+      expect(indicators[0]?.closest(".sidebar-thread-item")?.textContent).toContain("Thread 2");
+    } finally {
+      if (root) {
+        await act(async () => root?.unmount());
+      }
+      harness.restore();
+    }
   });
 
   test.serial(

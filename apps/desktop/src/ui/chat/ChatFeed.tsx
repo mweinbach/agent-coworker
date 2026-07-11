@@ -240,11 +240,13 @@ function TranscriptScroller(props: {
   currentItemIdsRef.current = itemIds;
 
   const setScrollMode = useCallback((nextMode: TranscriptScrollMode) => {
+    if (modeRef.current === nextMode) return;
     modeRef.current = nextMode;
     setMode(nextMode);
   }, []);
 
   const setUnreadCount = useCallback((nextCount: number) => {
+    if (newMessageCountRef.current === nextCount) return;
     newMessageCountRef.current = nextCount;
     setNewMessageCount(nextCount);
   }, []);

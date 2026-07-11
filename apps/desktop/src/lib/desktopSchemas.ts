@@ -539,8 +539,9 @@ const fileChangeVersionSchema: z.ZodType<FileChangeVersion> = z
   })
   .strict();
 
-export const previewFileChangeEventSchema: z.ZodType<PreviewFileChangeEvent> =
-  z.discriminatedUnion("kind", [
+export const previewFileChangeEventSchema: z.ZodType<PreviewFileChangeEvent> = z.discriminatedUnion(
+  "kind",
+  [
     z
       .object({
         kind: z.literal("changed"),
@@ -555,7 +556,8 @@ export const previewFileChangeEventSchema: z.ZodType<PreviewFileChangeEvent> =
         version: z.null(),
       })
       .strict(),
-  ]);
+  ],
+);
 
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;

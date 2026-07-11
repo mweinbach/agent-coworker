@@ -1392,6 +1392,7 @@ export {
   nowIso,
   operationError,
   operationKey,
+  persist,
   persistNow,
   prependPendingThreadMessageWithAttachments,
   providerAuthMethodsFor,

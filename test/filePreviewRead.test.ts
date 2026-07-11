@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../src/platform/sandbox";
 import { fileChangeVersionFromStat, readCappedFilePreview } from "../src/utils/filePreviewRead";
 
 describe("file preview reads", () => {
   test("retries when the path is atomically replaced after its descriptor is read", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-preview-replacement-"));
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-preview-replacement-"),
+    );
     const filePath = path.join(dir, "preview.txt");
     const replacementPath = path.join(dir, "replacement.txt");
     await fs.writeFile(filePath, "old", "utf8");

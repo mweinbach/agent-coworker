@@ -1,3 +1,4 @@
+import { hostPlatform } from "../../../../src/platform/host";
 import { expect, test } from "../fixtures";
 
 for (const mode of ["light", "dark", "system"] as const) {
@@ -20,7 +21,7 @@ for (const mode of ["light", "dark", "system"] as const) {
       const resolvedTheme = mode === "light" ? "light" : "dark";
       const expectedBackground = mode === "light" ? "dde1ca" : "171d13";
 
-      await expect(page.locator("html")).toHaveAttribute("data-platform", process.platform);
+      await expect(page.locator("html")).toHaveAttribute("data-platform", hostPlatform());
       await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);
       await expect(page.locator("html")).toHaveAttribute("data-theme", resolvedTheme);
       await expect(page.getByRole("status")).toContainText("Restoring your workspace");

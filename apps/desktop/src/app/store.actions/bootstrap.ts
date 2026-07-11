@@ -46,6 +46,7 @@ import {
   isProviderName,
   normalizeThreadTitleSource,
   nowIso,
+  persist,
   persistNow,
   RUNTIME,
   type StoreGet,
@@ -1482,6 +1483,7 @@ export function createBootstrapActions(
     setSidebarWidth: (width: number) => {
       set({ sidebarWidth: Math.max(160, Math.min(440, width)) });
       syncDesktopStateCache(get);
+      persist(get);
     },
 
     setContextSidebarWidth: (width: number) => {
@@ -1497,11 +1499,13 @@ export function createBootstrapActions(
         set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) });
       }
       syncDesktopStateCache(get);
+      persist(get);
     },
 
     setMessageBarHeight: (height: number) => {
       set({ messageBarHeight: Math.max(80, Math.min(500, height)) });
       syncDesktopStateCache(get);
+      persist(get);
     },
   };
 }

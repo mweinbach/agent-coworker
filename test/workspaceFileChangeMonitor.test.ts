@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../src/platform/sandbox";
 import { WorkspaceFileChangeMonitor } from "../src/server/runtime/WorkspaceFileChangeMonitor";
 import type { WorkspaceFileChangeEvent } from "../src/shared/fileVersion";
 
@@ -21,7 +21,7 @@ async function waitForEvent(
 
 describe("WorkspaceFileChangeMonitor", () => {
   test("reports an external file change with its new canonical version", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-file-monitor-"));
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-file-monitor-"));
     const filePath = path.join(dir, "external.md");
     await fs.writeFile(filePath, "old", "utf8");
     const events: WorkspaceFileChangeEvent[] = [];

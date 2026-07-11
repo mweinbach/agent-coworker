@@ -123,21 +123,18 @@ export function ComposerMentionInput(props: {
     if (!textarea || !overlay) return;
     syncComposerOverlayGeometry(textarea, overlay);
     syncScroll();
-    if (!menuOpen) {
-      setCaretAnchor(null);
-      return;
-    }
+    if (!menuOpen) return;
     const nextAnchor =
       measureComposerCaretAnchor(overlay, caretRef.current, value.length) ??
       fallbackComposerCaretAnchor(textarea);
     setCaretAnchor((current) => (sameCaretAnchor(current, nextAnchor) ? current : nextAnchor));
-  }, [menuOpen, syncScroll, textareaRef, value.length]);
+  }, [menuOpen, syncScroll, textareaRef, value]);
 
   // Value-driven changes can alter wrapping and native textarea scroll. Resolve
-  // metrics after every render before measuring the caret for the picker.
+  // metrics before measuring the caret for the picker.
   useLayoutEffect(() => {
     updateGeometry();
-  });
+  }, [updateGeometry]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;

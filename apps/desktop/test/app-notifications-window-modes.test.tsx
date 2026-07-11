@@ -841,9 +841,6 @@ describe("app window-mode notification routing", () => {
   test("Escape with an approval dialog closes just the dialog, not settings", async () => {
     const harness = setupJsdom();
     const closeSettings = mock(() => {});
-    const dismissPrompt = mock(() => {
-      useAppStore.setState({ promptModal: null });
-    });
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
@@ -852,7 +849,6 @@ describe("app window-mode notification routing", () => {
         view: "settings",
         lastNonSettingsView: "chat",
         closeSettings,
-        dismissPrompt,
         promptModal: {
           kind: "approval",
           threadId: "thread-1",
@@ -893,7 +889,7 @@ describe("app window-mode notification routing", () => {
           }),
         );
       });
-      expect(dismissPrompt).toHaveBeenCalledTimes(1);
+      expect(useAppStore.getState().promptModal).toBeNull();
       expect(closeSettings).not.toHaveBeenCalled();
 
       await act(async () => {

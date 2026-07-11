@@ -872,8 +872,14 @@ describe("app window-mode notification routing", () => {
         root.render(createElement(App));
       });
 
+      const approvalDialog = harness.dom.window.document.querySelector(
+        '[data-slot="dialog-content"][data-state="open"]',
+      );
+      if (!(approvalDialog instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing approval dialog");
+      }
       await act(async () => {
-        harness.dom.window.dispatchEvent(
+        approvalDialog.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", {
             bubbles: true,
             cancelable: true,

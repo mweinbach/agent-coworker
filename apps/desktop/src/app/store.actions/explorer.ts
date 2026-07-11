@@ -2,6 +2,8 @@ import { requestCanvasDocumentTransition } from "../../lib/canvasDocumentLifecyc
 import {
   copyPath,
   createDirectory,
+  invalidateDirectoryListing,
+  isStaleDirectoryListingError,
   listDirectory,
   openPath,
   renamePath,
@@ -11,6 +13,8 @@ import {
 import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
 
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
+
+let nextExplorerRequestId = 0;
 
 export function createExplorerActions(
   set: StoreSet,
@@ -92,6 +96,7 @@ export function createExplorerActions(
       const state = get();
       const currentExp = state.workspaceExplorerById[workspaceId];
       const targetPath = currentExp?.currentPath ?? ws.path;
+      invalidateDirectoryListing({ workspaceId, path: targetPath });
       await get().navigateWorkspaceFiles(workspaceId, targetPath);
     },
 
@@ -100,7 +105,7 @@ export function createExplorerActions(
       const ws = state.workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
 
-      const requestId = Date.now();
+      const requestId = ++nextExplorerRequestId;
       const prev = state.workspaceExplorerById[workspaceId] ?? {
         rootPath: ws.path,
         currentPath: ws.path,
@@ -126,6 +131,7 @@ export function createExplorerActions(
 
       try {
         const entries = await listDirectory({
+          workspaceId,
           path: targetPath,
           includeHidden: get().showHiddenFiles,
         });
@@ -146,6 +152,19 @@ export function createExplorerActions(
       } catch (err) {
         const current = get().workspaceExplorerById[workspaceId];
         if (current?.requestId !== requestId) return; // Stale
+        if (isStaleDirectoryListingError(err)) {
+          set((s) => ({
+            workspaceExplorerById: {
+              ...s.workspaceExplorerById,
+              [workspaceId]: {
+                ...current,
+                loading: false,
+                error: null,
+              },
+            },
+          }));
+          return;
+        }
 
         set((s) => ({
           workspaceExplorerById: {
@@ -216,18 +235,31 @@ export function createExplorerActions(
 
     createWorkspaceDirectory: async (workspaceId: string, parentPath: string, name: string) => {
       await createDirectory({ parentPath, name });
+      invalidateDirectoryListing({ workspaceId, path: parentPath });
       await get().refreshWorkspaceFiles(workspaceId);
       bumpWorkspaceExplorerRefresh(workspaceId);
     },
 
     renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
       await renamePath({ path: targetPath, newName });
+      const normalizedTargetPath = targetPath.replace(/\\/g, "/");
+      const parentPath =
+        normalizedTargetPath.slice(0, normalizedTargetPath.lastIndexOf("/")) || "/";
+      const renamedPath = `${parentPath === "/" ? "" : parentPath}/${newName}`;
+      invalidateDirectoryListing({ workspaceId, path: parentPath });
+      invalidateDirectoryListing({ workspaceId, path: targetPath, recursive: true });
+      invalidateDirectoryListing({ workspaceId, path: renamedPath, recursive: true });
       await get().refreshWorkspaceFiles(workspaceId);
       bumpWorkspaceExplorerRefresh(workspaceId);
     },
 
     trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
       await trashPath({ path: targetPath });
+      const normalizedTargetPath = targetPath.replace(/\\/g, "/");
+      const parentPath =
+        normalizedTargetPath.slice(0, normalizedTargetPath.lastIndexOf("/")) || "/";
+      invalidateDirectoryListing({ workspaceId, path: parentPath });
+      invalidateDirectoryListing({ workspaceId, path: targetPath, recursive: true });
       await get().refreshWorkspaceFiles(workspaceId);
       bumpWorkspaceExplorerRefresh(workspaceId);
     },

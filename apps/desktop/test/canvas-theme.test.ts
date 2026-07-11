@@ -60,6 +60,11 @@ function executeBootstrapScript(options: {
   path: string;
   prefersDark: boolean;
   forcedColors?: boolean;
+  highContrast?: boolean;
+  nativeResolvedTheme?: "light" | "dark";
+  nativeThemeSource?: "system" | "light" | "dark";
+  platform?: "darwin" | "win32" | "linux";
+  reducedTransparency?: boolean;
   storageFailure?: boolean;
   themeSource?: "system" | "light" | "dark";
 }): JSDOM {
@@ -86,7 +91,15 @@ function executeBootstrapScript(options: {
     URLSearchParams,
     window: {
       location: {
-        search: `?window=canvas&path=${encodeURIComponent(options.path)}`,
+        search: `?${new URLSearchParams({
+          window: "canvas",
+          path: options.path,
+          ...(options.nativeResolvedTheme ? { resolvedTheme: options.nativeResolvedTheme } : {}),
+          ...(options.nativeThemeSource ? { themeSource: options.nativeThemeSource } : {}),
+          ...(options.platform ? { platform: options.platform } : {}),
+          ...(options.highContrast ? { highContrast: "true" } : {}),
+          ...(options.reducedTransparency ? { reducedTransparency: "true" } : {}),
+        }).toString()}`,
       },
       matchMedia(query: string) {
         return {
@@ -247,6 +260,51 @@ describe("Canvas first paint and live theme changes", () => {
     expect(root.dataset.themeSource).toBe("system");
     expect(root.dataset.theme).toBe("dark");
     expect(root.dataset.canvasSurface).toBe("document");
+  });
+
+  test("uses native system resolution and platform attributes before CSS paint", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      for (const nativeResolvedTheme of ["light", "dark"] as const) {
+        const dom = executeBootstrapScript({
+          path: "/workspace/notes.md",
+          prefersDark: nativeResolvedTheme !== "dark",
+          nativeResolvedTheme,
+          nativeThemeSource: "system",
+          platform,
+        });
+        const root = dom.window.document.documentElement;
+        expect(root.dataset.themeSource).toBe("system");
+        expect(root.dataset.theme).toBe(nativeResolvedTheme);
+        expect(root.dataset.platform).toBe(platform);
+        expect(root.classList.contains(nativeResolvedTheme)).toBe(true);
+      }
+    }
+  });
+
+  test("applies native accessibility preferences before CSS paint", () => {
+    const dom = executeBootstrapScript({
+      path: "/workspace/notes.md",
+      prefersDark: false,
+      highContrast: true,
+      reducedTransparency: true,
+    });
+    const root = dom.window.document.documentElement;
+    expect(root.dataset.highContrast).toBe("true");
+    expect(root.dataset.reducedTransparency).toBe("true");
+    expect(root.style.colorScheme).toBe("light dark");
+  });
+
+  test("keeps an explicit persisted renderer preference during native persistence migration", () => {
+    const dom = executeBootstrapScript({
+      path: "/workspace/notes.md",
+      prefersDark: false,
+      nativeResolvedTheme: "light",
+      nativeThemeSource: "system",
+      themeSource: "dark",
+    });
+    const root = dom.window.document.documentElement;
+    expect(root.dataset.themeSource).toBe("dark");
+    expect(root.dataset.theme).toBe("dark");
   });
 
   test("applies light-to-dark updates without dropping the Canvas surface", () => {

@@ -170,6 +170,52 @@ describe("crash reporting wrapper", () => {
     expect(encoded).not.toContain("sk-test");
   });
 
+  test("scrubber redacts credentials and payloads embedded in free-form errors", () => {
+    const secrets = {
+      bearer: "Bearer abcdefghijklmnopqrstuvwxyz",
+      apiKey: "sk-proj-abcdefghijklmnopqrstuvwxyz",
+      githubToken: "ghp_abcdefghijklmnopqrstuvwxyz",
+      jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature123",
+      password: "correct-horse-battery-staple",
+      quotedPassword: "correct horse battery staple",
+    };
+    const payloads = {
+      prompt: "summarize the private acquisition plan",
+      response: "the acquisition target is Example Corp",
+      command: "curl https://internal.example --data @private.json",
+    };
+    const scrubbed = __internal.scrubSentryEvent({
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: [
+              `authorization: ${secrets.bearer}`,
+              `OPENAI_API_KEY=${secrets.apiKey}`,
+              `github_token=${secrets.githubToken}`,
+              `session=${secrets.jwt}`,
+              `password: ${secrets.password}`,
+              `database_password="${secrets.quotedPassword}"`,
+              `prompt: ${payloads.prompt}`,
+              `response: ${payloads.response}`,
+              `command failed: ${payloads.command}`,
+            ].join("\n"),
+          },
+        ],
+      },
+    });
+
+    const encoded = JSON.stringify(scrubbed);
+    for (const secret of Object.values(secrets)) {
+      expect(encoded).not.toContain(secret);
+    }
+    for (const payload of Object.values(payloads)) {
+      expect(encoded).not.toContain(payload);
+    }
+    expect(encoded).toContain("[redacted]");
+    expect(encoded).toContain("[redacted-body]");
+  });
+
   test("scrubber drops console and unsafe automatic breadcrumbs", () => {
     expect(
       __internal.scrubSentryBreadcrumb({

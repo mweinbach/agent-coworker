@@ -58,7 +58,7 @@ describe("getPlatformBrowserWindowOptions", () => {
     expect(getPlatformBrowserWindowOptions("linux")).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
-        color: "#dfe2cc",
+        color: NATIVE_THEME_TOKENS.shellSurface.light,
         symbolColor: "#556041",
         height: 48,
       },
@@ -69,7 +69,7 @@ describe("getPlatformBrowserWindowOptions", () => {
     expect(getPlatformBrowserWindowOptions("linux", { useDarkColors: true })).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
-        color: "#171d13",
+        color: NATIVE_THEME_TOKENS.shellSurface.dark,
         symbolColor: "#eef0dc",
         height: 48,
       },

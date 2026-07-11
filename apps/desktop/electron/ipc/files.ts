@@ -8,7 +8,10 @@ import { promisify } from "node:util";
 
 import type * as Electron from "electron";
 
+import { DirectoryListingCoordinator } from "../../../../src/filesystem/directoryListingCoordinator";
+import type { WorkspaceFileChangeEvent as DirectoryWorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
 import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
+import type { WorkspaceFileChangeEvent as PreviewFileChangeEvent } from "../../../../src/shared/fileVersion";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
 import {
   type AuthorizeUploadSourceInput,
@@ -16,7 +19,9 @@ import {
   type CopyFileToWorkspaceUploadsOutput,
   type CopyPathInput,
   type CreateDirectoryInput,
+  DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
+  type ExplorerEntry,
   type ListDirectoryInput,
   type OpenPathInput,
   type PickCanvasSavePathInput,
@@ -29,6 +34,7 @@ import {
   type RevealPathInput,
   type SaveExportedFileInput,
   type TrashPathInput,
+  type WatchWorkspaceDirectoryInput,
   type WriteFileInput,
 } from "../../src/lib/desktopApi";
 import {
@@ -49,17 +55,23 @@ import {
   revealPathInputSchema,
   saveExportedFileInputSchema,
   trashPathInputSchema,
+  watchWorkspaceDirectoryInputSchema,
   writeFileInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
-import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
+import {
+  DEFAULT_PREVIEW_MAX_BYTES,
+  readCappedFilePreview,
+  readFileChangeVersion,
+} from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
   resolveAllowedSaveExportSourcePath,
 } from "../services/ipcSecurity";
+import { WorkspaceDirectoryWatcher } from "../services/workspaceDirectoryWatcher";
 import type { DesktopIpcModuleContext } from "./types";
 
 const execFile = promisify(execFileCallback);
@@ -155,8 +167,94 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
   return uploadSourceIdentityFromStat(sourceStat);
 }
 
-export function registerFilesIpc(context: DesktopIpcModuleContext): void {
+function sendPreviewFileChanged(
+  event: Electron.IpcMainInvokeEvent,
+  change: PreviewFileChangeEvent,
+): void {
+  if (typeof event.sender?.send === "function") {
+    event.sender.send(DESKTOP_EVENT_CHANNELS.previewFileChanged, change);
+  }
+}
+
+function explorerEntriesEqual(left: ExplorerEntry, right: ExplorerEntry): boolean {
+  return (
+    left.name === right.name &&
+    left.path === right.path &&
+    left.isDirectory === right.isDirectory &&
+    left.isHidden === right.isHidden &&
+    left.sizeBytes === right.sizeBytes &&
+    left.modifiedAtMs === right.modifiedAtMs
+  );
+}
+
+async function readExplorerDirectory(
+  directoryPath: string,
+  includeHidden: boolean,
+): Promise<ExplorerEntry[]> {
+  const entries = await fs.readdir(directoryPath, { withFileTypes: true });
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      const isHidden = isExplorerEntryHidden(entry.name);
+      if (!includeHidden && isHidden) {
+        return null;
+      }
+
+      let sizeBytes: number | null = null;
+      let modifiedAtMs: number | null = null;
+      try {
+        const stat = await fs.stat(path.join(directoryPath, entry.name));
+        sizeBytes = stat.size;
+        modifiedAtMs = stat.mtimeMs;
+      } catch {
+        // Ignore stat errors for broken symlinks etc.
+      }
+
+      return {
+        name: entry.name,
+        path: path.join(directoryPath, entry.name),
+        isDirectory: entry.isDirectory(),
+        isHidden,
+        sizeBytes,
+        modifiedAtMs,
+      };
+    }),
+  );
+
+  return results
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => {
+      if (left.isDirectory !== right.isDirectory) {
+        return left.isDirectory ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+  const directoryListings = new DirectoryListingCoordinator<ExplorerEntry>({
+    cacheResults: false,
+    isEntryEqual: explorerEntriesEqual,
+    readDirectory: async (input) => await readExplorerDirectory(input.path, input.includeHidden),
+  });
+  const directoryWatcher = new WorkspaceDirectoryWatcher();
+  const destroyListenerBySenderId = new Set<number>();
+
+  const invalidateWorkspaceFileChange = (event: DirectoryWorkspaceFileChangeEvent): void => {
+    for (const directoryPath of event.affectedDirectoryPaths) {
+      directoryListings.invalidate({
+        workspaceId: event.workspaceId,
+        path: directoryPath,
+      });
+    }
+    for (const subtreePath of event.invalidatedSubtreePaths) {
+      directoryListings.invalidate({
+        workspaceId: event.workspaceId,
+        path: subtreePath,
+        recursive: true,
+      });
+    }
+  };
 
   // Source paths a trusted-renderer file picker (webUtils.getPathForFile) has
   // resolved from a real user-selected File. Authorizations are scoped to the
@@ -195,43 +293,71 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         input.path,
       );
 
-      const entries = await fs.readdir(safePath, { withFileTypes: true });
-      const results = await Promise.all(
-        entries.map(async (entry) => {
-          const isHidden = isExplorerEntryHidden(entry.name);
-          if (!input.includeHidden && isHidden) {
-            return null;
-          }
+      return await directoryListings.read({
+        workspaceId: input.workspaceId,
+        path: safePath,
+        includeHidden: input.includeHidden ?? false,
+      });
+    },
+  );
 
-          let sizeBytes: number | null = null;
-          let modifiedAtMs: number | null = null;
-          try {
-            const stat = await fs.stat(path.join(safePath, entry.name));
-            sizeBytes = stat.size;
-            modifiedAtMs = stat.mtimeMs;
-          } catch {
-            // Ignore stat errors for broken symlinks etc.
-          }
-
-          return {
-            name: entry.name,
-            path: path.join(safePath, entry.name),
-            isDirectory: entry.isDirectory(),
-            isHidden,
-            sizeBytes,
-            modifiedAtMs,
-          };
-        }),
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.watchWorkspaceDirectory,
+    async (event, args: WatchWorkspaceDirectoryInput) => {
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const input = parseWithSchema(
+        watchWorkspaceDirectoryInputSchema,
+        args,
+        "watchWorkspaceDirectory options",
       );
-
-      return results
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-        .sort((a, b) => {
-          if (a.isDirectory !== b.isDirectory) {
-            return a.isDirectory ? -1 : 1;
-          }
-          return a.name.localeCompare(b.name);
+      const safeRootPath = resolveAllowedDirectoryPath(
+        workspaceRoots.getApprovedWorkspaceRoots(),
+        input.rootPath,
+      );
+      const subscriberId = String(event.sender.id);
+      if (!destroyListenerBySenderId.has(event.sender.id)) {
+        destroyListenerBySenderId.add(event.sender.id);
+        event.sender.once("destroyed", () => {
+          directoryWatcher.unwatchSubscriber(subscriberId);
+          destroyListenerBySenderId.delete(event.sender.id);
         });
+      }
+      return directoryWatcher.watch(
+        {
+          workspaceId: input.workspaceId,
+          rootPath: safeRootPath,
+        },
+        subscriberId,
+        (change) => {
+          invalidateWorkspaceFileChange(change);
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(DESKTOP_EVENT_CHANNELS.workspaceFileChanged, change);
+          }
+        },
+      );
+    },
+  );
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.unwatchWorkspaceDirectory,
+    async (event, args: WatchWorkspaceDirectoryInput) => {
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
+      const input = parseWithSchema(
+        watchWorkspaceDirectoryInputSchema,
+        args,
+        "unwatchWorkspaceDirectory options",
+      );
+      const safeRootPath = resolveAllowedDirectoryPath(
+        workspaceRoots.getApprovedWorkspaceRoots(),
+        input.rootPath,
+      );
+      directoryWatcher.unwatch(
+        {
+          workspaceId: input.workspaceId,
+          rootPath: safeRootPath,
+        },
+        String(event.sender.id),
+      );
     },
   );
 
@@ -251,11 +377,17 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     return { content: await fs.readFile(safePath, "utf8") };
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (_event, args: WriteFileInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (event, args: WriteFileInput) => {
     const input = parseWithSchema(writeFileInputSchema, args, "writeFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     await fs.writeFile(safePath, input.content, "utf8");
+    directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
+    sendPreviewFileChanged(event, {
+      kind: "changed",
+      path: safePath,
+      version: await readFileChangeVersion(safePath),
+    });
   });
 
   handleDesktopInvoke(
@@ -450,12 +582,14 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         "copyFileToWorkspaceUploads options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      return await copyFileToWorkspaceUploads(
+      const copied = await copyFileToWorkspaceUploads(
         workspaceRoots.getApprovedWorkspaceRoots(),
         input,
         authorizedUploadSources,
         uploadAuthorizationOwnerKey(event),
       );
+      directoryListings.invalidatePathAcrossWorkspaces(path.dirname(copied.path));
+      return copied;
     },
   );
 
@@ -469,10 +603,11 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
       const targetPath = path.join(safeParent, input.name);
       resolveAllowedPath(roots, targetPath);
       await fs.mkdir(targetPath);
+      directoryListings.invalidatePathAcrossWorkspaces(safeParent);
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (_event, args: RenamePathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (event, args: RenamePathInput) => {
     const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const roots = workspaceRoots.getApprovedWorkspaceRoots();
@@ -480,19 +615,44 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const targetPath = path.join(path.dirname(safePath), input.newName);
     resolveAllowedPath(roots, targetPath);
     await fs.rename(safePath, targetPath);
+    directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
+    directoryListings.invalidatePathAcrossWorkspaces(safePath, true);
+    directoryListings.invalidatePathAcrossWorkspaces(targetPath, true);
+    sendPreviewFileChanged(event, {
+      kind: "deleted",
+      path: safePath,
+      version: null,
+    });
+    sendPreviewFileChanged(event, {
+      kind: "changed",
+      path: targetPath,
+      version: await readFileChangeVersion(targetPath),
+    });
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (_event, args: TrashPathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (event, args: TrashPathInput) => {
     const input = parseWithSchema(trashPathInputSchema, args, "trashPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     try {
       await shell.trashItem(safePath);
+      directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
+      directoryListings.invalidatePathAcrossWorkspaces(safePath, true);
     } catch (trashError) {
       const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
       throw new Error(`Unable to move to Trash: ${trashDetail}`);
     }
+    sendPreviewFileChanged(event, {
+      kind: "deleted",
+      path: safePath,
+      version: null,
+    });
   });
+
+  return () => {
+    directoryWatcher.dispose();
+    directoryListings.clear();
+  };
 }
 
 async function copyFileToWorkspaceUploads(

@@ -49,6 +49,30 @@ function waitForSingleMessage(ws: WebSocket): Promise<any> {
   });
 }
 
+function collectMessages(ws: WebSocket): {
+  waitFor: (
+    predicate: (message: Record<string, unknown>) => boolean,
+  ) => Promise<Record<string, unknown>>;
+} {
+  const messages: Record<string, unknown>[] = [];
+  ws.onmessage = (event) => {
+    const raw = typeof event.data === "string" ? event.data : "";
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    messages.push(parsed);
+  };
+  return {
+    waitFor: async (predicate) => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5_000) {
+        const message = messages.find(predicate);
+        if (message) return message;
+        await Bun.sleep(10);
+      }
+      throw new Error("Timed out waiting for matching websocket message");
+    },
+  };
+}
+
 async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -146,6 +170,81 @@ describe("server JSON-RPC websocket mode", () => {
       const response = await requestRawWebSocketUpgrade(url);
       expect(response).toStartWith("HTTP/1.1 101");
     } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("streams external and web file mutations as workspace invalidations", async () => {
+    const tmpDir = await makeTmpProject();
+    const sourcePath = path.join(tmpDir, "external.md");
+    const renamedPath = path.join(tmpDir, "renamed.md");
+    await fs.writeFile(sourcePath, "old", "utf8");
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const ws = new WebSocket(url, "cowork.jsonrpc.v1");
+
+    try {
+      await waitForOpen(ws);
+      const response = waitForSingleMessage(ws);
+      ws.send(JSON.stringify({ id: 1, method: "workspace/list", params: {} }));
+      await response;
+      const collector = collectMessages(ws);
+
+      await fs.writeFile(sourcePath, "external update", "utf8");
+      const external = await collector.waitFor((message) => {
+        const params = message.params as Record<string, unknown> | undefined;
+        return (
+          message.method === "cowork/workspace/fileChanged" &&
+          params?.kind === "changed" &&
+          params.path === sourcePath
+        );
+      });
+      expect(external.params).toMatchObject({
+        cwd: tmpDir,
+        kind: "changed",
+        path: sourcePath,
+        version: { size: "external update".length },
+      });
+
+      const httpBase = url.replace(/^ws:/, "http:").replace(/\/ws$/, "");
+      const renamed = await fetch(`${httpBase}/cowork/fs/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: sourcePath, newName: "renamed.md" }),
+      });
+      expect(renamed.status).toBe(204);
+      await collector.waitFor((message) => {
+        const params = message.params as Record<string, unknown> | undefined;
+        return (
+          message.method === "cowork/workspace/fileChanged" &&
+          params?.kind === "deleted" &&
+          params.path === sourcePath
+        );
+      });
+      await collector.waitFor((message) => {
+        const params = message.params as Record<string, unknown> | undefined;
+        return (
+          message.method === "cowork/workspace/fileChanged" &&
+          params?.kind === "changed" &&
+          params.path === renamedPath
+        );
+      });
+
+      const trashed = await fetch(`${httpBase}/cowork/fs/trash`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: renamedPath }),
+      });
+      expect(trashed.status).toBe(204);
+      await collector.waitFor((message) => {
+        const params = message.params as Record<string, unknown> | undefined;
+        return (
+          message.method === "cowork/workspace/fileChanged" &&
+          params?.kind === "deleted" &&
+          params.path === renamedPath
+        );
+      });
+    } finally {
+      ws.close();
       await stopTestServer(server);
     }
   });

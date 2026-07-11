@@ -98,6 +98,7 @@ describe("workspace file explorer helpers", () => {
     expect(shouldAutoRefreshExplorer("visible", true)).toBe(true);
     expect(shouldAutoRefreshExplorer("hidden", true)).toBe(false);
     expect(shouldAutoRefreshExplorer("visible", false)).toBe(false);
+    expect(shouldAutoRefreshExplorer("visible", true, false)).toBe(false);
   });
 
   test("treats SVG descendants inside control buttons as control targets", () => {

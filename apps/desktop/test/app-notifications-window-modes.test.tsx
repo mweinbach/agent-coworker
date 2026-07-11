@@ -170,7 +170,7 @@ function seedDisconnectedChatState(hydrating: boolean) {
         title: "Disconnected chat",
         createdAt: now,
         lastMessageAt: now,
-        status: "active",
+        status: "disconnected",
         sessionId: "chat-session-1",
         messageCount: 0,
         lastEventSeq: 0,

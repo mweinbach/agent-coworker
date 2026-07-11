@@ -22,12 +22,13 @@ import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
 import {
   hydrateComposerDrafts,
+  mergeComposerDraftsByRevision,
   pruneComposerDrafts,
   resolveActiveComposerDraftKey,
   revokeComposerDraftAttachmentPreviews,
   sanitizePersistedComposerDrafts,
 } from "../composerDrafts";
-import { hydrateCreationDrafts } from "../creationDrafts";
+import { hydrateCreationDrafts, mergeCreationDraftsByRevision } from "../creationDrafts";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -43,11 +44,10 @@ import {
   type AppStoreDataState,
   defaultThreadRuntime,
   isProviderName,
-  makeId,
   normalizeThreadTitleSource,
   nowIso,
+  persist,
   persistNow,
-  pushNotification,
   RUNTIME,
   type StoreGet,
   type StoreSet,
@@ -651,8 +651,15 @@ function buildRestoredComposerDrafts(
     selectedWorkspaceId: string | null;
     newChatLandingTarget: CachedDesktopUiState["newChatLandingTarget"];
   },
+  options: {
+    mergeDrafts?: AppStoreDataState["composerDraftsByKey"];
+    replacedDrafts?: AppStoreDataState["composerDraftsByKey"];
+  } = {},
 ): AppStoreDataState["composerDraftsByKey"] {
-  const drafts = hydrateComposerDrafts(persistedDrafts);
+  const hydratedDrafts = hydrateComposerDrafts(persistedDrafts);
+  const drafts = options.mergeDrafts
+    ? mergeComposerDraftsByRevision(hydratedDrafts, options.mergeDrafts)
+    : hydratedDrafts;
   const activeKey = resolveActiveComposerDraftKey({
     selectedThreadId: selection.selectedThreadId,
     selectedWorkspaceId: selection.selectedWorkspaceId,
@@ -668,7 +675,16 @@ function buildRestoredComposerDrafts(
     ),
     activeKey,
   });
-  revokeComposerDraftAttachmentPreviews(pruned.removedAttachments);
+  const retainedDrafts = new Set(Object.values(pruned.drafts));
+  const discardedDrafts = new Set([
+    ...Object.values(hydratedDrafts),
+    ...Object.values(options.replacedDrafts ?? {}),
+  ]);
+  revokeComposerDraftAttachmentPreviews(
+    [...discardedDrafts]
+      .filter((draft) => !retainedDrafts.has(draft))
+      .flatMap((draft) => draft.attachments),
+  );
   return pruned.drafts;
 }
 
@@ -765,6 +781,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     return {
       ready: true,
       bootstrapPhase: "idle",
+      bootstrapStage: null,
       startupError: null,
       workspaces: state.workspaces,
       threads: state.threads,
@@ -960,13 +977,27 @@ export function createBootstrapActions(
     drainBootstrap: () => bootstrapCoordinator.drain(),
 
     init: () =>
-      bootstrapCoordinator.run(async ({ isCurrent, signal, waitUntil }) => {
-        set({ startupError: null, bootstrapPhase: "loading" });
+      bootstrapCoordinator.run(async ({ isCurrent, signal }) => {
+        const retryingStartupFailure = get().bootstrapPhase === "error";
+        set({
+          startupError: null,
+          bootstrapPhase: "loading",
+          bootstrapStage: "restoring-workspace",
+        });
         try {
+          if (retryingStartupFailure) {
+            await persistNow(get).catch((error) => {
+              console.warn("Desktop draft flush before startup retry failed:", error);
+            });
+            if (!isCurrent()) {
+              return;
+            }
+          }
           const state = hydratePersistedDesktopState(await loadState());
           if (!isCurrent()) {
             return;
           }
+          set({ bootstrapStage: "checking-services" });
           const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
           let updateState = get().updateState;
           try {
@@ -1057,6 +1088,8 @@ export function createBootstrapActions(
           if (!isCurrent()) {
             return;
           }
+          set({ bootstrapStage: "reconnecting-sessions" });
+          const currentComposerDrafts = get().composerDraftsByKey;
           const restoredComposerDrafts = buildRestoredComposerDrafts(
             state.composerDrafts,
             state.workspaces,
@@ -1066,13 +1099,34 @@ export function createBootstrapActions(
               selectedWorkspaceId: ui.selectedWorkspaceId,
               newChatLandingTarget: ui.newChatLandingTarget,
             },
+            {
+              mergeDrafts: retryingStartupFailure ? currentComposerDrafts : undefined,
+              replacedDrafts: currentComposerDrafts,
+            },
           );
-          const previousDrafts = get().composerDraftsByKey;
+          const persistedCreationDrafts = hydrateCreationDrafts(state.creationDrafts);
+          const currentState = get();
+          const inMemoryCreationDrafts = retryingStartupFailure
+            ? {
+                researchCreationDraft: currentState.researchCreationDraft,
+                researchCreationError: currentState.researchCreationError,
+                taskCreationDraft: currentState.taskCreationDraft,
+                taskCreationError: currentState.taskCreationError,
+              }
+            : null;
+          const creationDrafts = inMemoryCreationDrafts
+            ? mergeCreationDraftsByRevision(persistedCreationDrafts, inMemoryCreationDrafts)
+            : persistedCreationDrafts;
+          const retainedResearchDraft = creationDrafts.researchCreationDraft;
+          const discardedResearchDrafts = new Set([
+            persistedCreationDrafts.researchCreationDraft,
+            currentState.researchCreationDraft,
+          ]);
           revokeComposerDraftAttachmentPreviews(
-            Object.values(previousDrafts).flatMap((draft) => draft.attachments),
+            [...discardedResearchDrafts]
+              .filter((draft) => draft !== retainedResearchDraft)
+              .flatMap((draft) => draft.attachments),
           );
-          const creationDrafts = hydrateCreationDrafts(state.creationDrafts);
-          revokeComposerDraftAttachmentPreviews(get().researchCreationDraft.attachments);
           set({
             workspaces: state.workspaces,
             threads: finalThreads,
@@ -1101,8 +1155,6 @@ export function createBootstrapActions(
             desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
             updateState,
             ready: true,
-            bootstrapPhase: "ready",
-            startupError: null,
             onboardingState: resolvedOnboarding,
             onboardingVisible: autoOpen,
             onboardingStep: "welcome",
@@ -1127,8 +1179,15 @@ export function createBootstrapActions(
             return;
           }
 
-          waitUntil(completeStartupSelection(ui, isCurrent, signal));
-          return;
+          await completeStartupSelection(ui, isCurrent, signal);
+          if (!isCurrent()) {
+            return;
+          }
+          set({
+            bootstrapPhase: "ready",
+            bootstrapStage: null,
+            startupError: null,
+          });
         } catch (error) {
           if (!isCurrent()) {
             return;
@@ -1136,20 +1195,14 @@ export function createBootstrapActions(
           const detail = error instanceof Error ? error.message : String(error);
           console.error("Desktop init failed:", error);
           if (get().ready) {
-            set((s) => ({
+            set({
               bootstrapPhase: "error",
+              bootstrapStage: null,
               startupError: detail,
-              notifications: pushNotification(s.notifications, {
-                id: makeId(),
-                ts: nowIso(),
-                kind: "error",
-                title: "Startup recovery mode",
-                detail,
-              }),
-            }));
+            });
             return;
           }
-          set((s) => ({
+          set({
             workspaces: [],
             threads: [],
             selectedWorkspaceId: null,
@@ -1163,19 +1216,13 @@ export function createBootstrapActions(
             providerLastAuthChallenge: null,
             providerLastAuthResult: null,
             providerUiState: normalizePersistedProviderUiState(undefined),
-            ready: true,
+            ready: false,
             bootstrapPhase: "error",
+            bootstrapStage: null,
             startupError: detail,
             onboardingVisible: false,
             onboardingStep: "welcome" as const,
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Startup recovery mode",
-              detail,
-            }),
-          }));
+          });
           return;
         }
       }),
@@ -1436,6 +1483,7 @@ export function createBootstrapActions(
     setSidebarWidth: (width: number) => {
       set({ sidebarWidth: Math.max(160, Math.min(440, width)) });
       syncDesktopStateCache(get);
+      persist(get);
     },
 
     setContextSidebarWidth: (width: number) => {
@@ -1451,11 +1499,13 @@ export function createBootstrapActions(
         set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) });
       }
       syncDesktopStateCache(get);
+      persist(get);
     },
 
     setMessageBarHeight: (height: number) => {
       set({ messageBarHeight: Math.max(80, Math.min(500, height)) });
       syncDesktopStateCache(get);
+      persist(get);
     },
   };
 }

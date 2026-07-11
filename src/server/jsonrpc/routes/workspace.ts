@@ -1,9 +1,12 @@
+import type { FileChangeVersion } from "../../../shared/fileVersion";
+import { readFileChangeVersion } from "../../../utils/filePreviewRead";
 import { canvasDocumentPersistence } from "../../canvasDocumentPersistence";
 import { previewPresentationFile } from "../../presentationPreview";
 import { patchSpreadsheetBatch } from "../../spreadsheetEdit";
 import {
   readSpreadsheetFileVersion,
   readSpreadsheetWorkbookSnapshot,
+  resolveWorkspaceFilePath,
 } from "../../spreadsheetPreview";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
@@ -20,6 +23,23 @@ export function createWorkspaceRouteHandlers(
       throw new Error(`${method} requires a server-owned workspace root`);
     }
     return workspaceRoot;
+  };
+  const broadcastFileChanged = async (
+    cwd: string,
+    filePath: string,
+    fallbackVersion: FileChangeVersion,
+  ): Promise<void> => {
+    const version = await readFileChangeVersion(filePath).catch(() => fallbackVersion);
+    try {
+      context.jsonrpc.broadcast?.("cowork/workspace/fileChanged", {
+        cwd,
+        kind: "changed",
+        path: filePath,
+        version,
+      });
+    } catch {
+      // A notification transport failure must not change the completed mutation result.
+    }
   };
   return {
     "workspace/list": async (ws, message) => {
@@ -175,8 +195,12 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const result = await canvasDocuments.save(canvasWorkspaceRoot(message.method), parsed.data);
+        const cwd = canvasWorkspaceRoot(message.method);
+        const result = await canvasDocuments.save(cwd, parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
+        if (result.ok && result.status === "saved") {
+          await broadcastFileChanged(cwd, result.path, result.revision);
+        }
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
@@ -198,11 +222,12 @@ export function createWorkspaceRouteHandlers(
         return;
       }
       try {
-        const result = await canvasDocuments.saveAs(
-          canvasWorkspaceRoot(message.method),
-          parsed.data,
-        );
+        const cwd = canvasWorkspaceRoot(message.method);
+        const result = await canvasDocuments.saveAs(cwd, parsed.data);
         context.jsonrpc.sendResult(ws, message.id, result);
+        if (result.ok && result.status === "saved") {
+          await broadcastFileChanged(cwd, result.path, result.revision);
+        }
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
@@ -318,6 +343,23 @@ export function createWorkspaceRouteHandlers(
             : {}),
         });
         context.jsonrpc.sendResult(ws, message.id, result);
+        if (result.ok) {
+          try {
+            const versionResult = await readSpreadsheetFileVersion({
+              cwd,
+              filePath: parsed.data.path,
+            });
+            if (versionResult.ok) {
+              await broadcastFileChanged(
+                cwd,
+                await resolveWorkspaceFilePath(cwd, parsed.data.path),
+                versionResult.version,
+              );
+            }
+          } catch {
+            // The mutation result remains authoritative when best-effort invalidation metadata fails.
+          }
+        }
       } catch (error) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,

@@ -538,6 +538,126 @@ describe("desktop activity group card", () => {
     }
   });
 
+  test("preserves manual reasoning disclosure state across streamed body deltas", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+
+    const renderReasoning = async (body: string) => {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "reasoning-source-1",
+                kind: "reasoning",
+                mode: "summary",
+                ts: "2024-01-01T00:00:00.000Z",
+                text: `**Plan**\n\n${body}`,
+              },
+            ],
+          }),
+        );
+      });
+    };
+
+    try {
+      await renderReasoning("Initial streamed body.");
+      const disclosure = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("Plan"),
+      );
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => {
+        disclosure?.click();
+      });
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+
+      await renderReasoning(
+        "A completely different streamed body prefix that previously changed the React key.",
+      );
+      const updatedDisclosure = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent?.includes("Plan"));
+      expect(updatedDisclosure).toBe(disclosure);
+      expect(updatedDisclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(updatedDisclosure?.getAttribute("aria-controls")).toContain("reasoning-source-1");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
+  test("keeps nested Activity scrolling detached and reports new entries", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    let nestedScrollHeight = 900;
+
+    const renderActivity = async (toolCount: number) => {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: Array.from({ length: toolCount }, (_, index) => ({
+              id: `tool-${index + 1}`,
+              kind: "tool" as const,
+              ts: `2024-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+              name: "read",
+              state: "output-available" as const,
+              args: { path: `file-${index + 1}.ts` },
+            })),
+          }),
+        );
+      });
+    };
+
+    try {
+      await renderActivity(4);
+      const timeline = container.querySelector(
+        '[data-slot="activity-timeline-viewport"]',
+      ) as HTMLElement | null;
+      if (!timeline) throw new Error("missing activity timeline");
+      Object.defineProperty(timeline, "clientHeight", { configurable: true, value: 300 });
+      Object.defineProperty(timeline, "scrollHeight", {
+        configurable: true,
+        get: () => nestedScrollHeight,
+      });
+      timeline.scrollTop = 200;
+      await act(async () => {
+        timeline.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -60 }),
+        );
+        timeline.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+
+      nestedScrollHeight = 1_100;
+      await renderActivity(6);
+      expect(timeline.scrollTop).toBe(200);
+      const jumpButton = container.querySelector(
+        '[aria-label="2 new activities. Jump to latest"]',
+      ) as HTMLButtonElement | null;
+      expect(jumpButton?.textContent).toContain("2 new activities");
+
+      await act(async () => {
+        jumpButton?.click();
+      });
+      expect(timeline.scrollTop).toBe(800);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
   test("isolates an activity-card render failure with an inline fallback", async () => {
     const harness = setupJsdom();
     const container = harness.dom.window.document.getElementById("root");
@@ -593,7 +713,7 @@ describe("desktop activity group card", () => {
               citationUrlsByMessageId: new Map(),
               citationSourcesByMessageId: new Map(),
               desktopBasePath: null,
-              composerOverlayHeight: 0,
+              bottomOffset: 0,
               interactions: [],
               onAnswerAsk: () => true,
               onAnswerApproval: () => true,

@@ -1,13 +1,19 @@
+import { SparklesIcon } from "lucide-react";
 import type { CoworkRuntimeBootstrapProgress } from "../../../../../src/coworkRuntime/types";
-import { Button } from "../../components/ui/button";
+import type { BootstrapStage } from "../../app/store.helpers";
+import { Spinner } from "../../components/ui/spinner";
 import { ChatView } from "../ChatView";
 import { ResearchView } from "../ResearchView";
+import { StartupRecovery } from "../recovery/StartupRecovery";
+import { startupStagePresentation } from "../recovery/startupPresentation";
 import { TaskView } from "../tasks/TaskView";
 import { WorkspaceRuntimeProgress } from "../WorkspaceRuntimeProgress";
 
 interface PrimaryContentProps {
   init: () => Promise<void>;
   ready: boolean;
+  bootstrapLoading: boolean;
+  bootstrapStage: BootstrapStage | null;
   startupError: string | null;
   workspaceStartupProgress: CoworkRuntimeBootstrapProgress | null;
   view: "chat" | "task" | "research";
@@ -26,15 +32,18 @@ function resolveVariant({
   startupError,
   workspaceStartupProgress,
   view,
-}: Omit<PrimaryContentProps, "init">): PrimaryContentVariant {
-  if (!ready) {
-    return "starting";
-  }
+}: Omit<
+  PrimaryContentProps,
+  "init" | "bootstrapLoading" | "bootstrapStage"
+>): PrimaryContentVariant {
   if (workspaceStartupProgress) {
     return "workspace-startup";
   }
   if (startupError) {
     return "error";
+  }
+  if (!ready) {
+    return "starting";
   }
   if (view === "research") {
     return "research";
@@ -45,29 +54,22 @@ function resolveVariant({
   return "chat";
 }
 
-function StartingContent() {
+function StartingContent({ stage }: { stage: BootstrapStage | null }) {
+  const presentation = startupStagePresentation(stage);
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <div
-        className="size-10 rounded-2xl border border-border/60 bg-primary/15 shadow-sm"
-        aria-hidden
-      />
-      <div className="text-lg font-semibold tracking-tight text-foreground">Starting Cowork</div>
-      <div className="max-w-sm text-sm text-muted-foreground">
-        Loading your workspace shell and reconnecting sessions.
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex h-full flex-col items-center justify-center gap-3 bg-panel px-6 text-center"
+    >
+      <div className="relative flex size-12 items-center justify-center rounded-2xl border border-border/60 bg-primary/15 text-primary shadow-sm">
+        <SparklesIcon className="size-5" aria-hidden="true" />
+        <Spinner className="absolute -right-1 -bottom-1 size-4 bg-panel" aria-hidden="true" />
       </div>
-    </div>
-  );
-}
-
-function ErrorContent({ startupError, init }: { startupError: string; init: () => Promise<void> }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <div className="text-xl font-semibold text-foreground">Couldn&apos;t start</div>
-      <div className="max-w-xl text-sm text-muted-foreground">{startupError}</div>
-      <Button variant="outline" type="button" onClick={() => void init()}>
-        Retry
-      </Button>
+      <div className="text-lg font-semibold tracking-tight text-foreground">
+        {presentation.title}
+      </div>
+      <div className="max-w-sm text-sm text-muted-foreground">{presentation.detail}</div>
     </div>
   );
 }
@@ -75,6 +77,8 @@ function ErrorContent({ startupError, init }: { startupError: string; init: () =
 export function PrimaryContent({
   init,
   ready,
+  bootstrapLoading,
+  bootstrapStage,
   startupError,
   workspaceStartupProgress,
   view,
@@ -82,17 +86,24 @@ export function PrimaryContent({
   const variant = resolveVariant({ ready, startupError, workspaceStartupProgress, view });
   switch (variant) {
     case "starting":
-      return <StartingContent />;
+      return <StartingContent stage={bootstrapStage} />;
     case "workspace-startup":
       return workspaceStartupProgress ? (
         <div className="flex h-full items-center justify-center overflow-auto bg-panel px-6 py-10">
           <WorkspaceRuntimeProgress progress={workspaceStartupProgress} />
         </div>
       ) : (
-        <StartingContent />
+        <StartingContent stage={bootstrapStage} />
       );
     case "error":
-      return <ErrorContent startupError={startupError ?? "Startup error"} init={init} />;
+      return (
+        <StartupRecovery
+          detail={startupError ?? "Cowork could not restore the saved desktop state."}
+          init={init}
+          retrying={bootstrapLoading}
+          presentation="page"
+        />
+      );
     case "research":
       return (
         <div className="h-full min-h-0 bg-panel">
@@ -111,11 +122,9 @@ export function PrimaryContent({
           <TaskView />
         </div>
       );
-    default:
-      return (
-        <div className="h-full min-h-0 bg-panel">
-          <ChatView />
-        </div>
-      );
+    default: {
+      const exhaustive: never = variant;
+      return exhaustive;
+    }
   }
 }

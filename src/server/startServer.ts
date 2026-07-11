@@ -261,6 +261,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
         const webDesktopRoute = await handleWebDesktopRoute(req, {
           cwd: opts.cwd,
           desktopService: webDesktopService,
+          onWorkspaceFileChanged: runtime.notifyWorkspaceFileChanged,
         });
         if (webDesktopRoute) {
           for (const [key, value] of Object.entries(corsHeaders)) {

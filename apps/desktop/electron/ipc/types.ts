@@ -8,6 +8,7 @@ import type {
   ShowQuickChatWindowInput,
   WindowCloseResponseInput,
 } from "../../src/lib/desktopApi";
+import type { AppearancePreferences } from "../services/appearancePreferences";
 import type { DiagnosticsService } from "../services/diagnostics";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
@@ -17,6 +18,7 @@ import type { DesktopUpdaterService } from "../services/updater";
 import type { NativeCloseWebContents } from "../services/windowCloseCoordinator";
 
 export type DesktopIpcDeps = {
+  appearancePreferences: AppearancePreferences;
   mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
   productAnalytics?: DesktopProductAnalyticsService;

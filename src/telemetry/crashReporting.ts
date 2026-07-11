@@ -1,3 +1,4 @@
+import { redactSensitiveText } from "../diagnostics/sensitiveText";
 import { isNetworkTelemetryGloballyDisabled } from "./config";
 
 export type CrashReportingEnvironment = "development" | "packaged" | "beta" | "production";
@@ -457,7 +458,7 @@ function redactLocalUsername(value: string, homeDir: string | null): string {
 }
 
 function scrubString(value: string, context: ScrubContext): string {
-  let next = value;
+  let next = redactSensitiveText(value);
   for (const workspacePath of context.workspacePaths) {
     next = redactKnownPath(next, workspacePath);
   }

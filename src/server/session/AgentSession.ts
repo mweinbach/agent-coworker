@@ -132,7 +132,12 @@ import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import type { SkillManager } from "./SkillManager";
-import type { TurnExecutionManager } from "./TurnExecutionManager";
+import type {
+  SendUserMessageOptions,
+  TurnExecutionManager,
+  UserMessageIdempotencyClaim,
+  UserMessageIdempotencyInput,
+} from "./TurnExecutionManager";
 import type { TaskLockError } from "./taskLocks";
 
 const MEMORY_GENERATIONS_PER_CONSOLIDATION = 5;
@@ -1889,7 +1894,7 @@ export class AgentSession {
     attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
     references?: import("../../types").TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: SendUserMessageOptions,
   ) {
     await this.pendingConfigMutation.catch(() => {});
     if (!(await this.ensureSystemPromptReady())) {
@@ -1904,6 +1909,10 @@ export class AgentSession {
       references,
       opts,
     );
+  }
+
+  claimUserMessage(input: UserMessageIdempotencyInput): UserMessageIdempotencyClaim | null {
+    return this.getTurnExecutionManager().claimUserMessage(input);
   }
 
   async sendSteerMessage(

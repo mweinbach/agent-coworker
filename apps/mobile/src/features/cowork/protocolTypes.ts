@@ -145,6 +145,7 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       role: z.enum(["user", "assistant"]),
       ts: z.string(),
       text: z.string(),
+      clientMessageId: nonEmptyStringSchema.optional(),
       annotations: z.array(z.record(z.string(), z.unknown())).optional(),
     })
     .passthrough(),

@@ -356,6 +356,7 @@ export const jsonRpcThreadTurnResultSchemas = {
           items: z.array(z.unknown()),
         })
         .strict(),
+      replayed: z.boolean().optional(),
     })
     .strict(),
   "turn/steer": z

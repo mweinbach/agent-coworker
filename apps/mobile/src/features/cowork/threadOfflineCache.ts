@@ -10,7 +10,7 @@ import {
 import type { MobileThreadSummary } from "./threadStore";
 
 export const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
-const THREAD_OFFLINE_CACHE_VERSION = 2;
+const THREAD_OFFLINE_CACHE_VERSION = 3;
 
 export type ThreadOfflineCache = {
   version: typeof THREAD_OFFLINE_CACHE_VERSION;
@@ -47,6 +47,8 @@ function sanitizeThreads(threads: MobileThreadSummary[]): MobileThreadSummary[] 
     .map((thread) => ({
       ...thread,
       composerDraft: "",
+      composerAttachments: [],
+      composerSubmission: null,
       pendingPrompt: false,
       pendingServerRequest: null,
     }));
@@ -114,7 +116,7 @@ export async function loadThreadOfflineCache(): Promise<ThreadOfflineCache | nul
     return null;
   }
 
-  if (cached.version === 1) {
+  if (cached.version === 1 || cached.version === 2) {
     return normalizeCache({
       ...cached,
       version: THREAD_OFFLINE_CACHE_VERSION,

@@ -58,6 +58,7 @@ export type UserMessageTurnRunnerDeps = {
   validateUploadedFileAttachments: UserMessageAttachmentHelpers["validateUploadedFileAttachments"];
   onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
   waitForLiveSteerSettlement?: () => Promise<void>;
+  onUserMessageAccepted?: (clientMessageId: string | undefined, turnId: string) => void;
 };
 
 export type UserMessageTurnRunner = {
@@ -68,7 +69,10 @@ export type UserMessageTurnRunner = {
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      idempotencyFingerprint?: string;
+    },
   ) => Promise<void>;
 };
 
@@ -109,6 +113,7 @@ export function createUserMessageTurnRunner(
     validateUploadedFileAttachments,
     onAdvancedMemoryChanged,
     waitForLiveSteerSettlement,
+    onUserMessageAccepted,
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
@@ -186,7 +191,10 @@ export function createUserMessageTurnRunner(
     attachments?: FileAttachment[],
     inputParts?: OrderedInputPart[],
     references?: TurnReference[],
-    opts?: { allowThreadManagementTools?: boolean },
+    opts?: {
+      allowThreadManagementTools?: boolean;
+      idempotencyFingerprint?: string;
+    },
   ) => {
     if (context.state.running) {
       context.emitError("busy", "session", "Agent is busy");
@@ -323,7 +331,12 @@ export function createUserMessageTurnRunner(
         sessionId: context.id,
         text: visibleText,
         clientMessageId,
+        turnId,
+        ...(opts?.idempotencyFingerprint
+          ? { idempotencyFingerprint: opts.idempotencyFingerprint }
+          : {}),
       });
+      onUserMessageAccepted?.(clientMessageId, turnId);
       metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       context.queuePersistSessionSnapshot("session.user_message");
       context.emit({

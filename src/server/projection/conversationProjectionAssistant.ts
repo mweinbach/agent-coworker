@@ -126,6 +126,7 @@ export function createAssistantProjection(state: ConversationProjectionState) {
     turnId: string,
     text: string,
     clientMessageId: string | null,
+    annotations: Array<Record<string, unknown>> | null,
   ) => {
     const item: ProjectedItem = {
       id: clientMessageId
@@ -134,6 +135,7 @@ export function createAssistantProjection(state: ConversationProjectionState) {
       type: "userMessage",
       content: [{ type: "text", text }],
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(annotations ? { annotations } : {}),
     };
     state.opts.sink.emitItemStarted(turnId, item);
     state.opts.sink.emitItemCompleted(turnId, item);

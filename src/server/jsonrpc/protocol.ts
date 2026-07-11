@@ -59,6 +59,7 @@ export type JsonRpcInitializeParams = {
   };
   capabilities?: {
     experimentalApi?: boolean;
+    toolRetryLineage?: boolean;
     optOutNotificationMethods?: string[];
   };
 };
@@ -77,6 +78,7 @@ const initializeParamsSchema = z
     capabilities: z
       .object({
         experimentalApi: z.boolean().optional(),
+        toolRetryLineage: z.boolean().optional(),
         optOutNotificationMethods: z.array(nonEmptyTrimmedStringSchema).optional(),
       })
       .strict()

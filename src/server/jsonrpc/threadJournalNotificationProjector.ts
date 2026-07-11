@@ -128,6 +128,22 @@ export function createThreadJournalNotificationProjector(
   return {
     handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
+      if (
+        event.type === "user_message" &&
+        event.clientMessageId &&
+        event.idempotencyFingerprint &&
+        event.turnId
+      ) {
+        emit(
+          "internal/userMessageAccepted",
+          {
+            clientMessageId: event.clientMessageId,
+            fingerprint: event.idempotencyFingerprint,
+            turnId: event.turnId,
+          },
+          { turnId: event.turnId },
+        );
+      }
       projection.handle(event);
     },
   };

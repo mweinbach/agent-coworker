@@ -26,6 +26,7 @@ export function createJsonRpcWorkspaceModule(
     | "applyProjectedCompleted"
     | "applyProjectedReasoningDeltaToThread"
     | "applyProjectedAssistantDeltaToThread"
+    | "flushPendingContentForThread"
   >,
   handlers: {
     handleThreadEvent: (
@@ -62,6 +63,7 @@ export function createJsonRpcWorkspaceModule(
     applyProjectedCompleted,
     applyProjectedReasoningDeltaToThread,
     applyProjectedAssistantDeltaToThread,
+    flushPendingContentForThread,
   } = feed;
   const { handleThreadEvent } = handlers;
   const { ensureThreadSocket } = socket;
@@ -145,6 +147,7 @@ export function createJsonRpcWorkspaceModule(
       if (message.method === "serverRequest/resolved") {
         const requestId = typeof params.requestId === "string" ? params.requestId : null;
         if (!requestId) return;
+        flushPendingContentForThread(set, mappedThreadId);
         set((s) => {
           const existing = s.sandboxApprovalsByThread[mappedThreadId];
           if (!existing) return {};
@@ -352,6 +355,7 @@ export function createJsonRpcWorkspaceModule(
 
     const workspaceId =
       workspaceIdForThread(get, fromThreadId) ?? workspaceIdForThread(get, toThreadId);
+    flushPendingContentForThread(set, fromThreadId);
     rekeyThreadRuntimeMaps(fromThreadId, toThreadId);
     if (workspaceId) {
       forgetThreadForReconnect(workspaceId, fromThreadId);

@@ -20,9 +20,14 @@ type ComposerBarProps = {
   value: string;
   onChangeText: (text: string) => void;
   onSubmit: () => void;
+  onStop: () => void;
+  canEdit: boolean;
+  canSubmit: boolean;
+  isSubmitting: boolean;
+  isBusy: boolean;
+  isStopping: boolean;
   submitLabel?: string;
   helperText?: string | null;
-  disabled?: boolean;
 };
 
 const MIN_INPUT_HEIGHT = 36;
@@ -39,23 +44,28 @@ function asNativeSymbol(icon: string): NativeSFSymbol {
 }
 
 function sendAccessibilityLabel({
-  canSend,
-  disabled,
+  canSubmit,
+  canEdit,
   hasText,
+  isSubmitting,
   submitLabel,
 }: {
-  canSend: boolean;
-  disabled: boolean;
+  canSubmit: boolean;
+  canEdit: boolean;
   hasText: boolean;
+  isSubmitting: boolean;
   submitLabel: string;
 }): string {
-  if (disabled) {
+  if (isSubmitting) {
+    return "Sending message";
+  }
+  if (!canEdit) {
     return "Send unavailable while offline";
   }
-  if (!hasText) {
+  if (!hasText && !canSubmit) {
     return `${submitLabel}, enter a message first`;
   }
-  if (!canSend) {
+  if (!canSubmit) {
     return submitLabel;
   }
   return submitLabel;
@@ -65,25 +75,44 @@ export function ComposerBar({
   value,
   onChangeText,
   onSubmit,
+  onStop,
+  canEdit,
+  canSubmit,
+  isSubmitting,
+  isBusy,
+  isStopping,
   submitLabel = "Send",
   helperText = null,
-  disabled = false,
 }: ComposerBarProps) {
   const theme = useAppTheme();
   const [inputHeight, setInputHeight] = useState(MIN_INPUT_HEIGHT);
   const hasText = value.trim().length > 0;
-  const canSend = !disabled && hasText;
   const accessibilityLabel = sendAccessibilityLabel({
-    canSend,
-    disabled,
+    canSubmit,
+    canEdit,
     hasText,
+    isSubmitting,
     submitLabel,
   });
   const barHeight = clamp(inputHeight, MIN_INPUT_HEIGHT, MAX_INPUT_HEIGHT) + VERTICAL_CHROME;
-  const sendFillColor = canSend ? theme.primary : theme.surfaceMuted;
-  const sendIconColor = canSend ? theme.primaryText : theme.textTertiary;
-  const submitIfReady = () => {
-    if (!canSend) {
+  const actionEnabled = isBusy ? !isStopping : canSubmit;
+  const actionFillColor = actionEnabled
+    ? isBusy
+      ? theme.danger
+      : theme.primary
+    : theme.surfaceMuted;
+  const actionIconColor = actionEnabled ? theme.primaryText : theme.textTertiary;
+  const actionAccessibilityLabel = isBusy
+    ? isStopping
+      ? "Stopping turn"
+      : "Stop turn"
+    : accessibilityLabel;
+  const performAction = () => {
+    if (!actionEnabled) {
+      return;
+    }
+    if (isBusy) {
+      onStop();
       return;
     }
     onSubmit();
@@ -152,7 +181,7 @@ export function ComposerBar({
                 <TextInput
                   value={value}
                   onChangeText={onChangeText}
-                  editable={!disabled}
+                  editable={canEdit}
                   placeholder="Message…"
                   placeholderTextColor={theme.textTertiary}
                   accessibilityLabel="Message"
@@ -183,22 +212,22 @@ export function ComposerBar({
           </Group>
           <Group modifiers={[frame({ width: BUTTON_SIZE, height: BUTTON_SIZE })]}>
             <ExpoImage
-              systemName={asNativeSymbol("arrow.up")}
+              systemName={asNativeSymbol(isBusy ? "stop.fill" : "arrow.up")}
               size={16}
-              color={sendIconColor}
-              onPress={canSend ? submitIfReady : undefined}
+              color={actionIconColor}
+              onPress={actionEnabled ? performAction : undefined}
               modifiers={[
-                accessibilityLabelModifier(accessibilityLabel),
+                accessibilityLabelModifier(actionAccessibilityLabel),
                 accessibilityAddTraits(["isButton"]),
-                disabledModifier(!canSend),
-                foregroundStyle(sendIconColor),
+                disabledModifier(!actionEnabled),
+                foregroundStyle(actionIconColor),
                 frame({ width: BUTTON_SIZE, height: BUTTON_SIZE }),
-                background(sendFillColor, shapes.circle()),
+                background(actionFillColor, shapes.circle()),
                 glassEffect({
                   glass: {
                     variant: "regular",
                     interactive: true,
-                    tint: sendFillColor,
+                    tint: actionFillColor,
                   },
                   shape: "circle",
                 }),

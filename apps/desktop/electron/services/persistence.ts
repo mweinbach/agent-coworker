@@ -9,6 +9,7 @@ import {
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
 } from "../../../../src/utils/oneOffChats";
+import { sanitizePersistedComposerDrafts } from "../../src/app/composerDrafts";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import {
@@ -426,6 +427,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     ...(providerState ? { providerState } : {}),
     providerUiState,
     ...(onboarding ? { onboarding } : {}),
+    composerDrafts: sanitizePersistedComposerDrafts(value.composerDrafts),
   };
 }
 

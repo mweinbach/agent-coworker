@@ -1,5 +1,12 @@
 import { create } from "zustand";
 
+import {
+  type ComposerAttachment,
+  type ComposerSubmission,
+  createComposerSubmission,
+  hasComposerContent,
+  sameComposerAttachments,
+} from "./composer-policy";
 import type {
   CoworkThread,
   ProjectedItem,
@@ -7,6 +14,7 @@ import type {
   SessionSnapshotLike,
   WorkspaceSummary,
 } from "./protocolTypes";
+import type { PendingServerRequestIdentity } from "./server-request-identity";
 import {
   applyAgentDelta,
   applyProjectedCompletion,
@@ -32,30 +40,37 @@ export type MobileThreadSummary = {
   workspaceKind: WorkspaceSummary["workspaceKind"] | null;
   feed: SessionFeedItem[];
   composerDraft: string;
+  composerAttachments: ComposerAttachment[];
+  composerSubmission: ComposerSubmission | null;
   pendingPrompt: boolean;
   pendingServerRequest: PendingServerRequest | null;
 };
 
 export type MobileThreadFeedEntry = SessionFeedItem;
 
-export type PendingServerRequest =
-  | {
-      requestId: string | number;
-      kind: "ask";
-      threadId: string;
-      itemId: string;
-      question: string;
-      options: string[];
-    }
-  | {
-      requestId: string | number;
-      kind: "approval";
-      threadId: string;
-      itemId: string;
-      command: string;
-      reason: string;
-      dangerous: boolean;
-    };
+export type ThreadFeedMutation = {
+  kind: "hydrate" | "started" | "delta" | "completed" | "local" | "removed";
+  revision: number;
+};
+
+export type PendingServerRequest = PendingServerRequestIdentity &
+  (
+    | {
+        kind: "ask";
+        threadId: string;
+        itemId: string;
+        question: string;
+        options: string[];
+      }
+    | {
+        kind: "approval";
+        threadId: string;
+        itemId: string;
+        command: string;
+        reason: string;
+        dangerous: boolean;
+      }
+  );
 
 type ThreadStoreState = {
   snapshots: Record<string, SessionSnapshotLike>;
@@ -63,6 +78,7 @@ type ThreadStoreState = {
   selectedThreadId: string | null;
   pendingRequests: Record<string, PendingServerRequest | null>;
   activeTurnStartedAt: Record<string, string | null>;
+  lastFeedMutationByThread: Record<string, ThreadFeedMutation>;
   expandedWorkspaceIds: Record<string, true>;
   sectionOrder: HomeSectionKey[];
   sectionsOpen: ThreadHomeSectionsOpen;
@@ -95,6 +111,11 @@ type ThreadStoreState = {
   clearPendingRequest(threadId: string): void;
   selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
+  setComposerAttachments(threadId: string, attachments: ComposerAttachment[]): void;
+  beginComposerSubmission(threadId: string, clientMessageId: string): ComposerSubmission | null;
+  retryComposerSubmission(threadId: string): ComposerSubmission | null;
+  failComposerSubmission(threadId: string, clientMessageId: string, error: string): void;
+  acceptComposerSubmission(threadId: string, clientMessageId: string): void;
   submitComposer(threadId: string): void;
   appendOptimisticUserMessage(threadId: string, text: string, clientMessageId: string): void;
   removeOptimisticUserMessage(threadId: string, clientMessageId: string): void;
@@ -127,6 +148,20 @@ type ThreadStoreState = {
 };
 
 let threadCachePersistQueued = false;
+
+function recordFeedMutation(
+  state: ThreadStoreState,
+  threadId: string,
+  kind: ThreadFeedMutation["kind"],
+): Record<string, ThreadFeedMutation> {
+  return {
+    ...state.lastFeedMutationByThread,
+    [threadId]: {
+      kind,
+      revision: (state.lastFeedMutationByThread[threadId]?.revision ?? 0) + 1,
+    },
+  };
+}
 
 function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
   if (threadCachePersistQueued) {
@@ -206,6 +241,8 @@ function buildThreadSummary(
   threadId: string,
   snapshot: SessionSnapshotLike,
   composerDraft = "",
+  composerAttachments: ComposerAttachment[] = [],
+  composerSubmission: ComposerSubmission | null = null,
   pendingServerRequest: PendingServerRequest | null = null,
   cwd: string | null = null,
   workspaceByPath?: Map<string, WorkspaceSummary>,
@@ -228,6 +265,8 @@ function buildThreadSummary(
     ...workspace,
     feed: snapshot.feed,
     composerDraft,
+    composerAttachments,
+    composerSubmission,
     pendingPrompt:
       snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
     pendingServerRequest,
@@ -246,6 +285,8 @@ function updateThreadList(
     threadId,
     snapshot,
     composerDraft ?? existing?.composerDraft ?? "",
+    existing?.composerAttachments ?? [],
+    existing?.composerSubmission ?? null,
     state.pendingRequests[threadId] ?? existing?.pendingServerRequest ?? null,
     existing?.cwd ?? null,
     workspaceByPath,
@@ -269,6 +310,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   selectedThreadId: null,
   pendingRequests: {},
   activeTurnStartedAt: {},
+  lastFeedMutationByThread: {},
   expandedWorkspaceIds: {},
   sectionOrder: defaultThreadHomeUiState().sectionOrder,
   sectionsOpen: defaultThreadHomeUiState().sectionsOpen,
@@ -287,6 +329,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       const cachedThreads = cache.threads.map((thread) => ({
         ...thread,
         composerDraft: "",
+        composerAttachments: [],
+        composerSubmission: null,
         pendingPrompt: false,
         pendingServerRequest: null,
       }));
@@ -309,6 +353,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
             : (cachedThreads[0]?.id ?? existingDraftThreads[0]?.id ?? null),
         pendingRequests: {},
         activeTurnStartedAt: {},
+        lastFeedMutationByThread: {},
         expandedWorkspaceIds: {
           ...state.expandedWorkspaceIds,
           ...cache.expandedWorkspaceIds,
@@ -344,6 +389,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         },
         threads: updateThreadList(state, snapshot.sessionId, mergedSnapshot),
         selectedThreadId: state.selectedThreadId ?? snapshot.sessionId,
+        lastFeedMutationByThread: recordFeedMutation(state, snapshot.sessionId, "hydrate"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -368,6 +414,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "started"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -392,6 +439,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "completed"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -417,6 +465,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "delta"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -443,6 +492,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(state, threadId, "delta"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -526,6 +576,97 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       selectedThreadId: threadId,
     }));
   },
+  setComposerAttachments(threadId, attachments) {
+    set((state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              composerAttachments: attachments.map((attachment) => ({ ...attachment })),
+            }
+          : thread,
+      ),
+      selectedThreadId: threadId,
+    }));
+  },
+  beginComposerSubmission(threadId, clientMessageId) {
+    const thread = get().threads.find((entry) => entry.id === threadId);
+    if (
+      !thread ||
+      thread.composerSubmission !== null ||
+      !hasComposerContent(thread.composerDraft, thread.composerAttachments)
+    ) {
+      return null;
+    }
+    const submission = createComposerSubmission({
+      clientMessageId,
+      text: thread.composerDraft,
+      attachments: thread.composerAttachments,
+    });
+    set((state) => ({
+      threads: state.threads.map((entry) =>
+        entry.id === threadId ? { ...entry, composerSubmission: submission } : entry,
+      ),
+    }));
+    return submission;
+  },
+  retryComposerSubmission(threadId) {
+    const thread = get().threads.find((entry) => entry.id === threadId);
+    if (thread?.composerSubmission?.status !== "failed") {
+      return null;
+    }
+    const submission: ComposerSubmission = {
+      ...thread.composerSubmission,
+      attachments: thread.composerSubmission.attachments.map((attachment) => ({
+        ...attachment,
+      })),
+      status: "submitting",
+      error: null,
+    };
+    set((state) => ({
+      threads: state.threads.map((entry) =>
+        entry.id === threadId ? { ...entry, composerSubmission: submission } : entry,
+      ),
+    }));
+    return submission;
+  },
+  failComposerSubmission(threadId, clientMessageId, error) {
+    set((state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === threadId && thread.composerSubmission?.clientMessageId === clientMessageId
+          ? {
+              ...thread,
+              composerSubmission: {
+                ...thread.composerSubmission,
+                status: "failed",
+                error,
+              },
+            }
+          : thread,
+      ),
+    }));
+  },
+  acceptComposerSubmission(threadId, clientMessageId) {
+    set((state) => ({
+      threads: state.threads.map((thread) => {
+        const submission = thread.composerSubmission;
+        if (thread.id !== threadId || submission?.clientMessageId !== clientMessageId) {
+          return thread;
+        }
+        return {
+          ...thread,
+          composerDraft: thread.composerDraft === submission.text ? "" : thread.composerDraft,
+          composerAttachments: sameComposerAttachments(
+            thread.composerAttachments,
+            submission.attachments,
+          )
+            ? []
+            : thread.composerAttachments,
+          composerSubmission: null,
+        };
+      }),
+    }));
+  },
   submitComposer(threadId) {
     const state = get();
     const thread = state.threads.find((entry) => entry.id === threadId);
@@ -552,6 +693,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot, ""),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "local"),
       };
     });
   },
@@ -562,9 +704,21 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       role: "user",
       ts: new Date().toISOString(),
       text,
+      clientMessageId,
     };
     set((current) => {
       const snapshot = ensureThreadSnapshot(threadId, current.snapshots[threadId]);
+      if (
+        snapshot.feed.some(
+          (item) =>
+            item.id === clientMessageId ||
+            (item.kind === "message" &&
+              item.role === "user" &&
+              item.clientMessageId === clientMessageId),
+        )
+      ) {
+        return current;
+      }
       const nextSnapshot = {
         ...snapshot,
         feed: [...snapshot.feed, userItem],
@@ -575,6 +729,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "local"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -595,6 +750,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           [threadId]: nextSnapshot,
         },
         threads: updateThreadList(current, threadId, nextSnapshot),
+        lastFeedMutationByThread: recordFeedMutation(current, threadId, "removed"),
       };
     });
     scheduleThreadCachePersist(get);
@@ -632,6 +788,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       const nextThreads = state.threads.filter((t) => t.id.startsWith("draft-"));
       const nextSnapshots: Record<string, SessionSnapshotLike> = {};
       const nextPendingRequests: Record<string, PendingServerRequest | null> = {};
+      const nextFeedMutations: Record<string, ThreadFeedMutation> = {};
 
       for (const t of nextThreads) {
         if (state.snapshots[t.id]) {
@@ -639,6 +796,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         }
         if (state.pendingRequests[t.id]) {
           nextPendingRequests[t.id] = state.pendingRequests[t.id];
+        }
+        if (state.lastFeedMutationByThread[t.id]) {
+          nextFeedMutations[t.id] = state.lastFeedMutationByThread[t.id];
         }
       }
 
@@ -652,6 +812,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         threads: nextThreads,
         selectedThreadId: nextSelectedThreadId,
         pendingRequests: nextPendingRequests,
+        lastFeedMutationByThread: nextFeedMutations,
       };
     });
     scheduleThreadCachePersist(get);
@@ -714,6 +875,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         }
 
         const composerDraft = existingThread?.composerDraft ?? "";
+        const composerAttachments = existingThread?.composerAttachments ?? [];
+        const composerSubmission = existingThread?.composerSubmission ?? null;
         const pendingServerRequest =
           state.pendingRequests[rt.id] ?? existingThread?.pendingServerRequest ?? null;
 
@@ -722,6 +885,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
             rt.id,
             snapshot,
             composerDraft,
+            composerAttachments,
+            composerSubmission,
             pendingServerRequest,
             rt.cwd ?? null,
             workspaceByPath,

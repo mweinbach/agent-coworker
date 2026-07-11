@@ -1,6 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type { TaskRecord, TaskSummary } from "../../../src/shared/tasks";
+import {
+  composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
+  createComposerDraftAttachment,
+  createEmptyComposerDraft,
+} from "../src/app/composerDrafts";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
@@ -502,7 +508,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
     providerUiState: { lmstudio: { enabled: false, hiddenModels: [] } },
-    composerText: "",
+    composerDraftsByKey: {},
     injectContext: false,
     developerMode: false,
     showHiddenFiles: false,
@@ -676,6 +682,92 @@ describe("desktop bootstrap cache", () => {
       cloudSyncEnabled: false,
     });
     expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBeUndefined();
+  });
+
+  test("buildCachedDesktopStateSeed restores a complete New Chat target draft", async () => {
+    const key = composerDraftKeyForNewChatTarget({
+      kind: "project",
+      workspaceId: "ws-cached",
+    });
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        composerDrafts: {
+          [key]: {
+            revision: 8,
+            generation: 2,
+            updatedAt: "2099-03-20T00:00:00.000Z",
+            text: "restored project draft",
+            attachments: [
+              {
+                filename: "notes.txt",
+                mimeType: "text/plain",
+                size: 10,
+                lastModified: 42,
+                signature: "notes",
+                contentBase64: "ZHJhZnQgZmlsZQ==",
+              },
+            ],
+            references: [{ kind: "skill", name: "documents" }],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+        },
+      },
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+        selectedWorkspaceId: "ws-cached",
+        selectedThreadId: null,
+        newChatLandingTarget: { kind: "project", workspaceId: "ws-cached" },
+      },
+    });
+
+    expect(seed?.selectedThreadId).toBeNull();
+    expect(seed?.newChatLandingTarget).toEqual({
+      kind: "project",
+      workspaceId: "ws-cached",
+    });
+    expect(seed?.composerDraftsByKey?.[key]).toMatchObject({
+      revision: 8,
+      generation: 2,
+      text: "restored project draft",
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+    expect(await seed?.composerDraftsByKey?.[key]?.attachments[0]?.file.text()).toBe("draft file");
+  });
+
+  test("durable persistence includes attachment bytes while the fast cache omits them", async () => {
+    resetStoreToCachedSeed();
+    const key = composerDraftKeyForThread("thread-cached");
+    const attachment = await createComposerDraftAttachment(
+      new File(["persist me"], "draft.txt", { type: "text/plain", lastModified: 7 }),
+    );
+    useAppStore.setState({
+      composerDraftsByKey: {
+        [key]: {
+          ...createEmptyComposerDraft("2099-03-20T00:00:00.000Z"),
+          revision: 3,
+          text: "persisted text",
+          attachments: [attachment],
+        },
+      },
+    });
+
+    const persisted = syncDesktopStateCacheNow(useAppStore.getState);
+    expect(persisted.composerDrafts?.[key]?.attachments[0]).toMatchObject({
+      filename: "draft.txt",
+      contentBase64: "cGVyc2lzdCBtZQ==",
+    });
+    const cached = JSON.parse(localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY) ?? "{}") as {
+      persistedState?: { composerDrafts?: Record<string, { attachments?: unknown[] }> };
+    };
+    expect(cached.persistedState?.composerDrafts?.[key]?.attachments).toEqual([]);
   });
 
   test("buildCachedDesktopStateSeed preserves an explicitly selected task", () => {

@@ -215,6 +215,14 @@ export type WindowDragPointInput = {
   screenY: number;
 };
 
+export type WindowCloseRequest = {
+  requestId: string;
+};
+
+export type WindowCloseResponseInput = WindowCloseRequest & {
+  canClose: boolean;
+};
+
 export type ShowCanvasWindowInput = {
   path: string;
 };
@@ -236,6 +244,10 @@ export type OpenPathInput = {
 export type SaveExportedFileInput = {
   sourcePath: string;
   defaultFileName: string;
+};
+
+export type PickCanvasSavePathInput = {
+  sourcePath: string;
 };
 
 export type PickDirectoryInput = {
@@ -582,6 +594,7 @@ export interface DesktopApi {
   windowMinimize(): Promise<void>;
   windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
+  resolveWindowCloseRequest?(input: WindowCloseResponseInput): Promise<void>;
   windowDragStart(opts: WindowDragPointInput): Promise<void>;
   windowDragMove(opts: WindowDragPointInput): Promise<void>;
   windowDragEnd(): Promise<void>;
@@ -598,6 +611,7 @@ export interface DesktopApi {
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   saveExportedFile(opts: SaveExportedFileInput): Promise<string | null>;
+  pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
@@ -630,6 +644,7 @@ export interface DesktopApi {
     listener: (event: WorkspaceServerStartupProgress) => void,
   ): () => void;
   onWorkspaceServerExited(listener: (event: WorkspaceServerExitedEvent) => void): () => void;
+  onWindowCloseRequested?(listener: (request: WindowCloseRequest) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
   onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
@@ -661,6 +676,7 @@ export const DESKTOP_IPC_CHANNELS = {
   windowMinimize: "desktop:windowMinimize",
   windowMaximize: "desktop:windowMaximize",
   windowClose: "desktop:windowClose",
+  resolveWindowCloseRequest: "desktop:resolveWindowCloseRequest",
   windowDragStart: "desktop:windowDragStart",
   windowDragMove: "desktop:windowDragMove",
   windowDragEnd: "desktop:windowDragEnd",
@@ -678,6 +694,7 @@ export const DESKTOP_IPC_CHANNELS = {
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   saveExportedFile: "desktop:saveExportedFile",
+  pickCanvasSavePath: "desktop:pickCanvasSavePath",
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
@@ -708,6 +725,7 @@ export const DESKTOP_EVENT_CHANNELS = {
   updateStateChanged: "desktop:event:updateState",
   workspaceServerStartupProgress: "desktop:event:workspaceServerStartupProgress",
   workspaceServerExited: "desktop:event:workspaceServerExited",
+  windowCloseRequested: "desktop:event:windowCloseRequested",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
   mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
 } as const;

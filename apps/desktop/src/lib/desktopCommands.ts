@@ -20,6 +20,7 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ExplorerEntry,
+  PickCanvasSavePathInput,
   PlatformChromeInfo,
   ReadFileForPreviewOutput,
   SetWindowAppearanceInput,
@@ -32,6 +33,8 @@ import type {
   TranscriptDeliveryFailure,
   UpdaterState,
   UploadDiagnosticsBundleOutput,
+  WindowCloseRequest,
+  WindowCloseResponseInput,
   WorkspaceServerExitedEvent,
   WorkspaceServerStartupProgress,
   WorkspaceServerStatus,
@@ -210,6 +213,10 @@ export async function windowClose(): Promise<void> {
   await requireDesktopApi().windowClose();
 }
 
+export async function resolveWindowCloseRequest(input: WindowCloseResponseInput): Promise<void> {
+  await requireDesktopApi().resolveWindowCloseRequest?.(input);
+}
+
 export async function showMainWindow(): Promise<void> {
   await requireDesktopApi().showMainWindow();
 }
@@ -266,6 +273,10 @@ export async function saveExportedFile(opts: {
   defaultFileName: string;
 }): Promise<string | null> {
   return await requireDesktopApi().saveExportedFile(opts);
+}
+
+export async function pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null> {
+  return await requireDesktopApi().pickCanvasSavePath(opts);
 }
 
 export async function openExternalUrl(opts: { url: string }): Promise<void> {
@@ -418,6 +429,12 @@ export function onWorkspaceServerExited(
   listener: (event: WorkspaceServerExitedEvent) => void,
 ): () => void {
   return getDesktopApi()?.onWorkspaceServerExited(listener) ?? noopUnsubscribe;
+}
+
+export function onWindowCloseRequested(
+  listener: (request: WindowCloseRequest) => void,
+): () => void {
+  return getDesktopApi()?.onWindowCloseRequested?.(listener) ?? noopUnsubscribe;
 }
 
 export async function writeRendererLog(

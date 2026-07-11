@@ -664,7 +664,7 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
       providerAuthMethodsByProvider: {},
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
-      composerText: "",
+      composerDraftsByKey: {},
       injectContext: false,
       developerMode: false,
       showHiddenFiles: false,

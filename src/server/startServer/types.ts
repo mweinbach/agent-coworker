@@ -10,6 +10,7 @@ type JsonRpcConnectionState = {
   clientInfo?: JsonRpcInitializeParams["clientInfo"];
   capabilities: {
     experimentalApi: boolean;
+    toolRetryLineage: boolean;
     optOutNotificationMethods: string[];
   };
   pendingServerRequests: Map<

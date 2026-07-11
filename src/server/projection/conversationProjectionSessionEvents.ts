@@ -8,6 +8,7 @@ import {
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
 } from "../../shared/modelStreamReplay";
+import type { ToolInputDigest } from "../../shared/toolInputDigest";
 import type { SessionEvent } from "../protocol";
 import type { AssistantProjection } from "./conversationProjectionAssistant";
 import {
@@ -32,6 +33,27 @@ export function createSessionEventHandler(
   feedItems: FeedItemProjection,
   handleModelStreamUpdate: (update: ModelStreamUpdate) => void,
 ) {
+  const applyToolCallMetadata = (
+    turnId: string,
+    metadata: {
+      toolKey: string;
+      toolName: string;
+      inputDigest: ToolInputDigest;
+      retryOf?: string;
+    },
+  ): void => {
+    const { state: toolState } = tools.resolveToolState(
+      turnId,
+      metadata.toolKey,
+      metadata.toolName,
+    );
+    toolState.inputDigest = metadata.inputDigest;
+    if (metadata.retryOf !== undefined) {
+      toolState.retryOf = metadata.retryOf;
+    }
+    tools.publishToolStartedOrCompleted(turnId, toolState);
+  };
+
   return (event: SessionEvent) => {
     switch (event.type) {
       case "user_message":
@@ -40,12 +62,14 @@ export function createSessionEventHandler(
             state.activeTurnId,
             event.text,
             typeof event.clientMessageId === "string" ? event.clientMessageId : null,
+            event.annotations ?? null,
           );
           return;
         }
         state.lastUserMessageText = event.text;
         state.lastUserMessageClientMessageId =
           typeof event.clientMessageId === "string" ? event.clientMessageId : null;
+        state.lastUserMessageAnnotations = event.annotations ?? null;
         return;
       case "session_busy":
         if (event.busy) {
@@ -61,9 +85,11 @@ export function createSessionEventHandler(
               state.activeTurnId,
               state.lastUserMessageText,
               state.lastUserMessageClientMessageId,
+              state.lastUserMessageAnnotations,
             );
             state.lastUserMessageText = null;
             state.lastUserMessageClientMessageId = null;
+            state.lastUserMessageAnnotations = null;
           }
           return;
         }
@@ -93,6 +119,9 @@ export function createSessionEventHandler(
         );
         for (const update of updates) {
           handleModelStreamUpdate(update);
+        }
+        for (const metadata of event.toolCallMetadata ?? []) {
+          applyToolCallMetadata(event.turnId, metadata);
         }
         return;
       }

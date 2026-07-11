@@ -1,3 +1,4 @@
+import { requestCanvasDocumentTransition } from "../../lib/canvasDocumentLifecycle";
 import {
   copyPath,
   createDirectory,
@@ -42,8 +43,14 @@ export function createExplorerActions(
   };
 
   return {
-    openFilePreview: (opts: { path: string }) => {
+    openFilePreview: async (opts: { path: string }): Promise<boolean> => {
       const state = get();
+      if (state.filePreview?.path === opts.path) {
+        return true;
+      }
+      if (!(await requestCanvasDocumentTransition(opts.path))) {
+        return false;
+      }
       const canvasEnabled = state.desktopFeatureFlags?.canvas === true;
       const isCanvasSupported = isCanvasSupportedFile(opts.path);
       if (canvasEnabled && isCanvasSupported) {
@@ -56,10 +63,15 @@ export function createExplorerActions(
       } else {
         set({ filePreview: { path: opts.path }, isCanvasMaximized: false });
       }
+      return true;
     },
 
-    closeFilePreview: () => {
+    closeFilePreview: async (): Promise<boolean> => {
+      if (!(await requestCanvasDocumentTransition(null))) {
+        return false;
+      }
       set({ filePreview: null, isCanvasMaximized: false });
+      return true;
     },
 
     setCanvasActiveTab: (tab: "preview" | "edit") => {
@@ -188,7 +200,7 @@ export function createExplorerActions(
       if (isDirectory) {
         await get().navigateWorkspaceFiles(workspaceId, targetPath);
       } else if (isCanvasSupportedFile(targetPath)) {
-        get().openFilePreview({ path: targetPath });
+        await get().openFilePreview({ path: targetPath });
       } else {
         await openPath({ path: targetPath });
       }

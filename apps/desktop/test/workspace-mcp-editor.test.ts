@@ -258,7 +258,7 @@ describe("workspace MCP editor flow", () => {
         providerAuthMethodsByProvider: {},
         providerLastAuthChallenge: null,
         providerLastAuthResult: null,
-        composerText: "",
+        composerDraftsByKey: {},
         injectContext: false,
         developerMode: false,
         showHiddenFiles: false,

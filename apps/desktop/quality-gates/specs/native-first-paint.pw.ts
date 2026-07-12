@@ -6,7 +6,8 @@ for (const mode of ["light", "dark", "system"] as const) {
     test.use({
       qualityOptions: {
         appearanceDelayMs: 250,
-        height: 720,
+        // Fits the smallest macOS CI work area after its 36px native inset.
+        height: 684,
         holdBootstrap: true,
         mode,
         recordVideo: false,

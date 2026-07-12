@@ -431,24 +431,6 @@ async function launchQualityHarness(
   if (!options.holdBootstrap && !options.startupFailureCount) {
     await page.waitForFunction(() => window.__coworkQualityGate?.isReady() === true);
   }
-  await electronApp.evaluate(
-    ({ BrowserWindow }, target) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (!win) return;
-      const [actualWidth, actualHeight] = win.getContentSize();
-      if (actualWidth === target.width && actualHeight === target.height) return;
-      const [windowWidth, windowHeight] = win.getSize();
-      win.setSize(
-        windowWidth + target.width - actualWidth,
-        windowHeight + target.height - actualHeight,
-      );
-    },
-    { height: options.height, width: options.width },
-  );
-  await page.waitForFunction(
-    (target) => window.innerWidth === target.width && window.innerHeight === target.height,
-    { height: options.height, width: options.width },
-  );
   const viewport = await page.evaluate(() => ({
     height: window.innerHeight,
     width: window.innerWidth,

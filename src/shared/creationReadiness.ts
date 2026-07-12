@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import { PROVIDER_NAMES } from "../types";
 
+export const COWORK_RUNTIME_STARTING_MESSAGE =
+  "Cowork is still starting. Wait a moment, then retry.";
+
 export const creationKindSchema = z.enum(["chat", "research"]);
 
 export const creationRepairActionSchema = z.discriminatedUnion("type", [

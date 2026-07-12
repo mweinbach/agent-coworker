@@ -72,4 +72,47 @@ describe("useCreationReadiness", () => {
     expect(container.textContent).toBe("ready");
     expect(preflightCreation).toHaveBeenCalledTimes(2);
   });
+
+  test("rechecks while the Cowork runtime is still starting", async () => {
+    const preflightCreation = mock()
+      .mockResolvedValueOnce({
+        ready: false,
+        checks: [
+          {
+            id: "runtime_ready",
+            status: "blocked",
+            message: "Cowork is still starting. Wait a moment, then retry.",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ ready: true, checks: [] });
+    useAppStore.setState({ preflightCreation });
+
+    function ReadinessProbe() {
+      const readiness = useCreationReadiness({
+        kind: "chat",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+      });
+      return createElement(
+        "div",
+        null,
+        readiness.checking ? "checking" : readiness.result?.ready ? "ready" : "blocked",
+      );
+    }
+
+    await act(async () => {
+      root.render(createElement(ReadinessProbe));
+      await Bun.sleep(0);
+    });
+    expect(container.textContent).toBe("blocked");
+    expect(preflightCreation).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await Bun.sleep(1_100);
+    });
+
+    expect(container.textContent).toBe("ready");
+    expect(preflightCreation).toHaveBeenCalledTimes(2);
+  });
 });

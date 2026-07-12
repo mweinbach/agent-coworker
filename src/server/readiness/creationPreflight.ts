@@ -1,10 +1,11 @@
 import type { CodexAppServerInstallStatus } from "../../providers/codexAppServerResolver";
 import type { ProviderCatalogPayload } from "../../providers/connectionCatalog";
 import type { LmStudioLocalStatus } from "../../providers/lmstudio/local";
-import type {
-  CreationPreflightParams,
-  CreationPreflightResult,
-  CreationReadinessCheck,
+import {
+  COWORK_RUNTIME_STARTING_MESSAGE,
+  type CreationPreflightParams,
+  type CreationPreflightResult,
+  type CreationReadinessCheck,
 } from "../../shared/creationReadiness";
 import type { AgentConfig } from "../../types";
 import { hasGoogleResearchApiKey } from "../research/googleApiKey";
@@ -46,7 +47,7 @@ async function appendRuntimeChecks(
         "blocked",
         startup.error
           ? `Cowork runtime failed to start: ${startup.error}`
-          : "Cowork is still starting. Wait a moment, then retry.",
+          : COWORK_RUNTIME_STARTING_MESSAGE,
       ),
     );
     return;

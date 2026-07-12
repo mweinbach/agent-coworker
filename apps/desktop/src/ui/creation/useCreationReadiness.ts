@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  CreationPreflightParams,
-  CreationPreflightResult,
+import {
+  COWORK_RUNTIME_STARTING_MESSAGE,
+  type CreationPreflightParams,
+  type CreationPreflightResult,
 } from "../../../../../src/shared/creationReadiness";
 import { useAppStore } from "../../app/store";
 
@@ -30,6 +31,19 @@ export function useCreationReadiness(request: CreationReadinessRequest) {
     lastProviderStatusUpdatedAtRef.current = providerStatusLastUpdatedAt;
     refresh();
   }, [providerStatusLastUpdatedAt, refresh]);
+
+  const runtimeStarting = result?.checks.some(
+    (entry) =>
+      entry.id === "runtime_ready" &&
+      entry.status === "blocked" &&
+      entry.message === COWORK_RUNTIME_STARTING_MESSAGE,
+  );
+
+  useEffect(() => {
+    if (!runtimeStarting) return;
+    const timeout = setTimeout(refresh, 1_000);
+    return () => clearTimeout(timeout);
+  }, [refresh, runtimeStarting]);
 
   useEffect(() => {
     const controller = new AbortController();

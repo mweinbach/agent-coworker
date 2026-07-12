@@ -181,6 +181,72 @@ describe("research view layout", () => {
     }
   });
 
+  test("returns from compact history to the preserved new-research draft", async () => {
+    const harness = setupJsdom({ extraGlobals: { ResizeObserver: LayoutResizeObserver } });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const research = {
+        id: "research-existing",
+        parentResearchId: null,
+        title: "Existing research",
+        prompt: "Research prompt",
+        status: "completed",
+        interactionId: null,
+        lastEventId: null,
+        inputs: { files: [] },
+        settings: DEFAULT_RESEARCH_SETTINGS,
+        outputsMarkdown: "# Existing research",
+        thoughtSummaries: [],
+        sources: [],
+        createdAt: "2026-04-21T21:00:00.000Z",
+        updatedAt: "2026-04-21T21:10:00.000Z",
+        error: null,
+      };
+      resetAppStore({
+        researchById: { [research.id]: research },
+        researchOrder: [research.id],
+        selectedResearchId: null,
+        researchCreationDraft: {
+          ...useAppStore.getInitialState().researchCreationDraft,
+          text: "Keep this local draft",
+        },
+      });
+
+      await act(async () => root.render(createElement(ResearchView)));
+      await act(async () => await Promise.resolve());
+
+      const draft = container.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder^="Investigate a market"]',
+      );
+      expect(draft?.value).toBe("Keep this local draft");
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-label="Open research history"]')
+          ?.click(),
+      );
+      const returnButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Return to research draft"]',
+      );
+      expect(returnButton?.textContent).toContain("Back");
+
+      await act(async () => returnButton?.click());
+      expect(
+        container.querySelector<HTMLTextAreaElement>(
+          'textarea[placeholder^="Investigate a market"]',
+        )?.value,
+      ).toBe("Keep this local draft");
+
+      await act(async () => root.unmount());
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
   test("shows readiness status without restoring the retired helper copy", async () => {
     const harness = setupJsdom();
 

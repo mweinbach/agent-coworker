@@ -1,4 +1,4 @@
-import { HistoryIcon, PlusIcon } from "lucide-react";
+import { ArrowLeftIcon, HistoryIcon, PlusIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
@@ -34,6 +34,7 @@ export function ResearchView() {
   );
   const selectedResearch = selectedResearchId ? (researchById[selectedResearchId] ?? null) : null;
   const compact = viewWidth > 0 && viewWidth < RESEARCH_SPLIT_MIN_WIDTH;
+  const returningToDraft = compact && selectedResearchId === null;
 
   useEffect(() => {
     void refreshResearchList();
@@ -68,18 +69,25 @@ export function ResearchView() {
               </div>
             </div>
             <Button
+              aria-label={returningToDraft ? "Return to research draft" : undefined}
               size="sm"
               type="button"
               variant="secondary"
               className="h-8 gap-1.5 rounded-md border-border/60 bg-background/70 px-3 text-xs"
               onClick={() => {
                 setCompactHistoryOpen(false);
-                selectResearch(null);
+                if (!returningToDraft) {
+                  selectResearch(null);
+                }
               }}
-              disabled={selectedResearchId === null}
+              disabled={!compact && selectedResearchId === null}
             >
-              <PlusIcon className="h-3.5 w-3.5" />
-              New
+              {returningToDraft ? (
+                <ArrowLeftIcon className="h-3.5 w-3.5" />
+              ) : (
+                <PlusIcon className="h-3.5 w-3.5" />
+              )}
+              {returningToDraft ? "Back" : "New"}
             </Button>
           </div>
         </div>

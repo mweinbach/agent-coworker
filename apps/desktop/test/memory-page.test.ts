@@ -148,6 +148,22 @@ describe("desktop memory page", () => {
         root.render(createElement(MemoryPage));
       });
 
+      const skillMaintenanceTitle = Array.from(container.querySelectorAll("div")).find(
+        (element) => element.textContent === "Advanced skill maintenance",
+      );
+      const skillMaintenanceRow = skillMaintenanceTitle?.closest(".settings-row");
+      const configureButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Configure"),
+      );
+      expect(skillMaintenanceRow?.className).toContain("px-4");
+      expect(skillMaintenanceRow?.className).toContain("py-3.5");
+      expect(configureButton).not.toBeUndefined();
+
+      await act(async () => {
+        configureButton?.click();
+      });
+      expect(container.querySelector('[aria-label="Skill improvement"]')).not.toBeNull();
+
       expect(container.textContent).toContain("Loading...");
       expect(container.textContent).not.toContain("No remembered facts yet");
 

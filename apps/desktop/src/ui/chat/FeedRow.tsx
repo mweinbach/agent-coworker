@@ -1,9 +1,5 @@
 import {
-  CheckCircle2Icon,
   CheckIcon,
-  CircleDashedIcon,
-  CircleIcon,
-  ClipboardListIcon,
   CopyIcon,
   FileAudioIcon,
   FileIcon,
@@ -78,11 +74,11 @@ function MessageCopyAction(props: { text: string; className?: string }) {
     <Button
       type="button"
       variant="ghost"
-      size="xs"
+      size="icon-xs"
       onClick={handleCopy}
       aria-label={copied ? "Copied" : "Copy message"}
       className={cn(
-        "bg-background/90 shadow-sm backdrop-blur-sm opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+        "opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
         props.className,
       )}
     >
@@ -91,7 +87,7 @@ function MessageCopyAction(props: { text: string; className?: string }) {
       ) : (
         <CopyIcon data-icon="inline-start" />
       )}
-      {copied ? "Copied" : "Copy"}
+      <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
     </Button>
   );
 }
@@ -274,49 +270,6 @@ function resolveUserCopyText(opts: {
   return opts.cleanText || opts.rawText;
 }
 
-function FeedTodosCard(props: { todos: Extract<FeedItem, { kind: "todos" }>["todos"] }) {
-  const todos = props.todos;
-  if (todos.length === 0) return null;
-  const completed = todos.filter((todo) => todo.status === "completed").length;
-  return (
-    <Card className="max-w-3xl gap-0 rounded-xl border border-border/45 bg-muted/[0.08] p-0 shadow-none">
-      <CardContent className="flex flex-col gap-2 p-3">
-        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          <ClipboardListIcon className="size-3.5" />
-          <span>Plan</span>
-          <span className="font-medium normal-case tracking-normal text-muted-foreground/80">
-            {completed}/{todos.length}
-          </span>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {todos.map((todo) => (
-            <div
-              key={`${todo.status}:${todo.content}`}
-              className="flex items-start gap-2 text-[12.5px]"
-            >
-              {todo.status === "completed" ? (
-                <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-success" />
-              ) : todo.status === "in_progress" ? (
-                <CircleDashedIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
-              ) : (
-                <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span
-                className={cn(
-                  "leading-5 text-foreground",
-                  todo.status === "completed" && "text-muted-foreground line-through",
-                )}
-              >
-                {todo.content}
-              </span>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -417,9 +370,10 @@ export const FeedRow = memo(function FeedRow(props: {
 
           <div
             className={cn(
-              "pointer-events-none absolute top-1 z-10 flex items-center",
-              item.role === "user" ? "left-1" : "right-1",
+              "pointer-events-none -mt-2 flex h-6 items-center",
+              item.role === "user" ? "justify-end" : "justify-start",
             )}
+            data-slot="message-actions"
           >
             <div className="pointer-events-auto">
               <MessageCopyAction text={copyText} />
@@ -435,7 +389,7 @@ export const FeedRow = memo(function FeedRow(props: {
   }
 
   if (item.kind === "todos") {
-    return <FeedTodosCard todos={item.todos} />;
+    return null;
   }
 
   if (item.kind === "tool") {

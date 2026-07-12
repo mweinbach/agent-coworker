@@ -489,6 +489,9 @@ describe("desktop chat message scroller", () => {
         '[aria-label="Jump to latest"]',
       ) as HTMLButtonElement | null;
       expect(scrollToEnd).not.toBeNull();
+      expect(scrollToEnd?.style.bottom).toBe("172px");
+      expect(scrollToEnd?.className).toContain("bg-background/80");
+      expect(scrollToEnd?.className).toContain("backdrop-blur-md");
       await act(async () => {
         scrollToEnd?.click();
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -551,6 +554,10 @@ describe("desktop chat message scroller", () => {
       expect(container.querySelector('[data-message-id="msg-20"]')).not.toBeNull();
       expect(container.querySelector('[data-message-id="msg-99"]')).not.toBeNull();
       expect(container.querySelector('[data-message-id="status:show-older"]')).not.toBeNull();
+      expect(
+        (container.querySelector('[data-slot="feed-window-spacer"]') as HTMLElement | null)?.style
+          .minHeight,
+      ).toBe("");
 
       const viewport = container.querySelector(
         '[data-slot="message-scroller-viewport"]',
@@ -1062,6 +1069,63 @@ describe("desktop chat message scroller", () => {
       });
       expect(container.querySelector('[aria-label="2 new messages. Jump to latest"]')).toBeNull();
       expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("does not restore a stale lower anchor while upward wheel scrolling reveals the jump control", async () => {
+    const heights = new Map([
+      ["user-1", 100],
+      ["assistant-1", 900],
+      ["assistant-2", 300],
+    ]);
+    const harness = setupScroller(heights);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          renderFeed(
+            [
+              message("user-1", "user", "Question"),
+              message("assistant-1", "assistant", "Long answer"),
+              message("assistant-2", "assistant", "Latest answer"),
+            ],
+            "thread-a",
+          ),
+        );
+      });
+
+      const viewport = container.querySelector(
+        '[data-slot="message-scroller-viewport"]',
+      ) as HTMLElement | null;
+      if (!viewport) throw new Error("missing viewport");
+
+      await act(async () => {
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -120 }),
+        );
+        // Browser default scrolling happens after the wheel handler but before
+        // the scroll event. A resize notification in this gap used to restore
+        // the stale lower anchor and produce the visible double jump.
+        viewport.scrollTop = 300;
+        ControlledResizeObserver.trigger();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(container.querySelector('[aria-label="Jump to latest"]')).not.toBeNull();
+      expect(viewport.scrollTop).toBe(300);
+
+      await act(async () => {
+        viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
+      });
+      expect(viewport.scrollTop).toBe(300);
 
       await act(async () => root.unmount());
     } finally {

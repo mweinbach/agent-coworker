@@ -58,6 +58,16 @@ type PendingContentOperation =
       beforeItemId: string | null;
     };
 
+export function latestTodosFromFeed(
+  feed: FeedItem[],
+): Extract<FeedItem, { kind: "todos" }>["todos"] | undefined {
+  for (let index = feed.length - 1; index >= 0; index -= 1) {
+    const item = feed[index];
+    if (item?.kind === "todos") return item.todos;
+  }
+  return undefined;
+}
+
 type PendingThreadContent = {
   eventSequenceIncrements: number;
   operations: PendingContentOperation[];
@@ -766,6 +776,12 @@ export function createFeedProjectionModule(
         thread.lastMessageAt > snapshot.updatedAt
           ? thread.lastMessageAt
           : snapshot.updatedAt;
+      const nextFeed = preserveCurrentFeed
+        ? runtime.feed
+        : opts?.forceFeed === true
+          ? mergeSnapshotFeedWithMissingOptimisticUserItems(threadId, runtime.feed, snapshot.feed)
+          : snapshot.feed;
+      const restoredTodos = latestTodosFromFeed(nextFeed) ?? snapshot.todos;
       return {
         threads: s.threads.map((entry) =>
           entry.id === threadId
@@ -804,18 +820,14 @@ export function createFeedProjectionModule(
             agents: snapshot.agents,
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
-            feed: preserveCurrentFeed
-              ? runtime.feed
-              : opts?.forceFeed === true
-                ? mergeSnapshotFeedWithMissingOptimisticUserItems(
-                    threadId,
-                    runtime.feed,
-                    snapshot.feed,
-                  )
-                : snapshot.feed,
+            feed: nextFeed,
             hydrating: false,
             transcriptOnly: false,
           },
+        },
+        latestTodosByThreadId: {
+          ...s.latestTodosByThreadId,
+          [threadId]: restoredTodos,
         },
       };
     });

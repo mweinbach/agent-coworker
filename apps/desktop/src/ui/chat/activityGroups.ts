@@ -213,10 +213,9 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   for (let i = 0; i < feed.length; i++) {
     const item = feed[i];
     if (!item) continue;
-    // Keep the latest todos snapshot as a standalone in-feed card (not folded into activity).
+    // Plan progress belongs in the context sidebar above Files. Todos are
+    // state snapshots, not transcript content, so do not render duplicates.
     if (item.kind === "todos") {
-      flushGroup();
-      items.push({ kind: "feed-item", item });
       continue;
     }
     if (item.kind === "reasoning") {

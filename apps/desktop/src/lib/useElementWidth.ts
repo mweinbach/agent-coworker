@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 
-export function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>): number {
+export function useElementWidth<T extends HTMLElement>(ref: RefObject<T | null>): number {
   const [width, setWidth] = useState(0);
 
   useEffect(() => {

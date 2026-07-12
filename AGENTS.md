@@ -2,8 +2,6 @@
 
 agent-coworker is a coworker agent built on Bun + TypeScript (ESM) with a WebSocket server and CLI REPL.
 
-When you have access to subagents or agent teams, feel free to use them. Subagents are good for delegating tasks for searching and performing specific actions. Be specific with your delegation, and feel free to use them liberally.  
-
 All logic for the application should be done in the harness itself, consider the desktop app just a UI layer. The only things that should be specific to that are things that are relevant, like UI layout or platform-specific behavior. All logic on how the agent works on the users system, saves files, etc should be done in the harness THEN exposed and connected to the UI layers via the websocket.
 
 When you run into an issue, create tests to target the error. Then work on that error until the test passes. Make sure we have tests for all error cases to prevent regressions.
@@ -146,34 +144,27 @@ If something goes sideways, STOP and re-plan immediately don't keep pushing
 Use plan mode for verification steps, not just building
 Write detailed specs upfront to reduce ambiguity
 
-### 2. Subagent Strategy
-
-Use subagents liberally to keep main context window clean
-Offload research, exploration, and parallel analysis to subagents
-For complex problems, throw more compute at it via subagents
-One tack per subagent for focused execution
-
-### 3. Self-Improvement
+### 2. Self-Improvement
 
 After ANY correction from the user, distill the pattern into a durable rule and add it to the Engineering Rules section below.
 Apply existing rules before editing, not after.
 Review the rules at session start.
 
-### 4. Verification Before Done
+### 3. Verification Before Done
 
 Never mark a task complete without proving it works
 Diff behavior between main and your changes when relevant
 Ask yourself: "Would a staff engineer approve this?"
 Run tests, check logs, demonstrate correctness
 
-### 5. Demand Elegance (Balanced)
+### 4. Demand Elegance (Balanced)
 
 For non-trivial changes: pause and ask "is there a more elegant way?"
 If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
 Skip this for simple, obvious fixes don't over-engineer
 Challenge your own work before presenting it
 
-### 6. Autonomous Bug Fixing
+### 5. Autonomous Bug Fixing
 
 When given a bug report: just fix it. Don't ask for hand-holding Point at logs, errors, failing tests then resolve them
 Zero context switching required from the user

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { Locator } from "@playwright/test";
 
 import {
   assertKeyboardFocusJourney,
@@ -20,6 +21,56 @@ const delayedMentionWebfontPath = fileURLToPath(
 const delayedMentionWebfontBase64 = fs
   .readFile(delayedMentionWebfontPath)
   .then((contents) => contents.toString("base64"));
+
+async function measureReadingPoint(anchor: Locator, characterOffset?: number) {
+  return await anchor.evaluate((element, targetOffset) => {
+    const viewport = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+    if (!viewport) throw new Error("Conversation viewport is unavailable");
+    const document = element.ownerDocument;
+    let range: Range | null = null;
+
+    if (targetOffset === undefined) {
+      const caretDocument = document as Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      const viewportRect = viewport.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      range =
+        caretDocument.caretRangeFromPoint?.(
+          Math.max(viewportRect.left, elementRect.left) + 16,
+          Math.max(viewportRect.top, elementRect.top) + 1,
+        ) ?? null;
+    } else {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let remaining = targetOffset;
+      let node = walker.nextNode();
+      while (node) {
+        const textNode = node as Text;
+        if (remaining <= textNode.data.length) {
+          range = document.createRange();
+          range.setStart(textNode, remaining);
+          range.collapse(true);
+          break;
+        }
+        remaining -= textNode.data.length;
+        node = walker.nextNode();
+      }
+    }
+
+    if (!range || (range.startContainer !== element && !element.contains(range.startContainer))) {
+      throw new Error("Visible transcript reading point is unavailable");
+    }
+    const prefix = document.createRange();
+    prefix.selectNodeContents(element);
+    prefix.setEnd(range.startContainer, range.startOffset);
+    const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+    return {
+      characterOffset: prefix.toString().length,
+      offset: rect.top - viewport.getBoundingClientRect().top,
+      scrollTop: viewport.scrollTop,
+    };
+  }, characterOffset);
+}
 
 for (const mode of ["light", "dark", "system"] as const) {
   test.describe(`first launch ${mode}`, () => {
@@ -214,9 +265,6 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await showOlderButton.click();
   await settleQualityPage(page);
   const anchor = page.locator('[data-message-id="quality-long-0-1"]');
-  const readingPoint = anchor.getByText("Deterministic transcript run 0 message 2", {
-    exact: true,
-  });
   await expect(anchor).toBeAttached();
   await anchor.evaluate((element) => {
     const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
@@ -231,14 +279,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   });
   await expect(viewport).toHaveAttribute("data-scroll-mode", "detached");
   await settleQualityPage(page);
-  const before = await readingPoint.evaluate((element) => {
-    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
-    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
-    return {
-      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
-      scrollTop: viewportElement.scrollTop,
-    };
-  });
+  const before = await measureReadingPoint(anchor);
 
   const composer = page.getByRole("combobox", { name: "Message input" });
   await composer.fill("Keep this controlled draft while switching chats.");
@@ -254,28 +295,12 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await expect(anchor).toBeAttached();
   await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
   await expect
-    .poll(
-      async () =>
-        await readingPoint.evaluate((element) => {
-          const viewportElement = element.closest<HTMLElement>(
-            '[data-slot="message-scroller-viewport"]',
-          );
-          if (!viewportElement) throw new Error("Conversation viewport is unavailable");
-          return Math.round(
-            element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
-          );
-        }),
+    .poll(async () =>
+      Math.round((await measureReadingPoint(anchor, before.characterOffset)).offset),
     )
     .toBe(Math.round(before.offset));
   const navigationElapsedMs = performance.now() - navigationStartedAt;
-  const restored = await readingPoint.evaluate((element) => {
-    const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
-    if (!viewportElement) throw new Error("Conversation viewport is unavailable");
-    return {
-      offset: element.getBoundingClientRect().top - viewportElement.getBoundingClientRect().top,
-      scrollTop: viewportElement.scrollTop,
-    };
-  });
+  const restored = await measureReadingPoint(anchor, before.characterOffset);
   const sample = {
     anchorDriftAfterAwayArrivalPx: Math.abs(restored.offset - before.offset),
     appendElapsedMs,

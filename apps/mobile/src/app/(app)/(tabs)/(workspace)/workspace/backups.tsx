@@ -4,6 +4,10 @@ import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { useBackupStore } from "@/features/cowork/backupStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
@@ -24,6 +28,7 @@ export default function BackupsScreen() {
   const deleteEntry = useBackupStore((s) => s.deleteEntry);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [expandedCheckpointKey, setExpandedCheckpointKey] = useState<string | null>(null);
+  useAccessibilityAnnouncement(error ?? (loading ? "Loading backups" : null));
 
   useEffect(() => {
     if (isConnected) {
@@ -101,8 +106,12 @@ export default function BackupsScreen() {
       {error ? (
         <SectionCard title="Error" description={error}>
           <Pressable
+            accessibilityLabel="Retry loading backups"
+            accessibilityRole="button"
             onPress={() => void fetchBackups()}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               alignSelf: "flex-start",
               borderRadius: 999,
               backgroundColor: pressed ? theme.accent : theme.primary,
@@ -131,10 +140,14 @@ export default function BackupsScreen() {
             <View style={{ gap: 8 }}>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                 <Pressable
+                  accessibilityLabel={`Create checkpoint for ${backup.title ?? backup.targetSessionId}`}
+                  accessibilityRole="button"
                   onPress={() => {
                     void createCheckpoint(backup.targetSessionId);
                   }}
                   style={({ pressed }) => ({
+                    minHeight: minimumTouchTarget(),
+                    justifyContent: "center",
                     borderRadius: 999,
                     backgroundColor: pressed ? theme.accent : theme.primary,
                     paddingHorizontal: 12,
@@ -146,8 +159,12 @@ export default function BackupsScreen() {
                   </Text>
                 </Pressable>
                 <Pressable
+                  accessibilityLabel={`Restore original backup for ${backup.title ?? backup.targetSessionId}`}
+                  accessibilityRole="button"
                   onPress={() => handleRestoreOriginal(backup.targetSessionId)}
                   style={({ pressed }) => ({
+                    minHeight: minimumTouchTarget(),
+                    justifyContent: "center",
                     borderRadius: 999,
                     borderWidth: 1,
                     borderColor: theme.border,
@@ -161,8 +178,12 @@ export default function BackupsScreen() {
                   </Text>
                 </Pressable>
                 <Pressable
+                  accessibilityLabel={`Delete backup entry for ${backup.title ?? backup.targetSessionId}`}
+                  accessibilityRole="button"
                   onPress={() => handleDeleteEntry(backup.targetSessionId)}
                   style={({ pressed }) => ({
+                    minHeight: minimumTouchTarget(),
+                    justifyContent: "center",
                     borderRadius: 999,
                     borderWidth: 1,
                     borderColor: theme.danger,
@@ -215,8 +236,12 @@ export default function BackupsScreen() {
 
                     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                       <Pressable
+                        accessibilityLabel={`Restore checkpoint ${cp.index}`}
+                        accessibilityRole="button"
                         onPress={() => handleRestore(backup.targetSessionId, cp.id)}
                         style={({ pressed }) => ({
+                          minHeight: minimumTouchTarget(),
+                          justifyContent: "center",
                           borderRadius: 999,
                           backgroundColor: pressed ? theme.accent : theme.primary,
                           paddingHorizontal: 10,
@@ -228,6 +253,11 @@ export default function BackupsScreen() {
                         </Text>
                       </Pressable>
                       <Pressable
+                        accessibilityLabel={`${expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}` ? "Hide" : "Inspect"} delta for checkpoint ${cp.index}`}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          expanded: expandedCheckpointKey === `${backup.targetSessionId}:${cp.id}`,
+                        }}
                         onPress={() => {
                           const checkpointKey = `${backup.targetSessionId}:${cp.id}`;
                           setExpandedCheckpointKey((state) =>
@@ -238,6 +268,8 @@ export default function BackupsScreen() {
                           }
                         }}
                         style={({ pressed }) => ({
+                          minHeight: minimumTouchTarget(),
+                          justifyContent: "center",
                           borderRadius: 999,
                           borderWidth: 1,
                           borderColor: theme.border,
@@ -253,8 +285,12 @@ export default function BackupsScreen() {
                         </Text>
                       </Pressable>
                       <Pressable
+                        accessibilityLabel={`Delete checkpoint ${cp.index}`}
+                        accessibilityRole="button"
                         onPress={() => handleDelete(backup.targetSessionId, cp.id)}
                         style={({ pressed }) => ({
+                          minHeight: minimumTouchTarget(),
+                          justifyContent: "center",
                           borderRadius: 999,
                           borderWidth: 1,
                           borderColor: theme.danger,

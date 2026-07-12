@@ -1,6 +1,10 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
+import {
   buildActivityEntryPage,
   nextActivityPageStart,
   previousActivityPageStart,
@@ -99,7 +103,12 @@ function ReasoningSectionNode({
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
         accessibilityLabel={open ? `Collapse ${title}` : `Expand ${title}`}
-        style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+        style={{
+          minHeight: minimumTouchTarget(),
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 4,
+        }}
       >
         <Text
           selectable
@@ -326,9 +335,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Show earlier activity"
+            accessibilityState={{ disabled: page.hiddenBefore === 0 }}
             disabled={page.hiddenBefore === 0}
             onPress={() => setRequestedStartIndex(previousActivityPageStart(page))}
             hitSlop={8}
+            style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
           >
             <Text
               style={{
@@ -353,9 +364,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Show newer activity"
+            accessibilityState={{ disabled: page.hiddenAfter === 0 }}
             disabled={page.hiddenAfter === 0}
             onPress={() => setRequestedStartIndex(nextActivityPageStart(page))}
             hitSlop={8}
+            style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
           >
             <Text
               style={{
@@ -460,6 +473,7 @@ export function ActivityGroupCard({
           accessibilityState={{ expanded }}
           accessibilityLabel={expanded ? "Collapse activity details" : "Expand activity details"}
           style={{
+            minHeight: minimumTouchTarget(),
             flexDirection: "row",
             alignItems: "center",
             gap: 6,
@@ -514,6 +528,7 @@ export function ActivityGroupCard({
         accessibilityState={{ expanded }}
         accessibilityLabel={expanded ? "Collapse activity details" : "Expand activity details"}
         style={{
+          minHeight: minimumTouchTarget(),
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
@@ -529,8 +544,8 @@ export function ActivityGroupCard({
             color={isPendingReasoning ? theme.primary : theme.textTertiary}
           />
           <Text
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
             selectable
-            numberOfLines={1}
             style={{
               flex: 1,
               color: isPendingReasoning ? theme.textSecondary : theme.textSecondary,
@@ -571,7 +586,9 @@ export function ActivityGroupCard({
           disabled={retryDisabled || retrying}
           accessibilityRole="button"
           accessibilityLabel="Retry failed tool calls"
+          accessibilityState={{ busy: retrying, disabled: retryDisabled || retrying }}
           style={{
+            minHeight: minimumTouchTarget(),
             alignSelf: "flex-end",
             flexDirection: "row",
             alignItems: "center",

@@ -153,7 +153,7 @@
     {
       "includes": [
         "apps/mobile/src/components/thread/**",
-        "apps/mobile/src/app/(app)/settings/providers.tsx"
+        "apps/mobile/src/app/(app)/(tabs)/(settings)/settings/providers.tsx"
       ],
       "linter": {
         "rules": {
@@ -276,7 +276,7 @@
     {
       "includes": [
         "apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx",
-        "apps/mobile/src/app/(app)/thread/\\[id\\].tsx",
+        "apps/mobile/src/app/(app)/(tabs)/(chats)/thread/\\[id\\].tsx",
         "apps/mobile/src/features/cowork/providerStore.ts"
       ],
       "linter": {

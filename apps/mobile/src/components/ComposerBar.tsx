@@ -6,9 +6,13 @@ import {
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
-import { Platform, Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { alpha, palette } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -84,16 +88,17 @@ function ComposerActionButton({
   onStop: () => void;
 }) {
   const theme = useAppTheme();
-  const useLiquidGlass = Platform.OS === "ios" && isLiquidGlassAvailable();
+  const useLiquidGlass = process.env.EXPO_OS === "ios" && isLiquidGlassAvailable();
   const enabled = isBusy ? !isStopping : canSubmit;
   const action = isBusy ? onStop : onSubmit;
   const icon = isBusy ? "stop.fill" : "arrow.up";
   const actionLabel = isBusy ? (isStopping ? "Stopping turn" : "Stop turn") : accessibilityLabel;
   const fillColor = isBusy ? theme.danger : theme.primary;
+  const targetSize = minimumTouchTarget();
 
   if (useLiquidGlass) {
     return (
-      <Host matchContents style={{ width: 34, height: 34, marginBottom: 2 }}>
+      <Host matchContents style={{ width: targetSize, height: targetSize }}>
         <Button
           onPress={action}
           systemImage={icon}
@@ -117,9 +122,9 @@ function ComposerActionButton({
       accessibilityLabel={actionLabel}
       accessibilityState={{ disabled: !enabled, busy: isStopping }}
       style={{
-        width: 34,
-        height: 34,
-        borderRadius: 17,
+        width: targetSize,
+        height: targetSize,
+        borderRadius: targetSize / 2,
         borderCurve: "continuous",
         alignItems: "center",
         justifyContent: "center",
@@ -154,13 +159,16 @@ export function ComposerBar({
     isSubmitting,
     submitLabel,
   });
-  const shouldUseGlass = Platform.OS === "ios" && isLiquidGlassAvailable();
+  const shouldUseGlass = process.env.EXPO_OS === "ios" && isLiquidGlassAvailable();
   const glassColors = glassFallbackColors(theme.isDark);
 
   return (
     <View style={{ gap: 8 }}>
       {helperText ? (
         <Text
+          accessibilityLiveRegion="polite"
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.textTertiary,
@@ -214,13 +222,17 @@ export function ComposerBar({
           placeholder="Message…"
           placeholderTextColor={theme.textTertiary}
           accessibilityLabel="Message"
+          accessibilityHint={canEdit ? "Enter a message" : "Message editing is unavailable"}
+          accessibilityState={{ disabled: !canEdit }}
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           multiline
           style={{
             flex: 1,
             color: theme.text,
             fontSize: 16,
             lineHeight: 22,
-            minHeight: 36,
+            minHeight: minimumTouchTarget(),
             maxHeight: 120,
             paddingTop: 6,
             paddingBottom: 6,

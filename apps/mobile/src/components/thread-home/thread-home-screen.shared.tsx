@@ -21,6 +21,12 @@ import {
 } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
+import {
+  minimumTouchTarget,
+  runAccessibleLayoutAnimation,
+  useAccessibilityAnnouncement,
+  useReducedMotionEnabled,
+} from "@/features/accessibility/mobile-accessibility";
 import type { MobilePlatformContract } from "@/features/cowork/mobilePerformanceContracts";
 import { getMobileListPerformanceContract } from "@/features/cowork/mobilePerformanceContracts";
 import {
@@ -34,10 +40,7 @@ import { useThreadHome } from "@/features/cowork/useThreadHome";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-const SETTINGS_ACTIONS = [
-  { title: "Settings", icon: "slider.horizontal.3", href: "/settings" },
-  { title: "Workspace", icon: "square.grid.2x2", href: "/(app)/(tabs)/workspace" },
-  { title: "Skills", icon: "sparkles", href: "/(app)/(tabs)/skills" },
+const MENU_ACTIONS = [
   { title: "Remote access", icon: "iphone.and.arrow.forward", href: "/(pairing)" },
 ] as const;
 
@@ -119,7 +122,7 @@ function RowTextContent({
   return (
     <View
       style={{
-        minHeight: preview ? 62 : indent ? 46 : 50,
+        minHeight: preview ? 62 : minimumTouchTarget(),
         justifyContent: "center",
         paddingLeft: indent ? 45 : 16,
         paddingRight: 16,
@@ -127,16 +130,15 @@ function RowTextContent({
         gap: 3,
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 11 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 11 }}>
         {!indent ? <SFSymbol name="bubble.left.fill" size={18} color={theme.primary} /> : null}
         <Text
-          numberOfLines={1}
           selectable
           style={{
             color: theme.text,
             fontSize: indent ? 15 : 17,
-            fontFamily: theme.fontFamilySans,
             flex: 1,
+            minWidth: 160,
           }}
         >
           {title}
@@ -153,13 +155,11 @@ function RowTextContent({
       </View>
       {preview ? (
         <Text
-          numberOfLines={1}
           selectable
           style={{
             color: theme.textSecondary,
             fontSize: 13,
             paddingLeft: 29,
-            fontFamily: theme.fontFamilySans,
           }}
         >
           {preview}
@@ -195,12 +195,10 @@ function LoadMoreContent({
         <>
           <Text
             selectable
-            numberOfLines={2}
             style={{
               color: theme.danger,
               fontSize: 13,
               textAlign: "center",
-              fontFamily: theme.fontFamilySans,
             }}
           >
             {error}
@@ -241,7 +239,9 @@ function ThreadHomeRow({
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open chat ${row.thread.title}`}
+            accessibilityLabel={`Open chat ${row.thread.title}${
+              row.thread.pendingPrompt ? ", needs response" : ""
+            }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
               separatorStyle,
@@ -287,13 +287,12 @@ function ThreadHomeRow({
               color={theme.primary}
             />
             <Text
-              numberOfLines={1}
               selectable
               style={{
                 color: theme.text,
                 fontSize: 17,
-                fontFamily: theme.fontFamilySans,
                 flex: 1,
+                minWidth: 160,
               }}
             >
               {row.workspaceName}
@@ -317,7 +316,9 @@ function ThreadHomeRow({
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open chat ${row.thread.title}`}
+            accessibilityLabel={`Open chat ${row.thread.title}${
+              row.thread.pendingPrompt ? ", needs response" : ""
+            }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
               separatorStyle,
@@ -347,6 +348,9 @@ function ThreadHomeRow({
         <View style={shellStyle}>
           <Pressable
             disabled={row.loading}
+            accessibilityLabel={row.loading ? "Loading more chats" : row.label}
+            accessibilityRole="button"
+            accessibilityState={{ busy: row.loading, disabled: row.loading }}
             onPress={actions.onLoadMoreChats}
             style={({ pressed }) => [
               separatorStyle,
@@ -362,6 +366,9 @@ function ThreadHomeRow({
         <View style={shellStyle}>
           <Pressable
             disabled={row.loading}
+            accessibilityLabel={row.loading ? "Loading more project chats" : row.label}
+            accessibilityRole="button"
+            accessibilityState={{ busy: row.loading, disabled: row.loading }}
             onPress={() => actions.onLoadMoreProject(row.workspaceId)}
             style={({ pressed }) => [
               separatorStyle,
@@ -397,6 +404,7 @@ function SectionHeader({
   const theme = useAppTheme();
   return (
     <Text
+      accessibilityRole="header"
       style={{
         color: theme.textSecondary,
         fontSize: 13,
@@ -405,7 +413,6 @@ function SectionHeader({
         paddingHorizontal: 16,
         paddingTop: section.orderIndex === 0 ? 8 : 26,
         paddingBottom: 6,
-        fontFamily: theme.fontFamilySans,
         backgroundColor: theme.backgroundMuted,
       }}
     >
@@ -442,7 +449,6 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
             color: theme.text,
             fontSize: 15,
             fontWeight: "600",
-            fontFamily: theme.fontFamilySans,
           }}
         >
           Cowork Desktop disconnected
@@ -454,7 +460,6 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
             fontSize: 13,
             lineHeight: 18,
             paddingTop: 2,
-            fontFamily: theme.fontFamilySans,
           }}
         >
           {message}
@@ -486,7 +491,6 @@ function EmptyHomeState({ children }: { children: ReactNode }) {
           fontSize: 15,
           lineHeight: 21,
           textAlign: "center",
-          fontFamily: theme.fontFamilySans,
         }}
       >
         {children}
@@ -498,6 +502,7 @@ function EmptyHomeState({ children }: { children: ReactNode }) {
 export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformContract }) {
   const theme = useAppTheme();
   const router = useRouter();
+  const reducedMotionEnabled = useReducedMotionEnabled();
   const threadHome = useThreadHome();
   const {
     viewModel,
@@ -523,6 +528,11 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   const projectsFirst = viewModel.sectionOrder[0] === "projects";
   const showDisconnectedBanner = connectionStatus === "error" && hasTrustedDesktop;
   const disconnectedMessage = connectionLastError ?? "Tap to open Remote access and reconnect.";
+  const announcedError =
+    chatsError ??
+    Object.values(projectErrors)[0] ??
+    (showDisconnectedBanner ? disconnectedMessage : null);
+  useAccessibilityAnnouncement(announcedError);
 
   const setProjectError = useCallback((workspaceId: string, error: string | null) => {
     setProjectErrors((current) => {
@@ -553,7 +563,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
     useThreadStore.getState().seedThread();
     const draftId = useThreadStore.getState().selectedThreadId;
     if (draftId) {
-      router.push(`/(app)/thread/${draftId}` as const);
+      router.push(`/thread/${draftId}` as const);
     }
   }, [router]);
 
@@ -565,7 +575,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
       if (group) {
         expandWorkspace(group.workspace.id);
       }
-      router.push(`/(app)/thread/${threadId}` as const);
+      router.push(`/thread/${threadId}` as const);
     },
     [expandWorkspace, router, viewModel.projects],
   );
@@ -622,9 +632,10 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   const handleOpenThreadLatest = useLatestCallback(handleOpenThread);
   const handleToggleProject = useCallback(
     (workspaceId: string) => {
+      runAccessibleLayoutAnimation(reducedMotionEnabled);
       toggleWorkspaceExpanded(workspaceId);
     },
-    [toggleWorkspaceExpanded],
+    [reducedMotionEnabled, toggleWorkspaceExpanded],
   );
 
   const actions = useMemo<ThreadHomeRowActions>(
@@ -671,7 +682,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
       />
       <Stack.Toolbar placement="left">
         <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Open menu">
-          {SETTINGS_ACTIONS.map((action) => (
+          {MENU_ACTIONS.map((action) => (
             <Stack.Toolbar.MenuAction
               key={action.title}
               icon={action.icon}
@@ -682,7 +693,10 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
           ))}
           <Stack.Toolbar.MenuAction
             icon={projectsFirst ? "bubble.left.fill" : "folder.fill"}
-            onPress={() => reorderSections(0, 2)}
+            onPress={() => {
+              runAccessibleLayoutAnimation(reducedMotionEnabled);
+              reorderSections(0, 2);
+            }}
           >
             {projectsFirst ? "Show Chats first" : "Show Projects first"}
           </Stack.Toolbar.MenuAction>
@@ -696,6 +710,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
         />
       </Stack.Toolbar>
       <SectionList<ThreadHomeListRow, ThreadHomeListSection>
+        accessibilityLabel="Chats and workspaces"
         style={{ flex: 1, backgroundColor: theme.backgroundMuted }}
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 110 }}
         contentInsetAdjustmentBehavior="automatic"

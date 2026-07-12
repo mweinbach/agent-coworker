@@ -15,6 +15,7 @@ const ICON_MAP = {
   "bolt.fill": { family: "material", name: "bolt" },
   "brain.head.profile": { family: "community", name: "brain" },
   "bubble.left.fill": { family: "community", name: "message-text" },
+  "bubble.left.and.bubble.right": { family: "material", name: "forum" },
   "bubble.left.and.bubble.right.fill": { family: "material", name: "forum" },
   "bubble.left.and.exclamationmark.bubble.right.fill": {
     family: "community",
@@ -25,6 +26,7 @@ const ICON_MAP = {
   "checkmark.shield.fill": { family: "community", name: "shield-check" },
   "chevron.down": { family: "material", name: "keyboard-arrow-down" },
   "chevron.right": { family: "material", name: "keyboard-arrow-right" },
+  "chevron.up.chevron.down": { family: "material", name: "unfold-more" },
   checklist: { family: "material", name: "checklist" },
   clock: { family: "material", name: "schedule" },
   globe: { family: "material", name: "public" },
@@ -36,6 +38,7 @@ const ICON_MAP = {
   "desktopcomputer.and.arrow.down": { family: "community", name: "monitor-arrow-down" },
   "desktopcomputer.slash": { family: "community", name: "monitor-off" },
   "doc.text": { family: "material", name: "description" },
+  "doc.on.clipboard": { family: "material", name: "content-paste" },
   ellipsis: { family: "material", name: "more-horiz" },
   "ellipsis.circle": { family: "material", name: "more-horiz" },
   "ellipsis.message.fill": { family: "community", name: "message-processing" },
@@ -58,7 +61,9 @@ const ICON_MAP = {
   "qrcode.viewfinder": { family: "material", name: "qr-code-scanner" },
   "slider.horizontal.3": { family: "material", name: "tune" },
   sparkles: { family: "material", name: "auto-awesome" },
+  "square.and.pencil": { family: "material", name: "edit-square" },
   "square.grid.2x2": { family: "material", name: "grid-view" },
+  "stop.fill": { family: "material", name: "stop" },
   touchid: { family: "material", name: "fingerprint" },
   wifi: { family: "ionicons", name: "wifi" },
   xmark: { family: "material", name: "close" },
@@ -76,6 +81,8 @@ export function SFSymbol({ name, size = 20, color, style }: SFSymbolProps) {
   if (icon.family === "community") {
     return (
       <MaterialCommunityIcons
+        accessibilityElementsHidden
+        accessible={false}
         name={icon.name as keyof typeof MaterialCommunityIcons.glyphMap}
         size={size}
         color={color}
@@ -87,6 +94,8 @@ export function SFSymbol({ name, size = 20, color, style }: SFSymbolProps) {
   if (icon.family === "ionicons") {
     return (
       <Ionicons
+        accessibilityElementsHidden
+        accessible={false}
         name={icon.name as keyof typeof Ionicons.glyphMap}
         size={size}
         color={color}
@@ -97,6 +106,8 @@ export function SFSymbol({ name, size = 20, color, style }: SFSymbolProps) {
 
   return (
     <MaterialIcons
+      accessibilityElementsHidden
+      accessible={false}
       name={icon.name as keyof typeof MaterialIcons.glyphMap}
       size={size}
       color={color}

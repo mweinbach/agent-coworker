@@ -4,6 +4,10 @@ import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { useProviderStore } from "@/features/cowork/providerStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -22,8 +26,13 @@ function ChoicePill({
   const theme = useAppTheme();
   return (
     <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
       onPress={onPress}
       style={{
+        minHeight: minimumTouchTarget(),
+        justifyContent: "center",
         borderRadius: 999,
         borderCurve: "continuous",
         borderWidth: 1,
@@ -34,6 +43,7 @@ function ChoicePill({
       }}
     >
       <Text
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         style={{
           color: selected ? theme.primaryText : theme.text,
           fontSize: 13,
@@ -50,6 +60,8 @@ function SectionLabel({ children }: { children: string }) {
   const theme = useAppTheme();
   return (
     <Text
+      accessibilityRole="header"
+      maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
       style={{
         color: theme.textTertiary,
         fontSize: 11,
@@ -213,6 +225,9 @@ export default function WorkspaceGeneralScreen() {
               </Text>
             </View>
             <Switch
+              accessibilityLabel="Enable MCP integrations"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: enableMcp }}
               value={enableMcp}
               onValueChange={(value) => {
                 void applyWorkspaceDefaults({ enableMcp: value });
@@ -237,6 +252,9 @@ export default function WorkspaceGeneralScreen() {
               </Text>
             </View>
             <Switch
+              accessibilityLabel="Enable workspace backups"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: backupsEnabled }}
               value={backupsEnabled}
               onValueChange={(value) => {
                 void applyWorkspaceDefaults({ config: { backupsEnabled: value } });
@@ -322,6 +340,9 @@ export default function WorkspaceGeneralScreen() {
               </Text>
             </View>
             <Switch
+              accessibilityLabel="Enable native Google web search"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: Boolean(googleOptions?.nativeWebSearch) }}
               value={Boolean(googleOptions?.nativeWebSearch)}
               onValueChange={(value) => {
                 void applyWorkspaceDefaults({
@@ -382,11 +403,13 @@ export default function WorkspaceGeneralScreen() {
           <View style={{ gap: 8 }}>
             <SectionLabel>Preferred child model</SectionLabel>
             <TextInput
+              accessibilityLabel="Preferred child model"
               value={preferredChildModel}
               onChangeText={setPreferredChildModel}
               placeholder="gpt-5.4-mini"
               placeholderTextColor={theme.textTertiary}
               style={{
+                minHeight: minimumTouchTarget(),
                 borderRadius: 16,
                 borderWidth: 1,
                 borderColor: theme.border,
@@ -402,11 +425,13 @@ export default function WorkspaceGeneralScreen() {
           <View style={{ gap: 8 }}>
             <SectionLabel>Preferred child target</SectionLabel>
             <TextInput
+              accessibilityLabel="Preferred child model reference"
               value={preferredChildModelRef}
               onChangeText={setPreferredChildModelRef}
               placeholder="provider:model"
               placeholderTextColor={theme.textTertiary}
               style={{
+                minHeight: minimumTouchTarget(),
                 borderRadius: 16,
                 borderWidth: 1,
                 borderColor: theme.border,
@@ -423,6 +448,7 @@ export default function WorkspaceGeneralScreen() {
             <View style={{ gap: 8 }}>
               <SectionLabel>Allowed child targets</SectionLabel>
               <TextInput
+                accessibilityLabel="Allowed child model references"
                 value={allowedChildModelRefs}
                 onChangeText={setAllowedChildModelRefs}
                 placeholder="provider:model, provider:model"
@@ -445,10 +471,14 @@ export default function WorkspaceGeneralScreen() {
           ) : null}
 
           <Pressable
+            accessibilityLabel="Save routing defaults"
+            accessibilityRole="button"
             onPress={() => {
               void saveSubagentDefaults();
             }}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               alignSelf: "flex-start",
               borderRadius: 999,
               borderCurve: "continuous",

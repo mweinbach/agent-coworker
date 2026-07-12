@@ -12,6 +12,11 @@ export function hostPlatform(): NodeJS.Platform {
   return process.platform;
 }
 
+/** The single sanctioned read of the host architecture. */
+export function hostArch(): NodeJS.Architecture {
+  return process.arch;
+}
+
 export type DesktopPlatform = "windows" | "macos" | "linux" | "other";
 
 /**

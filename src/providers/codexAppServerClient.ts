@@ -107,6 +107,29 @@ function codexAppServerInitializeParams(): {
   };
 }
 
+/**
+ * Build the spawn environment for the managed Codex app-server. Strips every
+ * inherited `CODEX_*` variable before pinning `CODEX_HOME` so state from a
+ * standalone Codex install (`~/.codex`) can never leak into the Cowork-managed
+ * runtime: Windows environment names are case-insensitive, so a differently
+ * cased `Codex_Home` from a shell profile would otherwise ride along and can
+ * shadow the pinned value, and markers like `CODEX_SANDBOX` /
+ * `CODEX_COMPANION_SESSION_ID` from external Codex tooling would change the
+ * server's behavior.
+ */
+function buildCodexSpawnEnv(
+  baseEnv: Record<string, string | undefined>,
+  codexHome: string,
+): Record<string, string | undefined> {
+  const spawnEnv: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (/^CODEX_/i.test(key)) continue;
+    spawnEnv[key] = value;
+  }
+  spawnEnv.CODEX_HOME = codexHome;
+  return spawnEnv;
+}
+
 export async function startCodexAppServerClient(
   opts: CodexAppServerClientOptions = {},
 ): Promise<CodexAppServerClient> {
@@ -120,7 +143,7 @@ export async function startCodexAppServerClient(
   try {
     child = spawnCodexAppServer(command, {
       cwd: opts.cwd,
-      env: { ...baseEnv, CODEX_HOME: codexHome },
+      env: buildCodexSpawnEnv(baseEnv, codexHome),
     });
   } catch (error) {
     throw new Error(
@@ -543,6 +566,7 @@ export async function closePooledCodexAppServerClient(
 
 export const __internal = {
   resolveCodexHome,
+  buildCodexSpawnEnv,
   respondToServerRequest,
   setClientFactoryForTests(
     factory: ((opts: CodexAppServerClientOptions) => Promise<CodexAppServerClient>) | undefined,

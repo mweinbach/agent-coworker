@@ -165,6 +165,33 @@ setInterval(() => {}, 1000);
     expect((await fs.stat(expectedCodexHome)).isDirectory()).toBe(true);
   });
 
+  test("spawn env strips inherited CODEX_* variables case-insensitively", () => {
+    const codexHome = path.join("C:", "users", "example", ".cowork", "auth", "codex-cli");
+    const spawnEnv = __internal.buildCodexSpawnEnv(
+      {
+        PATH: "/usr/bin",
+        // Windows env names are case-insensitive: a differently cased
+        // CODEX_HOME from a shell profile must not shadow the pinned value.
+        Codex_Home: "C:\\Users\\example\\.codex",
+        codex_home: "/home/example/.codex",
+        CODEX_SANDBOX: "seatbelt",
+        CODEX_SANDBOX_NETWORK_DISABLED: "1",
+        CODEX_COMPANION_SESSION_ID: "abc-123",
+        CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "external-tool",
+        NOT_CODEX_PREFIXED: "kept",
+        MY_CODEX_TOOL: "kept-too",
+      },
+      codexHome,
+    );
+
+    expect(spawnEnv).toEqual({
+      PATH: "/usr/bin",
+      NOT_CODEX_PREFIXED: "kept",
+      MY_CODEX_TOOL: "kept-too",
+      CODEX_HOME: codexHome,
+    });
+  });
+
   test("falls back to older request handlers when newest handler declines request", async () => {
     const writes: string[] = [];
     const rawMessages: unknown[] = [];

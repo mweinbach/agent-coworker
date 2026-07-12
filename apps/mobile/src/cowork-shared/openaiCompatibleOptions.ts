@@ -17,20 +17,30 @@ export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
 export type EditableProviderOptionsProviderName =
   (typeof EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES)[number];
 
-// "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
-// and "maximum effort" respectively. They are mapped to API-specific parameters before
-// being sent to the provider and are not passed to the OpenAI API verbatim.
-export const OPENAI_REASONING_EFFORT_VALUES = ["none", "low", "medium", "high", "xhigh"] as const;
+// Keep this ladder in parity with the harness schema. Individual models expose
+// only the supported subset through provider-catalog reasoning metadata.
+export const OPENAI_REASONING_EFFORT_VALUES = [
+  "none",
+  "minimal",
+  "light",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type OpenAiReasoningEffort = (typeof OPENAI_REASONING_EFFORT_VALUES)[number];
 
 export const CATALOG_REASONING_EFFORT_VALUES = [
   "none",
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   "minimal",
+  "light",
   "low",
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 export type CatalogReasoningEffort = (typeof CATALOG_REASONING_EFFORT_VALUES)[number];
 

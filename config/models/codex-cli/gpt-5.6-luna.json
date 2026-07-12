@@ -1,0 +1,15 @@
+{
+  "id": "gpt-5.6-luna",
+  "provider": "codex-cli",
+  "displayName": "GPT-5.6 Luna (Codex CLI)",
+  "knowledgeCutoff": "February 16, 2026",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gpt-5.5.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+  "isDefault": false
+}

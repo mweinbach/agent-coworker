@@ -82,6 +82,42 @@ async function createFakeCodexBin(prefix: string, name = "codex"): Promise<strin
 }
 
 describe("codex app-server resolver", () => {
+  test("pins the GPT-5.6-capable stable release and all supported asset digests", () => {
+    expect(CODEX_APP_SERVER_MANAGED_VERSION).toBe("0.144.0");
+    const expected = {
+      "darwin-arm64": [
+        "codex-app-server-aarch64-apple-darwin.tar.gz",
+        "982f3a687dc8266580770da68dfe661d7a4825773737f23a7e74e15ab0866da9",
+      ],
+      "darwin-x64": [
+        "codex-app-server-x86_64-apple-darwin.tar.gz",
+        "e358b666be9f0d9dd2b0c1678ec0b9b0ef621df68ba0a4f91e7879a4da400561",
+      ],
+      "linux-arm64": [
+        "codex-app-server-aarch64-unknown-linux-musl.tar.gz",
+        "eebfa18d883c76874dd3c16ecc2cf914ba22c89418e97a6a5ef81c3b9786ac92",
+      ],
+      "linux-x64": [
+        "codex-app-server-x86_64-unknown-linux-musl.tar.gz",
+        "3ea7c729d7c5107ba53fef17ba1f74ed19078b79f7bafd16eafc4a3576362187",
+      ],
+      "win32-arm64": [
+        "codex-app-server-aarch64-pc-windows-msvc.exe",
+        "3eee2fbd3b9ec94709a84699dc86d39b2ba6d895882f42b3809aaabb9530b3a2",
+      ],
+      "win32-x64": [
+        "codex-app-server-x86_64-pc-windows-msvc.exe",
+        "197f96d25723726cfc060a7accdba3708d3fc38dbbb11c46c96fd217b8595fb3",
+      ],
+    } as const;
+
+    for (const [targetKey, [assetName, digest]] of Object.entries(expected)) {
+      const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
+      expect(__internal.resolveCodexAppServerAssetName({ platform, arch })).toBe(assetName);
+      expect(__internal.expectedCodexAssetChecksum("0.144.0", assetName, {})).toBe(digest);
+    }
+  });
+
   test.serial(
     "uses explicit command overrides without adding implicit app-server args",
     async () => {

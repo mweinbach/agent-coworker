@@ -19,6 +19,9 @@ import codexCliGpt53CodexSpark from "../../config/models/codex-cli/gpt-5.3-codex
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import codexCliGpt55 from "../../config/models/codex-cli/gpt-5.5.json";
+import codexCliGpt56Luna from "../../config/models/codex-cli/gpt-5.6-luna.json";
+import codexCliGpt56Sol from "../../config/models/codex-cli/gpt-5.6-sol.json";
+import codexCliGpt56Terra from "../../config/models/codex-cli/gpt-5.6-terra.json";
 import firepassKimiK2p6Turbo from "../../config/models/firepass/accounts-fireworks-routers-kimi-k2p6-turbo.json";
 import fireworksDeepseekV4Pro from "../../config/models/fireworks/accounts-fireworks-models-deepseek-v4-pro.json";
 import fireworksGlm5p1 from "../../config/models/fireworks/accounts-fireworks-models-glm-5p1.json";
@@ -167,6 +170,9 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   basetenNvidiaNemotron120bA12b,
   basetenZaiOrgGlm5,
   codexCliGpt55,
+  codexCliGpt56Sol,
+  codexCliGpt56Terra,
+  codexCliGpt56Luna,
   codexCliGpt54,
   codexCliGpt54Mini,
   codexCliGpt53CodexSpark,

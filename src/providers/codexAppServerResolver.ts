@@ -77,7 +77,7 @@ const CODEX_RELEASES_LATEST_URL = "https://api.github.com/repos/openai/codex/rel
 const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/releases/tags";
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-export const CODEX_APP_SERVER_MANAGED_VERSION = "0.142.3";
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.144.0";
 const MANAGED_CODEX_APP_SERVER_ARGS: readonly string[] = [];
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
@@ -95,6 +95,20 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
 const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.144.0": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "982f3a687dc8266580770da68dfe661d7a4825773737f23a7e74e15ab0866da9",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "e358b666be9f0d9dd2b0c1678ec0b9b0ef621df68ba0a4f91e7879a4da400561",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "eebfa18d883c76874dd3c16ecc2cf914ba22c89418e97a6a5ef81c3b9786ac92",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "3ea7c729d7c5107ba53fef17ba1f74ed19078b79f7bafd16eafc4a3576362187",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "3eee2fbd3b9ec94709a84699dc86d39b2ba6d895882f42b3809aaabb9530b3a2",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "197f96d25723726cfc060a7accdba3708d3fc38dbbb11c46c96fd217b8595fb3",
+  },
   "0.142.3": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
       "69167dbcbfa6c2bfa6cffd9f3aab785fbf5f7ea655e1b2ac5a47fa5aec0bb6ed",
@@ -199,7 +213,7 @@ function normalizeCodexReleaseVersion(tagName: string): string {
 function normalizeCodexVersionInput(version: string): string {
   const normalized = normalizeCodexReleaseVersion(version.trim());
   if (!CODEX_VERSION_PATTERN.test(normalized)) {
-    throw new Error("Codex app-server version must look like 0.142.3.");
+    throw new Error("Codex app-server version must look like 0.144.0.");
   }
   return normalized;
 }
@@ -786,6 +800,7 @@ export const __internal = {
   parseCodexVersion,
   compareVersions,
   resolveCodexAppServerAssetName,
+  expectedCodexAssetChecksum,
   managedExecutablePath,
   managedCurrentPath,
   installCodexAppServer,

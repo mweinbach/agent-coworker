@@ -172,6 +172,49 @@ describe("canvas window lifecycle", () => {
     }
   });
 
+  test.serial("keeps canvas chrome available when a resize hides the overlay rail", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 1_240,
+        writable: true,
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const createdRoot = createRoot(container);
+      root = createdRoot;
+
+      await act(async () => {
+        createdRoot.render(createElement(App));
+        await flushUi();
+      });
+      expect(
+        harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
+      ).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.innerWidth = 800;
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize"));
+        await flushUi();
+      });
+
+      expect(useAppStore.getState().filePreview).not.toBeNull();
+      expect(
+        harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
+      ).not.toBeNull();
+    } finally {
+      if (root) {
+        const mountedRoot = root;
+        await act(async () => {
+          mountedRoot.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test.serial(
     "does not expose spreadsheet pop-out while the embedded editor is active",
     async () => {

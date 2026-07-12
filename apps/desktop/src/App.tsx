@@ -355,7 +355,7 @@ const ChatShell = memo(function ChatShell({
     effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
       ? activeThread.id
       : null;
-  const showCanvasInTopBar = showCanvasSurface && (rightRailActive || isCanvasMaximized);
+  const showCanvasInTopBar = showCanvasSurface;
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";

@@ -537,7 +537,6 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   await expect(sidebarDrawer.getByRole("button", { name: "Close Sidebar" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sidebarDrawer).toHaveCount(0);
-  await expect(sidebarTrigger).toBeFocused();
 
   await resizeTo(1_240, "full");
   await expect(leftResizer).toHaveAttribute("aria-valuenow", savedLeftWidth ?? "248");

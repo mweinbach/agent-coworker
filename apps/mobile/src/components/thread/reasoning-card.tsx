@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -20,7 +24,15 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
   return (
     <Pressable
       onPress={isLong ? () => setExpanded(!expanded) : undefined}
+      accessibilityRole={isLong ? "button" : undefined}
+      accessibilityLabel={
+        isLong
+          ? `${expanded ? "Collapse" : "Expand"} ${mode === "summary" ? "summary" : "reasoning"}`
+          : undefined
+      }
+      accessibilityState={isLong ? { expanded } : undefined}
       style={{
+        minHeight: minimumTouchTarget(),
         gap: 8,
         borderRadius: radius.xl,
         borderCurve: "continuous",
@@ -33,6 +45,7 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
     >
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textTertiary,
             fontSize: 11,
@@ -50,6 +63,7 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
         ) : null}
       </View>
       <Text
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         selectable
         style={{
           color: theme.textSecondary,

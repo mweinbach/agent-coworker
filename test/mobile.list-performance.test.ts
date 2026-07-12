@@ -200,7 +200,7 @@ describe("mobile long-list performance contracts", () => {
     const [activitySource, threadSource, homeSource, iosWrapper, androidWrapper] =
       await Promise.all([
         Bun.file("apps/mobile/src/components/thread/activity-group-card.tsx").text(),
-        Bun.file("apps/mobile/src/app/(app)/thread/[id].tsx").text(),
+        Bun.file("apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id].tsx").text(),
         Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.shared.tsx").text(),
         Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.ios.tsx").text(),
         Bun.file("apps/mobile/src/components/thread-home/thread-home-screen.tsx").text(),

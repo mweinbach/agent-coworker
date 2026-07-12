@@ -201,6 +201,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - Run the same lane CI runs (`bun test --max-concurrency 1` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite.
 - For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
+- For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.
 - Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
 
 ### Repo-Specific Contracts

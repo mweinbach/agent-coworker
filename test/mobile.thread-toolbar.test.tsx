@@ -66,6 +66,17 @@ mockLocalModule(
   }),
 );
 
+mockLocalModule(
+  "@/features/accessibility/mobile-accessibility",
+  "apps/mobile/src/features/accessibility/mobile-accessibility",
+  () => ({
+    MAX_DYNAMIC_TYPE_MULTIPLIER: 2,
+    minimumTouchTarget: () => 48,
+    useAccessibilityAnnouncement: () => undefined,
+    useReducedMotionEnabled: () => false,
+  }),
+);
+
 mockLocalModule("@/theme/use-app-theme", "apps/mobile/src/theme/use-app-theme", () => ({
   useAppTheme: () => ({
     border: "#111",
@@ -197,7 +208,8 @@ mockLocalModule(
   () => ({ useDisplayPreferencesStore: () => false }),
 );
 
-const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/thread/[id]")).default;
+const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id]"))
+  .default;
 
 async function renderScreen() {
   const harness = setupJsdom();

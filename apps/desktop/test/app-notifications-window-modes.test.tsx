@@ -406,12 +406,17 @@ describe("app window-mode notification routing", () => {
     }
   });
 
-  test("settings still handles sidebar commands while the chat shell is unmounted", async () => {
+  test("settings handles sidebar commands with its local narrow navigation drawer", async () => {
     const harness = setupJsdom();
     const toggleSidebar = mock(() => {});
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 680,
+        writable: true,
+      });
       seedReadyState();
       useAppStore.setState({ view: "settings", toggleSidebar } as never);
       const container = harness.dom.window.document.getElementById("root");
@@ -421,9 +426,16 @@ describe("app window-mode notification routing", () => {
       await act(async () => {
         root?.render(createElement(App));
       });
+      const navigation = container.querySelector<HTMLElement>(
+        '[role="dialog"][aria-label="Settings navigation"]',
+      );
+      expect(navigation?.getAttribute("aria-hidden")).toBe("true");
+
       await act(async () => requestDesktopRailCommand("toggle-sidebar"));
 
-      expect(toggleSidebar).toHaveBeenCalledTimes(1);
+      expect(navigation?.hasAttribute("aria-hidden")).toBe(false);
+      expect(navigation?.hasAttribute("inert")).toBe(false);
+      expect(toggleSidebar).not.toHaveBeenCalled();
     } finally {
       if (root) {
         await act(async () => root?.unmount());

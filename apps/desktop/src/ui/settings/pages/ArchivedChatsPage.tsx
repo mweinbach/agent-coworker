@@ -116,7 +116,7 @@ export function ArchivedChatsPage() {
         <SettingsEmptyState
           icon={<ArchiveIcon />}
           title="No archived chats"
-          description="Archived chats will be stored here. You can archive any chat from the sidebar by hovering over its date label."
+          description="Archived chats will be stored here. Use a chat's More actions menu in the sidebar to archive it."
         />
       ) : (
         <SettingsSection

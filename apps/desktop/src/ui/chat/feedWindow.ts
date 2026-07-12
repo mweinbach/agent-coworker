@@ -1,9 +1,19 @@
 import type { FeedItem } from "../../app/types";
+import { filterFeedForDeveloperMode } from "./chatLogic";
+import { isHiddenRetryTurnMessage } from "./chatRetry";
+import { normalizeFeedForToolCards } from "./toolCards/legacyToolLogs";
 
 export type FeedDerivationWindowState = {
   feedLength: number;
   visibleCount: number;
 };
+
+export function prepareFeedDerivationFeed(feed: FeedItem[], developerMode: boolean): FeedItem[] {
+  return filterFeedForDeveloperMode(
+    normalizeFeedForToolCards(feed, developerMode),
+    developerMode,
+  ).filter((item) => item.kind !== "todos" && !isHiddenRetryTurnMessage(item));
+}
 
 export function resolveFeedDerivationVisibleCount(
   state: FeedDerivationWindowState | undefined,

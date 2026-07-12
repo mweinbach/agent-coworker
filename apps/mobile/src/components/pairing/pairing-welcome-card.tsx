@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 
 import { AppButton } from "@/components/ui/app-button";
 import { SFSymbol } from "@/components/ui/sf-symbol";
+import { MAX_DYNAMIC_TYPE_MULTIPLIER } from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type PairingWelcomeCardProps = {
@@ -19,6 +20,8 @@ export function PairingWelcomeCard({ title, body }: PairingWelcomeCardProps) {
       <SFSymbol name="macbook.and.iphone" size={52} color={theme.textSecondary} />
       <View style={{ alignItems: "center", gap: 8, width: "100%" }}>
         <Text
+          accessibilityRole="header"
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.text,
@@ -30,6 +33,7 @@ export function PairingWelcomeCard({ title, body }: PairingWelcomeCardProps) {
           {title}
         </Text>
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.textSecondary,

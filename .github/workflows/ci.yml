@@ -335,5 +335,8 @@ jobs:
           grep -q '"packageName":"cowork-pinned-https"' "$RUNNER_TEMP/mobile-autolinking-android.json"
           grep -q '"co.weinbach.cowork.mobile.pinnedhttps.CoworkPinnedHttpsModule"' "$RUNNER_TEMP/mobile-autolinking-android.json"
 
-      - name: Export mobile bundle
-        run: cd apps/mobile && bunx expo export --platform ios --output-dir dist-export-ci
+      - name: Export iOS mobile bundle
+        run: cd apps/mobile && bunx expo export --platform ios --output-dir "$RUNNER_TEMP/cowork-mobile-ios" --clear
+
+      - name: Export Android mobile bundle
+        run: cd apps/mobile && bunx expo export --platform android --output-dir "$RUNNER_TEMP/cowork-mobile-android" --clear

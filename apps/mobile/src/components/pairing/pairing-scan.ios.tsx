@@ -13,6 +13,11 @@ import { Stack, useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import { Alert, Pressable, Text as RNText, TextInput, View } from "react-native";
 
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { validatePairingPayload } from "@/features/pairing/qrValidation";
 import { createPairingScanHandler } from "@/features/pairing/scanHandler";
@@ -42,6 +47,7 @@ function CameraScanner({
         }}
       >
         <CameraView
+          accessibilityLabel="QR code scanner camera"
           style={{ flex: 1 }}
           facing="back"
           barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
@@ -87,6 +93,9 @@ export function PairingScanIos() {
   const pairingInFlight =
     scannedPayload !== null &&
     (connectionState.status === "pairing" || connectionState.status === "connecting");
+  useAccessibilityAnnouncement(
+    connectionState.lastError ?? (pairingInFlight ? "Connecting to your Mac" : null),
+  );
 
   if (!scanHandlerRef.current) {
     scanHandlerRef.current = createPairingScanHandler({
@@ -94,7 +103,7 @@ export function PairingScanIos() {
       connectWithQr,
       setScannedPayload,
       onSuccess: () => {
-        router.replace("/(app)/(tabs)/threads");
+        router.replace("/threads");
       },
       onInvalidPayload: (message) => {
         Alert.alert("Invalid QR", message);
@@ -127,8 +136,12 @@ export function PairingScanIos() {
               hitSlop={12}
               accessibilityRole="button"
               accessibilityLabel="Cancel"
+              style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
             >
-              <RNText style={{ color: theme.primary, fontSize: 17, fontWeight: "400" }}>
+              <RNText
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                style={{ color: theme.primary, fontSize: 17, fontWeight: "400" }}
+              >
                 Cancel
               </RNText>
             </Pressable>
@@ -202,6 +215,9 @@ export function PairingScanIos() {
             <RNHostView matchContents>
               <View style={{ minHeight: 88, justifyContent: "center", paddingHorizontal: 16 }}>
                 <TextInput
+                  accessibilityLabel="Pairing key"
+                  accessibilityHint="Paste the pairing key from Cowork Desktop"
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
                   value={manualPayload}
                   onChangeText={setManualPayload}
                   placeholder="cowork-pair://…"

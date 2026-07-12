@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { GroupedSection } from "@/components/pairing/grouped-list";
-import { Screen } from "@/components/ui/screen";
-import { SectionCard } from "@/components/ui/section-card";
+import { GroupedScreen, GroupedSection } from "@/components/pairing/grouped-list";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { useSkillsStore } from "@/features/cowork/skillsStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -37,6 +39,7 @@ export default function SkillsScreen() {
   const workspaceLoading = useWorkspaceStore((s) => s.loading);
   const [sourceInput, setSourceInput] = useState("");
   const [targetScope, setTargetScope] = useState<"project" | "global">("project");
+  useAccessibilityAnnouncement(error);
 
   useEffect(() => {
     if (isConnected && activeWorkspaceCwd) {
@@ -46,49 +49,55 @@ export default function SkillsScreen() {
 
   if (!isConnected) {
     return (
-      <Screen scroll>
-        <SectionCard title="Skills" description="Connect to a desktop to manage skills.">
-          <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
+      <GroupedScreen>
+        <GroupedSection title="Availability" footer="Connect to a desktop to manage skills.">
+          <Text
+            selectable
+            style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 21, padding: 16 }}
+          >
             Skills catalog will load here once connected to a workspace.
           </Text>
-        </SectionCard>
-      </Screen>
+        </GroupedSection>
+      </GroupedScreen>
     );
   }
 
   if (!activeWorkspaceCwd) {
     return (
-      <Screen scroll>
-        <SectionCard
-          title="Skills"
-          description={
+      <GroupedScreen>
+        <GroupedSection
+          title="Availability"
+          footer={
             workspaceLoading
               ? "Loading the active workspace from the desktop."
               : "No active workspace is available from the desktop yet."
           }
         >
-          <View style={{ gap: 12 }}>
+          <View style={{ gap: 12, padding: 16 }}>
             {workspaceLoading ? <ActivityIndicator color={theme.primary} /> : null}
             <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
               Skills will load once the desktop sends the active workspace context.
             </Text>
           </View>
-        </SectionCard>
-      </Screen>
+        </GroupedSection>
+      </GroupedScreen>
     );
   }
 
   return (
-    <Screen scroll contentStyle={{ gap: 18 }}>
-      <SectionCard
+    <GroupedScreen contentStyle={{ gap: 18 }}>
+      <GroupedSection
         title="Workspace skills"
-        description="Install from skills.sh, GitHub, or local paths, then inspect what is actually effective in the active workspace."
+        footer="Install from skills.sh, GitHub, or local paths, then inspect what is actually effective in the active workspace."
       >
-        <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
+        <Text
+          selectable
+          style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21, padding: 16 }}
+        >
           This is the same managed skill surface the desktop control session exposes, now reachable
           directly from a top-level mobile page.
         </Text>
-      </SectionCard>
+      </GroupedSection>
 
       {loading && skills.length === 0 ? (
         <View style={{ padding: 40, alignItems: "center" }}>
@@ -96,19 +105,21 @@ export default function SkillsScreen() {
         </View>
       ) : null}
 
-      <SectionCard
+      <GroupedSection
         title="Install skill"
-        description="Preview or install from skills.sh, GitHub, or a local path."
+        footer="Preview or install from skills.sh, GitHub, or a local path."
       >
-        <View style={{ gap: 10 }}>
+        <View style={{ gap: 10, padding: 16 }}>
           <TextInput
             value={sourceInput}
             onChangeText={setSourceInput}
             placeholder="skills.sh slug, GitHub URL, or local path"
             placeholderTextColor={theme.textTertiary}
+            accessibilityLabel="Skill source"
             autoCapitalize="none"
             autoCorrect={false}
             style={{
+              minHeight: minimumTouchTarget(),
               borderRadius: 14,
               borderWidth: 1,
               borderColor: theme.border,
@@ -124,7 +135,14 @@ export default function SkillsScreen() {
               <Pressable
                 key={scope}
                 onPress={() => setTargetScope(scope)}
+                accessibilityLabel={
+                  scope === "project" ? "Install for workspace" : "Install for user"
+                }
+                accessibilityRole="radio"
+                accessibilityState={{ selected: targetScope === scope }}
                 style={{
+                  minHeight: minimumTouchTarget(),
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderWidth: 1,
                   borderColor: targetScope === scope ? theme.primary : theme.border,
@@ -146,11 +164,17 @@ export default function SkillsScreen() {
           </View>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             <Pressable
+              accessibilityLabel="Preview skill installation"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !sourceInput.trim() }}
+              disabled={!sourceInput.trim()}
               onPress={() => {
                 if (!sourceInput.trim()) return;
                 void previewInstall(sourceInput.trim(), targetScope);
               }}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: 999,
                 borderWidth: 1,
                 borderColor: theme.border,
@@ -162,13 +186,21 @@ export default function SkillsScreen() {
               <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>Preview</Text>
             </Pressable>
             <Pressable
+              accessibilityLabel={mutationPending.install ? "Installing skill" : "Install skill"}
+              accessibilityRole="button"
+              accessibilityState={{
+                busy: Boolean(mutationPending.install),
+                disabled: Boolean(mutationPending.install) || !sourceInput.trim(),
+              }}
               onPress={() => {
                 if (!sourceInput.trim()) return;
                 void installSkill(sourceInput.trim(), targetScope);
                 setSourceInput("");
               }}
-              disabled={Boolean(mutationPending.install)}
+              disabled={Boolean(mutationPending.install) || !sourceInput.trim()}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: 999,
                 backgroundColor: pressed ? theme.accent : theme.primary,
                 paddingHorizontal: 14,
@@ -181,14 +213,14 @@ export default function SkillsScreen() {
             </Pressable>
           </View>
         </View>
-      </SectionCard>
+      </GroupedSection>
 
       {installPreview ? (
-        <SectionCard
+        <GroupedSection
           title="Install preview"
-          description={`${installPreview.candidates.length} candidate skills`}
+          footer={`${installPreview.candidates.length} candidate skills`}
         >
-          <View style={{ gap: 8 }}>
+          <View style={{ gap: 8, padding: 16 }}>
             {installPreview.warnings.map((warning) => (
               <Text key={warning} style={{ color: theme.warning, fontSize: 13, lineHeight: 18 }}>
                 {warning}
@@ -220,24 +252,32 @@ export default function SkillsScreen() {
               </View>
             ))}
           </View>
-        </SectionCard>
+        </GroupedSection>
       ) : null}
 
       {error ? (
-        <SectionCard title="Error" description={error}>
-          <Pressable
-            onPress={() => void fetchSkills()}
-            style={({ pressed }) => ({
-              alignSelf: "flex-start",
-              borderRadius: 999,
-              backgroundColor: pressed ? theme.accent : theme.primary,
-              paddingHorizontal: 16,
-              paddingVertical: 11,
-            })}
-          >
-            <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Retry</Text>
-          </Pressable>
-        </SectionCard>
+        <View accessibilityLiveRegion="assertive" accessibilityRole="alert">
+          <GroupedSection title="Error" footer={error}>
+            <View style={{ padding: 16 }}>
+              <Pressable
+                accessibilityLabel="Retry loading skills"
+                accessibilityRole="button"
+                onPress={() => void fetchSkills()}
+                style={({ pressed }) => ({
+                  minHeight: minimumTouchTarget(),
+                  justifyContent: "center",
+                  alignSelf: "flex-start",
+                  borderRadius: 999,
+                  backgroundColor: pressed ? theme.accent : theme.primary,
+                  paddingHorizontal: 16,
+                  paddingVertical: 11,
+                })}
+              >
+                <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Retry</Text>
+              </Pressable>
+            </View>
+          </GroupedSection>
+        </View>
       ) : null}
 
       {installations.length > 0 ? (
@@ -273,7 +313,7 @@ export default function SkillsScreen() {
                       {installation.name}
                     </Text>
                     {installation.description ? (
-                      <Text numberOfLines={2} style={{ color: theme.textSecondary, fontSize: 13 }}>
+                      <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
                         {installation.description}
                       </Text>
                     ) : null}
@@ -289,6 +329,9 @@ export default function SkillsScreen() {
                   <StatusPill label={installation.scope} tone="neutral" />
                   {installation.effective ? <StatusPill label="effective" tone="primary" /> : null}
                   <Pressable
+                    accessibilityLabel={`${installation.enabled ? "Disable" : "Enable"} ${installation.name}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: installation.enabled }}
                     onPress={() => {
                       void (installation.enabled
                         ? disableInstallation(installation.installationId)
@@ -296,6 +339,8 @@ export default function SkillsScreen() {
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -309,11 +354,15 @@ export default function SkillsScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Inspect ${installation.name}`}
+                    accessibilityRole="button"
                     onPress={() => {
                       void readInstallation(installation.installationId);
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -327,11 +376,15 @@ export default function SkillsScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Check ${installation.name} for updates`}
+                    accessibilityRole="button"
                     onPress={() => {
                       void checkInstallationUpdate(installation.installationId);
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -345,11 +398,15 @@ export default function SkillsScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Copy ${installation.name} to ${copyScope === "project" ? "workspace" : "user"}`}
+                    accessibilityRole="button"
                     onPress={() => {
                       void copyInstallation(installation.installationId, copyScope);
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -363,11 +420,15 @@ export default function SkillsScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Delete ${installation.name}`}
+                    accessibilityRole="button"
                     onPress={() => {
                       void deleteInstallation(installation.installationId);
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.danger,
@@ -396,10 +457,14 @@ export default function SkillsScreen() {
                     </Text>
                     {updateCheck.canUpdate ? (
                       <Pressable
+                        accessibilityLabel={`Update ${installation.name}`}
+                        accessibilityRole="button"
                         onPress={() => {
                           void updateInstallation(installation.installationId);
                         }}
                         style={({ pressed }) => ({
+                          minHeight: minimumTouchTarget(),
+                          justifyContent: "center",
                           alignSelf: "flex-start",
                           borderRadius: 999,
                           backgroundColor: pressed ? theme.accent : theme.primary,
@@ -428,9 +493,9 @@ export default function SkillsScreen() {
           })}
         </GroupedSection>
       ) : !loading ? (
-        <SectionCard
+        <GroupedSection
           title="No installations"
-          description="No managed skills are installed in this workspace yet."
+          footer="No managed skills are installed in this workspace yet."
         />
       ) : null}
 
@@ -491,6 +556,6 @@ export default function SkillsScreen() {
           })}
         </GroupedSection>
       ) : null}
-    </Screen>
+    </GroupedScreen>
   );
 }

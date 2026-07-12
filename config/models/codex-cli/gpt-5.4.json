@@ -11,5 +11,5 @@
     "textVerbosity": "medium"
   },
   "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
-  "isDefault": true
+  "isDefault": false
 }

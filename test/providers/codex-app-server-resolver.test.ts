@@ -12,16 +12,20 @@ import {
   updateManagedCodexAppServer,
 } from "../../src/providers/codexAppServerResolver";
 
-// fakeReleaseFetch serves the literal bytes "managed app-server" for downloads.
+// fakeReleaseFetch serves the literal bytes "managed app-server" for app-server
+// downloads and "managed code-mode host" for codex-code-mode-host downloads.
 // The resolver now verifies downloaded assets against a pinned SHA-256, so the
 // install plumbing tests inject the matching checksum via the expectedChecksums
 // override (production verifies against the repo-pinned map instead).
 const FAKE_ASSET_SHA256 = createHash("sha256").update("managed app-server").digest("hex");
+const FAKE_HOST_ASSET_SHA256 = createHash("sha256").update("managed code-mode host").digest("hex");
 const FAKE_ASSET_CHECKSUMS: Record<string, string> = {
   "codex-app-server-x86_64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
   "codex-app-server-aarch64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
   "codex-app-server-x86_64-apple-darwin.tar.gz": FAKE_ASSET_SHA256,
   "codex-app-server-aarch64-apple-darwin.tar.gz": FAKE_ASSET_SHA256,
+  "codex-code-mode-host-x86_64-pc-windows-msvc.exe": FAKE_HOST_ASSET_SHA256,
+  "codex-code-mode-host-aarch64-pc-windows-msvc.exe": FAKE_HOST_ASSET_SHA256,
 };
 
 const previousCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
@@ -64,10 +68,17 @@ function fakeReleaseFetch(
               name: "codex-app-server-aarch64-apple-darwin.tar.gz",
               browser_download_url: "https://example.test/codex-app-server.tar.gz",
             },
+            {
+              name: "codex-code-mode-host-x86_64-pc-windows-msvc.exe",
+              browser_download_url: "https://example.test/codex-code-mode-host.exe",
+            },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
+    }
+    if (url.includes("code-mode-host")) {
+      return new Response("managed code-mode host", { status: 200 });
     }
     return new Response("managed app-server", { status: 200 });
   }) as typeof fetch;
@@ -114,6 +125,39 @@ describe("codex app-server resolver", () => {
     for (const [targetKey, [assetName, digest]] of Object.entries(expected)) {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodexAppServerAssetName({ platform, arch })).toBe(assetName);
+      expect(__internal.expectedCodexAssetChecksum("0.144.0", assetName, {})).toBe(digest);
+    }
+
+    const expectedHosts = {
+      "darwin-arm64": [
+        "codex-code-mode-host-aarch64-apple-darwin.tar.gz",
+        "6cf9282430befe541369c7cb2804604a7f0dd9416f3a3241e3676db22022a246",
+      ],
+      "darwin-x64": [
+        "codex-code-mode-host-x86_64-apple-darwin.tar.gz",
+        "6fd2b21d9737f90d9cd047da717d378e58009c0c069b5ecd4fb86ebcfef52d1f",
+      ],
+      "linux-arm64": [
+        "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
+        "2ab25695f61ac23a71e467425322a1f197ea52e9da9aa8e0cbc339d661c6d16a",
+      ],
+      "linux-x64": [
+        "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
+        "26d9c65c5a947c2bf489513ef7f81e027b0c96dc15e2781de6eed5e02a18993d",
+      ],
+      "win32-arm64": [
+        "codex-code-mode-host-aarch64-pc-windows-msvc.exe",
+        "21d78b37b846ef2557bd4eb2e73ee48daf9fdea71cf2a7c41c048ff2064631a7",
+      ],
+      "win32-x64": [
+        "codex-code-mode-host-x86_64-pc-windows-msvc.exe",
+        "66c351f09fb6a28d71c3186252293e2e410820f07d38bfbdc9e6bf6e2c47c510",
+      ],
+    } as const;
+
+    for (const [targetKey, [assetName, digest]] of Object.entries(expectedHosts)) {
+      const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
+      expect(__internal.resolveCodeModeHostAssetName({ platform, arch })).toBe(assetName);
       expect(__internal.expectedCodexAssetChecksum("0.144.0", assetName, {})).toBe(digest);
     }
   });
@@ -381,6 +425,12 @@ describe("codex app-server resolver", () => {
         homeDir,
         platform: "darwin",
         arch: "arm64",
+        // The install is missing its code-mode host, so resolution attempts a
+        // best-effort repair; fail that fetch deterministically instead of
+        // letting the test reach the real GitHub API.
+        fetchImpl: async () => {
+          throw new Error("code-mode host repair fetch is not under test");
+        },
       });
       expect(managed).toEqual({
         command: currentPath,
@@ -534,6 +584,130 @@ describe("codex app-server resolver", () => {
       source: "override",
     });
   });
+
+  test.serial("installs the code-mode host companion next to the app-server", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-install-"));
+    const target = { platform: "win32" as const, arch: "x64" };
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
+    });
+
+    const versionedHostPath = __internal.codeModeHostSiblingPath(command.command, target);
+    expect(path.basename(versionedHostPath)).toBe("codex-code-mode-host.exe");
+    expect(await fs.readFile(versionedHostPath, "utf8")).toBe("managed code-mode host");
+
+    // The promoted current install must carry the host too: non-Windows
+    // platforms spawn the app-server from the current path.
+    const currentHostPath = __internal.codeModeHostSiblingPath(
+      __internal.managedCurrentPath(homeDir, target),
+      target,
+    );
+    expect(await fs.readFile(currentHostPath, "utf8")).toBe("managed code-mode host");
+  });
+
+  test.serial("repairs an existing managed install that is missing the code-mode host", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-repair-"));
+    const target = { platform: "win32" as const, arch: "x64" };
+    const versionedPath = __internal.managedExecutablePath(
+      homeDir,
+      CODEX_APP_SERVER_MANAGED_VERSION,
+      target,
+    );
+    await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+    await fs.writeFile(versionedPath, "managed app-server", "utf8");
+    await fs.writeFile(
+      `${versionedPath}.version`,
+      `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
+      "utf8",
+    );
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
+    });
+
+    expect(command.command).toBe(versionedPath);
+    const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
+    expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
+  });
+
+  test.serial(
+    "falls back to the installed app-server when the code-mode host repair fails",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-fallback-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+      const versionedPath = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+      await fs.writeFile(versionedPath, "managed app-server", "utf8");
+      await fs.writeFile(
+        `${versionedPath}.version`,
+        `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
+        "utf8",
+      );
+
+      const command = await resolveCodexAppServerCommand({
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: async () => {
+          throw new Error("release metadata unavailable");
+        },
+      });
+
+      expect(command.command).toBe(versionedPath);
+      expect(command.version).toBe(CODEX_APP_SERVER_MANAGED_VERSION);
+      const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
+      await expect(fs.access(hostPath)).rejects.toThrow();
+    },
+  );
+
+  test.serial(
+    "rejects an install whose code-mode host bytes fail checksum verification",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-bad-sum-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+
+      await expect(
+        __internal.installCodexAppServer(
+          { version: CODEX_APP_SERVER_MANAGED_VERSION },
+          {
+            homeDir,
+            platform: "win32",
+            arch: "x64",
+            fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+            expectedChecksums: {
+              ...FAKE_ASSET_CHECKSUMS,
+              "codex-code-mode-host-x86_64-pc-windows-msvc.exe": "0".repeat(64),
+            },
+          },
+        ),
+      ).rejects.toThrow(/checksum verification/i);
+
+      // Neither binary may land: the host installs first so a failed install
+      // never leaves a resolvable app-server without its companion.
+      const executablePath = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      await expect(fs.access(executablePath)).rejects.toThrow();
+      await expect(
+        fs.access(__internal.codeModeHostSiblingPath(executablePath, target)),
+      ).rejects.toThrow();
+    },
+  );
 
   test.serial(
     "rejects a managed install whose downloaded bytes fail checksum verification",

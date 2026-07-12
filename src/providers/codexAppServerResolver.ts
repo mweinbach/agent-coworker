@@ -90,7 +90,9 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *
  * Keyed by release version, then by exact platform asset name. When bumping
  * {@link CODEX_APP_SERVER_MANAGED_VERSION}, add the new version's asset checksums
- * here. They are the GitHub release asset `digest` values, obtainable with:
+ * here — both the app-server binary and its codex-code-mode-host companion,
+ * which the app-server spawns from its own directory for code-mode tool
+ * routing. They are the GitHub release asset `digest` values, obtainable with:
  *   gh api repos/openai/codex/releases/tags/rust-v<version> \
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
@@ -108,6 +110,18 @@ const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>>
       "3eee2fbd3b9ec94709a84699dc86d39b2ba6d895882f42b3809aaabb9530b3a2",
     "codex-app-server-x86_64-pc-windows-msvc.exe":
       "197f96d25723726cfc060a7accdba3708d3fc38dbbb11c46c96fd217b8595fb3",
+    "codex-code-mode-host-aarch64-apple-darwin.tar.gz":
+      "6cf9282430befe541369c7cb2804604a7f0dd9416f3a3241e3676db22022a246",
+    "codex-code-mode-host-x86_64-apple-darwin.tar.gz":
+      "6fd2b21d9737f90d9cd047da717d378e58009c0c069b5ecd4fb86ebcfef52d1f",
+    "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz":
+      "2ab25695f61ac23a71e467425322a1f197ea52e9da9aa8e0cbc339d661c6d16a",
+    "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz":
+      "26d9c65c5a947c2bf489513ef7f81e027b0c96dc15e2781de6eed5e02a18993d",
+    "codex-code-mode-host-aarch64-pc-windows-msvc.exe":
+      "21d78b37b846ef2557bd4eb2e73ee48daf9fdea71cf2a7c41c048ff2064631a7",
+    "codex-code-mode-host-x86_64-pc-windows-msvc.exe":
+      "66c351f09fb6a28d71c3186252293e2e410820f07d38bfbdc9e6bf6e2c47c510",
   },
   "0.142.3": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
@@ -204,6 +218,25 @@ function resolveCodexAppServerAssetName(target: BuildTarget): string {
   return target.platform === "win32"
     ? `codex-app-server-${triple}.exe`
     : `codex-app-server-${triple}.tar.gz`;
+}
+
+const CODE_MODE_HOST_BASENAME = "codex-code-mode-host";
+
+function resolveCodeModeHostAssetName(target: BuildTarget): string {
+  const triple = resolveTargetTriple(target);
+  return target.platform === "win32"
+    ? `${CODE_MODE_HOST_BASENAME}-${triple}.exe`
+    : `${CODE_MODE_HOST_BASENAME}-${triple}.tar.gz`;
+}
+
+/**
+ * The app-server spawns codex-code-mode-host from its own directory, so the
+ * host binary must live next to whichever app-server executable gets spawned
+ * (the versioned path on win32, the promoted current path elsewhere).
+ */
+function codeModeHostSiblingPath(appServerExecutablePath: string, target: BuildTarget): string {
+  const ext = target.platform === "win32" ? ".exe" : "";
+  return path.join(path.dirname(appServerExecutablePath), `${CODE_MODE_HOST_BASENAME}${ext}`);
 }
 
 function normalizeCodexReleaseVersion(tagName: string): string {
@@ -445,6 +478,16 @@ async function resolvePinnedManagedCommand(
   const existing = await resolveInstalledManagedVersionCommand(normalizedVersion, overrides);
   if (!existing) return await installCodexAppServer({ version: normalizedVersion }, overrides);
 
+  if (await codeModeHostNeedsInstall(existing.command, normalizedVersion, target, overrides)) {
+    try {
+      return await installCodexAppServer({ version: normalizedVersion }, overrides);
+    } catch {
+      // Repairing the missing code-mode host needs release metadata; when that
+      // fetch fails (e.g. offline), fall back to the verified app-server
+      // install rather than blocking runtime startup.
+    }
+  }
+
   const currentPath = managedCurrentPath(homeDir, target);
   await promoteManagedInstallBestEffort(
     existing.command,
@@ -537,6 +580,120 @@ async function extractTarGz(archivePath: string, destDir: string): Promise<void>
   }
 }
 
+let installTmpCounter = 0;
+
+/**
+ * Downloads one release asset, verifies it against the pinned checksum, and
+ * installs the contained executable at destPath via an atomic rename so a
+ * concurrently running app-server never observes a partially written binary.
+ */
+async function installReleaseExecutable(opts: {
+  assets: GitHubReleaseAsset[];
+  assetName: string;
+  wantedBasename: string;
+  destPath: string;
+  version: string;
+  tempRoot: string;
+  target: BuildTarget;
+  overrides: CodexAppServerResolverOverrides;
+}): Promise<void> {
+  const downloadUrl = findReleaseAsset(opts.assets, opts.assetName);
+  const assetPath = path.join(opts.tempRoot, opts.assetName);
+  await downloadFile(downloadUrl, assetPath, opts.overrides);
+  // Verify the downloaded bytes against the repo-pinned checksum BEFORE the
+  // asset is extracted, copied to the managed path, made executable, or
+  // promoted for spawn. A mismatch (or a version with no pinned checksum)
+  // fails closed so a compromised release asset is never executed.
+  await verifyDownloadedAssetChecksum({
+    assetPath,
+    assetName: opts.assetName,
+    version: opts.version,
+    overrides: opts.overrides,
+  });
+  let sourcePath = assetPath;
+  if (opts.assetName.endsWith(".tar.gz")) {
+    const extractDir = path.join(opts.tempRoot, `extract-${opts.wantedBasename}`);
+    await fs.mkdir(extractDir, { recursive: true });
+    await extractTarGz(assetPath, extractDir);
+    const extracted =
+      (await findFileRecursive(extractDir, opts.wantedBasename)) ??
+      (await findFileRecursive(extractDir, opts.assetName.slice(0, -".tar.gz".length)));
+    if (!extracted) throw new Error(`Unable to find ${opts.wantedBasename} in ${opts.assetName}.`);
+    sourcePath = extracted;
+  }
+  const tmpDest = `${opts.destPath}.tmp-${process.pid}-${++installTmpCounter}`;
+  await fs.copyFile(sourcePath, tmpDest);
+  if (opts.target.platform !== "win32") await fs.chmod(tmpDest, 0o755);
+  await fs.rename(tmpDest, opts.destPath);
+}
+
+/**
+ * Installs the codex-code-mode-host companion next to the app-server binary.
+ * Skipped for release versions with no pinned host checksum (older releases
+ * did not ship or need the host); a mismatch on a pinned version fails closed.
+ */
+async function installCodeModeHost(opts: {
+  release: { version: string; assets: GitHubReleaseAsset[] };
+  appServerExecutablePath: string;
+  tempRoot: string;
+  target: BuildTarget;
+  overrides: CodexAppServerResolverOverrides;
+}): Promise<void> {
+  const assetName = resolveCodeModeHostAssetName(opts.target);
+  if (!expectedCodexAssetChecksum(opts.release.version, assetName, opts.overrides)) return;
+  const destPath = codeModeHostSiblingPath(opts.appServerExecutablePath, opts.target);
+  if (await pathExists(destPath)) return;
+  await installReleaseExecutable({
+    assets: opts.release.assets,
+    assetName,
+    wantedBasename: CODE_MODE_HOST_BASENAME,
+    destPath,
+    version: opts.release.version,
+    tempRoot: opts.tempRoot,
+    target: opts.target,
+    overrides: opts.overrides,
+  });
+}
+
+/**
+ * Repairs an already-installed managed version that predates the code-mode
+ * host requirement. Best-effort: the app-server binary was already verified
+ * and works without the host (code-mode tools degrade), so a failed repair
+ * download must not break runtime startup.
+ */
+async function repairCodeModeHostBestEffort(opts: {
+  release: { version: string; assets: GitHubReleaseAsset[] };
+  appServerExecutablePath: string;
+  target: BuildTarget;
+  overrides: CodexAppServerResolverOverrides;
+}): Promise<void> {
+  const tempRoot = path.join(
+    os.tmpdir(),
+    `cowork-codex-code-mode-host-${process.pid}-${++installTmpCounter}`,
+  );
+  try {
+    await fs.mkdir(tempRoot, { recursive: true });
+    await installCodeModeHost({ ...opts, tempRoot });
+  } catch {
+    // Best-effort repair only; a checksum mismatch or download failure leaves
+    // the host uninstalled (fail closed) without blocking the verified
+    // app-server install.
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function codeModeHostNeedsInstall(
+  appServerExecutablePath: string,
+  version: string,
+  target: BuildTarget,
+  overrides: CodexAppServerResolverOverrides,
+): Promise<boolean> {
+  const assetName = resolveCodeModeHostAssetName(target);
+  if (!expectedCodexAssetChecksum(version, assetName, overrides)) return false;
+  return !(await pathExists(codeModeHostSiblingPath(appServerExecutablePath, target)));
+}
+
 async function findFileRecursive(dir: string, wantedBasename: string): Promise<string | null> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -606,6 +763,9 @@ async function promoteManagedInstallBestEffort(
     if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
     await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
     await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
+    await fs
+      .rm(`${codeModeHostSiblingPath(currentPath, target)}.tmp`, { force: true })
+      .catch(() => {});
   }
 }
 
@@ -624,6 +784,12 @@ async function installCodexAppServer(
   const key = `${homeDir}-${target.platform}-${target.arch}-${release.version}`;
   const existing = await pathExists(executablePath);
   if (existing && !opts.force) {
+    await repairCodeModeHostBestEffort({
+      release,
+      appServerExecutablePath: executablePath,
+      target,
+      overrides,
+    });
     await promoteManagedInstallBestEffort(
       executablePath,
       currentPath,
@@ -642,38 +808,31 @@ async function installCodexAppServer(
   if (inFlight) return await inFlight;
 
   const installPromise: Promise<CodexAppServerCommand> = (async () => {
-    const assetName = resolveCodexAppServerAssetName(target);
-    const downloadUrl = findReleaseAsset(release.assets, assetName);
     const parent = path.dirname(executablePath);
     const tempRoot = path.join(os.tmpdir(), `cowork-codex-app-server-${process.pid}-${Date.now()}`);
     await fs.mkdir(parent, { recursive: true });
     await fs.mkdir(tempRoot, { recursive: true });
     try {
-      const assetPath = path.join(tempRoot, assetName);
-      await downloadFile(downloadUrl, assetPath, overrides);
-      // Verify the downloaded bytes against the repo-pinned checksum BEFORE the
-      // asset is extracted, copied to the managed path, made executable, or
-      // promoted for spawn. A mismatch (or a version with no pinned checksum)
-      // fails closed so a compromised release asset is never executed.
-      await verifyDownloadedAssetChecksum({
-        assetPath,
-        assetName,
-        version: release.version,
+      // Install the code-mode host companion first so a failure never leaves a
+      // resolvable app-server binary without its host: if the host install
+      // throws, the whole install fails and retries from scratch next time.
+      await installCodeModeHost({
+        release,
+        appServerExecutablePath: executablePath,
+        tempRoot,
+        target,
         overrides,
       });
-      if (assetName.endsWith(".tar.gz")) {
-        const extractDir = path.join(tempRoot, "extract");
-        await fs.mkdir(extractDir, { recursive: true });
-        await extractTarGz(assetPath, extractDir);
-        const extracted =
-          (await findFileRecursive(extractDir, "codex-app-server")) ??
-          (await findFileRecursive(extractDir, assetName.slice(0, -".tar.gz".length)));
-        if (!extracted) throw new Error(`Unable to find codex-app-server in ${assetName}.`);
-        await fs.copyFile(extracted, executablePath);
-        await fs.chmod(executablePath, 0o755);
-      } else {
-        await fs.copyFile(assetPath, executablePath);
-      }
+      await installReleaseExecutable({
+        assets: release.assets,
+        assetName: resolveCodexAppServerAssetName(target),
+        wantedBasename: "codex-app-server",
+        destPath: executablePath,
+        version: release.version,
+        tempRoot,
+        target,
+        overrides,
+      });
       await fs.writeFile(`${executablePath}.version`, `${release.version}\n`, "utf8");
       await promoteManagedInstallBestEffort(
         executablePath,
@@ -714,6 +873,14 @@ async function promoteManagedInstall(
   const tmpVersionPath = `${currentPath}.version.tmp`;
   await fs.writeFile(tmpVersionPath, `${version}\n`, "utf8");
   await fs.rename(tmpVersionPath, `${currentPath}.version`);
+  const hostSourcePath = codeModeHostSiblingPath(executablePath, target);
+  if (await pathExists(hostSourcePath)) {
+    const hostCurrentPath = codeModeHostSiblingPath(currentPath, target);
+    const hostTmpPath = `${hostCurrentPath}.tmp`;
+    await fs.copyFile(hostSourcePath, hostTmpPath);
+    if (target.platform !== "win32") await fs.chmod(hostTmpPath, 0o755);
+    await fs.rename(hostTmpPath, hostCurrentPath);
+  }
 }
 
 export async function resolveCodexAppServerCommand(
@@ -800,6 +967,8 @@ export const __internal = {
   parseCodexVersion,
   compareVersions,
   resolveCodexAppServerAssetName,
+  resolveCodeModeHostAssetName,
+  codeModeHostSiblingPath,
   expectedCodexAssetChecksum,
   managedExecutablePath,
   managedCurrentPath,

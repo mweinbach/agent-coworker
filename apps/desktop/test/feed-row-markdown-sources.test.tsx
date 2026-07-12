@@ -98,8 +98,13 @@ describe("FeedRow assistant markdown and sources integration", () => {
       expect(container.querySelector('[data-slot="bubble"]')?.getAttribute("data-variant")).toBe(
         "ghost",
       );
-      // Copy lives in an overlay toolbar (hover/focus-within), not a permanent footer.
-      expect(container.querySelector('[aria-label="Copy message"]')).not.toBeNull();
+      const copyAction = container.querySelector('[aria-label="Copy message"]');
+      const messageActions = container.querySelector('[data-slot="message-actions"]');
+      expect(copyAction).not.toBeNull();
+      expect(copyAction?.getAttribute("data-size")).toBe("icon-xs");
+      expect(copyAction?.textContent).toBe("Copy");
+      expect(messageActions?.className).not.toContain("absolute");
+      expect(messageActions?.className).toContain("justify-start");
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Portfolio Methodology"),

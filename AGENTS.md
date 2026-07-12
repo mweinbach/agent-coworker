@@ -11,38 +11,6 @@ When you run into an issue, create tests to target the error. Then work on that 
 [Ask DeepWiki](https://deepwiki.com/mweinbach/agent-coworker)
 
 
-## Picking the right models for workflows and subagents
-
-Rankings, higher = better. Cost reflects what I actually pay (OpenAI has really generous limits), not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
-
-| Model    | Cost | Intelligence | Taste |
-|----------|-----:|-------------:|------:|
-| gpt-5.5 | 9    | 8            | 5     |
-| sonnet-5 | 5    | 5            | 7     |
-| opus-4.8 | 4    | 7            | 8     |
-| fable-5 | 2    | 9            | 9     |
-
-### How to apply
-
-- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
-- Cost is a tie-breaker only; when axes conflict for anything that ships, **intelligence > taste > cost**.
-- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): **gpt-5.5** — it's effectively free.
-- Anything user-facing (UI, copy, API design) needs **taste ≥ 7**.
-- Reviews of plans/implementations: **fable-5** or **opus-4.8**, optionally **gpt-5.5** as an extra independent perspective.
-- Never use Haiku.
-- **Mechanics:** gpt-5.5 is only reachable through the Codex CLI — `codex exec` / `codex review` (my `~/.codex/config.toml` defaults to gpt-5.5). Use the `codex-implementation`, `codex-review`, and `codex-computer-use` skills; for work they don't cover (investigation, data analysis), run `codex exec -s read-only` directly with a self-contained prompt.
-- Claude models (**sonnet-5**, **opus-4.8**, **fable-5**) run via the Agent/Workflow model parameter.
-
-### Using gpt-5.5 inside workflows and subagents
-
-> *(The model parameter only takes Claude models, so use a wrapper.)*
-
-- Spawn a thin Claude wrapper agent with `model: 'sonnet'`, `effort: 'low'` whose prompt instructs it to:
-  1. Write a self-contained Codex prompt.
-  2. Run `codex exec` via Bash.
-  3. Return the result.
-
-
 ## Project Structure & Module Organization
 
 - `src/`: application code
@@ -126,6 +94,8 @@ For the Electron desktop app (`apps/desktop`):
 - Start app in dev mode: `bun run desktop:dev`
 - Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
 - Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (the default) is already in use. The default avoids `9222` because Chrome's own remote-debugging endpoint conventionally binds it.
+
+When available, use Computer Use tools and skills, not Playwright, especially while in Codex. Computer Use is more efficient and more accurate than Playwright or equal. If that's not available, use Chrome Dev Tools MCP. Playwright should be the last option.
 
 ### Desktop UI and shadcn/ui
 

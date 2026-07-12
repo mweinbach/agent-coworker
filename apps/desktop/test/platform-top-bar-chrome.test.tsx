@@ -56,12 +56,13 @@ describe("PlatformTopBarChrome", () => {
             sidebarWidth: 280,
             onToggleSidebar: () => {},
             onNewChat: () => {},
-            sidebarLabel: "Hide sidebar",
+            sidebarLabel: "Close sidebar",
           }),
         );
       });
 
       expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
+      expect(container.querySelector('button[aria-label="Close sidebar"]')).not.toBeNull();
       expect(container.querySelector(".app-topbar__win32-left-rail")).toBeNull();
       expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
 

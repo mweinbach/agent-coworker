@@ -47,6 +47,7 @@ export function PlatformTopBarChrome({
         onToggleSidebar={onToggleSidebar}
         onNewChat={onNewChat}
         sidebarCollapsed={sidebarCollapsed}
+        sidebarLabel={sidebarLabel}
       />
     );
   }

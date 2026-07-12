@@ -307,18 +307,22 @@ const ChatShell = memo(function ChatShell({
     : adaptiveLayout.rightWidth;
   const toggleAdaptiveSidebar = useCallback(() => {
     if (adaptiveLayout.leftOverlay) {
-      setLeftOverlayOpen((open) => !open);
+      const nextOpen = !leftOverlayOpen;
+      setLeftOverlayOpen(nextOpen);
+      if (nextOpen) setRightOverlayOpen(false);
       return;
     }
     toggleSidebar();
-  }, [adaptiveLayout.leftOverlay, toggleSidebar]);
+  }, [adaptiveLayout.leftOverlay, leftOverlayOpen, toggleSidebar]);
   const toggleAdaptiveContextSidebar = useCallback(() => {
     if (adaptiveLayout.rightOverlay) {
-      setRightOverlayOpen((open) => !open);
+      const nextOpen = !rightOverlayOpen;
+      setRightOverlayOpen(nextOpen);
+      if (nextOpen) setLeftOverlayOpen(false);
       return;
     }
     toggleContextSidebar();
-  }, [adaptiveLayout.rightOverlay, toggleContextSidebar]);
+  }, [adaptiveLayout.rightOverlay, rightOverlayOpen, toggleContextSidebar]);
   const activeWorkspaceId = activeWorkspace?.id ?? null;
   const workspaceStartupProgress = useMemo(() => {
     const activeRuntime = activeWorkspaceId ? workspaceRuntimeById[activeWorkspaceId] : null;

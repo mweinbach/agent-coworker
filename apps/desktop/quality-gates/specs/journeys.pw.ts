@@ -527,10 +527,13 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   await resizeTo(800, "compact");
   await resizeTo(640, "narrow");
   await expect(leftResizer).toHaveCount(0);
+  await contextTrigger.click();
+  await expect(contextDrawer).toBeVisible();
   const sidebarTrigger = page.getByRole("button", { name: "Show sidebar", exact: true });
   await sidebarTrigger.click();
   const sidebarDrawer = page.getByRole("dialog", { name: "Sidebar", exact: true });
   await expect(sidebarDrawer).toBeVisible();
+  await expect(contextDrawer).toHaveCount(0);
   await expect(sidebarDrawer.getByRole("button", { name: "Close Sidebar" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sidebarDrawer).toHaveCount(0);

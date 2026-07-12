@@ -1107,6 +1107,7 @@ Changes in `7.32`:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
   - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
 - Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
+- The current managed runtime pin is Codex app-server `0.144.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
 
 Changes in `7.31`:
 
@@ -1406,6 +1407,11 @@ Returned in `server_hello` and `config_updated`:
 For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
 `models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
 metadata; newly available app-server model ids may appear with conservative fallback metadata.
+The bundled fallback catalog includes `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`,
+with image input and reasoning efforts through `max`. Sol is the local default before live
+discovery. An explicit tier remains selected when the account reports it; otherwise Cowork uses
+the live app-server default and then the first reported model, preserving plan-dependent rollout
+behavior without collapsing the three GPT-5.6 tiers.
 When `reasoning` is present, `defaultEffort` is the model's default composer effort and
 `availableEfforts` is the ordered list the UI should present. Codex app-server models use live
 reasoning tiers from `model/list` when reported, with static metadata as the fallback. Gemini

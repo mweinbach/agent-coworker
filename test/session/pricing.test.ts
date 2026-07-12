@@ -286,6 +286,25 @@ describe("pricing", () => {
       expect(pricing!.cachedInputPerMillion).toBe(0.25);
     });
 
+    it("resolves GPT-5.6 Codex pricing including cache writes", () => {
+      expect(resolveModelPricing("codex-cli", "gpt-5.6-sol")).toMatchObject({
+        inputPerMillion: 5,
+        outputPerMillion: 30,
+        cachedInputPerMillion: 0.5,
+        cacheWriteInputPerMillion: 6.25,
+      });
+      expect(resolveModelPricing("codex-cli", "gpt-5.6-terra")).toMatchObject({
+        inputPerMillion: 2.5,
+        outputPerMillion: 15,
+        cacheWriteInputPerMillion: 3.125,
+      });
+      expect(resolveModelPricing("codex-cli", "gpt-5.6-luna")).toMatchObject({
+        inputPerMillion: 1,
+        outputPerMillion: 6,
+        cacheWriteInputPerMillion: 1.25,
+      });
+    });
+
     it("resolves exact match for codex-cli gpt-5.5 pricing", () => {
       const pricing = resolveModelPricing("codex-cli", "gpt-5.5");
       expect(pricing).not.toBeNull();

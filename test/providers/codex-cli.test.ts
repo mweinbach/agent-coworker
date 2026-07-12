@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { defaultSupportedModel, providerOptionsDefaultsForModel } from "../../src/models/registry";
 import {
   DEFAULT_PROVIDER_OPTIONS,
   makeConfig,
@@ -11,7 +12,11 @@ import {
   writeJson,
 } from "./helpers";
 
-const DEFAULT_CODEX_MODEL = "gpt-5.4";
+const DEFAULT_CODEX_MODEL = defaultSupportedModel("codex-cli").id;
+const DEFAULT_CODEX_PROVIDER_OPTIONS = providerOptionsDefaultsForModel(
+  "codex-cli",
+  DEFAULT_CODEX_MODEL,
+);
 
 describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   test(`defaultModelForProvider returns ${DEFAULT_CODEX_MODEL}`, () => {
@@ -62,6 +67,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   test("codex provider options are configured", () => {
     const opts = DEFAULT_PROVIDER_OPTIONS["codex-cli"];
     expect(opts).toBeDefined();
+    expect(opts).toEqual(DEFAULT_CODEX_PROVIDER_OPTIONS);
     expect(opts.reasoningEffort).toBe("high");
     expect(opts.reasoningSummary).toBe("detailed");
     expect(opts.textVerbosity).toBe("medium");
@@ -79,6 +85,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
 
     expect(cfg.provider).toBe("codex-cli");
     expect(cfg.model).toBe(DEFAULT_CODEX_MODEL);
+    expect(cfg.providerOptions?.["codex-cli"]).toEqual(DEFAULT_CODEX_PROVIDER_OPTIONS);
   });
 
   test.each([

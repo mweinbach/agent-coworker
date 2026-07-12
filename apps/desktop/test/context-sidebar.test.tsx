@@ -260,6 +260,10 @@ describe("desktop context sidebar", () => {
         expect(agentsPanel?.className).toContain("app-context-sidebar__panel");
         expect(tasksPanel?.className).toContain("flex-none");
         expect(agentsPanel?.className).toContain("flex-none");
+        expect(
+          tasksPanel?.compareDocumentPosition(filesPanel as Node) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
         const taskIcons = tasksSection?.querySelectorAll("svg") ?? [];
         expect(taskIcons.length).toBeGreaterThan(0);
         for (const icon of taskIcons) {

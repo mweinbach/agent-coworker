@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { FeedItem } from "../src/app/types";
 import {
   type FeedDerivationWindowState,
+  prepareFeedDerivationFeed,
   resolveFeedDerivationVisibleCount,
   selectFeedDerivationWindow,
 } from "../src/ui/chat/feedWindow";
@@ -36,6 +37,31 @@ describe("chat feed derivation window", () => {
       hiddenCount: 0,
     });
     expect(selectFeedDerivationWindow(feed, 80).feed).toBe(feed);
+  });
+
+  test("windows renderable transcript rows instead of trailing todo and hidden-event snapshots", () => {
+    const messages = makeFeed(120);
+    const snapshots: FeedItem[] = Array.from({ length: 120 }, (_, index) => ({
+      id: `todos-${index}`,
+      kind: "todos",
+      ts: "2026-07-09T00:00:01.000Z",
+      todos: [{ content: `Task ${index}`, status: "completed" }],
+    }));
+    const logs: FeedItem[] = Array.from({ length: 40 }, (_, index) => ({
+      id: `log-${index}`,
+      kind: "log",
+      ts: "2026-07-09T00:00:02.000Z",
+      line: `debug ${index}`,
+    }));
+
+    const derivationFeed = prepareFeedDerivationFeed([...messages, ...snapshots, ...logs], false);
+    const window = selectFeedDerivationWindow(derivationFeed, 80);
+
+    expect(derivationFeed).toHaveLength(120);
+    expect(window.feed).toHaveLength(80);
+    expect(window.feed[0]?.id).toBe("message-41");
+    expect(window.feed.at(-1)?.id).toBe("message-120");
+    expect(window.feed.every((item) => item.kind === "message")).toBe(true);
   });
 
   test("preserves each thread window and its oldest anchor across away arrivals", () => {

@@ -202,7 +202,7 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("group-focus-within/message:opacity-100");
   });
 
-  test("streams plain text instead of full markdown while isStreaming", () => {
+  test("renders markdown continuously while the assistant is streaming", () => {
     const html = renderToStaticMarkup(
       renderFeedRow(
         {
@@ -240,7 +240,8 @@ describe("FeedRow assistant markdown and sources integration", () => {
       ),
     );
     expect(streamingHtml).toContain('data-slot="streaming-markdown"');
-    expect(streamingHtml).toContain("Hello **world**");
-    expect(streamingHtml).toContain('data-slot="streaming-caret"');
+    expect(streamingHtml).toContain("Hello ");
+    expect(streamingHtml).toContain('data-streamdown="strong">world</span>');
+    expect(streamingHtml).not.toContain("Hello **world**");
   });
 });

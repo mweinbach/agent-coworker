@@ -312,32 +312,22 @@ export const FeedRow = memo(function FeedRow(props: {
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
               <BubbleContent>
-                {isStreamingAssistant ? (
-                  // Lightweight path while tokens stream: avoid full Streamdown reparse
-                  // every delta. Swap to DesktopMarkdown once the item is complete.
-                  <div
-                    data-slot="streaming-markdown"
-                    className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-7 text-foreground"
-                  >
-                    {item.text}
-                    <span
-                      aria-hidden
-                      data-slot="streaming-caret"
-                      className="ml-0.5 inline-block h-[1.05em] w-[0.45em] translate-y-[0.1em] rounded-[1px] bg-foreground/70 align-baseline animate-pulse"
-                    />
-                  </div>
-                ) : (
+                <div data-slot={isStreamingAssistant ? "streaming-markdown" : "markdown"}>
                   <DesktopMarkdown
                     citationAnnotations={item.annotations}
                     citationSources={props.citationSources}
                     citationUrlsByIndex={props.citationUrlsByIndex}
+                    caret="block"
                     desktopBasePath={props.desktopBasePath}
                     normalizeDisplayCitations
                     fallbackToSourcesFooter={!hasSources}
+                    isAnimating={isStreamingAssistant}
+                    mode={isStreamingAssistant ? "streaming" : "static"}
+                    parseIncompleteMarkdown={isStreamingAssistant}
                   >
                     {item.text}
                   </DesktopMarkdown>
-                )}
+                </div>
               </BubbleContent>
             </Bubble>
           ) : (

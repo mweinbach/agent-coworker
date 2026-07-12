@@ -502,11 +502,7 @@ const ChatShell = memo(function ChatShell({
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={
-          showContextSidebar &&
-          (!showCanvasInTopBar || adaptiveLayout.rightOverlay) &&
-          workspaceStartupProgress === null
-        }
+        showContextToggle={showContextSidebar && workspaceStartupProgress === null}
         canvasMode={showCanvasInTopBar}
         canvasIsMarkdown={canvasIsMarkdown}
         canvasActiveTab={canvasActiveTab}

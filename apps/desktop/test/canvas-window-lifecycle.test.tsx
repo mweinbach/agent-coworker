@@ -193,6 +193,9 @@ describe("canvas window lifecycle", () => {
       expect(
         harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
       ).not.toBeNull();
+      expect(
+        harness.dom.window.document.querySelector('button[aria-label="Hide context"]'),
+      ).not.toBeNull();
 
       await act(async () => {
         harness.dom.window.innerWidth = 800;

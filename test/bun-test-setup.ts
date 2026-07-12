@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import "./helpers/mock-react-native";
+import { setupJsdom } from "../apps/desktop/test/jsdomHarness";
 
 const desktopRequire = createRequire(path.resolve("apps/desktop/package.json"));
 
@@ -35,6 +36,18 @@ mock.module("react/jsx-runtime", () => desktopJsxRuntime);
 mock.module("react-dom", () => desktopReactDom);
 mock.module("react-dom/client", () => desktopReactDomClient);
 mock.module("react-dom/server", () => desktopReactDomServer);
+
+// Radix selects its layout-effect implementation when its modules are first
+// evaluated. The desktop suite otherwise imports Radix nondeterministically:
+// whichever test reaches it first decides whether dialogs can mount portals
+// for every later test in the same Bun process. Initialize it once with a DOM,
+// matching the renderer environment, before test-file imports begin.
+const radixImportHarness = setupJsdom();
+try {
+  await import("radix-ui");
+} finally {
+  radixImportHarness.restore();
+}
 
 try {
   const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));

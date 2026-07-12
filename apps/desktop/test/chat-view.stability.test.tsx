@@ -822,10 +822,11 @@ describe("desktop chat view stability", () => {
         '[aria-label="Jump to latest"]',
       ) as HTMLButtonElement | null;
       expect(scrollButton).not.toBeNull();
-      // Positioned above the absolute composer (overlay height 220 + 9px gap).
+      // Positioned inside the absolute composer's transparent fade
+      // (overlay height 220 - 28px inset).
       // Full scroller active/click geometry is package-owned and unreliable under
       // jsdom stubs; pin positioning is the product invariant we own.
-      expect(scrollButton?.style.bottom).toBe("229px");
+      expect(scrollButton?.style.bottom).toBe("192px");
     } finally {
       if (root) {
         await act(async () => {

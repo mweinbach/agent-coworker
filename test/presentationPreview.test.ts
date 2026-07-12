@@ -285,7 +285,8 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
       });
       expect(first.ok).toBe(true);
       if (!first.ok) return;
-      expect(first.dependencies).toEqual(expect.arrayContaining([deckPath, pngPath]));
+      expect(first.dependencies).toContain(await fs.realpath(deckPath));
+      expect(first.dependencies).toContain(await fs.realpath(pngPath));
 
       await fs.writeFile(pngPath, "second-preview-is-different", "utf8");
       const second = await previewPresentationFile({
@@ -296,7 +297,8 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
       expect(second.ok).toBe(true);
       if (!second.ok) return;
 
-      expect(second.dependencies).toEqual(expect.arrayContaining([deckPath, pngPath]));
+      expect(second.dependencies).toContain(await fs.realpath(deckPath));
+      expect(second.dependencies).toContain(await fs.realpath(pngPath));
       expect(second.version.fingerprint).not.toBe(first.version.fingerprint);
       expect(second.slides[0]?.pngBase64).not.toBe(first.slides[0]?.pngBase64);
     });
@@ -333,7 +335,8 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
       });
       expect(first.ok).toBe(true);
       if (!first.ok) return;
-      expect(first.dependencies).toEqual(expect.arrayContaining([deckPath, modulePath]));
+      expect(first.dependencies).toContain(await fs.realpath(deckPath));
+      expect(first.dependencies).toContain(await fs.realpath(modulePath));
 
       await fs.writeFile(modulePath, "export default { version: 200 }", "utf8");
       const second = await previewPresentationFile({
@@ -345,7 +348,8 @@ fs.writeFileSync(process.argv[outputIndex + 1], "bundled-runtime-png");
       expect(second.ok).toBe(true);
       if (!second.ok) return;
 
-      expect(second.dependencies).toEqual(expect.arrayContaining([deckPath, modulePath]));
+      expect(second.dependencies).toContain(await fs.realpath(deckPath));
+      expect(second.dependencies).toContain(await fs.realpath(modulePath));
       expect(second.version.fingerprint).not.toBe(first.version.fingerprint);
     });
   });

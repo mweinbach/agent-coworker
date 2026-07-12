@@ -51,6 +51,8 @@ function resetAppStore(overrides: Record<string, unknown>) {
     sidebarCollapsed: false,
     contextSidebarCollapsed: false,
     contextSidebarWidth: 300,
+    canvasSidebarWidth: 500,
+    filePreview: null,
     messageBarHeight: 120,
     sidebarWidth: 248,
     ...overrides,

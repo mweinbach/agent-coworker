@@ -1235,13 +1235,13 @@ describe("task workspace subscription routing", () => {
       expect(rejectedListResponse.error?.message ?? "").toContain(
         "cwd must match an authorized workspace",
       );
-      const providerCatalogResponse = await sendRequest(
+      const providerAuthMethodsResponse = await sendRequest(
         runtime,
         genericReader,
-        "cowork/provider/catalog/read",
+        "cowork/provider/authMethods/read",
         { cwd: targetPath },
       );
-      expect(providerCatalogResponse.error).toBeUndefined();
+      expect(providerAuthMethodsResponse.error).toBeUndefined();
 
       includeTargetWorkspace = true;
       const createdBeforeSubscription = requireCreatedTask(

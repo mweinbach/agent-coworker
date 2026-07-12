@@ -214,6 +214,9 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await showOlderButton.click();
   await settleQualityPage(page);
   const anchor = page.locator('[data-message-id="quality-long-0-1"]');
+  const readingPoint = anchor.getByText("Deterministic transcript run 0 message 1", {
+    exact: true,
+  });
   await expect(anchor).toBeAttached();
   await anchor.evaluate((element) => {
     const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
@@ -228,7 +231,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   });
   await expect(viewport).toHaveAttribute("data-scroll-mode", "detached");
   await settleQualityPage(page);
-  const before = await anchor.evaluate((element) => {
+  const before = await readingPoint.evaluate((element) => {
     const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
     if (!viewportElement) throw new Error("Conversation viewport is unavailable");
     return {
@@ -253,7 +256,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await expect
     .poll(
       async () =>
-        await anchor.evaluate((element) => {
+        await readingPoint.evaluate((element) => {
           const viewportElement = element.closest<HTMLElement>(
             '[data-slot="message-scroller-viewport"]',
           );
@@ -265,7 +268,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
     )
     .toBe(Math.round(before.offset));
   const navigationElapsedMs = performance.now() - navigationStartedAt;
-  const restored = await anchor.evaluate((element) => {
+  const restored = await readingPoint.evaluate((element) => {
     const viewportElement = element.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
     if (!viewportElement) throw new Error("Conversation viewport is unavailable");
     return {

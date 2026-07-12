@@ -1717,11 +1717,14 @@ async function loadWindow(
     lifecycle.firstLoadStarted = ++lifecycleSequence;
   }
   await win.loadURL(rendererUrl.toString());
+  win.show();
+  // Showing a frameless window can cause macOS to recalculate its content
+  // bounds. Apply the deterministic quality-gate size after that native
+  // transition so the renderer viewport is identical on every host.
   win.setContentSize(
     isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
     isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
   );
-  win.show();
 }
 
 async function createWindow(

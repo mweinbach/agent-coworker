@@ -121,6 +121,18 @@ describe("model registry invariants", () => {
       defaultEffort: "high",
       availableEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
     });
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      expect(reasoningConfigForProviderModel("codex-cli", model)).toEqual({
+        defaultEffort: "high",
+        availableEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      });
+      expect(getSupportedModel("codex-cli", model)).toMatchObject({
+        knowledgeCutoff: "February 16, 2026",
+        supportsImageInput: true,
+      });
+    }
+    expect(defaultSupportedModel("codex-cli").id).toBe("gpt-5.6-sol");
+    expect(getSupportedModel("codex-cli", "gpt-5.4")).not.toBeNull();
   });
 
   test("light and max efforts are opt-in, never assumed by the fallback list", () => {

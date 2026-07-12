@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { act, createElement, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../src/components/ui/dropdown-menu";
 import { AdaptiveRailSurface } from "../src/ui/layout/AdaptiveRailSurface";
 import { OverlayStackProvider } from "../src/ui/OverlayStack";
 import { setupJsdom } from "./jsdomHarness";
@@ -81,6 +87,18 @@ test.serial(
       await act(async () => trigger.focus());
       expect(close).toBe(harness.dom.window.document.activeElement);
 
+      const portaledMenu = harness.dom.window.document.createElement("div");
+      portaledMenu.dataset.overlayLayerSequence = "2";
+      const portaledAction = harness.dom.window.document.createElement("button");
+      portaledAction.textContent = "Portaled action";
+      portaledMenu.append(portaledAction);
+      harness.dom.window.document.body.append(portaledMenu);
+      await act(async () => portaledAction.focus());
+      expect(portaledAction).toBe(harness.dom.window.document.activeElement);
+
+      await act(async () => trigger.focus());
+      expect(close).toBe(harness.dom.window.document.activeElement);
+
       await act(async () => {
         harness.dom.window.dispatchEvent(
           new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
@@ -113,6 +131,63 @@ test.serial(
     }
   },
 );
+
+test.serial("adaptive overlay rails permit focus in nested portaled menus", async () => {
+  const harness = setupJsdom({ includeAnimationFrame: true });
+
+  try {
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        createElement(
+          OverlayStackProvider,
+          null,
+          createElement(
+            AdaptiveRailSurface,
+            {
+              active: true,
+              label: "Navigation",
+              onClose: () => {},
+              overlay: true,
+              side: "left",
+              width: 280,
+            },
+            createElement(
+              DropdownMenu,
+              { open: true },
+              createElement(DropdownMenuTrigger, null, "Actions"),
+              createElement(
+                DropdownMenuContent,
+                null,
+                createElement(DropdownMenuItem, null, "Rename"),
+              ),
+            ),
+          ),
+        ),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const menu = harness.dom.window.document.querySelector<HTMLElement>(
+      '[data-slot="dropdown-menu-content"]',
+    );
+    const menuItem = harness.dom.window.document.querySelector<HTMLElement>(
+      '[data-slot="dropdown-menu-item"]',
+    );
+    expect(Number(menu?.dataset.overlayLayerSequence)).toBeGreaterThan(0);
+    if (!menuItem) throw new Error("missing portaled menu item");
+
+    await act(async () => menuItem.focus());
+    expect(menuItem).toBe(harness.dom.window.document.activeElement);
+
+    await act(async () => root.unmount());
+  } finally {
+    harness.restore();
+  }
+});
 
 test.serial(
   "switching a rail between inline and overlay keeps its live child mounted",

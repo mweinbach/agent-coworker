@@ -24,6 +24,7 @@ mock.module("../src/lib/agentSocket", () => ({
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
 const { CommandPalette } = await import("../src/ui/CommandPalette");
+const { requestDesktopRailCommand } = await import("../src/lib/desktopRailCommands");
 const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 
 const defaultStoreState = useAppStore.getState();
@@ -400,6 +401,32 @@ describe("app window-mode notification routing", () => {
         await act(async () => {
           root?.unmount();
         });
+      }
+      harness.restore();
+    }
+  });
+
+  test("settings still handles sidebar commands while the chat shell is unmounted", async () => {
+    const harness = setupJsdom();
+    const toggleSidebar = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      seedReadyState();
+      useAppStore.setState({ view: "settings", toggleSidebar } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(App));
+      });
+      await act(async () => requestDesktopRailCommand("toggle-sidebar"));
+
+      expect(toggleSidebar).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => root?.unmount());
       }
       harness.restore();
     }

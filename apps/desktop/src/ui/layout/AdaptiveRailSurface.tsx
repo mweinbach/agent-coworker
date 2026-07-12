@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { useOverlayOwner } from "../OverlayStack";
+import { isTargetInHigherOverlayLayer, useOverlayOwner } from "../OverlayStack";
 
 type AdaptiveRailSurfaceProps = {
   active: boolean;
@@ -92,7 +92,11 @@ export function AdaptiveRailSurface({
       }
     };
     const handleFocusIn = (event: FocusEvent) => {
-      if (event.target instanceof Node && !pane.contains(event.target)) {
+      if (
+        event.target instanceof Node &&
+        !pane.contains(event.target) &&
+        !isTargetInHigherOverlayLayer(event.target, ownership?.sequence ?? 0)
+      ) {
         closeButtonRef.current?.focus();
       }
     };
@@ -103,7 +107,7 @@ export function AdaptiveRailSurface({
       pane.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("focusin", handleFocusIn, true);
     };
-  }, [active, overlay]);
+  }, [active, overlay, ownership?.sequence]);
 
   return (
     <>

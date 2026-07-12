@@ -74,13 +74,10 @@ export async function loadMainWindowBounds(
 
   const display = screen.getDisplayMatching(saved);
   const workArea = display.workArea;
-  // Clamp size to the work area too — otherwise a window saved at 2560×1600 on a
-  // 4K monitor reopens oversized on a 1920×1080 laptop (only a sliver visible
-  // and the off-screen resize edge is hard to grab on Windows).
-  const width = Math.max(
-    Math.min(MAIN_WINDOW_MIN_WIDTH, workArea.width),
-    Math.min(saved.width, workArea.width),
-  );
+  // Clamp size to the work area unless that display is narrower than the
+  // supported minimum. In that edge case, keep restored geometry aligned with
+  // BrowserWindow.minWidth instead of handing Electron contradictory bounds.
+  const width = Math.max(MAIN_WINDOW_MIN_WIDTH, Math.min(saved.width, workArea.width));
   const height = Math.min(saved.height, workArea.height);
   const minVisibleWidth = Math.min(200, width);
   const minVisibleHeight = Math.min(120, height);

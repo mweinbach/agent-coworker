@@ -64,6 +64,7 @@ function PopoverContent({
     <PopoverPrimitive.Portal container={getPortalContainer()}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
+        data-overlay-layer-sequence={ownership?.sequence}
         align={align}
         sideOffset={sideOffset}
         className={cn(

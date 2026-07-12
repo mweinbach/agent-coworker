@@ -51,6 +51,7 @@ type OverlayRootState = {
 const OverlayStackContext = createContext<OverlayStack | null>(null);
 const stackReservedEditableEscapes = new WeakSet<object>();
 const OVERLAY_Z_INDEX_BASE = 1_000;
+const OVERLAY_LAYER_SEQUENCE_ATTRIBUTE = "data-overlay-layer-sequence";
 const EDITABLE_ESCAPE_SELECTOR =
   "input, textarea, select, [contenteditable='true'], [contenteditable='plaintext-only'], [role='textbox']";
 
@@ -91,6 +92,16 @@ function scheduleFocusRestore(owner: OverlayOwner, getOwners: () => OverlayOwner
 
 function supportsClosest(target: EventTarget | null): target is ClosestEventTarget {
   return target !== null && typeof (target as Partial<ClosestEventTarget>).closest === "function";
+}
+
+export function isTargetInHigherOverlayLayer(
+  target: EventTarget | null,
+  ownerSequence: number,
+): boolean {
+  if (!supportsClosest(target)) return false;
+  const layer = target.closest(`[${OVERLAY_LAYER_SEQUENCE_ATTRIBUTE}]`);
+  const sequence = Number(layer?.getAttribute(OVERLAY_LAYER_SEQUENCE_ATTRIBUTE));
+  return Number.isFinite(sequence) && sequence > ownerSequence;
 }
 
 function isEditableElement(target: EventTarget | null): boolean {

@@ -708,6 +708,15 @@ function AppContent() {
   }, [canvasSurfaceKind, windowMode]);
 
   useEffect(() => {
+    if (view !== "settings") return;
+    return onDesktopRailCommand((command) => {
+      if (command === "toggle-sidebar") {
+        useAppStore.getState().toggleSidebar();
+      }
+    });
+  }, [view]);
+
+  useEffect(() => {
     if (bootstrapPhase !== "idle") return;
     void init().catch((err) => {
       console.error(err);

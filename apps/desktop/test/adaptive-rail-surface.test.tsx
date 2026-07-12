@@ -29,7 +29,7 @@ test.serial(
           null,
           createElement(
             "button",
-            { type: "button", onClick: () => setOpen(true) },
+            { type: "button", onClick: () => setOpen((value) => !value) },
             "Open navigation",
           ),
           createElement(
@@ -87,8 +87,17 @@ test.serial(
       await act(async () => trigger.focus());
       expect(close).toBe(harness.dom.window.document.activeElement);
 
+      await act(async () => trigger.click());
+      await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(drawer?.getAttribute("aria-hidden")).toBe("true");
+      expect(trigger).toBe(harness.dom.window.document.activeElement);
+
+      await act(async () => trigger.click());
+      await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(close).toBe(harness.dom.window.document.activeElement);
+
       const portaledMenu = harness.dom.window.document.createElement("div");
-      portaledMenu.dataset.overlayLayerSequence = "2";
+      portaledMenu.dataset.overlayLayerSequence = "999";
       const portaledAction = harness.dom.window.document.createElement("button");
       portaledAction.textContent = "Portaled action";
       portaledMenu.append(portaledAction);

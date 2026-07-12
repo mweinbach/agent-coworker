@@ -1,6 +1,6 @@
 import { XIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "../../components/ui/button";
@@ -39,10 +39,29 @@ export function AdaptiveRailSurface({
 }: AdaptiveRailSurfaceProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const wasOverlayActiveRef = useRef(false);
+  useLayoutEffect(() => {
+    const overlayActive = overlay && active;
+    if (overlayActive && !wasOverlayActiveRef.current) {
+      restoreFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (wasOverlayActiveRef.current && overlay && !active) {
+      const target = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      const frame = window.requestAnimationFrame(() => {
+        if (target?.isConnected) target.focus();
+      });
+      wasOverlayActiveRef.current = overlayActive;
+      return () => window.cancelAnimationFrame(frame);
+    }
+    wasOverlayActiveRef.current = overlayActive;
+  }, [active, overlay]);
   const ownership = useOverlayOwner({
     active: overlay && active,
     label,
     onDismiss: onClose,
+    restoreFocus: () => restoreFocusRef.current,
   });
   const overlayZIndex = ownership?.zIndex ?? 1_000;
   const dismissOverlay = () => {

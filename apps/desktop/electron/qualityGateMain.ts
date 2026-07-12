@@ -1721,10 +1721,17 @@ async function loadWindow(
   // Showing a frameless window can cause macOS to recalculate its content
   // bounds. Apply the deterministic quality-gate size after that native
   // transition so the renderer viewport is identical on every host.
-  win.setContentSize(
-    isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
-    isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
-  );
+  const targetWidth = isMain ? contentWidth : mode === "quick-chat" ? 337 : 800;
+  const targetHeight = isMain ? contentHeight : mode === "quick-chat" ? 552 : 600;
+  win.setContentSize(targetWidth, targetHeight);
+  const [actualWidth, actualHeight] = win.getContentSize();
+  if (actualWidth !== targetWidth || actualHeight !== targetHeight) {
+    const [windowWidth, windowHeight] = win.getSize();
+    win.setSize(
+      windowWidth + targetWidth - actualWidth,
+      windowHeight + targetHeight - actualHeight,
+    );
+  }
 }
 
 async function createWindow(

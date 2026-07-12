@@ -214,7 +214,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   await showOlderButton.click();
   await settleQualityPage(page);
   const anchor = page.locator('[data-message-id="quality-long-0-1"]');
-  const readingPoint = anchor.getByText("Deterministic transcript run 0 message 1", {
+  const readingPoint = anchor.getByText("Deterministic transcript run 0 message 2", {
     exact: true,
   });
   await expect(anchor).toBeAttached();

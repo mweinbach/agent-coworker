@@ -122,6 +122,9 @@ describe("settings shell", () => {
     const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
 
     expect(settingsSource).toContain("useAdaptiveLayout");
+    expect(settingsSource).toContain("onDesktopRailCommand");
+    expect(settingsSource).toContain('command !== "toggle-sidebar"');
+    expect(settingsSource).toContain("setNavigationOpen((open) => !open)");
     expect(settingsSource).toContain('label="Settings navigation"');
     expect(settingsSource).toContain("Open settings navigation");
     expect(settingsSource).toContain("text-foreground/72");

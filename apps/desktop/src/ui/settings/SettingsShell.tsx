@@ -17,13 +17,14 @@ import {
   WifiIcon,
   WrenchIcon,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
+import { onDesktopRailCommand } from "../../lib/desktopRailCommands";
 import { useAdaptiveLayout } from "../../lib/useAdaptiveLayout";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
@@ -379,6 +380,16 @@ export function SettingsShell() {
     : adaptiveLayout.leftWidth;
   const navigationActive =
     adaptiveLayout.leftInline || (adaptiveLayout.leftOverlay && navigationOpen);
+  useEffect(
+    () =>
+      onDesktopRailCommand((command) => {
+        if (command !== "toggle-sidebar") return;
+        if (adaptiveLayout.leftOverlay) {
+          setNavigationOpen((open) => !open);
+        }
+      }),
+    [adaptiveLayout.leftOverlay],
+  );
   const settingsGroups = getSettingsGroups(remoteAccessAvailable, {
     includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
   });

@@ -125,6 +125,7 @@ test.serial(
         '[data-slot="adaptive-rail-backdrop"]',
       );
       expect(backdrop).not.toBeNull();
+      expect(backdrop?.parentElement).toBe(drawer?.parentElement);
       await act(async () => {
         backdrop?.dispatchEvent(
           new harness.dom.window.PointerEvent("pointerdown", { bubbles: true }),

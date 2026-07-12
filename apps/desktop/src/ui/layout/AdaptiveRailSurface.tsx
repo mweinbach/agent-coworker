@@ -1,7 +1,6 @@
 import { XIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { createPortal } from "react-dom";
 
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
@@ -130,18 +129,15 @@ export function AdaptiveRailSurface({
 
   return (
     <>
-      {overlay && active && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              aria-hidden="true"
-              className="fixed inset-0 bg-black/45 backdrop-blur-[1px]"
-              data-slot="adaptive-rail-backdrop"
-              onPointerDown={dismissOverlay}
-              style={{ zIndex: overlayZIndex }}
-            />,
-            document.body,
-          )
-        : null}
+      {overlay && active ? (
+        <div
+          aria-hidden="true"
+          className="fixed inset-0 bg-black/45 backdrop-blur-[1px]"
+          data-slot="adaptive-rail-backdrop"
+          onPointerDown={dismissOverlay}
+          style={{ zIndex: overlayZIndex }}
+        />
+      ) : null}
       {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: both dynamic roles support an accessible name */}
       <div
         ref={paneRef}

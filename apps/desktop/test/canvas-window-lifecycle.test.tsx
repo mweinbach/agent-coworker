@@ -193,6 +193,7 @@ describe("canvas window lifecycle", () => {
       expect(
         harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
       ).not.toBeNull();
+
       expect(
         harness.dom.window.document.querySelector('button[aria-label="Hide context"]'),
       ).not.toBeNull();
@@ -207,6 +208,20 @@ describe("canvas window lifecycle", () => {
       expect(
         harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
       ).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.document
+          .querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')
+          ?.click();
+        await flushUi();
+      });
+
+      expect(useAppStore.getState().filePreview).toBeNull();
+      expect(
+        harness.dom.window.document
+          .querySelector('[role="dialog"][aria-label="Context"]')
+          ?.getAttribute("aria-hidden"),
+      ).toBe("true");
     } finally {
       if (root) {
         const mountedRoot = root;

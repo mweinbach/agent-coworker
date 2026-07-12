@@ -406,6 +406,10 @@ const ChatShell = memo(function ChatShell({
   useEffect(() => {
     const previousCanvasPath = previousCanvasPathRef.current;
     previousCanvasPathRef.current = activeCanvasPath;
+    if (adaptiveLayout.rightOverlay && previousCanvasPath !== null && activeCanvasPath === null) {
+      setRightOverlayOpen(false);
+      return;
+    }
     if (
       adaptiveLayout.rightOverlay &&
       activeCanvasPath !== null &&
@@ -706,15 +710,6 @@ function AppContent() {
       delete documentElement.dataset.canvasSurface;
     };
   }, [canvasSurfaceKind, windowMode]);
-
-  useEffect(() => {
-    if (view !== "settings") return;
-    return onDesktopRailCommand((command) => {
-      if (command === "toggle-sidebar") {
-        useAppStore.getState().toggleSidebar();
-      }
-    });
-  }, [view]);
 
   useEffect(() => {
     if (bootstrapPhase !== "idle") return;

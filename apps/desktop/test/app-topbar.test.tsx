@@ -803,6 +803,9 @@ describe("desktop app top bar", () => {
       expect(container.querySelector('button[aria-label="Canvas view options"]')).not.toBeNull();
       expect(container.querySelector('button[aria-label="Open canvas in window"]')).toBeNull();
       expect(container.querySelector('button[aria-label="Maximize canvas"]')).toBeNull();
+      expect(
+        (container.querySelector(".app-topbar__thread-shell") as HTMLElement | null)?.style.right,
+      ).toBe("176px");
 
       await act(async () => root.unmount());
     } finally {

@@ -395,10 +395,11 @@ export function AppTopBar({
       ? 0
       : sidebarWidth;
   const showQuickChatPopOut = onPopOutQuickChat !== undefined;
+  const canvasContextInset = showContextToggle ? 2.5 * 16 : 0;
   const defaultRightInset = canvasMode
     ? busy
-      ? 12.5 * 16
-      : 8.5 * 16
+      ? 12.5 * 16 + canvasContextInset
+      : 8.5 * 16 + canvasContextInset
     : busy
       ? 8.75 * 16
       : showContextToggle || showQuickChatPopOut
@@ -406,8 +407,8 @@ export function AppTopBar({
         : 12;
   const win32RightInset = canvasMode
     ? busy
-      ? 10.5 * 16
-      : 6.5 * 16
+      ? 10.5 * 16 + canvasContextInset
+      : 6.5 * 16 + canvasContextInset
     : busy
       ? 8.75 * 16
       : showContextToggle || showQuickChatPopOut

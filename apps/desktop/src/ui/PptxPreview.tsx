@@ -7,13 +7,14 @@ import {
   Loader2Icon,
   RefreshCwIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import {
   loadPresentationPreviewResource,
   workspaceFileChangeEvents,
 } from "../lib/filePreviewResource";
+import { useElementWidth } from "../lib/useElementWidth";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
 
@@ -32,6 +33,8 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const loadPresentationPreview = useAppStore((s) => s.loadPresentationPreview);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const previewWidth = useElementWidth(previewRef);
 
   const hasActiveWorkspace = useMemo(
     () => workspaces.some((w) => w.id === selectedWorkspaceId),
@@ -118,6 +121,8 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   const visibleError = loadedCurrentPath ? error : null;
   const visibleSlides = loadedCurrentPath ? slides : [];
   const activeSlide = visibleSlides[activeIndex];
+  const compactPreview = previewWidth > 0 && previewWidth < 520;
+  const gridColumnCount = previewWidth >= 900 ? 3 : previewWidth >= 560 ? 2 : 1;
 
   const handlePrev = useCallback(() => {
     setActiveIndex((prev) => (prev > 0 ? prev - 1 : prev));
@@ -128,8 +133,12 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   }, [visibleSlides.length]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 pb-2">
+    <div
+      ref={previewRef}
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-canvas-foreground"
+      data-presentation-layout={compactPreview ? "compact" : "full"}
+    >
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
             {fileName}
@@ -173,13 +182,14 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           ) : null}
           <Button
             variant="outline"
-            size="sm"
+            size={compactPreview ? "icon-sm" : "sm"}
             onClick={() => setRefreshKey((k) => k + 1)}
             disabled={visibleLoading}
-            className="h-7 gap-1.5 px-2.5 text-xs"
+            className={cn("h-7 gap-1.5 text-xs", compactPreview ? "w-7 px-0" : "px-2.5")}
+            aria-label="Refresh presentation"
           >
             <RefreshCwIcon className={cn("size-3.5", visibleLoading && "animate-spin")} />
-            Refresh
+            <span className={cn(compactPreview && "sr-only")}>Refresh</span>
           </Button>
         </div>
       </div>
@@ -211,15 +221,23 @@ export function PptxPreview({ path }: PptxPreviewProps) {
             No slides to preview.
           </div>
         ) : layoutMode === "deck" ? (
-          <div className="flex min-h-0 flex-1 gap-3">
-            <div className="flex w-40 shrink-0 flex-col gap-1.5 overflow-y-auto border-r border-border/50 pr-2 select-none">
+          <div className={cn("flex min-h-0 flex-1 gap-3", compactPreview && "flex-col")}>
+            <div
+              className={cn(
+                "flex shrink-0 gap-1.5 select-none",
+                compactPreview
+                  ? "order-2 h-24 w-full flex-row overflow-x-auto border-t border-border/50 pt-2"
+                  : "w-40 flex-col overflow-y-auto border-r border-border/50 pr-2",
+              )}
+            >
               {visibleSlides.map((s, idx) => (
                 <button
                   type="button"
                   key={s.slideIndex}
                   onClick={() => setActiveIndex(idx)}
                   className={cn(
-                    "flex w-full flex-col gap-1 rounded-md border p-1.5 text-left transition-colors",
+                    "flex flex-col gap-1 rounded-md border p-1.5 text-left transition-colors",
+                    compactPreview ? "w-28 shrink-0" : "w-full",
                     idx === activeIndex
                       ? "border-primary/50 bg-primary/8"
                       : "border-transparent bg-muted/15 hover:border-border/60 hover:bg-muted/30",
@@ -242,7 +260,9 @@ export function PptxPreview({ path }: PptxPreviewProps) {
               ))}
             </div>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div
+              className={cn("flex min-h-0 min-w-0 flex-1 flex-col", compactPreview && "order-1")}
+            >
               <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border border-border/50 bg-muted/15 p-3">
                 {activeSlide ? (
                   <img
@@ -286,7 +306,10 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              className="grid gap-3"
+              style={{ gridTemplateColumns: `repeat(${gridColumnCount}, minmax(0, 1fr))` }}
+            >
               {visibleSlides.map((s, idx) => (
                 <button
                   type="button"

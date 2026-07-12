@@ -47,4 +47,33 @@ describe("desktop sidebar resizer", () => {
       harness.restore();
     }
   });
+
+  test.serial("reports and enforces the viewport-aware effective maximum", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      resetAppStore({ sidebarWidth: 440 });
+
+      await act(async () => {
+        root.render(createElement(SidebarResizer, { effectiveWidth: 240, maximumWidth: 240 }));
+      });
+
+      const separator = container.querySelector<HTMLElement>('[aria-label="Resize sidebar"]');
+      expect(separator?.getAttribute("aria-valuenow")).toBe("240");
+      expect(separator?.getAttribute("aria-valuemax")).toBe("240");
+      await act(async () => {
+        separator?.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }),
+        );
+      });
+      expect(useAppStore.getState().sidebarWidth).toBe(240);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
 });

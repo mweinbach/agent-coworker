@@ -5,7 +5,17 @@ import { useAppStore } from "../../app/store";
 import { isCanvasSupportedFile } from "../../lib/filePreviewKind";
 import { cn } from "../../lib/utils";
 
-export function ContextSidebarResizer() {
+type ContextSidebarResizerProps = {
+  effectiveWidth?: number;
+  maximumWidth?: number;
+  minimumWidth?: number;
+};
+
+export function ContextSidebarResizer({
+  effectiveWidth,
+  maximumWidth,
+  minimumWidth,
+}: ContextSidebarResizerProps = {}) {
   const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
   const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
   const filePreview = useAppStore((s) => s.filePreview);
@@ -19,11 +29,26 @@ export function ContextSidebarResizer() {
 
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
   const showCanvas = canvasEnabled && isCanvasSupported;
-  const activeWidth = showCanvas
+  const savedActiveWidth = showCanvas
     ? canvasSidebarWidth
     : view === "task"
-      ? Math.max(contextSidebarWidth, 420)
+      ? Math.max(contextSidebarWidth, 360)
       : contextSidebarWidth;
+  const resolvedMinimumWidth = minimumWidth ?? (view === "task" && !showCanvas ? 360 : 200);
+  const resolvedMaximumWidth = Math.max(
+    resolvedMinimumWidth,
+    maximumWidth ?? (showCanvas ? 900 : 600),
+  );
+  const activeWidth = Math.max(
+    resolvedMinimumWidth,
+    Math.min(resolvedMaximumWidth, effectiveWidth ?? savedActiveWidth),
+  );
+
+  const commitWidth = useCallback(
+    (width: number) =>
+      setContextSidebarWidth(Math.max(resolvedMinimumWidth, Math.min(resolvedMaximumWidth, width))),
+    [resolvedMaximumWidth, resolvedMinimumWidth, setContextSidebarWidth],
+  );
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
@@ -41,19 +66,19 @@ export function ContextSidebarResizer() {
       const step = event.shiftKey ? 32 : 16;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setContextSidebarWidth(activeWidth + step); // Moving left makes right sidebar wider
+        commitWidth(activeWidth + step); // Moving left makes right sidebar wider
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        setContextSidebarWidth(activeWidth - step); // Moving right makes right sidebar narrower
+        commitWidth(activeWidth - step); // Moving right makes right sidebar narrower
       } else if (event.key === "Home") {
         event.preventDefault();
-        setContextSidebarWidth(view === "task" ? 420 : 200);
+        commitWidth(resolvedMinimumWidth);
       } else if (event.key === "End") {
         event.preventDefault();
-        setContextSidebarWidth(showCanvas ? 900 : 600);
+        commitWidth(resolvedMaximumWidth);
       }
     },
-    [setContextSidebarWidth, activeWidth, showCanvas, view],
+    [activeWidth, commitWidth, resolvedMaximumWidth, resolvedMinimumWidth],
   );
 
   useEffect(() => {
@@ -69,7 +94,7 @@ export function ContextSidebarResizer() {
       if (pendingWidth === null) {
         return;
       }
-      setContextSidebarWidth(pendingWidth);
+      commitWidth(pendingWidth);
       pendingWidth = null;
     };
 
@@ -88,7 +113,7 @@ export function ContextSidebarResizer() {
         frameId = null;
       }
       if (pendingWidth !== null) {
-        setContextSidebarWidth(pendingWidth);
+        commitWidth(pendingWidth);
         pendingWidth = null;
       }
       document.body.classList.remove("app-resizing-sidebars");
@@ -108,7 +133,7 @@ export function ContextSidebarResizer() {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dragging, setContextSidebarWidth]);
+  }, [commitWidth, dragging]);
 
   return (
     <hr
@@ -118,8 +143,8 @@ export function ContextSidebarResizer() {
       )}
       aria-orientation="vertical"
       aria-label="Resize context sidebar"
-      aria-valuemin={view === "task" && !showCanvas ? 420 : 200}
-      aria-valuemax={showCanvas ? 900 : 600}
+      aria-valuemin={resolvedMinimumWidth}
+      aria-valuemax={resolvedMaximumWidth}
       aria-valuenow={activeWidth}
       tabIndex={0}
       onPointerDown={handlePointerDown}

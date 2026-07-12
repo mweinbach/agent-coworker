@@ -1,13 +1,17 @@
-import { PlusIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { HistoryIcon, PlusIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { ResearchCard } from "../app/types";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { useElementWidth } from "../lib/useElementWidth";
+import { cn } from "../lib/utils";
 import { NewResearchComposer } from "./research/NewResearchComposer";
 import { ResearchCardGrid } from "./research/ResearchCardGrid";
 import { ResearchDetailPane } from "./research/ResearchDetailPane";
+
+const RESEARCH_SPLIT_MIN_WIDTH = 808;
 
 export function ResearchView() {
   const researchById = useAppStore((s) => s.researchById);
@@ -17,6 +21,9 @@ export function ResearchView() {
   const researchListLoading = useAppStore((s) => s.researchListLoading);
   const refreshResearchList = useAppStore((s) => s.refreshResearchList);
   const selectResearch = useAppStore((s) => s.selectResearch);
+  const viewRef = useRef<HTMLDivElement | null>(null);
+  const viewWidth = useElementWidth(viewRef);
+  const [compactHistoryOpen, setCompactHistoryOpen] = useState(false);
 
   const research = useMemo(
     () =>
@@ -26,14 +33,30 @@ export function ResearchView() {
     [researchById, researchOrder],
   );
   const selectedResearch = selectedResearchId ? (researchById[selectedResearchId] ?? null) : null;
+  const compact = viewWidth > 0 && viewWidth < RESEARCH_SPLIT_MIN_WIDTH;
 
   useEffect(() => {
     void refreshResearchList();
   }, [refreshResearchList]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-row">
-      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-background">
+    <div
+      ref={viewRef}
+      className="flex h-full min-h-0 min-w-0 flex-row"
+      data-research-layout={compact ? "compact" : "split"}
+    >
+      <section
+        aria-hidden={compact && !compactHistoryOpen ? "true" : undefined}
+        className={cn(
+          "min-h-0 flex-col bg-background",
+          compact
+            ? compactHistoryOpen
+              ? "flex w-full min-w-0"
+              : "hidden"
+            : "flex w-[clamp(18rem,26vw,23.75rem)] min-w-[18rem] shrink-0 border-r border-border/40",
+        )}
+        inert={compact && !compactHistoryOpen ? true : undefined}
+      >
         <div className="border-b border-border/35 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -49,7 +72,10 @@ export function ResearchView() {
               type="button"
               variant="secondary"
               className="h-8 gap-1.5 rounded-md border-border/60 bg-background/70 px-3 text-xs"
-              onClick={() => selectResearch(null)}
+              onClick={() => {
+                setCompactHistoryOpen(false);
+                selectResearch(null);
+              }}
               disabled={selectedResearchId === null}
             >
               <PlusIcon className="h-3.5 w-3.5" />
@@ -78,7 +104,10 @@ export function ResearchView() {
             <ResearchCardGrid
               research={research}
               selectedResearchId={selectedResearchId}
-              onSelectResearch={(researchId) => void selectResearch(researchId)}
+              onSelectResearch={(researchId) => {
+                setCompactHistoryOpen(false);
+                void selectResearch(researchId);
+              }}
             />
           ) : (
             <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
@@ -92,7 +121,10 @@ export function ResearchView() {
                 size="sm"
                 variant="secondary"
                 className="mt-4 h-8 gap-1.5 rounded-md px-3 text-xs"
-                onClick={() => selectResearch(null)}
+                onClick={() => {
+                  setCompactHistoryOpen(false);
+                  selectResearch(null);
+                }}
               >
                 <PlusIcon className="h-3.5 w-3.5" />
                 New research
@@ -102,7 +134,32 @@ export function ResearchView() {
         </div>
       </section>
 
-      <section className="min-h-0 min-w-0 flex-1">
+      <section
+        aria-hidden={compact && compactHistoryOpen ? "true" : undefined}
+        className={cn(
+          "min-h-0 min-w-0 flex-1 flex-col",
+          compact && compactHistoryOpen ? "hidden" : "flex",
+        )}
+        inert={compact && compactHistoryOpen ? true : undefined}
+      >
+        {compact ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-background px-3 py-2">
+            <Button
+              aria-label="Open research history"
+              className="gap-1.5"
+              onClick={() => setCompactHistoryOpen(true)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <HistoryIcon data-icon="inline-start" />
+              History
+            </Button>
+            <span className="min-w-0 truncate text-sm font-medium text-foreground">
+              {selectedResearch?.title ?? "New research"}
+            </span>
+          </div>
+        ) : null}
         {selectedResearch ? (
           <ResearchDetailPane key={selectedResearch.id} research={selectedResearch} />
         ) : (

@@ -33,3 +33,15 @@ test("desktop app names itself before userData-backed services initialize", asyn
   expect(userDataOverrideIndex).toBeLessThan(remoteDebugIndex);
   expect(userDataOverrideIndex).toBeLessThan(singleInstanceLockIndex);
 });
+
+test("desktop main window applies the adaptive narrow-width guard", async () => {
+  const source = await fs.readFile(new URL("../electron/main.ts", import.meta.url), "utf8");
+
+  const mainWindowStart = source.indexOf("async function createMainWindow");
+  const quickChatStart = source.indexOf("async function createQuickChatWindow");
+  const mainWindowSource = source.slice(mainWindowStart, quickChatStart);
+
+  expect(mainWindowStart).toBeGreaterThanOrEqual(0);
+  expect(quickChatStart).toBeGreaterThan(mainWindowStart);
+  expect(mainWindowSource).toContain("minWidth: MAIN_WINDOW_MIN_WIDTH");
+});

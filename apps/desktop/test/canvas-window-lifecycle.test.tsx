@@ -224,15 +224,28 @@ describe("canvas window lifecycle", () => {
         createdRoot.render(createElement(App));
         await flushUi();
       });
-      const popOut = harness.dom.window.document.querySelector(
-        'button[aria-label="Open canvas in window"]',
+      const viewOptions = harness.dom.window.document.querySelector(
+        'button[aria-label="Canvas view options"]',
       );
-      if (!(popOut instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing pop-out button");
+      if (!(viewOptions instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Canvas view options");
       }
 
       await act(async () => {
-        popOut.click();
+        viewOptions.dispatchEvent(
+          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+        );
+        await flushUi();
+      });
+      const popOut = Array.from(
+        harness.dom.window.document.body.querySelectorAll('[role="menuitem"]'),
+      ).find((item) => item.textContent?.includes("Open in window"));
+      if (!popOut) {
+        throw new Error("missing compact Canvas pop-out action");
+      }
+
+      await act(async () => {
+        popOut.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
         await flushUi();
       });
 

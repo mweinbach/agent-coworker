@@ -24,6 +24,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "../components/ui/command";
+import { requestDesktopRailCommand } from "../lib/desktopRailCommands";
 import { getSettingsGroups } from "./settings/SettingsShell";
 
 export type CommandPaletteProps = {
@@ -64,7 +65,6 @@ export const CommandPalette = memo(function CommandPalette({
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
-  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
 
   const selectThread = useAppStore((s) => s.selectThread);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
@@ -73,7 +73,6 @@ export const CommandPalette = memo(function CommandPalette({
   const openNewTask = useAppStore((s) => s.openNewTask);
   const openResearch = useAppStore((s) => s.openResearch);
   const cancelThread = useAppStore((s) => s.cancelThread);
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
 
   // Recent ordinary chat threads, newest first.
   const recentThreads = useMemo(() => {
@@ -179,9 +178,9 @@ export const CommandPalette = memo(function CommandPalette({
   }, [cancelThread, close, selectedThreadBusy, selectedThreadId]);
 
   const handleToggleSidebarClick = useCallback(() => {
-    toggleSidebar();
+    requestDesktopRailCommand("toggle-sidebar");
     close();
-  }, [close, toggleSidebar]);
+  }, [close]);
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
@@ -215,7 +214,7 @@ export const CommandPalette = memo(function CommandPalette({
           ) : null}
           <CommandItem onSelect={handleToggleSidebarClick} value="toggle sidebar">
             <PanelLeftIcon />
-            <span>{sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
+            <span>Toggle sidebar</span>
             <CommandKbd keys={[MOD, "B"]} />
           </CommandItem>
           <CommandItem onSelect={handleOpenSkills} value="browse skills">

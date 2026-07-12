@@ -104,7 +104,7 @@
   -webkit-app-region: drag;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 719px) {
   :root[data-platform="darwin"] .settings-shell__drag-zone {
     left: 0;
   }

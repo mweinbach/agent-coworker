@@ -706,7 +706,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
       )}
       data-cowork-univer-canvas="true"
     >
-      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-[var(--surface-spreadsheet)] px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-[var(--surface-spreadsheet)] px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <SaveStateIcon state={saveState} />
           <span className="truncate">{statusLabel}</span>
@@ -722,7 +722,10 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
           </span>
         ) : null}
         <form
-          className="ml-auto flex min-w-[260px] max-w-[560px] flex-1 items-center gap-2"
+          className={cn(
+            "ml-auto flex min-w-0 flex-1 items-center gap-2",
+            compact ? "order-last basis-full max-w-none" : "max-w-[560px] basis-[260px]",
+          )}
           onSubmit={handlePromptSubmit}
         >
           <Input

@@ -763,6 +763,53 @@ describe("desktop app top bar", () => {
     }
   });
 
+  test("keeps the context and close controls visible while compacting secondary Canvas actions", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            compactToolbar: true,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: true,
+            sidebarWidth: 0,
+            sidebarToggleLabel: "Show sidebar",
+            contextSidebarCollapsed: false,
+            contextSidebarToggleLabel: "Close context",
+            onToggleContextSidebar: () => {},
+            title: "Workbook",
+            subtitle: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+            showContextToggle: true,
+            canvasMode: true,
+            canvasMaximized: false,
+            onToggleCanvasMaximized: () => {},
+            onPopOutCanvas: () => {},
+            onCloseCanvas: () => {},
+          }),
+        );
+      });
+
+      expect(container.querySelector('button[aria-label="Close context"]')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="Close canvas"]')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="Canvas view options"]')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="Open canvas in window"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Maximize canvas"]')).toBeNull();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("consumes Escape while the thread details popover is open", async () => {
     const harness = setupJsdom();
 

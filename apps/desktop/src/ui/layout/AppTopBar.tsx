@@ -36,11 +36,14 @@ import { PlatformTopBarChrome } from "./PlatformTopBarChrome";
 
 interface AppTopBarProps {
   busy: boolean;
+  compactToolbar?: boolean;
   onToggleSidebar: () => void;
   onNewChat: () => void;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  sidebarToggleLabel?: string;
   contextSidebarCollapsed: boolean;
+  contextSidebarToggleLabel?: string;
   onToggleContextSidebar: () => void;
   onPopOutQuickChat?: () => void;
   title: string;
@@ -236,11 +239,14 @@ function formatTurnSummary(summary: TopBarUsageSummary): string {
 
 export function AppTopBar({
   busy,
+  compactToolbar = false,
   onToggleSidebar,
   onNewChat,
   sidebarCollapsed,
   sidebarWidth,
+  sidebarToggleLabel,
   contextSidebarCollapsed,
+  contextSidebarToggleLabel,
   onToggleContextSidebar,
   onPopOutQuickChat,
   title,
@@ -280,7 +286,7 @@ export function AppTopBar({
   const usesLeftRail = platformInfo.topbarControlPlacement === "left-rail";
   const collapsedRailWidth = resolveCollapsedLeftRailWidth(platformInfo);
   const showCollapsedLeftRail = usesLeftRail && sidebarCollapsed;
-  const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
+  const sidebarLabel = sidebarToggleLabel ?? (sidebarCollapsed ? "Show sidebar" : "Hide sidebar");
   const contentFillLeft = usesLeftRail
     ? sidebarCollapsed
       ? collapsedRailWidth
@@ -288,7 +294,8 @@ export function AppTopBar({
     : sidebarCollapsed
       ? 0
       : sidebarWidth;
-  const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
+  const rightSidebarLabel =
+    contextSidebarToggleLabel ?? (contextSidebarCollapsed ? "Show context" : "Hide context");
   const usageSummary = useMemo(
     () => summarizeTopBarUsage(sessionUsage, agents),
     [agents, sessionUsage],
@@ -680,11 +687,15 @@ export function AppTopBar({
         >
           {busy ? (
             <Badge
+              aria-label="Busy"
               variant="secondary"
-              className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none"
+              className={cn(
+                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-[11px] text-muted-foreground shadow-none",
+                compactToolbar ? "size-7 justify-center px-0" : "px-2",
+              )}
             >
               <LoaderCircleIcon className="h-3 w-3 animate-spin" />
-              Busy
+              <span className={cn(compactToolbar && "sr-only")}>Busy</span>
             </Badge>
           ) : null}
           <DropdownMenu>
@@ -734,9 +745,37 @@ export function AppTopBar({
                   {canvasShowFormattingBar && <CheckIcon className="size-3.5 text-primary" />}
                 </DropdownMenuItem>
               ) : null}
+              {compactToolbar && onPopOutCanvas ? (
+                <DropdownMenuItem onClick={onPopOutCanvas}>
+                  <ExternalLinkIcon className="mr-2 size-3.5" />
+                  <span>Open in window</span>
+                </DropdownMenuItem>
+              ) : null}
+              {compactToolbar && onToggleCanvasMaximized ? (
+                <DropdownMenuItem onClick={onToggleCanvasMaximized}>
+                  {canvasMaximized ? (
+                    <Minimize2Icon className="mr-2 size-3.5" />
+                  ) : (
+                    <Maximize2Icon className="mr-2 size-3.5" />
+                  )}
+                  <span>{canvasMaximized ? "Restore canvas" : "Maximize canvas"}</span>
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
-          {onPopOutCanvas ? (
+          {showContextToggle ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onToggleContextSidebar}
+              title={rightSidebarLabel}
+              aria-label={rightSidebarLabel}
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <PanelRightIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {!compactToolbar && onPopOutCanvas ? (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -748,7 +787,7 @@ export function AppTopBar({
               <ExternalLinkIcon className="h-4 w-4" />
             </Button>
           ) : null}
-          {onToggleCanvasMaximized ? (
+          {!compactToolbar && onToggleCanvasMaximized ? (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -787,14 +826,39 @@ export function AppTopBar({
         >
           {busy ? (
             <Badge
+              aria-label="Busy"
               variant="secondary"
-              className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none"
+              className={cn(
+                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-[11px] text-muted-foreground shadow-none",
+                compactToolbar ? "size-7 justify-center px-0" : "px-2",
+              )}
             >
               <LoaderCircleIcon className="h-3 w-3 animate-spin" />
-              Busy
+              <span className={cn(compactToolbar && "sr-only")}>Busy</span>
             </Badge>
           ) : null}
-          {showQuickChatPopOut ? (
+          {compactToolbar && showQuickChatPopOut ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  title="More actions"
+                  aria-label="More thread actions"
+                  className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+                >
+                  <MoreVerticalIcon className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44 outline-none">
+                <DropdownMenuItem onClick={onPopOutQuickChat}>
+                  <ArrowUpRightIcon className="mr-2 size-3.5" />
+                  <span>Open quick chat</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {!compactToolbar && showQuickChatPopOut ? (
             <Button
               size="icon-sm"
               variant="ghost"

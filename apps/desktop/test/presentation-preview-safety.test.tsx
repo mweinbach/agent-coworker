@@ -12,6 +12,37 @@ import { PptxPreview } from "../src/ui/PptxPreview";
 import { SlidePreview } from "../src/ui/SlidePreview";
 import { setupJsdom } from "./jsdomHarness";
 
+class PresentationResizeObserver {
+  static callbacks = new Set<ResizeObserverCallback>();
+  static width = 480;
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    PresentationResizeObserver.callbacks.add(callback);
+  }
+
+  observe(target: Element) {
+    this.callback(
+      [{ target, contentRect: { width: PresentationResizeObserver.width } } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  disconnect() {
+    PresentationResizeObserver.callbacks.delete(this.callback);
+  }
+
+  unobserve() {}
+
+  static trigger(target: Element, width: number) {
+    PresentationResizeObserver.width = width;
+    for (const callback of PresentationResizeObserver.callbacks) {
+      callback([{ target, contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+    }
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -78,6 +109,65 @@ function configurePresentationStore(
 }
 
 describe("presentation preview path safety", () => {
+  test.serial("PptxPreview adapts to its container without losing the active slide", async () => {
+    const harness = setupJsdom({
+      extraGlobals: { ResizeObserver: PresentationResizeObserver },
+    });
+    __internalFilePreviewResources.clear();
+    const deckPath = "/workspace/adaptive.pptx";
+    const loader = mock(
+      async (): Promise<PresentationPreviewResult> => ({
+        ok: true,
+        dependencies: [deckPath],
+        path: deckPath,
+        slides: [
+          { slideIndex: 0, title: "First", pngBase64: "data:image/png;base64,QQ==" },
+          { slideIndex: 1, title: "Second", pngBase64: "data:image/png;base64,Qg==" },
+        ],
+        version: {
+          modifiedAtMs: 1,
+          changeTimeMs: 1,
+          size: 20,
+          fingerprint: "adaptive:20",
+        },
+      }),
+    );
+    configurePresentationStore(loader);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(createElement(PptxPreview, { path: deckPath }));
+        await flushUi();
+      });
+      await waitForUi(() => container.textContent?.includes("Second") === true);
+
+      const preview = container.querySelector<HTMLElement>("[data-presentation-layout]");
+      expect(preview?.dataset.presentationLayout).toBe("compact");
+      expect(container.querySelector('button[aria-label="Refresh presentation"]')).not.toBeNull();
+
+      const secondThumbnail = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Second"),
+      );
+      await act(async () => secondThumbnail?.click());
+      expect(container.querySelector('img[alt="Second"]')).not.toBeNull();
+
+      await act(async () => {
+        if (preview) PresentationResizeObserver.trigger(preview, 700);
+      });
+      expect(preview?.dataset.presentationLayout).toBe("full");
+      expect(container.querySelector('img[alt="Second"]')).not.toBeNull();
+
+      await act(async () => root.unmount());
+    } finally {
+      PresentationResizeObserver.callbacks.clear();
+      PresentationResizeObserver.width = 480;
+      harness.restore();
+    }
+  });
+
   test.serial("SlidePreview ignores an A completion after switching to B", async () => {
     const harness = setupJsdom();
     __internalFilePreviewResources.clear();

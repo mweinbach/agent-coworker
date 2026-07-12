@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type * as Electron from "electron";
+import { MAIN_WINDOW_MIN_WIDTH } from "../../src/lib/adaptiveLayout";
 
 /**
  * Persisted main-window bounds. Kept in a dedicated `window-state.json`
@@ -76,7 +77,10 @@ export async function loadMainWindowBounds(
   // Clamp size to the work area too — otherwise a window saved at 2560×1600 on a
   // 4K monitor reopens oversized on a 1920×1080 laptop (only a sliver visible
   // and the off-screen resize edge is hard to grab on Windows).
-  const width = Math.min(saved.width, workArea.width);
+  const width = Math.max(
+    Math.min(MAIN_WINDOW_MIN_WIDTH, workArea.width),
+    Math.min(saved.width, workArea.width),
+  );
   const height = Math.min(saved.height, workArea.height);
   const minVisibleWidth = Math.min(200, width);
   const minVisibleHeight = Math.min(120, height);

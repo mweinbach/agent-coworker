@@ -55,7 +55,11 @@ function agentUsageLabel(agent: ThreadAgentSummary): string | null {
   return `${tokenLabel} · ${costLabel}`;
 }
 
-export const ContextSidebar = memo(function ContextSidebar() {
+export const ContextSidebar = memo(function ContextSidebar({
+  active = true,
+}: {
+  active?: boolean;
+}) {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const threadRuntime = useAppStore((s) =>
@@ -211,7 +215,11 @@ export const ContextSidebar = memo(function ContextSidebar() {
       >
         {selectedWorkspaceId ? (
           <InlineErrorBoundary label="This workspace's files couldn't be loaded.">
-            <WorkspaceFileExplorer workspaceId={selectedWorkspaceId} className="h-full" />
+            <WorkspaceFileExplorer
+              active={active}
+              workspaceId={selectedWorkspaceId}
+              className="h-full"
+            />
           </InlineErrorBoundary>
         ) : (
           <>

@@ -243,7 +243,7 @@
   -webkit-backdrop-filter: none;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 719px) {
   :root[data-platform="linux"] .settings-shell__drag-zone,
   :root[data-platform="linux"] .settings-shell__titleband-fill {
     left: 0;

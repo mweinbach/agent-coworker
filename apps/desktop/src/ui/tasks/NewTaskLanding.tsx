@@ -319,7 +319,7 @@ export function NewTaskLanding() {
 
         <form
           onSubmit={submit}
-          className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]"
+          className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-5"
         >
           <div className="flex flex-col gap-5">
             <Card className="gap-5 py-5 shadow-none">
@@ -481,7 +481,7 @@ export function NewTaskLanding() {
                             }
                           />
                         </Field>
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                           <Field>
                             <FieldLabel htmlFor={`work-item-dependencies-${item.id}`}>
                               Depends on

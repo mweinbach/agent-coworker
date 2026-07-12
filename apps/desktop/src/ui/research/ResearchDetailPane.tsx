@@ -14,6 +14,7 @@ import type { ResearchDetail } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { formatRelativeAge } from "../../lib/time";
+import { useElementWidth } from "../../lib/useElementWidth";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
@@ -73,35 +74,6 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
     return 0;
   }
   return Math.max(0, nowMs - startedMs);
-}
-
-function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>): number {
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) {
-      return;
-    }
-
-    setWidth(node.getBoundingClientRect().width);
-
-    if (typeof ResizeObserver !== "function") {
-      return;
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      const nextWidth = entries[0]?.contentRect.width;
-      if (typeof nextWidth === "number") {
-        setWidth(nextWidth);
-      }
-    });
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [ref]);
-
-  return width;
 }
 
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {

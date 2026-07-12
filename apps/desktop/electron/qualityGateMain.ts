@@ -1724,14 +1724,6 @@ async function loadWindow(
   const targetWidth = isMain ? contentWidth : mode === "quick-chat" ? 337 : 800;
   const targetHeight = isMain ? contentHeight : mode === "quick-chat" ? 552 : 600;
   win.setContentSize(targetWidth, targetHeight);
-  const [actualWidth, actualHeight] = win.getContentSize();
-  if (actualWidth !== targetWidth || actualHeight !== targetHeight) {
-    const [windowWidth, windowHeight] = win.getSize();
-    win.setSize(
-      windowWidth + targetWidth - actualWidth,
-      windowHeight + targetHeight - actualHeight,
-    );
-  }
 }
 
 async function createWindow(

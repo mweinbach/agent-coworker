@@ -18,6 +18,12 @@ import { GroupedSection } from "@/components/pairing/grouped-list";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+  useReducedMotionEnabled,
+} from "@/features/accessibility/mobile-accessibility";
 import { type McpUpsertServer, useMcpStore } from "@/features/cowork/mcpStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
@@ -143,6 +149,8 @@ export default function McpServersScreen() {
   const [previousName, setPreviousName] = useState<string | undefined>(undefined);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<string, string>>({});
+  const reducedMotionEnabled = useReducedMotionEnabled();
+  useAccessibilityAnnouncement(error ?? (loading ? "Loading integrations" : null));
 
   useEffect(() => {
     if (isConnected) {
@@ -192,9 +200,10 @@ export default function McpServersScreen() {
     <Screen scroll avoidKeyboard contentStyle={{ gap: 18 }}>
       <Modal
         visible={editorVisible}
-        animationType="slide"
+        animationType={reducedMotionEnabled ? "none" : "slide"}
         presentationStyle="pageSheet"
         onRequestClose={() => setEditorVisible(false)}
+        accessibilityViewIsModal
       >
         <KeyboardAvoidingView
           style={{ flex: 1, backgroundColor: theme.background }}
@@ -212,10 +221,19 @@ export default function McpServersScreen() {
                 alignItems: "center",
               }}
             >
-              <Text style={{ color: theme.text, fontSize: 22, fontWeight: "800" }}>
+              <Text
+                accessibilityRole="header"
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                style={{ color: theme.text, fontSize: 22, fontWeight: "800" }}
+              >
                 {previousName ? "Edit integration" : "New integration"}
               </Text>
-              <Pressable onPress={() => setEditorVisible(false)}>
+              <Pressable
+                accessibilityLabel="Close integration editor"
+                accessibilityRole="button"
+                onPress={() => setEditorVisible(false)}
+                style={{ minHeight: minimumTouchTarget(), justifyContent: "center" }}
+              >
                 <Text style={{ color: theme.primary, fontSize: 16, fontWeight: "700" }}>Close</Text>
               </Pressable>
             </View>
@@ -223,6 +241,7 @@ export default function McpServersScreen() {
             <SectionCard title="Connection" description="Basic server transport and auth settings.">
               <View style={{ gap: 12 }}>
                 <TextInput
+                  accessibilityLabel="Integration name"
                   value={draft.name}
                   onChangeText={(value) => setDraft((state) => ({ ...state, name: value }))}
                   placeholder="Server name"
@@ -230,6 +249,7 @@ export default function McpServersScreen() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   style={{
+                    minHeight: minimumTouchTarget(),
                     borderRadius: 14,
                     borderWidth: 1,
                     borderColor: theme.border,
@@ -245,8 +265,13 @@ export default function McpServersScreen() {
                   {(["stdio", "http", "sse"] as const).map((transportType) => (
                     <Pressable
                       key={transportType}
+                      accessibilityLabel={`${transportType} transport`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: draft.transportType === transportType }}
                       onPress={() => setDraft((state) => ({ ...state, transportType }))}
                       style={{
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
                         borderRadius: 999,
                         borderWidth: 1,
                         borderColor:
@@ -273,6 +298,7 @@ export default function McpServersScreen() {
                 {draft.transportType === "stdio" ? (
                   <>
                     <TextInput
+                      accessibilityLabel="Integration command"
                       value={draft.command}
                       onChangeText={(value) => setDraft((state) => ({ ...state, command: value }))}
                       placeholder="Command"
@@ -280,6 +306,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -291,6 +318,7 @@ export default function McpServersScreen() {
                       }}
                     />
                     <TextInput
+                      accessibilityLabel="Integration command arguments"
                       value={draft.args}
                       onChangeText={(value) => setDraft((state) => ({ ...state, args: value }))}
                       placeholder="Args (space separated)"
@@ -298,6 +326,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -309,6 +338,7 @@ export default function McpServersScreen() {
                       }}
                     />
                     <TextInput
+                      accessibilityLabel="Integration working directory"
                       value={draft.cwd}
                       onChangeText={(value) => setDraft((state) => ({ ...state, cwd: value }))}
                       placeholder="Working directory (optional)"
@@ -316,6 +346,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -329,6 +360,7 @@ export default function McpServersScreen() {
                   </>
                 ) : (
                   <TextInput
+                    accessibilityLabel="Integration URL"
                     value={draft.url}
                     onChangeText={(value) => setDraft((state) => ({ ...state, url: value }))}
                     placeholder="https://example.com/mcp"
@@ -336,6 +368,7 @@ export default function McpServersScreen() {
                     autoCapitalize="none"
                     autoCorrect={false}
                     style={{
+                      minHeight: minimumTouchTarget(),
                       borderRadius: 14,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -359,6 +392,9 @@ export default function McpServersScreen() {
                     Required
                   </Text>
                   <Switch
+                    accessibilityLabel="Integration required"
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: draft.required }}
                     value={draft.required}
                     onValueChange={(value) => setDraft((state) => ({ ...state, required: value }))}
                     trackColor={{ true: theme.primary, false: theme.surfaceMuted }}
@@ -377,8 +413,13 @@ export default function McpServersScreen() {
                   {(["none", "api_key", "oauth"] as const).map((authType) => (
                     <Pressable
                       key={authType}
+                      accessibilityLabel={`${authType} authentication`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: draft.authType === authType }}
                       onPress={() => setDraft((state) => ({ ...state, authType }))}
                       style={{
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
                         borderRadius: 999,
                         borderWidth: 1,
                         borderColor: draft.authType === authType ? theme.primary : theme.border,
@@ -403,6 +444,7 @@ export default function McpServersScreen() {
                 {draft.authType === "api_key" ? (
                   <>
                     <TextInput
+                      accessibilityLabel="API key header name"
                       value={draft.headerName}
                       onChangeText={(value) =>
                         setDraft((state) => ({ ...state, headerName: value }))
@@ -412,6 +454,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -423,6 +466,7 @@ export default function McpServersScreen() {
                       }}
                     />
                     <TextInput
+                      accessibilityLabel="API key prefix"
                       value={draft.prefix}
                       onChangeText={(value) => setDraft((state) => ({ ...state, prefix: value }))}
                       placeholder="Prefix (optional)"
@@ -430,6 +474,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -449,8 +494,13 @@ export default function McpServersScreen() {
                       {(["auto", "code"] as const).map((oauthMode) => (
                         <Pressable
                           key={oauthMode}
+                          accessibilityLabel={`${oauthMode} OAuth mode`}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected: draft.oauthMode === oauthMode }}
                           onPress={() => setDraft((state) => ({ ...state, oauthMode }))}
                           style={{
+                            minHeight: minimumTouchTarget(),
+                            justifyContent: "center",
                             borderRadius: 999,
                             borderWidth: 1,
                             borderColor:
@@ -473,6 +523,7 @@ export default function McpServersScreen() {
                       ))}
                     </View>
                     <TextInput
+                      accessibilityLabel="OAuth scope"
                       value={draft.scope}
                       onChangeText={(value) => setDraft((state) => ({ ...state, scope: value }))}
                       placeholder="OAuth scope"
@@ -480,6 +531,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -491,6 +543,7 @@ export default function McpServersScreen() {
                       }}
                     />
                     <TextInput
+                      accessibilityLabel="OAuth resource"
                       value={draft.resource}
                       onChangeText={(value) => setDraft((state) => ({ ...state, resource: value }))}
                       placeholder="OAuth resource"
@@ -498,6 +551,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -514,10 +568,16 @@ export default function McpServersScreen() {
             </SectionCard>
 
             <Pressable
+              accessibilityLabel="Save integration"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !draft.name.trim() }}
+              disabled={!draft.name.trim()}
               onPress={() => {
                 void saveDraft();
               }}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: 999,
                 backgroundColor: pressed ? theme.accent : theme.primary,
                 paddingHorizontal: 18,
@@ -553,8 +613,12 @@ export default function McpServersScreen() {
       >
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Pressable
+            accessibilityLabel="Add integration"
+            accessibilityRole="button"
             onPress={openCreate}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: 999,
               backgroundColor: pressed ? theme.accent : theme.primary,
               paddingHorizontal: 16,
@@ -620,7 +684,7 @@ export default function McpServersScreen() {
                 </View>
                 <Text
                   selectable
-                  numberOfLines={1}
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
                   style={{ fontSize: 12, color: theme.textSecondary }}
                 >
                   {transportSummary(server)}
@@ -645,6 +709,7 @@ export default function McpServersScreen() {
                 {server.auth?.type === "api_key" ? (
                   <View style={{ gap: 8 }}>
                     <TextInput
+                      accessibilityLabel={`API key for ${server.name}`}
                       value={apiKeyDrafts[server.name] ?? ""}
                       onChangeText={(value) => {
                         setApiKeyDrafts((state) => ({ ...state, [server.name]: value }));
@@ -655,6 +720,7 @@ export default function McpServersScreen() {
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={{
+                        minHeight: minimumTouchTarget(),
                         borderRadius: 14,
                         borderWidth: 1,
                         borderColor: theme.border,
@@ -666,6 +732,12 @@ export default function McpServersScreen() {
                       }}
                     />
                     <Pressable
+                      accessibilityLabel={`Save API key for ${server.name}`}
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        disabled: !apiKeyDrafts[server.name]?.trim(),
+                      }}
+                      disabled={!apiKeyDrafts[server.name]?.trim()}
                       onPress={() => {
                         const nextValue = apiKeyDrafts[server.name]?.trim();
                         if (!nextValue) return;
@@ -673,6 +745,8 @@ export default function McpServersScreen() {
                         setApiKeyDrafts((state) => ({ ...state, [server.name]: "" }));
                       }}
                       style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
                         alignSelf: "flex-start",
                         borderRadius: 999,
                         backgroundColor: pressed ? theme.accent : theme.primary,
@@ -690,10 +764,14 @@ export default function McpServersScreen() {
                 {server.auth?.type === "oauth" ? (
                   <View style={{ gap: 8 }}>
                     <Pressable
+                      accessibilityLabel={`Authenticate ${server.name}`}
+                      accessibilityRole="button"
                       onPress={() => {
                         void authorizeServer(server.name);
                       }}
                       style={({ pressed }) => ({
+                        minHeight: minimumTouchTarget(),
+                        justifyContent: "center",
                         alignSelf: "flex-start",
                         borderRadius: 999,
                         backgroundColor: pressed ? theme.accent : theme.primary,
@@ -716,6 +794,7 @@ export default function McpServersScreen() {
                           </Text>
                         ) : null}
                         <TextInput
+                          accessibilityLabel={`OAuth code for ${server.name}`}
                           value={oauthCodeDrafts[server.name] ?? ""}
                           onChangeText={(value) => {
                             setOauthCodeDrafts((state) => ({ ...state, [server.name]: value }));
@@ -725,6 +804,7 @@ export default function McpServersScreen() {
                           autoCapitalize="none"
                           autoCorrect={false}
                           style={{
+                            minHeight: minimumTouchTarget(),
                             borderRadius: 14,
                             borderWidth: 1,
                             borderColor: theme.border,
@@ -736,11 +816,19 @@ export default function McpServersScreen() {
                           }}
                         />
                         <Pressable
+                          accessibilityLabel={`Submit OAuth code for ${server.name}`}
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            disabled: !oauthCodeDrafts[server.name]?.trim(),
+                          }}
+                          disabled={!oauthCodeDrafts[server.name]?.trim()}
                           onPress={() => {
                             void callbackServer(server.name, oauthCodeDrafts[server.name]);
                             setOauthCodeDrafts((state) => ({ ...state, [server.name]: "" }));
                           }}
                           style={({ pressed }) => ({
+                            minHeight: minimumTouchTarget(),
+                            justifyContent: "center",
                             alignSelf: "flex-start",
                             borderRadius: 999,
                             borderWidth: 1,
@@ -772,9 +860,13 @@ export default function McpServersScreen() {
 
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   <Pressable
+                    accessibilityLabel={`Edit ${server.name}`}
+                    accessibilityRole="button"
                     onPress={() => openEdit(server)}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -786,9 +878,13 @@ export default function McpServersScreen() {
                     <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Validate ${server.name}`}
+                    accessibilityRole="button"
                     onPress={() => void validateServer(server.name)}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -802,9 +898,13 @@ export default function McpServersScreen() {
                     </Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Delete ${server.name}`}
+                    accessibilityRole="button"
                     onPress={() => handleDelete(server.name)}
                     hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.danger,

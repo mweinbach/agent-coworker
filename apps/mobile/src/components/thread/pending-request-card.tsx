@@ -1,5 +1,11 @@
+import { useRef, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 
+import {
+  announceForAccessibility,
+  minimumTouchTarget,
+  useAccessibilityFocus,
+} from "@/features/accessibility/mobile-accessibility";
 import type { PendingServerRequest } from "@/features/cowork/threadStore";
 import { alpha, radius } from "@/theme/tokens";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -10,9 +16,11 @@ type PendingRequestCardProps = {
   onChangeAskDraft: (text: string) => void;
   onAnswerOption: (answer: string) => void;
   onAnswerText: () => void;
-  onApprove: () => void;
-  onReject: () => void;
+  onApprove: () => Promise<boolean>;
+  onReject: () => Promise<boolean>;
 };
+
+type ApprovalResponseAction = "approve" | "reject";
 
 export function PendingRequestCard({
   request,
@@ -26,12 +34,52 @@ export function PendingRequestCard({
   const theme = useAppTheme();
   const isApproval = request.kind === "approval";
   const isDangerous = isApproval && request.dangerous;
+  const [respondingAction, setRespondingAction] = useState<ApprovalResponseAction | null>(null);
+  const respondingActionRef = useRef<ApprovalResponseAction | null>(null);
+  const focusRef = useAccessibilityFocus<View>(
+    `${request.threadId}:${request.itemId}:${request.requestFingerprint}`,
+  );
   // Desktop SandboxApprovalCard: quiet tinted wash (border-destructive/40 + bg-destructive/5),
   // no heavy shadow — not a loud solid border.
   const toneAccent = isDangerous ? theme.danger : theme.warning;
+  const isResponding = respondingAction !== null;
+
+  async function respondToApproval(
+    action: ApprovalResponseAction,
+    respond: () => Promise<boolean>,
+  ): Promise<void> {
+    if (respondingActionRef.current !== null) {
+      return;
+    }
+    respondingActionRef.current = action;
+    setRespondingAction(action);
+    announceForAccessibility(action === "approve" ? "Approving command" : "Declining command");
+    try {
+      const sent = await respond();
+      if (sent) {
+        announceForAccessibility(action === "approve" ? "Command approved" : "Command declined");
+      }
+    } catch {
+      announceForAccessibility(
+        action === "approve" ? "Command approval failed" : "Command decline failed",
+      );
+    } finally {
+      respondingActionRef.current = null;
+      setRespondingAction(null);
+    }
+  }
 
   return (
     <View
+      ref={focusRef}
+      accessibilityLabel={
+        request.kind === "approval"
+          ? `${isDangerous ? "Dangerous command" : "Approval needed"}. ${request.command}. ${request.reason}`
+          : `Question from Cowork. ${request.question}`
+      }
+      accessibilityLiveRegion="assertive"
+      accessibilityState={{ busy: isResponding }}
+      collapsable={false}
       style={{
         gap: 12,
         borderRadius: radius.lg,
@@ -104,6 +152,8 @@ export function PendingRequestCard({
             onChangeText={onChangeAskDraft}
             placeholder="Type a response..."
             placeholderTextColor={theme.textTertiary}
+            accessibilityLabel="Response"
+            accessibilityHint="Type an answer for Cowork"
             style={{
               minHeight: 48,
               borderRadius: radius.md,
@@ -124,6 +174,8 @@ export function PendingRequestCard({
                 accessibilityRole="button"
                 accessibilityLabel={`Answer with ${option}`}
                 style={({ pressed }) => ({
+                  minHeight: minimumTouchTarget(),
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderCurve: "continuous",
                   borderWidth: 1,
@@ -137,10 +189,14 @@ export function PendingRequestCard({
               </Pressable>
             ))}
             <Pressable
+              disabled={!askDraft.trim()}
               onPress={onAnswerText}
               accessibilityRole="button"
               accessibilityLabel="Send answer"
+              accessibilityState={{ disabled: !askDraft.trim() }}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 borderRadius: radius.md,
                 borderCurve: "continuous",
                 backgroundColor: pressed ? theme.primaryMuted : theme.primary,
@@ -155,10 +211,21 @@ export function PendingRequestCard({
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Pressable
-            onPress={onApprove}
+            disabled={isResponding}
+            onPress={() => {
+              void respondToApproval("approve", onApprove);
+            }}
             accessibilityRole="button"
-            accessibilityLabel="Approve command"
+            accessibilityLabel={
+              respondingAction === "approve" ? "Approving command" : "Approve command"
+            }
+            accessibilityState={{
+              busy: respondingAction === "approve",
+              disabled: isResponding,
+            }}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: radius.md,
               borderCurve: "continuous",
               backgroundColor: pressed ? theme.primaryMuted : theme.primary,
@@ -166,13 +233,26 @@ export function PendingRequestCard({
               paddingVertical: 10,
             })}
           >
-            <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Approve</Text>
+            <Text style={{ color: theme.primaryText, fontWeight: "600" }}>
+              {respondingAction === "approve" ? "Approving…" : "Approve"}
+            </Text>
           </Pressable>
           <Pressable
-            onPress={onReject}
+            disabled={isResponding}
+            onPress={() => {
+              void respondToApproval("reject", onReject);
+            }}
             accessibilityRole="button"
-            accessibilityLabel="Decline command"
+            accessibilityLabel={
+              respondingAction === "reject" ? "Declining command" : "Decline command"
+            }
+            accessibilityState={{
+              busy: respondingAction === "reject",
+              disabled: isResponding,
+            }}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: radius.md,
               borderCurve: "continuous",
               borderWidth: 1,
@@ -182,7 +262,9 @@ export function PendingRequestCard({
               paddingVertical: 10,
             })}
           >
-            <Text style={{ color: theme.danger, fontWeight: "600" }}>Decline</Text>
+            <Text style={{ color: theme.danger, fontWeight: "600" }}>
+              {respondingAction === "reject" ? "Declining…" : "Decline"}
+            </Text>
           </Pressable>
         </View>
       )}

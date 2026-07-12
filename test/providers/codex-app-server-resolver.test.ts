@@ -610,34 +610,37 @@ describe("codex app-server resolver", () => {
     expect(await fs.readFile(currentHostPath, "utf8")).toBe("managed code-mode host");
   });
 
-  test.serial("repairs an existing managed install that is missing the code-mode host", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-repair-"));
-    const target = { platform: "win32" as const, arch: "x64" };
-    const versionedPath = __internal.managedExecutablePath(
-      homeDir,
-      CODEX_APP_SERVER_MANAGED_VERSION,
-      target,
-    );
-    await fs.mkdir(path.dirname(versionedPath), { recursive: true });
-    await fs.writeFile(versionedPath, "managed app-server", "utf8");
-    await fs.writeFile(
-      `${versionedPath}.version`,
-      `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
-      "utf8",
-    );
+  test.serial(
+    "repairs an existing managed install that is missing the code-mode host",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-repair-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+      const versionedPath = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+      await fs.writeFile(versionedPath, "managed app-server", "utf8");
+      await fs.writeFile(
+        `${versionedPath}.version`,
+        `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
+        "utf8",
+      );
 
-    const command = await resolveCodexAppServerCommand({
-      homeDir,
-      platform: "win32",
-      arch: "x64",
-      fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
-      expectedChecksums: FAKE_ASSET_CHECKSUMS,
-    });
+      const command = await resolveCodexAppServerCommand({
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
+      });
 
-    expect(command.command).toBe(versionedPath);
-    const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
-    expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
-  });
+      expect(command.command).toBe(versionedPath);
+      const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
+      expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
+    },
+  );
 
   test.serial(
     "falls back to the installed app-server when the code-mode host repair fails",

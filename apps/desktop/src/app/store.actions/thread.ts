@@ -1396,6 +1396,7 @@ export function createThreadActions(
         messageCount: 0,
         lastEventSeq: 0,
         draft: !createSessionImmediately,
+        ...(opts?.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       };
 
       let queuedDraftSubmission = opts?.draftSubmission;
@@ -2072,6 +2073,9 @@ export function createThreadActions(
 
       if (thread.draft) {
         set((s) => ({
+          threads: s.threads.map((candidate) =>
+            candidate.id === threadId ? { ...candidate, reasoningEffort: undefined } : candidate,
+          ),
           threadRuntimeById: {
             ...s.threadRuntimeById,
             [threadId]: {
@@ -2082,12 +2086,16 @@ export function createThreadActions(
             },
           },
         }));
+        persist(get);
         return;
       }
 
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
       set((state) => ({
+        threads: state.threads.map((candidate) =>
+          candidate.id === threadId ? { ...candidate, reasoningEffort: undefined } : candidate,
+        ),
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -2096,6 +2104,7 @@ export function createThreadActions(
           },
         },
       }));
+      persist(get);
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
       if (pendingApply?.draftModelSelection) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
@@ -2134,6 +2143,9 @@ export function createThreadActions(
       if (!thread.draft && currentRuntime?.busy) return;
 
       set((state) => ({
+        threads: state.threads.map((candidate) =>
+          candidate.id === threadId ? { ...candidate, reasoningEffort: effort } : candidate,
+        ),
         threadRuntimeById: {
           ...state.threadRuntimeById,
           [threadId]: {
@@ -2142,6 +2154,7 @@ export function createThreadActions(
           },
         },
       }));
+      persist(get);
 
       if (thread.draft) return;
       const rt = currentRuntime;

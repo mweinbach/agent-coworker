@@ -9,7 +9,10 @@ import {
   isPathInsideOneOffChatsRoot,
   normalizeWorkspaceKind,
 } from "../../../../src/utils/oneOffChats";
-import { sanitizePersistedComposerDrafts } from "../../src/app/composerDrafts";
+import {
+  isReasoningEffortValue,
+  sanitizePersistedComposerDrafts,
+} from "../../src/app/composerDrafts";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import {
@@ -379,6 +382,9 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
       archived: typeof item.archived === "boolean" ? item.archived : false,
       archivedAt: typeof item.archivedAt === "string" ? item.archivedAt : undefined,
+      ...(isReasoningEffortValue(item.reasoningEffort)
+        ? { reasoningEffort: item.reasoningEffort }
+        : {}),
       ...(taskId ? { taskId } : {}),
       ...(taskThreadId ? { taskThreadId } : {}),
     });

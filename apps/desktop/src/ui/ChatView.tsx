@@ -543,7 +543,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           ? (rt.effectiveReasoningEffort ?? rt.requestedReasoningEffort)
           : undefined;
       const currentEffort = resolveCurrentReasoningEffort({
-        composerEffort: rt.composerReasoningEffort,
+        composerEffort: rt.composerReasoningEffort ?? thread.reasoningEffort,
         configuredEffort,
         runtimeEffort,
         defaultEffort: reasoningConfig.defaultEffort,

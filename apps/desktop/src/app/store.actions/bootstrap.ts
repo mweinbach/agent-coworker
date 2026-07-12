@@ -22,6 +22,7 @@ import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { type ProviderName, safeParseSessionEvent } from "../../lib/wsProtocol";
 import {
   hydrateComposerDrafts,
+  isReasoningEffortValue,
   mergeComposerDraftsByRevision,
   pruneComposerDrafts,
   resolveActiveComposerDraftKey,
@@ -346,6 +347,12 @@ const persistedThreadSchema = z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
     archivedAt: z.string().optional(),
+    reasoningEffort: z
+      .preprocess(
+        (value) => (isReasoningEffortValue(value) ? value : undefined),
+        z.custom<NonNullable<ThreadRecord["reasoningEffort"]>>().optional(),
+      )
+      .optional(),
   })
   .passthrough()
   .transform((thread): ThreadRecord => {
@@ -367,6 +374,7 @@ const persistedThreadSchema = z
       draft: thread.draft ?? false,
       archived: thread.archived ?? false,
       archivedAt: thread.archivedAt,
+      ...(thread.reasoningEffort ? { reasoningEffort: thread.reasoningEffort } : {}),
     };
   });
 

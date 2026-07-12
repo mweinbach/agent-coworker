@@ -152,6 +152,7 @@ export type ThreadRecord = {
   archivedAt?: string;
   taskId?: string;
   taskThreadId?: string;
+  reasoningEffort?: ReasoningEffortValue;
 };
 
 export type ThreadPendingSteer = {

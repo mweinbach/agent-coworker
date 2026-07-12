@@ -1298,4 +1298,38 @@ describe("composer draft clear after send", () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
     }
   });
+
+  test("keeps reasoning effort on the thread when its runtime state is replaced", () => {
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-a": {
+          ...state.threadRuntimeById["thread-a"],
+          sessionId: null,
+        },
+      },
+    }));
+    useAppStore.getState().setThreadReasoningEffort("thread-a", "openai", "medium");
+
+    expect(useAppStore.getState().threads.find((thread) => thread.id === "thread-a")).toMatchObject(
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    useAppStore.setState((state) => ({
+      selectedThreadId: "thread-b",
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        "thread-a": defaultThreadRuntime(),
+      },
+    }));
+    useAppStore.setState({ selectedThreadId: "thread-a" });
+
+    expect(useAppStore.getState().threads.find((thread) => thread.id === "thread-a")).toMatchObject(
+      {
+        reasoningEffort: "medium",
+      },
+    );
+  });
 });

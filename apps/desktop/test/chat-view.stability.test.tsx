@@ -1203,6 +1203,28 @@ describe("desktop chat view stability", () => {
         '[data-slot="composer-reasoning-selector"]',
       );
       expect(reasoningSelector?.getAttribute("title")).toBe("Reasoning: XHigh");
+
+      act(() => {
+        useAppStore.setState((state) => ({
+          threads: state.threads.map((thread) =>
+            thread.id === "thread-1" ? { ...thread, reasoningEffort: "low" } : thread,
+          ),
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"],
+              requestedReasoningEffort: null,
+              effectiveReasoningEffort: null,
+            },
+          },
+        }));
+      });
+
+      expect(
+        container
+          .querySelector<HTMLButtonElement>('[data-slot="composer-reasoning-selector"]')
+          ?.getAttribute("title"),
+      ).toBe("Reasoning: Low");
     } finally {
       if (root) {
         await act(async () => {

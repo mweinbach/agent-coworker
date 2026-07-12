@@ -170,6 +170,7 @@ export function createControlSocketHelpers(
         legacyTranscriptId,
         ...(existing?.taskId ? { taskId: existing.taskId } : {}),
         ...(existing?.taskThreadId ? { taskThreadId: existing.taskThreadId } : {}),
+        ...(existing?.reasoningEffort ? { reasoningEffort: existing.reasoningEffort } : {}),
       } satisfies ThreadRecord;
     });
     const claimedLegacyThreadIds = new Set(

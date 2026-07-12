@@ -156,6 +156,7 @@ describe("desktop persistence state validation", () => {
           sessionId: "session_drafts",
           messageCount: 1,
           lastEventSeq: 1,
+          reasoningEffort: "high",
         },
       ],
       composerDrafts: {
@@ -191,6 +192,7 @@ describe("desktop persistence state validation", () => {
     });
 
     const loaded = await persistence.loadState();
+    expect(loaded.threads[0]?.reasoningEffort).toBe("high");
     expect(loaded.composerDrafts?.["thread:thread_drafts"]).toEqual({
       revision: 4,
       generation: 1,

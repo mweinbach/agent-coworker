@@ -639,7 +639,7 @@ function isProviderName(value: unknown): value is ProviderName {
   return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
-function isReasoningEffortValue(value: unknown): value is ReasoningEffortValue {
+export function isReasoningEffortValue(value: unknown): value is ReasoningEffortValue {
   return typeof value === "string" && REASONING_EFFORT_VALUES.has(value);
 }
 

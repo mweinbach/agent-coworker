@@ -161,10 +161,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="linux"] .settings-shell__nav[data-presentation="overlay"] {
-  background: var(--surface-sidebar-pane);
-}
-
 :root[data-platform="linux"] .settings-shell__nav-header {
   border-bottom-width: 0;
 }

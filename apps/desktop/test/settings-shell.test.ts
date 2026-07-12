@@ -114,19 +114,11 @@ describe("settings shell", () => {
     );
   });
 
-  test("keeps Linux and Windows overlay navigation opaque above the backdrop", () => {
-    for (const platform of ["linux", "win32"]) {
-      const css = readFileSync(
-        resolve(import.meta.dir, `../src/styles/platform/${platform}.css`),
-        "utf8",
-      );
-      expect(css).toMatch(
-        new RegExp(
-          `:root\\[data-platform="${platform}"\\] \\.settings-shell__nav\\[data-presentation="overlay"\\]\\s*\\{[^}]*background:\\s*var\\(--surface-sidebar-pane\\);`,
-          "s",
-        ),
-      );
-    }
+  test("keeps overlay navigation opaque above the backdrop", () => {
+    const css = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    expect(css).toMatch(
+      /:root \.settings-shell__nav\[data-presentation="overlay"\]\s*\{[^}]*background:\s*var\(--sidebar-bg\);/s,
+    );
   });
 
   test("uses the shared narrow tier for a focus-managed settings navigation drawer", () => {

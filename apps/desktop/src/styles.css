@@ -456,7 +456,7 @@ samp {
   z-index: 1001;
   border-right-width: 1px;
   border-bottom-width: 0;
-  background: var(--surface-sidebar-pane);
+  background: var(--sidebar-bg);
 }
 
 .settings-shell__page-header {

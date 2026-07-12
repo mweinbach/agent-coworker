@@ -232,10 +232,6 @@
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="win32"] .settings-shell__nav[data-presentation="overlay"] {
-  background: var(--surface-sidebar-pane);
-}
-
 :root[data-platform="win32"] .settings-shell__nav-header {
   border-bottom-width: 0;
 }

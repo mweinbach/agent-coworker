@@ -4,6 +4,7 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { expect } from "@playwright/test";
 import type { Page, TestInfo } from "playwright";
 
+import { DESKTOP_LAYOUT_BREAKPOINTS, MIN_PRIMARY_WORKSPACE_WIDTH } from "../src/lib/adaptiveLayout";
 import axeBaseline from "./axe-baseline.json" with { type: "json" };
 
 const knownColorContrastSelectors = axeBaseline.colorContrast.selectors;
@@ -104,6 +105,39 @@ export async function assertNoViewportClipping(
       if (!scope) {
         throw new Error(`Clipping assertion scope was not found: ${includeSelector}`);
       }
+      const establishesFixedContainingBlock = (style: CSSStyleDeclaration): boolean => {
+        const containTokens = style.contain.split(/\s+/);
+        const willChangeTokens = style.willChange.split(",").map((token) => token.trim());
+        const hasNonDefaultProperty = (property: string, defaultValue: string): boolean => {
+          const value = style.getPropertyValue(property);
+          return value !== "" && value !== defaultValue;
+        };
+        return (
+          style.transform !== "none" ||
+          style.perspective !== "none" ||
+          style.filter !== "none" ||
+          hasNonDefaultProperty("backdrop-filter", "none") ||
+          ["translate", "rotate", "scale"].some((property) =>
+            hasNonDefaultProperty(property, "none"),
+          ) ||
+          containTokens.some((token) => ["layout", "paint", "strict", "content"].includes(token)) ||
+          hasNonDefaultProperty("container-type", "normal") ||
+          style.getPropertyValue("content-visibility") === "auto" ||
+          willChangeTokens.some((token) =>
+            ["transform", "perspective", "filter", "backdrop-filter", "contain"].includes(token),
+          )
+        );
+      };
+      const hasFixedContainingBlockAncestor = (element: HTMLElement): boolean => {
+        let ancestor = element.parentElement;
+        while (ancestor) {
+          if (establishesFixedContainingBlock(getComputedStyle(ancestor))) {
+            return true;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        return false;
+      };
       const clippedControls: Array<{
         clippingAncestor: {
           bottom: number;
@@ -148,7 +182,10 @@ export async function assertNoViewportClipping(
         if (entirelyOutsideViewport && !critical) {
           continue;
         }
-        let clippingAncestor = control.parentElement;
+        let clippingAncestor =
+          style.position === "fixed" && !hasFixedContainingBlockAncestor(control)
+            ? null
+            : control.parentElement;
         let clippingAncestorDetails: (typeof clippedControls)[number]["clippingAncestor"] = null;
         let clippedByAncestor = false;
         let recoverablyClippedX = false;
@@ -204,6 +241,12 @@ export async function assertNoViewportClipping(
               };
               break;
             }
+          }
+          if (
+            ancestorStyle.position === "fixed" &&
+            !hasFixedContainingBlockAncestor(clippingAncestor)
+          ) {
+            break;
           }
           clippingAncestor = clippingAncestor.parentElement;
         }
@@ -262,7 +305,7 @@ export async function assertNoViewportClipping(
 
 export async function assertUsablePrimaryContentWidth(
   page: Page,
-  minimumWidth = 280,
+  minimumWidth = MIN_PRIMARY_WORKSPACE_WIDTH,
 ): Promise<void> {
   const primaryContentWidth = await page
     .locator('[data-slot="primary-content-pane"]')
@@ -300,11 +343,22 @@ export async function assertKeyboardFocusJourney(page: Page): Promise<void> {
     return;
   }
 
+  const viewportWidth = await page.evaluate(() => window.innerWidth);
   const expectedTargets = [
     page.getByRole("link", { name: "Skip to content", exact: true }),
-    page.getByRole("button", { name: "Hide sidebar", exact: true }),
+    page.getByRole("button", {
+      name: viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.narrow ? "Show sidebar" : "Hide sidebar",
+      exact: true,
+    }),
+    ...(viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.narrow
+      ? [page.getByRole("button", { name: "New Chat", exact: true })]
+      : []),
     page.getByRole("button", { name: "Open thread details", exact: true }),
-    page.getByRole("button", { name: "Open quick chat", exact: true }),
+    page.getByRole("button", {
+      name:
+        viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.full ? "More thread actions" : "Open quick chat",
+      exact: true,
+    }),
   ];
   await page.evaluate(() => {
     document.body.tabIndex = -1;

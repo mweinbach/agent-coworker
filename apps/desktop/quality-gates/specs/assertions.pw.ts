@@ -67,6 +67,77 @@ test("clipping gate rejects a control clipped by a scrollable ancestor", async (
   );
 });
 
+test("clipping gate lets a fixed surface escape normal clipping ancestors", async ({ quality }) => {
+  const { page } = quality;
+  await page.evaluate(() => {
+    const fixture = document.createElement("div");
+    fixture.dataset.qualityClippingFixture = "fixed-surface";
+    fixture.style.position = "relative";
+    fixture.style.top = "120px";
+    fixture.style.width = "80px";
+    fixture.style.height = "40px";
+    fixture.style.overflow = "hidden";
+
+    const surface = document.createElement("div");
+    surface.style.position = "fixed";
+    surface.style.inset = "0";
+    const button = document.createElement("button");
+    button.ariaLabel = "Fixed surface action";
+    button.style.position = "absolute";
+    button.style.right = "8px";
+    button.style.top = "8px";
+    button.style.width = "120px";
+    button.style.height = "32px";
+    surface.append(button);
+    fixture.append(surface);
+    document.body.append(fixture);
+  });
+
+  await assertNoViewportClipping(page, '[data-quality-clipping-fixture="fixed-surface"]');
+});
+
+test("clipping gate rejects a fixed surface clipped by its transformed containing block", async ({
+  quality,
+}) => {
+  const { page } = quality;
+  await page.evaluate(() => {
+    const fixture = document.createElement("div");
+    fixture.dataset.qualityClippingFixture = "fixed-containing-block";
+    fixture.style.position = "relative";
+    fixture.style.left = "20px";
+    fixture.style.top = "20px";
+    fixture.style.width = "80px";
+    fixture.style.height = "40px";
+    fixture.style.overflow = "hidden";
+    fixture.style.transform = "translateZ(0)";
+
+    const surface = document.createElement("div");
+    surface.style.position = "fixed";
+    surface.style.inset = "0";
+    const button = document.createElement("button");
+    button.ariaLabel = "Transformed fixed surface action";
+    button.dataset.qualityCriticalControl = "true";
+    button.style.position = "absolute";
+    button.style.left = "100px";
+    button.style.top = "4px";
+    button.style.width = "120px";
+    button.style.height = "32px";
+    surface.append(button);
+    fixture.append(surface);
+    document.body.append(fixture);
+  });
+
+  const error = await captureExpectedFailure(async () => {
+    await assertNoViewportClipping(
+      page,
+      '[data-quality-clipping-fixture="fixed-containing-block"]',
+    );
+  });
+  expect(error.message).toContain(
+    "Visible interactive controls must remain inside the viewport and every clipping ancestor",
+  );
+});
+
 test("Axe gate rejects an unbaselined color-contrast regression", async ({ quality }, testInfo) => {
   const { page } = quality;
   await page.evaluate(() => {

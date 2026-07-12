@@ -2,6 +2,7 @@ import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
   assertNoViewportClipping,
+  assertUsablePrimaryContentWidth,
   settleQualityPage,
 } from "../assertions";
 import { expect, type QualityLaunchOptions, type QualityMode, test } from "../fixtures";
@@ -10,8 +11,12 @@ const widths = [640, 800, 1_024, 1_240] as const;
 const modes: QualityMode[] = ["light", "dark", "reduced-motion", "forced-colors"];
 const criticalControlSelector = [
   '[aria-label="Hide sidebar"]',
+  '[aria-label="Show sidebar"]',
   '[aria-label="Open thread details"]',
   '[aria-label="Open quick chat"]',
+  '[aria-label="More thread actions"]',
+  '[aria-label="Show context"]',
+  '[aria-label="Hide context"]',
 ].join(",");
 const visualMatrix: Array<Pick<QualityLaunchOptions, "mode" | "width">> = widths.flatMap((width) =>
   modes.map((mode) => ({ mode, width })),
@@ -42,6 +47,7 @@ for (const entry of visualMatrix) {
         await expect(page.locator("html")).toHaveAttribute("data-high-contrast", "true");
       }
       await settleQualityPage(page);
+      await assertUsablePrimaryContentWidth(page);
       await assertNoViewportClipping(page, undefined, criticalControlSelector);
       await assertKeyboardFocusJourney(page);
       await assertNoSeriousAxeViolations(page, testInfo);

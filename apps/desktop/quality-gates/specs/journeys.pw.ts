@@ -6,6 +6,7 @@ import {
   assertKeyboardFocusJourney,
   assertNoSeriousAxeViolations,
   assertNoViewportClipping,
+  assertUsablePrimaryContentWidth,
   settleQualityPage,
 } from "../assertions";
 import budgets from "../budgets.json" with { type: "json" };
@@ -411,7 +412,11 @@ test("covers tool failures and quick chat", async ({ quality }) => {
 
   const quickWindowClosed = quickWindow.waitForEvent("close");
   await quickWindow.getByRole("button", { name: "Close quick chat" }).focus();
-  await quickWindow.keyboard.press("Escape");
+  try {
+    await quickWindow.keyboard.press("Escape");
+  } catch (error) {
+    if (!quickWindow.isClosed()) throw error;
+  }
   await quickWindowClosed;
 });
 
@@ -470,18 +475,70 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
   await sidebarResizer.focus();
   await page.keyboard.press("ArrowRight");
   await expect(sidebarResizer).toHaveAttribute("aria-valuenow", String(initialSidebarWidth + 16));
+  await assertUsablePrimaryContentWidth(page);
 
   const contextResizer = page.getByRole("separator", { name: "Resize context sidebar" });
   const initialContextWidth = Number(await contextResizer.getAttribute("aria-valuenow"));
   await contextResizer.focus();
-  await page.keyboard.press("ArrowLeft");
-  await expect(contextResizer).toHaveAttribute("aria-valuenow", String(initialContextWidth + 16));
+  await page.keyboard.press("ArrowRight");
+  await expect(contextResizer).toHaveAttribute("aria-valuenow", String(initialContextWidth - 16));
+  await assertUsablePrimaryContentWidth(page);
 
   await expect
     .poll(async () => (await quality.getMainMetrics()).stateSaves)
     .toBeGreaterThanOrEqual(1);
   const metrics = await quality.getMainMetrics();
   expect(metrics.filesystemRequests).toBeLessThanOrEqual(4);
+});
+
+test("preserves rail preferences through full, compact, narrow, and restored layouts", async ({
+  quality,
+}) => {
+  const { electronApp, page } = quality;
+  const leftResizer = page.getByRole("separator", { name: "Resize sidebar" });
+  const rightResizer = page.getByRole("separator", { name: "Resize context sidebar" });
+  const savedLeftWidth = await leftResizer.getAttribute("aria-valuenow");
+  const savedRightWidth = await rightResizer.getAttribute("aria-valuenow");
+
+  const resizeTo = async (width: number, tier: "compact" | "full" | "narrow") => {
+    await electronApp.evaluate(({ BrowserWindow }, nextWidth) => {
+      BrowserWindow.getAllWindows()[0]?.setContentSize(nextWidth, 820);
+    }, width);
+    await expect.poll(async () => await page.evaluate(() => window.innerWidth)).toBe(width);
+    await expect(page.locator("[data-layout-tier]").first()).toHaveAttribute(
+      "data-layout-tier",
+      tier,
+    );
+    await settleQualityPage(page);
+    await assertUsablePrimaryContentWidth(page);
+  };
+
+  await resizeTo(1_024, "compact");
+  await expect(rightResizer).toHaveCount(0);
+  const contextTrigger = page.getByRole("button", { name: "Show context", exact: true });
+  await contextTrigger.click();
+  const contextDrawer = page.getByRole("dialog", { name: "Context", exact: true });
+  await expect(contextDrawer).toBeVisible();
+  await expect(contextDrawer.getByRole("button", { name: "Close Context" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(contextDrawer).toHaveCount(0);
+  await expect(contextTrigger).toBeFocused();
+
+  await resizeTo(800, "compact");
+  await resizeTo(640, "narrow");
+  await expect(leftResizer).toHaveCount(0);
+  const sidebarTrigger = page.getByRole("button", { name: "Show sidebar", exact: true });
+  await sidebarTrigger.click();
+  const sidebarDrawer = page.getByRole("dialog", { name: "Sidebar", exact: true });
+  await expect(sidebarDrawer).toBeVisible();
+  await expect(sidebarDrawer.getByRole("button", { name: "Close Sidebar" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sidebarDrawer).toHaveCount(0);
+  await expect(sidebarTrigger).toBeFocused();
+
+  await resizeTo(1_240, "full");
+  await expect(leftResizer).toHaveAttribute("aria-valuenow", savedLeftWidth ?? "248");
+  await expect(rightResizer).toHaveAttribute("aria-valuenow", savedRightWidth ?? "300");
 });
 
 test("persists settings through the production desktop state bridge", async ({ quality }) => {

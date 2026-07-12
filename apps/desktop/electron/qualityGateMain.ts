@@ -18,6 +18,7 @@ import {
   PROJECT_THREAD_ID,
 } from "../quality-gates/fixtureData";
 import type { PersistedState } from "../src/app/types";
+import { MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
 import {
   getCanvasCaptionSymbolTone,
   getCanvasNativeBackgroundColor,
@@ -1188,6 +1189,8 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
       return { thread: qualityThreadRecord(), coworkSnapshot: null };
     case "thread/resume":
       return { thread: qualityThreadRecord() };
+    case "cowork/creation/preflight":
+      return { ready: true, checks: [] };
     case "cowork/skills/catalog/read":
       return {
         event: {
@@ -1742,6 +1745,7 @@ async function createWindow(
       mode === "quick-chat" ? "Cowork Quick Chat" : mode === "canvas" ? "Cowork Canvas" : "Cowork",
     width: isMain ? contentWidth : mode === "quick-chat" ? 337 : 800,
     height: isMain ? contentHeight : mode === "quick-chat" ? 552 : 600,
+    minWidth: isMain ? MAIN_WINDOW_MIN_WIDTH : mode === "quick-chat" ? 275 : 400,
     useContentSize: true,
     show: false,
     frame: false,

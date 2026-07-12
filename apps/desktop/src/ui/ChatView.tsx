@@ -42,14 +42,14 @@ import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
   composerBusyHint,
   countActiveChildAgents,
-  filterFeedForDeveloperMode,
   getComposerSubmitState,
   resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
-import { HIDDEN_RETRY_TURN_PROMPT, isHiddenRetryTurnMessage } from "./chat/chatRetry";
+import { HIDDEN_RETRY_TURN_PROMPT } from "./chat/chatRetry";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import {
   type FeedDerivationWindowState,
+  prepareFeedDerivationFeed,
   resolveFeedDerivationVisibleCount,
   selectFeedDerivationWindow,
 } from "./chat/feedWindow";
@@ -58,8 +58,9 @@ import {
   buildOverflowCitationPathSignature,
   loadOverflowCitationContext,
 } from "./chat/overflowCitationContext";
-import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { recordDesktopRenderMetric } from "./renderDiagnostics";
+
+export { filterFeedForDeveloperMode } from "./chat/chatLogic";
 
 // Compact-state floor for the feed's bottom reservation and the composer
 // overlay's min-height. The composer auto-grows and a ResizeObserver measures
@@ -81,7 +82,6 @@ export {
   canClearSessionHardCap,
   composerBusyHint,
   countActiveChildAgents,
-  filterFeedForDeveloperMode,
   formatSessionBudgetLine,
   formatSessionUsageHeadline,
   getComposerSubmitState,
@@ -372,17 +372,21 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   );
 
   const feed = rt?.feed ?? [];
+  const derivationFeed = useMemo(
+    () => prepareFeedDerivationFeed(feed, developerMode),
+    [developerMode, feed],
+  );
   const savedFeedDerivationWindow = selectedThreadId
     ? feedDerivationWindows.get(selectedThreadId)
     : undefined;
   const feedDerivationVisibleCount = resolveFeedDerivationVisibleCount(
     savedFeedDerivationWindow,
-    feed.length,
+    derivationFeed.length,
     FEED_DERIVATION_WINDOW,
   );
   const windowedSourceFeed = useMemo(
-    () => selectFeedDerivationWindow(feed, feedDerivationVisibleCount),
-    [feed, feedDerivationVisibleCount],
+    () => selectFeedDerivationWindow(derivationFeed, feedDerivationVisibleCount),
+    [derivationFeed, feedDerivationVisibleCount],
   );
   recordDesktopRenderMetric(
     "feed-derivation",
@@ -394,35 +398,27 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     setFeedDerivationWindows((current) => {
       const next = new Map(current);
       next.set(selectedThreadId, {
-        feedLength: feed.length,
+        feedLength: derivationFeed.length,
         visibleCount: Math.min(
-          feed.length,
+          derivationFeed.length,
           feedDerivationVisibleCount + FEED_DERIVATION_EXPAND_BATCH,
         ),
       });
       return next;
     });
-  }, [feed.length, feedDerivationVisibleCount, selectedThreadId]);
+  }, [derivationFeed.length, feedDerivationVisibleCount, selectedThreadId]);
   const showAllOlderFeed = useCallback(() => {
     if (!selectedThreadId) return;
     setFeedDerivationWindows((current) => {
       const next = new Map(current);
       next.set(selectedThreadId, {
-        feedLength: feed.length,
-        visibleCount: feed.length,
+        feedLength: derivationFeed.length,
+        visibleCount: derivationFeed.length,
       });
       return next;
     });
-  }, [feed.length, selectedThreadId]);
-  const normalizedFeed = useMemo(
-    () => normalizeFeedForToolCards(windowedSourceFeed.feed, developerMode),
-    [developerMode, windowedSourceFeed.feed],
-  );
-  const visibleFeed = useMemo(() => {
-    return filterFeedForDeveloperMode(normalizedFeed, developerMode).filter(
-      (item) => !isHiddenRetryTurnMessage(item),
-    );
-  }, [developerMode, normalizedFeed]);
+  }, [derivationFeed.length, selectedThreadId]);
+  const visibleFeed = windowedSourceFeed.feed;
   const inlineCitationUrlsByMessageId = useMemo(
     () => buildCitationUrlsByMessageId(visibleFeed),
     [visibleFeed],

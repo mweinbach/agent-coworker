@@ -530,7 +530,7 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   await contextTrigger.click();
   await expect(contextDrawer).toBeVisible();
   const sidebarTrigger = page.getByRole("button", { name: "Show sidebar", exact: true });
-  await sidebarTrigger.click();
+  await sidebarTrigger.evaluate((element) => (element as HTMLButtonElement).click());
   const sidebarDrawer = page.getByRole("dialog", { name: "Sidebar", exact: true });
   await expect(sidebarDrawer).toBeVisible();
   await expect(contextDrawer).toHaveCount(0);

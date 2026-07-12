@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
+import { latestTodosFromFeed } from "../src/app/store.helpers/threadEventReducer/feedProjection";
 import type { FeedItem } from "../src/app/types";
 import {
   buildChatRenderItems,
@@ -63,7 +63,7 @@ describe("desktop chat activity groups", () => {
     ]);
   });
 
-  test("keeps todos as in-feed cards instead of dropping them", () => {
+  test("keeps todos out of the transcript so the context sidebar owns plan progress", () => {
     const feed: FeedItem[] = [
       {
         id: "m1",
@@ -103,9 +103,9 @@ describe("desktop chat activity groups", () => {
         items: [feed[1]],
         recoveredToolIds: [],
       },
-      { kind: "feed-item", item: feed[2] },
       { kind: "feed-item", item: feed[3] },
     ]);
+    expect(latestTodosFromFeed(feed)).toEqual(feed[2]?.kind === "todos" ? feed[2].todos : []);
   });
 
   test("buildChatRenderItems preserves feed order instead of sorting by timestamps", () => {

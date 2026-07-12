@@ -55,11 +55,12 @@ import {
   scrollViewportToEnd,
 } from "./scrollOwnership";
 
-const SCROLL_BUTTON_BOTTOM_GAP_PX = 9;
+// The composer overlay includes a 40px transparent fade above its surface.
+// Keep the floating control inside that fade instead of adding another gap
+// above the measured overlay height.
+const SCROLL_BUTTON_COMPOSER_INSET_PX = 28;
 /** Expand when within this many px of the top of the scrollable content. */
 const FEED_NEAR_TOP_PX = 160;
-/** Estimated height for unmounted older rows (scrollbar proportion only). */
-const FEED_ESTIMATED_ROW_HEIGHT_PX = 120;
 
 export type VisibleInteraction = {
   threadId: string;
@@ -235,6 +236,7 @@ function TranscriptScroller(props: {
   const currentItemIdsRef = useRef(itemIds);
   const previousLastUserTurnIdRef = useRef(lastUserTurnId);
   const programmaticScrollRef = useRef(false);
+  const userScrollPendingRef = useRef(false);
   const clearProgrammaticFrameRef = useRef<number | null>(null);
   modeRef.current = mode;
   currentItemIdsRef.current = itemIds;
@@ -377,6 +379,10 @@ function TranscriptScroller(props: {
         if (!restoredRef.current || hydrating) return;
         const viewport = viewportRef.current;
         if (!viewport) return;
+        // Wheel/key/touch input arrives before the browser's resulting scroll
+        // event. Restoring the previous anchor in that gap creates a visible
+        // second jump back down the transcript.
+        if (userScrollPendingRef.current) return;
         if (modeRef.current === "following") {
           markProgrammaticScroll();
           scrollViewportToEnd(viewport);
@@ -431,12 +437,14 @@ function TranscriptScroller(props: {
         setScrollMode("detached");
       }
       persistSnapshot();
+      userScrollPendingRef.current = false;
       onViewportScroll(event);
     },
     [onViewportScroll, persistSnapshot, setScrollMode, setUnreadCount],
   );
 
   const detachFromTail = useCallback(() => {
+    userScrollPendingRef.current = true;
     programmaticScrollRef.current = false;
     if (clearProgrammaticFrameRef.current !== null) {
       window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
@@ -490,8 +498,8 @@ function TranscriptScroller(props: {
           type="button"
           variant="secondary"
           size="sm"
-          className="absolute inset-s-1/2 z-10 -translate-x-1/2 gap-2 border border-border bg-background text-foreground shadow-md hover:bg-muted rtl:translate-x-1/2"
-          style={{ bottom: bottomOffset + SCROLL_BUTTON_BOTTOM_GAP_PX }}
+          className="absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border border-border/60 bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
+          style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
           aria-label={
             newMessageCount > 0
               ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}. Jump to latest`
@@ -658,9 +666,6 @@ export const ChatFeed = memo(function ChatFeed(props: {
                   aria-hidden="true"
                   className="flex flex-col items-center gap-2 py-1"
                   data-slot="feed-window-spacer"
-                  style={{
-                    minHeight: Math.min(hiddenFeedItemCount * FEED_ESTIMATED_ROW_HEIGHT_PX, 2_400),
-                  }}
                 >
                   <Button type="button" variant="outline" size="sm" onClick={onShowAllOlderFeed}>
                     Show {hiddenFeedItemCount} older messages

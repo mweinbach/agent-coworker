@@ -259,6 +259,24 @@ describe("desktop memory page", () => {
     expect(JSON.stringify(groups)).not.toContain("Amazon Nova Lite");
   });
 
+  test("memory model choices include connected Codex models missing from a partial live catalog", () => {
+    const groups = buildMemoryGenerationModelGroups(
+      [
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.5-flash",
+          models: [{ id: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash" }],
+        },
+      ] as any,
+      "",
+      { includedProviders: ["google", "codex-cli"] },
+    );
+
+    const codexGroup = groups.find((group) => group.provider === "codex-cli");
+    expect(codexGroup?.options.map((option) => option.value)).toContain("codex-cli:gpt-5.6-sol");
+  });
+
   test("memory model choices preserve the current unconfigured model as custom", () => {
     const groups = buildMemoryGenerationModelGroups(
       [

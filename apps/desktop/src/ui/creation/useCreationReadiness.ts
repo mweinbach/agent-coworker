@@ -11,10 +11,12 @@ type CreationReadinessRequest = CreationPreflightParams & {
 
 export function useCreationReadiness(request: CreationReadinessRequest) {
   const preflightCreation = useAppStore((state) => state.preflightCreation);
+  const providerStatusLastUpdatedAt = useAppStore((state) => state.providerStatusLastUpdatedAt);
   const [result, setResult] = useState<CreationPreflightResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const lastProviderStatusUpdatedAtRef = useRef(providerStatusLastUpdatedAt);
   const latestRefreshKeyRef = useRef(refreshKey);
   latestRefreshKeyRef.current = refreshKey;
   const { cwd, kind, model, provider, workspaceId } = request;
@@ -22,6 +24,12 @@ export function useCreationReadiness(request: CreationReadinessRequest) {
   const refresh = useCallback(() => {
     setRefreshKey((current) => current + 1);
   }, []);
+
+  useEffect(() => {
+    if (lastProviderStatusUpdatedAtRef.current === providerStatusLastUpdatedAt) return;
+    lastProviderStatusUpdatedAtRef.current = providerStatusLastUpdatedAt;
+    refresh();
+  }, [providerStatusLastUpdatedAt, refresh]);
 
   useEffect(() => {
     const controller = new AbortController();

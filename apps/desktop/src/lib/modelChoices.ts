@@ -211,6 +211,10 @@ export function modelChoicesFromCatalog(
       : (MODEL_CHOICES[entry.id] ?? []);
     result[entry.id] = filterModelsForProvider(entry.id, models, options);
   }
+  for (const provider of options?.includedProviders ?? []) {
+    if (result[provider] || isUiDisabledProvider(provider)) continue;
+    result[provider] = filterModelsForProvider(provider, MODEL_CHOICES[provider] ?? [], options);
+  }
   return result;
 }
 

@@ -750,7 +750,7 @@ export function ProvidersPage({
                     variant={lmStudioEnabled && connected ? "default" : "secondary"}
                     className={cn(
                       lmStudioEnabled && connected
-                        ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                        ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
                         : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
                     )}
                   >
@@ -910,7 +910,7 @@ export function ProvidersPage({
                   variant={connected ? "default" : "secondary"}
                   className={cn(
                     connected
-                      ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                      ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
                       : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
                   )}
                 >
@@ -1224,7 +1224,7 @@ export function ProvidersPage({
                   variant={connected ? "default" : "secondary"}
                   className={cn(
                     connected
-                      ? "bg-success/10 text-success border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
+                      ? "bg-success/10 text-foreground border-success/20 hover:bg-success/10 gap-1.5 px-2.5 py-0.5 font-medium shadow-none"
                       : "bg-muted/15 text-muted-foreground border-transparent shadow-none",
                   )}
                 >

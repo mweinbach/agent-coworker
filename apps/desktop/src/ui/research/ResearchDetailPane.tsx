@@ -31,7 +31,7 @@ const RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH = 36 * 16;
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
     case "completed":
-      return "border-success/25 bg-success/10 text-success";
+      return "border-success/25 bg-success/10 text-foreground";
     case "running":
     case "pending":
       return "border-primary/25 bg-primary/10 text-primary";
@@ -354,6 +354,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               )}
               aria-label="Sources"
               aria-hidden={!showSourcesPanel}
+              inert={!showSourcesPanel}
               style={{
                 ...sourcesPanelStyle,
                 zIndex: sourcesOverlay ? sourcesOwner?.zIndex : sourcesPanelStyle.zIndex,

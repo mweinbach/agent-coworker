@@ -124,6 +124,8 @@ describe("settings shell", () => {
     expect(settingsSource).toContain("useAdaptiveLayout");
     expect(settingsSource).toContain('label="Settings navigation"');
     expect(settingsSource).toContain("Open settings navigation");
+    expect(settingsSource).toContain("text-foreground/72");
+    expect(settingsSource).not.toContain("text-foreground/58");
     expect(settingsSource).not.toContain("max-[860px]");
     expect(settingsSource).not.toContain("min-[861px]");
     expect(stylesCss).not.toContain("max-width: 860px");

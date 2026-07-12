@@ -319,7 +319,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/72">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">

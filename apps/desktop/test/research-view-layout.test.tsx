@@ -109,6 +109,10 @@ describe("research view layout", () => {
       expect(detailPane?.className).toContain("min-w-0");
       expect(container.textContent).toContain("Select a run or follow-up");
       expect(container.textContent).not.toContain("Deep Research runs in the background");
+      const historyLabel = Array.from(container.querySelectorAll("div")).find(
+        (element) => element.textContent?.trim() === "Research",
+      );
+      expect(historyLabel?.className).toContain("text-foreground/72");
 
       await act(async () => {
         root.unmount();

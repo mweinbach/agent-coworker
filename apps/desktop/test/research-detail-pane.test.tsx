@@ -147,6 +147,7 @@ describe("research detail pane layout", () => {
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
       expect(drawer.getAttribute("aria-hidden")).toBe("true");
+      expect(drawer.hasAttribute("inert")).toBe(true);
       expect(drawer.getAttribute("data-sources-presentation")).toBe("inline");
       expect(drawer.getAttribute("style")).toContain(
         "--research-sources-panel-width: clamp(18rem, 30vw, 26rem)",
@@ -170,6 +171,7 @@ describe("research detail pane layout", () => {
 
       expect(openToggle.getAttribute("aria-expanded")).toBe("true");
       expect(openDrawer.getAttribute("aria-hidden")).toBe("false");
+      expect(openDrawer.hasAttribute("inert")).toBe(false);
       expect(openDrawer.getAttribute("data-sources-presentation")).toBe("inline");
       expect(openDrawer.getAttribute("style")).toContain(
         "--research-sources-panel-width: clamp(18rem, 30vw, 26rem)",
@@ -316,6 +318,7 @@ describe("research detail pane layout", () => {
       }
 
       expect(drawer.getAttribute("data-sources-presentation")).toBe("overlay");
+      expect(drawer.hasAttribute("inert")).toBe(true);
       expect(drawer.className).toContain("absolute");
       expect(drawer.getAttribute("style")).toContain("width: 0px");
       expect(drawer.getAttribute("style")).not.toContain("flex-basis");
@@ -331,6 +334,7 @@ describe("research detail pane layout", () => {
       }
 
       expect(openDrawer.getAttribute("aria-hidden")).toBe("false");
+      expect(openDrawer.hasAttribute("inert")).toBe(false);
       expect(openDrawer.getAttribute("data-sources-presentation")).toBe("overlay");
       expect(openDrawer.getAttribute("style")).toContain(
         "width: min(var(--research-sources-panel-width), calc(100% - 0.75rem))",
@@ -408,7 +412,11 @@ describe("research detail pane layout", () => {
       });
 
       const exportButtons = [...container.querySelectorAll('button[aria-haspopup="menu"]')];
+      const completedBadges = [...container.querySelectorAll('[data-slot="badge"]')];
       expect(exportButtons).toHaveLength(2);
+      expect(completedBadges).toHaveLength(2);
+      expect(completedBadges[0]?.className).toContain("text-foreground");
+      expect(completedBadges[0]?.className).not.toContain("text-success");
 
       expect((exportButtons[0] as HTMLButtonElement).disabled).toBe(true);
       expect((exportButtons[1] as HTMLButtonElement).disabled).toBe(false);

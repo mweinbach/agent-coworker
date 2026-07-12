@@ -95,7 +95,7 @@ describe("research view layout", () => {
     }
   });
 
-  test("does not render helper copy above the new research composer", async () => {
+  test("shows readiness status without restoring the retired helper copy", async () => {
     const harness = setupJsdom();
 
     try {
@@ -109,9 +109,12 @@ describe("research view layout", () => {
 
       await act(async () => {
         root.render(createElement(ResearchView));
+        await Promise.resolve();
       });
 
-      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.getAttribute("aria-live"),
+      ).toBe("polite");
       expect(container.textContent).not.toContain(
         "Deep Research runs in the background and streams cited markdown as it arrives.",
       );

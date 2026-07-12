@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
-import { hasGoogleApiKeyForResearch } from "./app/researchAvailability";
 import { useAppStore } from "./app/store";
 import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
@@ -154,9 +153,6 @@ const ChatShell = memo(function ChatShell({
   bootstrapStage: BootstrapStage | null;
 }) {
   const view = useAppStore((s) => s.view);
-  const googleResearchAvailable = useAppStore((s) =>
-    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
-  );
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -231,7 +227,7 @@ const ChatShell = memo(function ChatShell({
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
   const busy = selectedThreadBusy;
-  const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
+  const effectiveView = view;
   const isConversationView = effectiveView === "chat" || effectiveView === "task";
   const showContextSidebar =
     (effectiveView === "chat" && activeThread !== null) ||

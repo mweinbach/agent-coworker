@@ -80,7 +80,7 @@ describe("research service", () => {
     }
   });
 
-  test("prunes pending uploads when research fails before file preparation starts", async () => {
+  test("preserves pending uploads when credential preflight rejects research creation", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });
     delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
@@ -109,18 +109,18 @@ describe("research service", () => {
         `${uploaded.fileId}.json`,
       );
 
-      const research = await service.start({
-        input: "This should fail before preparation.",
-        attachedFileIds: [uploaded.fileId],
-      });
-      const failed = await waitFor(
-        () => sessionDb.getResearch(research.id),
-        (value) => value?.status === "failed",
+      await expect(
+        service.start({
+          input: "This should fail before preparation.",
+          attachedFileIds: [uploaded.fileId],
+        }),
+      ).rejects.toThrow(
+        "Google Deep Research requires a saved Google API key or GOOGLE_GENERATIVE_AI_API_KEY.",
       );
 
-      expect(failed?.error).toContain("Google Deep Research requires");
-      await expect(fs.stat(uploaded.path)).rejects.toThrow();
-      await expect(fs.stat(metadataPath)).rejects.toThrow();
+      expect(sessionDb.listResearch({ workspacePath: paths.rootDir })).toEqual([]);
+      await expect(fs.stat(uploaded.path)).resolves.toBeDefined();
+      await expect(fs.stat(metadataPath)).resolves.toBeDefined();
     } finally {
       sessionDb.close();
       await fs.rm(paths.home, { recursive: true, force: true });

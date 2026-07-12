@@ -13,7 +13,6 @@ import {
   createEmptyComposerDraft,
   revokeComposerDraftAttachmentPreviews,
 } from "../composerDrafts";
-import { hasGoogleApiKeyForResearch } from "../researchAvailability";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
@@ -283,16 +282,6 @@ export function createResearchActions(
     }));
   };
 
-  const hasGoogleResearchAccess = () =>
-    hasGoogleApiKeyForResearch(get().providerStatusByName.google);
-
-  const notifyMissingGoogleApiKey = () => {
-    notify(
-      "info",
-      "Google API key required",
-      "Add a Google API key in Settings -> Providers to use Deep Research.",
-    );
-  };
   const setResearchCreationError = (revision: number, message: string | null): boolean => {
     let applied = false;
     set((state) => {
@@ -898,11 +887,6 @@ export function createResearchActions(
     },
 
     openResearch: async () => {
-      if (!hasGoogleResearchAccess()) {
-        notifyMissingGoogleApiKey();
-        set({ researchListLoading: false, researchListError: null });
-        return;
-      }
       invalidateNavigationIntent();
       set({
         view: "research",
@@ -929,10 +913,6 @@ export function createResearchActions(
     },
 
     refreshResearchList: async () => {
-      if (!hasGoogleResearchAccess()) {
-        set({ researchListLoading: false, researchListError: null });
-        return;
-      }
       set({ researchListLoading: true, researchListError: null });
       try {
         const workspaceId = await ensureResearchTransportWorkspace();
@@ -996,6 +976,7 @@ export function createResearchActions(
       files,
       settings,
       draftRevision,
+      clientResearchId,
       intent,
       signal,
       onPhase,
@@ -1011,9 +992,6 @@ export function createResearchActions(
         errorMessage: "Unable to start research.",
         repairAction: "Check the research prompt and provider connection, then retry.",
         execute: async () => {
-          if (!hasGoogleResearchAccess()) {
-            throw new Error("Add a Google API key in Settings → Providers to use Deep Research.");
-          }
           const normalizedInput = input.trim();
           if (!normalizedInput) throw new Error("Enter a research request.");
           if (draftRevision !== undefined) {
@@ -1022,6 +1000,7 @@ export function createResearchActions(
           let workspaceId: string | null = null;
           let attachedFileIds: string[] = [];
           let startRequested = false;
+          let startedResearchId: string | null = clientResearchId ?? null;
           try {
             reportPhase("starting-server");
             workspaceId = await ensureResearchTransportWorkspace({
@@ -1058,9 +1037,12 @@ export function createResearchActions(
                   ...(settings ?? {}),
                 },
                 ...(attachedFileIds.length > 0 ? { attachedFileIds } : {}),
+                ...(clientResearchId ? { clientResearchId } : {}),
               },
               { signal },
             );
+            startedResearchId = result.research.id;
+            throwIfOperationAborted(signal);
             applyResearchRecord(result.research, { select: canNavigate() });
             await ensureResearchSubscription(workspaceId, result.research, canNavigate, signal);
             if (draftRevision !== undefined && canNavigate()) {
@@ -1068,6 +1050,28 @@ export function createResearchActions(
             }
             return result.research;
           } catch (error) {
+            if (
+              isOperationAbortError(error) &&
+              workspaceId &&
+              startRequested &&
+              startedResearchId
+            ) {
+              try {
+                const cancelled = await requestResearchResult(
+                  deps,
+                  get,
+                  set,
+                  workspaceId,
+                  "research/cancel",
+                  { researchId: startedResearchId },
+                );
+                if (cancelled.research) {
+                  applyResearchRecord(cancelled.research);
+                }
+              } catch {
+                // The run remains visible in Research if remote cancellation fails.
+              }
+            }
             if (
               isOperationAbortError(error) &&
               workspaceId &&
@@ -1226,9 +1230,6 @@ export function createResearchActions(
         errorMessage: "Unable to send the research follow-up.",
         repairAction: "Check the follow-up and provider connection, then retry.",
         execute: async () => {
-          if (!hasGoogleResearchAccess()) {
-            throw new Error("Add a Google API key in Settings → Providers to use Deep Research.");
-          }
           const normalizedInput = input.trim();
           if (!normalizedInput) throw new Error("Enter a follow-up request.");
           let workspaceId: string | null = null;

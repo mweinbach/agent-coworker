@@ -349,6 +349,62 @@ describe("research actions", () => {
     readGate.resolve(new ArrayBuffer(5));
   });
 
+  test("cancelling after research/start is sent cancels the created server run", async () => {
+    const submittedDraft = {
+      ...createEmptyComposerDraft("2026-04-21T00:00:00.000Z"),
+      revision: 7,
+      text: "Cancel this safely",
+    };
+    const harness = createHarness({ researchCreationDraft: submittedDraft });
+    const actions = createResearchActions(harness.set as never, harness.get as never, deps);
+    const startReceived = Promise.withResolvers<void>();
+    requestJsonRpcMock.mockImplementation(
+      async (_get, _set, _workspaceId, method, _params, opts) => {
+        if (method === "research/start") {
+          startReceived.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("Creation cancelled.");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          });
+        }
+        if (method === "research/cancel") {
+          return { research: null };
+        }
+        return {};
+      },
+    );
+    const controller = new AbortController();
+    const clientResearchId = "1781a5a2-b171-40a7-827e-587f122d56d9";
+
+    const pending = actions.startResearch({
+      input: submittedDraft.text,
+      draftRevision: submittedDraft.revision,
+      clientResearchId,
+      signal: controller.signal,
+    });
+    await startReceived.promise;
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: { message: "Creation cancelled." },
+    });
+    expect(requestJsonRpcMock.mock.calls.some((call) => call[3] === "research/cancel")).toBeTrue();
+    expect(
+      requestJsonRpcMock.mock.calls.find((call) => call[3] === "research/cancel")?.[4],
+    ).toEqual({
+      researchId: clientResearchId,
+    });
+    expect(harness.state.researchCreationDraft).toEqual(submittedDraft);
+  });
+
   test("exportResearch saves with a sanitized title-derived filename and clears pending state", async () => {
     const harness = createHarness();
     const actions = createResearchActions(harness.set as never, harness.get as never, deps);

@@ -5,6 +5,7 @@ import { createAgentProfilesRouteHandlers } from "./agentProfiles";
 import { createAgentRouteHandlers } from "./agents";
 import { createCommandRouteHandlers } from "./commands";
 import { createConnectorsRouteHandlers } from "./connectors";
+import { createCreationRouteHandlers } from "./creation";
 import { createImportRouteHandlers } from "./import";
 import { createMarketplacesRouteHandlers } from "./marketplaces";
 import { createMcpRouteHandlers } from "./mcp";
@@ -38,6 +39,7 @@ export function createJsonRpcRequestRouter(
     ...createAgentRouteHandlers(context),
     ...createAgentProfilesRouteHandlers(context),
     ...createConnectorsRouteHandlers(context),
+    ...createCreationRouteHandlers(context),
     ...createCommandRouteHandlers(context),
     ...createProviderRouteHandlers(context),
     ...createRuntimeRouteHandlers(context),

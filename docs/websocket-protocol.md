@@ -401,6 +401,8 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/customModel/delete`
   - `cowork/provider/model/setEnabled`
   - `cowork/provider/model/resetEnabled`
+- creation readiness
+  - `cowork/creation/preflight`
 - runtime diagnostics
   - `cowork/runtime/libreoffice/check`
   - `cowork/runtime/diagnostics/read`
@@ -753,6 +755,29 @@ idempotent across multiple authorized project workspaces on the same connection,
 removes every membership. This is separate from `cowork/control/event`, whose workspace-control
 subscription remains scoped to the latest requested workspace.
 
+### Creation readiness
+
+Clients should call `cowork/creation/preflight` before creating a chat thread or research run. The
+method validates the selected workspace and the dependencies required to start work without mutating
+thread or research state.
+
+- params: `{ kind: "chat" | "research", cwd?, provider?, model? }`
+- result: `{ ready, checks }`
+- each check is `{ id, status: "ok" | "blocked", message, repairAction? }`
+- check ids are `project_access`, `provider_connected`, `model_available`, `credentials`,
+  `runtime_ready`, and `research_credentials`
+- repair actions are typed as `connectProvider`, `openProviderSettings`, `startLmStudio`, or
+  `installCodexRuntime`
+
+For chat preflight, omitted `provider` and `model` use the server configuration defaults. The
+provider catalog, enabled model preferences, credentials, global startup state, and provider-specific
+runtime state are evaluated together. For research preflight, Google Deep Research credentials are
+accepted from the saved Google API-key connection or the server's
+`GOOGLE_GENERATIVE_AI_API_KEY`/`GOOGLE_API_KEY` environment.
+
+`ready` is true only when every returned check has status `ok`. A blocked result is an expected,
+actionable product state and is returned as a successful JSON-RPC result rather than an error.
+
 ### Research JSON-RPC methods
 
 Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
@@ -760,9 +785,12 @@ Research traffic is scoped to the active workspace and separate from chat thread
 Requests:
 
 - `research/start`
-  - params: `{ input, title?, settings?, attachedFileIds? }`
+  - params: `{ input, title?, settings?, attachedFileIds?, clientResearchId? }`
   - result: `{ research }`
   - starts a new Deep Research interaction and begins background streaming
+  - validates Google credentials before creating or persisting a research row
+  - `clientResearchId`, when present, is a UUID used as the research id and idempotency key; retries
+    return the existing run instead of creating a duplicate
 - `research/list`
   - params: `{}`
   - result: `{ research: ResearchRecord[] }`
@@ -987,6 +1015,12 @@ string, "installed": boolean, "canAutoStart": boolean }`. Because the message ne
 session, the send is retry-safe: clients should keep the optimistic user message, offer to start LM
 Studio via `cowork/provider/lmstudio/local/start`, and re-issue `turn/start` with the **same**
 `clientMessageId` once the server is running.
+
+`research/start` rejects missing Google Deep Research credentials with `-32600` before creating a
+research row. The rejection carries structured `error.data`
+`{ "reason": "research_credentials_missing", "provider": "google" }`. The draft and staged upload
+ids remain retry-safe; clients should preserve them, open the Google provider connection flow, and
+retry after credentials are configured.
 
 ### JSON-RPC overload behavior
 

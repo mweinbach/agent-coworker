@@ -1,12 +1,12 @@
 import type { Interactions } from "@google/genai";
 
-import { getSavedProviderApiKey } from "../../config";
 import type { AgentConfig } from "../../types";
 import { canonicalWorkspacePath, sameWorkspacePath } from "../../utils/workspacePath";
 import { enrichCitationAnnotations } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
 import { exportResearch } from "./export";
+import { resolveGoogleResearchApiKey } from "./googleApiKey";
 import { ResearchFileStore } from "./researchFileStore";
 import {
   cancelResearchInteraction,
@@ -59,6 +59,7 @@ type StartResearchParams = {
   settings?: unknown;
   attachedFileIds?: string[];
   attachedFiles?: ResearchInputFile[];
+  clientResearchId?: string;
 };
 
 type FollowUpResearchParams = StartResearchParams;
@@ -255,6 +256,8 @@ export class ResearchService {
   private readonly maxBufferedEvents: number;
   private readonly deleteStreamSettleTimeoutMs: number;
   private readonly states = new Map<string, ResearchRuntimeState>();
+  private readonly startsByClientResearchId = new Map<string, Promise<ResearchRecord>>();
+  private readonly pendingClientCancellations = new Set<string>();
   private readonly deletingIds = new Set<string>();
   private readonly deletedIds = new Set<string>();
   private initPromise: Promise<void> | null = null;
@@ -313,16 +316,56 @@ export class ResearchService {
   }
 
   async start(params: StartResearchParams): Promise<ResearchRecord> {
+    const clientResearchId = params.clientResearchId;
+    if (!clientResearchId) {
+      return await this.startOnce(params);
+    }
+    const existingStart = this.startsByClientResearchId.get(clientResearchId);
+    if (existingStart) {
+      return await existingStart;
+    }
+    const startPromise = this.startOnce(params);
+    this.startsByClientResearchId.set(clientResearchId, startPromise);
+    try {
+      return await startPromise;
+    } finally {
+      if (this.startsByClientResearchId.get(clientResearchId) === startPromise) {
+        this.startsByClientResearchId.delete(clientResearchId);
+      }
+    }
+  }
+
+  private async startOnce(params: StartResearchParams): Promise<ResearchRecord> {
     await this.init();
     const input = params.input.trim();
     if (!input) {
       throw new Error("Research input is required.");
     }
+    this.resolveGoogleApiKey();
+    if (params.clientResearchId) {
+      const existing = await this.get(params.clientResearchId);
+      if (existing) {
+        return existing;
+      }
+      if (this.pendingClientCancellations.delete(params.clientResearchId)) {
+        const error = new Error("Research creation cancelled.");
+        error.name = "AbortError";
+        throw error;
+      }
+    }
     const attachedFiles = await this.resolveAttachedFiles(params);
+    if (
+      params.clientResearchId &&
+      this.pendingClientCancellations.delete(params.clientResearchId)
+    ) {
+      const error = new Error("Research creation cancelled.");
+      error.name = "AbortError";
+      throw error;
+    }
 
     const now = new Date().toISOString();
     const record = researchRecordSchema.parse({
-      id: crypto.randomUUID(),
+      id: params.clientResearchId ?? crypto.randomUUID(),
       workspacePath: this.workspacePath,
       parentResearchId: null,
       title: params.title?.trim() || buildResearchTitle(input),
@@ -531,6 +574,13 @@ export class ResearchService {
     const existing =
       activeState?.record ?? this.sessionDb.getResearch(id, { workspacePath: this.workspacePath });
     if (!existing) {
+      if (this.pendingClientCancellations.size >= 1_000) {
+        const oldest = this.pendingClientCancellations.values().next().value;
+        if (typeof oldest === "string") {
+          this.pendingClientCancellations.delete(oldest);
+        }
+      }
+      this.pendingClientCancellations.add(id);
       return null;
     }
     if (!this.recordBelongsToWorkspace(existing)) {
@@ -1590,19 +1640,7 @@ export class ResearchService {
   }
 
   private resolveGoogleApiKey(): string {
-    const config = this.getConfigImpl();
-    const saved = getSavedProviderApiKey(config, "google")?.trim();
-    if (saved) {
-      return saved;
-    }
-    const fromEnv =
-      process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
-    if (fromEnv) {
-      return fromEnv;
-    }
-    throw new Error(
-      "Google Deep Research requires a saved Google API key or GOOGLE_GENERATIVE_AI_API_KEY.",
-    );
+    return resolveGoogleResearchApiKey(this.getConfigImpl());
   }
 
   private async resolveAttachedFiles(params: StartResearchParams): Promise<ResearchInputFile[]> {

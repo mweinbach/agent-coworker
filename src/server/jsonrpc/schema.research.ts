@@ -22,6 +22,7 @@ export const jsonRpcResearchRequestSchemas = {
       title: z.string().optional(),
       settings: researchSettingsSchema.optional(),
       attachedFileIds: z.array(researchFileIdSchema).optional(),
+      clientResearchId: z.string().uuid().optional(),
     })
     .strict(),
   "research/list": z.object({}).strict(),

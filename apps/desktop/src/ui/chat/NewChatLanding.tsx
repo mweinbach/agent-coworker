@@ -6,6 +6,7 @@ import {
   FolderPlusIcon,
   MessageSquareIcon,
   PaperclipIcon,
+  XIcon,
 } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +21,7 @@ import {
   type ReasoningEffortValue,
 } from "../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../app/store";
+import type { CreationOperationPhase } from "../../app/store.helpers/operationIntent";
 import { isOneOffChatWorkspace } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import {
@@ -45,11 +47,32 @@ import {
   MessageComposerSubmit,
   MessageComposerTools,
 } from "../composer/MessageComposer";
+import { CreationReadinessNotice } from "../creation/CreationReadinessNotice";
+import { useCreationReadiness } from "../creation/useCreationReadiness";
 import { ComposerMentionInput } from "./ComposerMentionInput";
 import { type ComposerModelSelection, ComposerModelSelector } from "./ComposerModelSelector";
 import { ComposerReasoningSelector } from "./ComposerReasoningToggle";
 import { buildMentionCatalog, extractReferencesFromText } from "./composerMentions";
 import { resolveDefaultNewChatModel } from "./newChatLandingModel";
+
+function creationPhaseLabel(phase: CreationOperationPhase | null): string | null {
+  switch (phase) {
+    case "preparing":
+      return "Validating draft…";
+    case "starting-server":
+      return "Starting workspace runtime…";
+    case "processing-attachments":
+      return "Preparing attachments…";
+    case "creating":
+      return "Creating chat…";
+    case null:
+      return null;
+    default: {
+      const exhaustivePhase: never = phase;
+      return String(exhaustivePhase);
+    }
+  }
+}
 
 export function NewChatLanding() {
   const workspaces = useAppStore((s) => s.workspaces);
@@ -74,7 +97,10 @@ export function NewChatLanding() {
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const submitComposerDraft = useAppStore((s) => s.submitComposerDraft);
   const retryComposerSubmission = useAppStore((s) => s.retryComposerSubmission);
+  const cancelComposerSubmission = useAppStore((s) => s.cancelComposerSubmission);
   const dismissComposerSubmission = useAppStore((s) => s.dismissComposerSubmission);
+  const repairCreationReadiness = useAppStore((s) => s.repairCreationReadiness);
+  const releasePreparedQuickChatWorkspace = useAppStore((s) => s.releasePreparedQuickChatWorkspace);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const setNewChatLandingTarget = useAppStore((s) => s.setNewChatLandingTarget);
   const target = useMemo(
@@ -83,6 +109,10 @@ export function NewChatLanding() {
   );
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [attachmentPickerErrors, setAttachmentPickerErrors] = useState<Record<string, string>>({});
+  const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
+  const [repairingReadiness, setRepairingReadiness] = useState(false);
+  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null);
+  const creationAbortRef = useRef<AbortController | null>(null);
   const submitting =
     composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending";
   const composerLocked = submitting || attachmentIngestionPending;
@@ -116,7 +146,7 @@ export function NewChatLanding() {
     projectWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
   const fallbackModelWorkspace =
     targetWorkspace ?? selectedProjectWorkspace ?? projectWorkspaces[0] ?? null;
-  const targetLabel = targetWorkspace?.name ?? "Don't work in a project";
+  const targetLabel = targetWorkspace?.name ?? "Quick chat";
 
   // Source the @-mention catalog from the target/selected workspace; fall back to
   // any connected workspace that has skills loaded (global + built-in skills are
@@ -144,7 +174,7 @@ export function NewChatLanding() {
 
   const trimmedComposerText = composerText.trim();
   const hasPendingAttachments = pendingAttachments.length > 0;
-  const canSubmitNewChat =
+  const hasSubmittableContent =
     !attachmentIngestionPending && Boolean(trimmedComposerText || hasPendingAttachments);
   const modelDisplayNames = useMemo(
     () => modelDisplayNamesFromCatalog(providerCatalog),
@@ -158,6 +188,16 @@ export function NewChatLanding() {
     composerDraft.provider && composerDraft.model
       ? { provider: composerDraft.provider, model: composerDraft.model }
       : defaultModelSelection;
+  const readiness = useCreationReadiness({
+    kind: "chat",
+    workspaceId: target.kind === "project" ? targetWorkspace?.id : undefined,
+    ...(targetWorkspace ? { cwd: targetWorkspace.path } : {}),
+    provider: modelSelection.provider,
+    model: modelSelection.model,
+  });
+  const readinessBlocked = Boolean(readiness.error) || readiness.result?.ready === false;
+  const canSubmitNewChat =
+    hasSubmittableContent && !readiness.checking && readiness.result?.ready === true;
 
   const reasoningConfig = useMemo(
     () =>
@@ -180,6 +220,19 @@ export function NewChatLanding() {
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
+
+  useEffect(
+    () => () => {
+      creationAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (submitting) return;
+    creationAbortRef.current = null;
+    setCreationPhase(null);
+  }, [submitting]);
 
   const ingestAttachmentFiles = useCallback(
     async (selectedFiles: File[]) => {
@@ -226,13 +279,26 @@ export function NewChatLanding() {
   const submitNewChat = useCallback(() => {
     if (!canSubmitNewChat || submitting) return;
     setAttachmentPickerError(null);
-    submitComposerDraft({
-      kind: "newChat",
-      target,
-      provider: modelSelection.provider,
-      model: modelSelection.model,
-      reasoningEffort,
-    });
+    const controller = new AbortController();
+    creationAbortRef.current = controller;
+    setCreationPhase("preparing");
+    const claimed = submitComposerDraft(
+      {
+        kind: "newChat",
+        target,
+        provider: modelSelection.provider,
+        model: modelSelection.model,
+        reasoningEffort,
+      },
+      {
+        signal: controller.signal,
+        onPhase: setCreationPhase,
+      },
+    );
+    if (!claimed) {
+      creationAbortRef.current = null;
+      setCreationPhase(null);
+    }
   }, [
     canSubmitNewChat,
     modelSelection,
@@ -243,11 +309,49 @@ export function NewChatLanding() {
     target,
   ]);
   const retrySubmission = useCallback(() => {
-    retryComposerSubmission(composerDraftKey);
+    const controller = new AbortController();
+    creationAbortRef.current = controller;
+    setCreationPhase("preparing");
+    const claimed = retryComposerSubmission(composerDraftKey, {
+      signal: controller.signal,
+      onPhase: setCreationPhase,
+    });
+    if (!claimed) {
+      creationAbortRef.current = null;
+      setCreationPhase(null);
+    }
   }, [composerDraftKey, retryComposerSubmission]);
+  const cancelSubmission = useCallback(() => {
+    creationAbortRef.current?.abort();
+    creationAbortRef.current = null;
+    cancelComposerSubmission(composerDraftKey);
+    setCreationPhase(null);
+  }, [cancelComposerSubmission, composerDraftKey]);
   const dismissSubmission = useCallback(() => {
     dismissComposerSubmission(composerDraftKey);
   }, [composerDraftKey, dismissComposerSubmission]);
+  const repairReadiness = useCallback(
+    async (action: Parameters<typeof repairCreationReadiness>[0]) => {
+      if (repairingReadiness) return;
+      setRepairingReadiness(true);
+      setReadinessRepairError(null);
+      try {
+        await repairCreationReadiness(action, targetWorkspace?.id ?? fallbackModelWorkspace?.id);
+        readiness.refresh();
+      } catch (error) {
+        setReadinessRepairError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setRepairingReadiness(false);
+      }
+    },
+    [
+      fallbackModelWorkspace?.id,
+      readiness,
+      repairCreationReadiness,
+      repairingReadiness,
+      targetWorkspace?.id,
+    ],
+  );
 
   const addProjectFromSelector = useCallback(async () => {
     setSelectorOpen(false);
@@ -258,13 +362,23 @@ export function NewChatLanding() {
         workspace.id === state.selectedWorkspaceId && !isOneOffChatWorkspace(workspace),
     );
     if (selectedProject) {
+      await releasePreparedQuickChatWorkspace();
       setNewChatLandingTarget({ kind: "project", workspaceId: selectedProject.id });
     }
-  }, [addWorkspace, setNewChatLandingTarget]);
+  }, [addWorkspace, releasePreparedQuickChatWorkspace, setNewChatLandingTarget]);
 
-  const starterPrompts = useMemo(
-    () =>
-      [
+  const selectProjectTarget = useCallback(
+    (workspaceId: string) => {
+      void releasePreparedQuickChatWorkspace();
+      setNewChatLandingTarget({ kind: "project", workspaceId });
+      setSelectorOpen(false);
+    },
+    [releasePreparedQuickChatWorkspace, setNewChatLandingTarget],
+  );
+
+  const starterPrompts = useMemo(() => {
+    if (targetWorkspace) {
+      return [
         {
           id: "summarize-repo",
           label: "Summarize this repo",
@@ -286,9 +400,26 @@ export function NewChatLanding() {
           label: "Suggest tests",
           prompt: "Suggest high-value tests for the most important behavior in this workspace.",
         },
-      ] as const,
-    [],
-  );
+      ] as const;
+    }
+    return [
+      {
+        id: "draft-plan",
+        label: "Draft a plan",
+        prompt: "Help me turn an idea into a clear, actionable plan.",
+      },
+      {
+        id: "brainstorm",
+        label: "Brainstorm options",
+        prompt: "Help me brainstorm several approaches and compare their trade-offs.",
+      },
+      {
+        id: "polish-writing",
+        label: "Polish writing",
+        prompt: "Help me make this writing clearer, tighter, and more persuasive.",
+      },
+    ] as const;
+  }, [targetWorkspace]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col items-center justify-center overflow-hidden bg-panel px-5 py-10">
@@ -323,6 +454,16 @@ export function NewChatLanding() {
             </Button>
           ))}
         </div>
+        <div className="w-full max-w-[42rem]">
+          <CreationReadinessNotice
+            checking={readiness.checking}
+            error={readinessRepairError ?? readiness.error}
+            result={readiness.result}
+            repairing={repairingReadiness}
+            onRepair={(action) => void repairReadiness(action)}
+            onRetry={readiness.refresh}
+          />
+        </div>
         <MessageComposerRoot
           className="w-full max-w-[42rem] rounded-[28px] border-border/55 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={
@@ -344,12 +485,16 @@ export function NewChatLanding() {
               submitNewChat();
             }}
           >
-            <MessageComposerStatus>
-              {composerSubmission?.phase === "preparing"
-                ? "Preparing message…"
-                : submitting
-                  ? "Starting a new chat…"
-                  : null}
+            <MessageComposerStatus aria-live="polite">
+              {submitting
+                ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
+                : readiness.result?.ready
+                  ? "Ready"
+                  : readiness.checking
+                    ? "Validating readiness…"
+                    : readinessBlocked
+                      ? "Setup required"
+                      : null}
             </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
@@ -463,13 +608,7 @@ export function NewChatLanding() {
                               key={workspace.id}
                               value={workspace.name}
                               className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
-                              onSelect={() => {
-                                setNewChatLandingTarget({
-                                  kind: "project",
-                                  workspaceId: workspace.id,
-                                });
-                                setSelectorOpen(false);
-                              }}
+                              onSelect={() => selectProjectTarget(workspace.id)}
                             >
                               <FolderIcon className="size-4" />
                               <span className="truncate">{workspace.name}</span>
@@ -492,7 +631,7 @@ export function NewChatLanding() {
                             </CommandItem>
                           ) : null}
                           <CommandItem
-                            value="Don't work in a project"
+                            value="Quick chat"
                             className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
                             onSelect={() => {
                               setNewChatLandingTarget({ kind: "oneOff" });
@@ -500,7 +639,7 @@ export function NewChatLanding() {
                             }}
                           >
                             <MessageSquareIcon className="size-4" />
-                            <span>Don't work in a project</span>
+                            <span>Quick chat</span>
                             {target.kind === "oneOff" ? (
                               <CheckIcon className="ml-auto size-4 text-primary" />
                             ) : null}
@@ -532,6 +671,12 @@ export function NewChatLanding() {
                   </>
                 ) : null}
               </MessageComposerTools>
+              {submitting ? (
+                <Button type="button" variant="ghost" size="sm" onClick={cancelSubmission}>
+                  <XIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              ) : null}
               <MessageComposerSubmit
                 status={composerLocked ? "pending" : "ready"}
                 disabled={!canSubmitNewChat || composerLocked}

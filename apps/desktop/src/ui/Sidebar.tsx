@@ -23,7 +23,6 @@ import {
 } from "react";
 import { countAllOutstandingInteractions, nextInteractionThreadId } from "../app/interactionQueue";
 import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
-import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
@@ -66,9 +65,6 @@ export const Sidebar = memo(function Sidebar() {
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const sidebarSectionOrder = useAppStore((s) => s.desktopSettings.sidebarSectionOrder);
-  const googleResearchAvailable = useAppStore((s) =>
-    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
-  );
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -119,7 +115,7 @@ export const Sidebar = memo(function Sidebar() {
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const tasksEnabled = desktopFeatures.tasks === true;
-  const effectiveView = view === "research" && !googleResearchAvailable ? "chat" : view;
+  const effectiveView = view;
   const isOnNewChatLanding = effectiveView === "chat" && selectedThreadId === null;
   const landingProjectWorkspaceId = useMemo(
     () =>
@@ -841,22 +837,20 @@ export const Sidebar = memo(function Sidebar() {
         </Button>
       ) : null}
       <nav aria-label="Primary" className="grid w-full min-w-0 gap-1.5">
-        {googleResearchAvailable ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-current={effectiveView === "research" ? "page" : undefined}
-            className={cn(
-              "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-              "hover:bg-foreground/[0.045] hover:text-foreground",
-              effectiveView === "research" && "bg-foreground/[0.055] text-foreground",
-            )}
-            onClick={() => void openResearch()}
-          >
-            <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
-            Research
-          </Button>
-        ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-current={effectiveView === "research" ? "page" : undefined}
+          className={cn(
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
+            effectiveView === "research" && "bg-foreground/[0.055] text-foreground",
+          )}
+          onClick={() => void openResearch()}
+        >
+          <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
+          Research
+        </Button>
         <Button
           variant="ghost"
           size="sm"

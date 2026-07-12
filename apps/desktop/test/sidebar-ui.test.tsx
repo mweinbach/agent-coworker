@@ -967,7 +967,7 @@ describe("desktop sidebar", () => {
     }
   });
 
-  test.serial("shows Research navigation only when a Google API key is saved", async () => {
+  test.serial("keeps Research navigation visible while provider setup is unavailable", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -985,7 +985,7 @@ describe("desktop sidebar", () => {
         root.render(createElement(Sidebar));
       });
 
-      expect(container.textContent).not.toContain("Research");
+      expect(container.textContent).toContain("Research");
 
       await act(async () => {
         resetAppStore({
@@ -1006,7 +1006,7 @@ describe("desktop sidebar", () => {
         });
       });
 
-      expect(container.textContent).not.toContain("Research");
+      expect(container.textContent).toContain("Research");
 
       await act(async () => {
         resetAppStore({

@@ -1,4 +1,4 @@
-import { AlertTriangleIcon, PaperclipIcon, Settings2Icon } from "lucide-react";
+import { AlertTriangleIcon, PaperclipIcon, RotateCcwIcon, Settings2Icon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
@@ -20,6 +20,8 @@ import {
   MessageComposerTextarea,
   MessageComposerTools,
 } from "../composer/MessageComposer";
+import { CreationReadinessNotice } from "../creation/CreationReadinessNotice";
+import { useCreationReadiness } from "../creation/useCreationReadiness";
 import { OperationFeedback } from "../OperationFeedback";
 import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
 
@@ -44,6 +46,10 @@ function researchPhaseLabel(phase: CreationOperationPhase | null): string | null
 
 export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void }) {
   const startResearch = useAppStore((s) => s.startResearch);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const researchTransportWorkspaceId = useAppStore((s) => s.researchTransportWorkspaceId);
+  const repairCreationReadiness = useAppStore((s) => s.repairCreationReadiness);
   const draft = useAppStore((s) => s.researchCreationDraft);
   const creationError = useAppStore((s) =>
     s.researchCreationError?.revision === s.researchCreationDraft.revision
@@ -59,22 +65,55 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
     creationOperationKey ? state.operationsByKey[creationOperationKey] : undefined,
   );
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [repairingReadiness, setRepairingReadiness] = useState(false);
+  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const submissionControllerRef = useRef<AbortController | null>(null);
+  const researchRequestIdentityRef = useRef<{ revision: number; id: string } | null>(null);
+  const readinessWorkspaceId = researchTransportWorkspaceId ?? selectedWorkspaceId ?? undefined;
+  const readinessWorkspace =
+    workspaces.find((workspace) => workspace.id === readinessWorkspaceId) ?? null;
+  const readiness = useCreationReadiness({
+    kind: "research",
+    workspaceId: readinessWorkspaceId,
+    ...(readinessWorkspace ? { cwd: readinessWorkspace.path } : {}),
+  });
   const attachmentPreviews = draft.attachments.map((attachment) => ({
     filename: attachment.filename,
     mimeType: attachment.mimeType,
     previewUrl: attachment.previewUrl,
   }));
 
+  const repairReadiness = async (
+    action: Parameters<typeof repairCreationReadiness>[0],
+  ): Promise<void> => {
+    if (repairingReadiness) return;
+    setRepairingReadiness(true);
+    setReadinessRepairError(null);
+    try {
+      await repairCreationReadiness(action, readinessWorkspaceId);
+      readiness.refresh();
+    } catch (error) {
+      setReadinessRepairError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRepairingReadiness(false);
+    }
+  };
+
   const submit = async () => {
     const trimmed = draft.text.trim();
-    if (!trimmed || submitting) {
+    if (!trimmed || submitting || readiness.checking || readiness.result?.ready !== true) {
       return;
     }
     const draftRevision = draft.revision;
+    const requestIdentity =
+      researchRequestIdentityRef.current?.revision === draftRevision
+        ? researchRequestIdentityRef.current
+        : { revision: draftRevision, id: crypto.randomUUID() };
+    researchRequestIdentityRef.current = requestIdentity;
     const operationIntent = beginCreationOperationIntent();
     setCreationOperationKey(operationKey("research", "start", operationIntent.operationId));
     const controller = new AbortController();
@@ -87,6 +126,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
         input: trimmed,
         files: draft.attachments.map((attachment) => attachment.file),
         draftRevision,
+        clientResearchId: requestIdentity.id,
         intent: operationIntent,
         signal: controller.signal,
         onPhase: setCreationPhase,
@@ -103,7 +143,14 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
       if (submissionControllerRef.current === controller) {
         submissionControllerRef.current = null;
       }
+      if (
+        controller.signal.aborted &&
+        researchRequestIdentityRef.current?.id === requestIdentity.id
+      ) {
+        researchRequestIdentityRef.current = null;
+      }
       setCreationPhase(null);
+      setCancelling(false);
       setSubmitting(false);
     }
   };
@@ -117,7 +164,16 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
           a cited report you can export.
         </p>
       </div>
+      <CreationReadinessNotice
+        checking={readiness.checking}
+        error={readinessRepairError ?? readiness.error}
+        result={readiness.result}
+        repairing={repairingReadiness}
+        onRepair={(action) => void repairReadiness(action)}
+        onRetry={readiness.refresh}
+      />
       <MessageComposerRoot
+        className="mt-3"
         fileDrop={{
           disabled: submitting,
           onFiles: async (files) => {
@@ -144,16 +200,38 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
             disabled={submitting}
           />
 
-          <MessageComposerStatus>
-            {submitting ? researchPhaseLabel(creationPhase) : null}
+          <MessageComposerStatus aria-live="polite">
+            {submitting
+              ? cancelling
+                ? "Cancelling research…"
+                : researchPhaseLabel(creationPhase)
+              : readiness.result?.ready
+                ? "Ready"
+                : readiness.checking
+                  ? "Validating readiness…"
+                  : "Setup required"}
           </MessageComposerStatus>
           <MessageComposerBody>
             {creationError ? (
-              <div className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive">
+              <div
+                className="flex min-w-0 items-start gap-1.5 px-1 pb-1 text-xs text-destructive"
+                role="alert"
+                aria-live="assertive"
+              >
                 <AlertTriangleIcon className="size-3.5 shrink-0" />
                 <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                   {creationError}
                 </span>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={submitting || readiness.result?.ready !== true}
+                  onClick={() => void submit()}
+                >
+                  <RotateCcwIcon data-icon="inline-start" />
+                  Retry
+                </Button>
               </div>
             ) : null}
             <MessageComposerTextarea
@@ -197,14 +275,23 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
                 type="button"
                 size="sm"
                 variant="ghost"
-                onClick={() => submissionControllerRef.current?.abort()}
+                disabled={cancelling}
+                onClick={() => {
+                  setCancelling(true);
+                  submissionControllerRef.current?.abort();
+                }}
               >
-                Cancel
+                {cancelling ? "Cancelling…" : "Cancel"}
               </Button>
             ) : null}
             <MessageComposerSubmit
               status={submitting ? "pending" : "ready"}
-              disabled={!draft.text.trim()}
+              disabled={
+                !draft.text.trim() ||
+                submitting ||
+                readiness.checking ||
+                readiness.result?.ready !== true
+              }
             />
           </MessageComposerFooter>
         </MessageComposerForm>

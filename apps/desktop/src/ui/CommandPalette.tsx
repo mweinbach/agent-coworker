@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 
-import { hasGoogleApiKeyForResearch } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
@@ -64,9 +63,6 @@ export const CommandPalette = memo(function CommandPalette({
   const developerMode = useAppStore((s) => s.developerMode);
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
-  const googleResearchAvailable = useAppStore((s) =>
-    hasGoogleApiKeyForResearch(s.providerStatusByName.google),
-  );
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
 
@@ -205,13 +201,11 @@ export const CommandPalette = memo(function CommandPalette({
               <span>New task</span>
             </CommandItem>
           ) : null}
-          {googleResearchAvailable ? (
-            <CommandItem onSelect={handleResearchClick} value="research open">
-              <BookOpenIcon />
-              <span>Research</span>
-              <CommandKbd keys={[MOD, SHIFT, "R"]} />
-            </CommandItem>
-          ) : null}
+          <CommandItem onSelect={handleResearchClick} value="research open">
+            <BookOpenIcon />
+            <span>Research</span>
+            <CommandKbd keys={[MOD, SHIFT, "R"]} />
+          </CommandItem>
           {selectedThreadBusy ? (
             <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
               <SquareIcon />

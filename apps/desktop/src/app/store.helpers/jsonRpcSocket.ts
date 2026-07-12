@@ -579,6 +579,7 @@ function getJsonRpcRequestRetryOptions(
     method === "cowork/session/state/read" ||
     method === "cowork/provider/authMethods/read" ||
     method === "cowork/provider/status/refresh" ||
+    method === "cowork/creation/preflight" ||
     method === "cowork/runtime/libreoffice/check" ||
     method === "cowork/workspace/document/open" ||
     method === "cowork/workspace/document/revision" ||
@@ -588,6 +589,9 @@ function getJsonRpcRequestRetryOptions(
     return { retryable: true, retryOnDisconnect: true };
   }
   if (method === "thread/start" && hasStableStringKey(params, "clientThreadId")) {
+    return { retryable: true, retryOnDisconnect: true };
+  }
+  if (method === "research/start" && hasStableStringKey(params, "clientResearchId")) {
     return { retryable: true, retryOnDisconnect: true };
   }
   return { retryable: false, retryOnDisconnect: false };

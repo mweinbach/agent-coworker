@@ -872,12 +872,14 @@ describe("settings nav (store)", () => {
     });
   });
 
-  test("openResearch requires a saved Google API key", async () => {
+  test("openResearch remains discoverable without a saved Google API key", async () => {
     await useAppStore.getState().openResearch();
 
     const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
-    expect(state.notifications.at(-1)?.title).toBe("Google API key required");
+    expect(state.view).toBe("research");
+    expect(
+      state.notifications.some((notification) => notification.title === "Google API key required"),
+    ).toBe(false);
   });
 
   test("openResearch switches to the research view before transport refresh completes", async () => {

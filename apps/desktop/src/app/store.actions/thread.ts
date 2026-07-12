@@ -76,6 +76,7 @@ import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { createOneOffWorkspaceRecord } from "../store.helpers/oneOffWorkspaceRecord";
 import {
   beginCreationOperationIntent,
+  type CreationOperationControl,
   invalidateNavigationIntent,
   isCreationNavigationIntentCurrent,
   isOperationAbortError,
@@ -101,6 +102,7 @@ import {
 
 const RECONNECT_OUTCOME_TIMEOUT_MS = 15_000;
 const RECONNECT_OUTCOME_POLL_MS = 50;
+const composerSubmissionCreationControl = new Map<string, CreationOperationControl>();
 
 type HydrateThreadSelectionOptions = {
   preserveView?: boolean;
@@ -701,6 +703,7 @@ export function createThreadActions(
   | "sendMessage"
   | "submitComposerDraft"
   | "retryComposerSubmission"
+  | "cancelComposerSubmission"
   | "editAcceptedComposerSubmission"
   | "dismissComposerSubmission"
   | "completeComposerSubmission"
@@ -807,6 +810,37 @@ export function createThreadActions(
     }
   };
 
+  const discardCancelledOneOffWorkspace = async (workspace: {
+    id: string;
+    path: string;
+  }): Promise<void> => {
+    const workspaceId = workspace.id;
+    const workspaceRecord = get().workspaces.find((entry) => entry.id === workspaceId);
+    if (workspaceRecord) {
+      await cleanupRemovedWorkspaceRuntime(workspaceId);
+      set((state) => {
+        const remainingWorkspaces = state.workspaces.filter((entry) => entry.id !== workspaceId);
+        return {
+          workspaces: remainingWorkspaces,
+          quickChatPreparedWorkspaceId:
+            state.quickChatPreparedWorkspaceId === workspaceId
+              ? null
+              : state.quickChatPreparedWorkspaceId,
+          selectedWorkspaceId:
+            state.selectedWorkspaceId === workspaceId
+              ? (remainingWorkspaces[0]?.id ?? null)
+              : state.selectedWorkspaceId,
+        };
+      });
+      await persistNow(get);
+    }
+    try {
+      await desktopCommands.trashPath({ path: workspace.path });
+    } catch {
+      // Best-effort cleanup; the path remains confined to Cowork's one-off chat root.
+    }
+  };
+
   const submissionEntry = (
     submissionId: string,
   ): { key: string; submission: ComposerSubmission } | null => {
@@ -860,6 +894,18 @@ export function createThreadActions(
     }));
   };
 
+  const removeSubmission = (submissionId: string): void => {
+    set((state) => {
+      const key = Object.keys(state.composerSubmissionsByKey).find(
+        (candidate) => state.composerSubmissionsByKey[candidate]?.id === submissionId,
+      );
+      if (!key) return {};
+      const next = { ...state.composerSubmissionsByKey };
+      delete next[key];
+      return { composerSubmissionsByKey: next };
+    });
+  };
+
   const revokeAttachmentPreviewsIfUnreferenced = (
     attachments: readonly ComposerDraftAttachment[],
   ): void => {
@@ -898,6 +944,7 @@ export function createThreadActions(
     try {
       if (submission.request.kind === "newChat") {
         const { target, provider, model, reasoningEffort } = submission.request;
+        const creationControl = composerSubmissionCreationControl.get(submissionId);
         const started = await get().newThread({
           scope: target.kind === "project" ? "project" : "oneOff",
           ...(target.kind === "project" ? { workspaceId: target.workspaceId } : {}),
@@ -913,9 +960,14 @@ export function createThreadActions(
           reasoningEffort: reasoningEffort ?? undefined,
           draftSubmission: submission.owner,
           clientMessageId: submission.clientMessageId,
+          ...creationControl,
         });
         if (!started) {
-          failSubmission(submissionId, new Error("The new chat could not be started."));
+          if (creationControl?.signal?.aborted) {
+            removeSubmission(submissionId);
+          } else {
+            failSubmission(submissionId, new Error("The new chat could not be started."));
+          }
         }
         return;
       }
@@ -968,7 +1020,13 @@ export function createThreadActions(
         failSubmission(submissionId, new Error("The message was not accepted by the chat."));
       }
     } catch (error) {
-      failSubmission(submissionId, error);
+      if (composerSubmissionCreationControl.get(submissionId)?.signal?.aborted) {
+        removeSubmission(submissionId);
+      } else {
+        failSubmission(submissionId, error);
+      }
+    } finally {
+      composerSubmissionCreationControl.delete(submissionId);
     }
   };
 
@@ -1146,32 +1204,59 @@ export function createThreadActions(
         opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
 
       let workspaceId: string | null = null;
+      let createdOneOffWorkspace: Awaited<ReturnType<typeof createOneOffWorkspaceRecord>> | null =
+        null;
       if (scope === "oneOff") {
-        try {
-          const oneOffWorkspace = await waitForOperation(
-            createOneOffWorkspaceRecord(get, opts?.titleHint ?? opts?.firstMessage),
-            opts?.signal,
-          );
-          workspaceId = oneOffWorkspace.id;
-          set((s) => {
-            const next = {
-              workspaces: [oneOffWorkspace, ...s.workspaces],
-            };
-            return canNavigate() ? { ...next, selectedWorkspaceId: oneOffWorkspace.id } : next;
+        const preparedWorkspaceId = get().quickChatPreparedWorkspaceId;
+        const preparedWorkspace = preparedWorkspaceId
+          ? (get().workspaces.find((workspace) => workspace.id === preparedWorkspaceId) ?? null)
+          : null;
+        if (preparedWorkspace) {
+          createdOneOffWorkspace = preparedWorkspace;
+          workspaceId = preparedWorkspace.id;
+          set({
+            quickChatPreparedWorkspaceId: null,
+            ...(canNavigate() ? { selectedWorkspaceId: preparedWorkspace.id } : {}),
           });
-          ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
-        } catch (error) {
-          if (isOperationAbortError(error)) return false;
-          set((s) => ({
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Unable to create chat",
-              detail: error instanceof Error ? error.message : String(error),
-            }),
-          }));
-          return false;
+          ensureWorkspaceRuntime(get, set, preparedWorkspace.id);
+        } else {
+          if (preparedWorkspaceId) {
+            set({ quickChatPreparedWorkspaceId: null });
+          }
+          const oneOffWorkspacePromise = createOneOffWorkspaceRecord(
+            get,
+            opts?.titleHint ?? opts?.firstMessage,
+          );
+          try {
+            const oneOffWorkspace = await waitForOperation(oneOffWorkspacePromise, opts?.signal);
+            createdOneOffWorkspace = oneOffWorkspace;
+            workspaceId = oneOffWorkspace.id;
+            set((s) => {
+              const next = {
+                workspaces: [oneOffWorkspace, ...s.workspaces],
+              };
+              return canNavigate() ? { ...next, selectedWorkspaceId: oneOffWorkspace.id } : next;
+            });
+            ensureWorkspaceRuntime(get, set, oneOffWorkspace.id);
+          } catch (error) {
+            if (isOperationAbortError(error)) {
+              const oneOffWorkspace = await oneOffWorkspacePromise.catch(() => null);
+              if (oneOffWorkspace) {
+                await discardCancelledOneOffWorkspace(oneOffWorkspace);
+              }
+              return false;
+            }
+            set((s) => ({
+              notifications: pushNotification(s.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "error",
+                title: "Unable to create chat",
+                detail: error instanceof Error ? error.message : String(error),
+              }),
+            }));
+            return false;
+          }
         }
       } else {
         workspaceId =
@@ -1236,6 +1321,9 @@ export function createThreadActions(
         try {
           await ensureServerRunning(get, set, workspaceId, { signal: opts?.signal });
         } catch (error) {
+          if (createdOneOffWorkspace) {
+            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
+          }
           if (isOperationAbortError(error)) return false;
           throw error;
         }
@@ -1253,6 +1341,9 @@ export function createThreadActions(
               detail: wsRt?.error ?? "Workspace server is not ready.",
             }),
           }));
+          if (createdOneOffWorkspace) {
+            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
+          }
           return false;
         }
       }
@@ -1276,11 +1367,19 @@ export function createThreadActions(
           resolvedAttachments = prepared.attachments;
           firstMessage = prepared.text;
         } catch (error) {
+          if (createdOneOffWorkspace) {
+            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
+          }
           if (isOperationAbortError(error)) return false;
           throw error;
         }
       }
-      if (opts?.signal?.aborted) return false;
+      if (opts?.signal?.aborted) {
+        if (createdOneOffWorkspace) {
+          await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
+        }
+        return false;
+      }
       reportPhase("creating");
       const createdAt = nowIso();
       const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
@@ -1671,7 +1770,7 @@ export function createThreadActions(
       return true;
     },
 
-    submitComposerDraft: (request) => {
+    submitComposerDraft: (request, control) => {
       const key =
         request.kind === "thread"
           ? composerDraftKeyForThread(request.threadId)
@@ -1716,11 +1815,14 @@ export function createThreadActions(
       });
       if (!claimed) return false;
       if (existing) revokeAttachmentPreviewsIfUnreferenced(existing.draft.attachments);
+      if (control) {
+        composerSubmissionCreationControl.set(submissionId, control);
+      }
       void executeComposerSubmission(submissionId);
       return true;
     },
 
-    retryComposerSubmission: (key) => {
+    retryComposerSubmission: (key, control) => {
       const ownerKey = key ?? resolveActiveComposerDraftKey(get());
       const submission = get().composerSubmissionsByKey[ownerKey];
       if (submission?.phase !== "failed") return false;
@@ -1742,8 +1844,29 @@ export function createThreadActions(
         };
       });
       if (!claimed) return false;
+      if (control) {
+        composerSubmissionCreationControl.set(submission.id, control);
+      }
       void executeComposerSubmission(submission.id);
       return true;
+    },
+
+    cancelComposerSubmission: (key) => {
+      const ownerKey = key ?? resolveActiveComposerDraftKey(get());
+      const submission = get().composerSubmissionsByKey[ownerKey];
+      if (!isComposerSubmissionInFlight(submission)) return false;
+      let cancelled = false;
+      set((state) => {
+        const current = state.composerSubmissionsByKey[ownerKey];
+        if (!current || current.id !== submission.id || !isComposerSubmissionInFlight(current)) {
+          return {};
+        }
+        const next = { ...state.composerSubmissionsByKey };
+        delete next[ownerKey];
+        cancelled = true;
+        return { composerSubmissionsByKey: next };
+      });
+      return cancelled;
     },
 
     editAcceptedComposerSubmission: (key) => {

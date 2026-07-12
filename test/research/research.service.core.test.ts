@@ -5,6 +5,7 @@ import path from "node:path";
 import { __internal as citationMetadataInternal } from "../../src/server/citationMetadata";
 import type { ResearchRecord } from "../../src/server/research/types";
 import { SessionDb } from "../../src/server/sessionDb";
+import type { AgentConfig } from "../../src/types";
 import {
   cancelResearchInteractionMock,
   createResearchFileSearchStoreMock,
@@ -25,6 +26,97 @@ import {
 
 describe("research service", () => {
   registerResearchServiceHooks();
+
+  test("rejects missing Google credentials before persisting a research row", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () =>
+        ({
+          skillsDirs: [],
+          userCoworkDir: paths.rootDir,
+        }) as AgentConfig,
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await expect(service.start({ input: "Investigate the market." })).rejects.toThrow(
+        "Google Deep Research requires a saved Google API key",
+      );
+      expect(sessionDb.listResearch({ workspacePath: paths.rootDir })).toEqual([]);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("uses clientResearchId to deduplicate research creation retries", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as AgentConfig,
+      sendJsonRpc: () => {},
+    });
+    const clientResearchId = "63f75348-fc9e-4e85-85d0-f760d245fe7b";
+
+    try {
+      const first = await service.start({
+        input: "Investigate idempotency.",
+        clientResearchId,
+      });
+      const retry = await service.start({
+        input: "Investigate idempotency.",
+        clientResearchId,
+      });
+      await waitFor(
+        () => createResearchInteractionStreamMock.mock.calls.length,
+        (calls) => calls === 1,
+      );
+
+      expect(first.id).toBe(clientResearchId);
+      expect(retry.id).toBe(clientResearchId);
+      expect(createResearchInteractionStreamMock).toHaveBeenCalledTimes(1);
+      expect(sessionDb.getResearch(clientResearchId)).not.toBeNull();
+      await Bun.sleep(50);
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("honors cancellation that arrives before idempotent research creation persists", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] }) as AgentConfig,
+      sendJsonRpc: () => {},
+    });
+    const clientResearchId = "1781a5a2-b171-40a7-827e-587f122d56d9";
+
+    try {
+      expect(await service.cancel(clientResearchId)).toBeNull();
+      await expect(
+        service.start({
+          input: "Do not start this run.",
+          clientResearchId,
+        }),
+      ).rejects.toThrow("Research creation cancelled.");
+      expect(sessionDb.listResearch({ workspacePath: paths.rootDir })).toEqual([]);
+      expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
 
   test("streams research updates to multiple subscribers and persists completion", async () => {
     const paths = await makeTmpCoworkHome();

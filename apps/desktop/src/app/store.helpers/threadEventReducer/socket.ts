@@ -142,7 +142,9 @@ export function createSocketModule(
           replayHealth?: { snapshotRequired?: boolean };
         } | null;
         const thread = response?.thread;
-        if (!thread) return;
+        if (!thread) {
+          throw new Error("The server did not return the chat it created.");
+        }
 
         if (!existingSessionId && activeThreadId !== thread.id) {
           activeThreadId = migrateThreadIdentity(get, set, activeThreadId, thread.id);

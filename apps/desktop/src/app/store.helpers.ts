@@ -12,6 +12,11 @@ import type {
   CanvasDocumentSaveResult,
 } from "../../../../src/shared/canvasDocument";
 import type {
+  CreationPreflightParams,
+  CreationPreflightResult,
+  CreationRepairAction,
+} from "../../../../src/shared/creationReadiness";
+import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
@@ -292,6 +297,7 @@ export type AppStoreState = {
   composerAttachmentIngestionCountByKey: Record<string, number>;
   composerSubmissionsByKey: ComposerSubmissionsByKey;
   newChatLandingTarget: NewChatLandingTarget | null;
+  quickChatPreparedWorkspaceId: string | null;
   researchCreationDraft: ComposerDraft;
   researchCreationError: CreationDraftError | null;
   taskCreationDraft: TaskCreationDraft;
@@ -367,6 +373,12 @@ export type AppStoreState = {
     target?: NewChatLandingTarget;
   }) => Promise<void>;
   setNewChatLandingTarget: (target: NewChatLandingTarget) => void;
+  preflightCreation: (
+    request: CreationPreflightParams & { workspaceId?: string },
+    options?: AbortableActionOptions,
+  ) => Promise<CreationPreflightResult>;
+  repairCreationReadiness: (action: CreationRepairAction, workspaceId?: string) => Promise<void>;
+  releasePreparedQuickChatWorkspace: () => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   archiveThread: (threadId: string) => Promise<void>;
   restoreThread: (threadId: string) => Promise<void>;
@@ -401,8 +413,12 @@ export type AppStoreState = {
       retryToolItemIds?: string[];
     },
   ) => Promise<boolean>;
-  submitComposerDraft: (request: ComposerSubmissionRequest) => boolean;
-  retryComposerSubmission: (key?: string) => boolean;
+  submitComposerDraft: (
+    request: ComposerSubmissionRequest,
+    control?: CreationOperationControl,
+  ) => boolean;
+  retryComposerSubmission: (key?: string, control?: CreationOperationControl) => boolean;
+  cancelComposerSubmission: (key?: string) => boolean;
   editAcceptedComposerSubmission: (key?: string) => boolean;
   dismissComposerSubmission: (key?: string) => void;
   completeComposerSubmission: (owner: ComposerDraftRevision) => void;
@@ -649,6 +665,7 @@ export type AppStoreState = {
       files?: File[];
       settings?: Partial<ResearchSettingsState>;
       draftRevision?: number;
+      clientResearchId?: string;
     } & CreationOperationControl,
   ) => Promise<OperationResult<ResearchCard>>;
   setResearchCreationInput: (input: string) => void;

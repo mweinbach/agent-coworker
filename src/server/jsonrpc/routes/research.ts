@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { ResearchCredentialsMissingError } from "../../research/googleApiKey";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcResearchRequestSchemas } from "../schema.research";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -42,6 +43,17 @@ function createResearchHandler<M extends ResearchRequestMethod>(
       const result = await run(parsed.data as ResearchRequestParams<M>, ws);
       context.jsonrpc.sendResult(ws, message.id, result);
     } catch (error) {
+      if (error instanceof ResearchCredentialsMissingError) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: error.message,
+          data: {
+            reason: "research_credentials_missing",
+            provider: "google",
+          },
+        });
+        return;
+      }
       sendExecutionError(
         context,
         ws,

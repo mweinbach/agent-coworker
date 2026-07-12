@@ -12,6 +12,7 @@ import {
 } from "./schema.agentProfiles";
 import { jsonRpcBackupsRequestSchemas, jsonRpcBackupsResultSchemas } from "./schema.backups";
 import { jsonRpcCommandRequestSchemas, jsonRpcCommandResultSchemas } from "./schema.commands";
+import { jsonRpcCreationRequestSchemas, jsonRpcCreationResultSchemas } from "./schema.creation";
 import {
   jsonRpcConnectorsRequestSchemas,
   jsonRpcConnectorsResultSchemas,
@@ -72,6 +73,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcAgentRequestSchemas,
   ...jsonRpcAgentProfilesRequestSchemas,
   ...jsonRpcConnectorsRequestSchemas,
+  ...jsonRpcCreationRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
   ...jsonRpcRuntimeRequestSchemas,
   ...jsonRpcResearchRequestSchemas,
@@ -111,6 +113,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcAgentResultSchemas,
   ...jsonRpcAgentProfilesResultSchemas,
   ...jsonRpcConnectorsResultSchemas,
+  ...jsonRpcCreationResultSchemas,
   ...jsonRpcProviderResultSchemas,
   ...jsonRpcRuntimeResultSchemas,
   ...jsonRpcResearchResultSchemas,

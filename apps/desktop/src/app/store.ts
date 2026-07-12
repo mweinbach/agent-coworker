@@ -79,6 +79,7 @@ const initialState: AppStoreDataState = {
   composerAttachmentIngestionCountByKey: {},
   composerSubmissionsByKey: {},
   newChatLandingTarget: null,
+  quickChatPreparedWorkspaceId: null,
   ...initialCreationDrafts,
   injectContext: false,
   developerMode: false,

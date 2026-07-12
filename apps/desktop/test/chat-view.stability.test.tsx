@@ -147,6 +147,17 @@ describe("desktop chat view stability", () => {
       composerAttachmentIngestionCountByKey: {},
       composerSubmissionsByKey: {},
       newChatLandingTarget: null,
+      quickChatPreparedWorkspaceId: null,
+      preflightCreation: async () => ({
+        ready: true,
+        checks: [
+          { id: "project_access", status: "ok", message: "Workspace is accessible." },
+          { id: "provider_connected", status: "ok", message: "Provider is available." },
+          { id: "credentials", status: "ok", message: "Credentials are ready." },
+          { id: "model_available", status: "ok", message: "Model is available." },
+          { id: "runtime_ready", status: "ok", message: "Runtime is ready." },
+        ],
+      }),
     });
   });
 

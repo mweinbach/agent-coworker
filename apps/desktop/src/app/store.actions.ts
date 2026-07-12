@@ -2,6 +2,7 @@ import { createAgentProfileActions } from "./store.actions/agentProfiles";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createOpenAiNativeConnectorActions } from "./store.actions/connectors";
+import { createCreationReadinessActions } from "./store.actions/creationReadiness";
 import { createExplorerActions } from "./store.actions/explorer";
 import { createImportActions } from "./store.actions/import";
 import { createLmStudioLocalActions } from "./store.actions/lmstudioLocal";
@@ -27,6 +28,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   return {
     ...createBootstrapActions(set, get),
     ...createWorkspaceActions(set, get),
+    ...createCreationReadinessActions(set, get),
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),
     ...createTaskActions(set, get),

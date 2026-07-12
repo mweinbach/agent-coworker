@@ -1,5 +1,6 @@
 import { Text, View } from "react-native";
 
+import { MAX_DYNAMIC_TYPE_MULTIPLIER } from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type StatusPillProps = {
@@ -35,6 +36,7 @@ export function StatusPill({ label, tone = "neutral" }: StatusPillProps) {
 
   return (
     <View
+      accessibilityLabel={`Status: ${label}`}
       style={{
         alignSelf: "flex-start",
         borderRadius: 999,
@@ -45,6 +47,8 @@ export function StatusPill({ label, tone = "neutral" }: StatusPillProps) {
       }}
     >
       <Text
+        allowFontScaling
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
         selectable
         style={{
           color: palette.color,

@@ -4,6 +4,11 @@ import { ActivityIndicator, Alert, Pressable, Text, TextInput, View } from "reac
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+  useAccessibilityAnnouncement,
+} from "@/features/accessibility/mobile-accessibility";
 import { useMemoryStore } from "@/features/cowork/memoryStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
@@ -20,8 +25,13 @@ function ScopeFilter() {
       {scopes.map((scope) => (
         <Pressable
           key={scope}
+          accessibilityLabel={`Show ${scope} memory`}
+          accessibilityRole="radio"
+          accessibilityState={{ selected: scope === filterScope }}
           onPress={() => setFilterScope(scope)}
           style={{
+            minHeight: minimumTouchTarget(),
+            justifyContent: "center",
             borderRadius: 999,
             borderCurve: "continuous",
             borderWidth: 1,
@@ -32,6 +42,7 @@ function ScopeFilter() {
           }}
         >
           <Text
+            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
             style={{
               color: scope === filterScope ? theme.primaryText : theme.text,
               fontSize: 13,
@@ -61,6 +72,7 @@ export default function MemoryScreen() {
   const [draftScope, setDraftScope] = useState<"workspace" | "user">("workspace");
   const [draftId, setDraftId] = useState("");
   const [draftContent, setDraftContent] = useState("");
+  useAccessibilityAnnouncement(error ?? (loading ? "Loading memory entries" : null));
 
   useEffect(() => {
     if (isConnected) {
@@ -134,10 +146,14 @@ export default function MemoryScreen() {
         <ScopeFilter />
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Pressable
+            accessibilityLabel="Refresh memory entries"
+            accessibilityRole="button"
             onPress={() => {
               void fetchMemories();
             }}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: 999,
               borderWidth: 1,
               borderColor: theme.border,
@@ -149,6 +165,9 @@ export default function MemoryScreen() {
             <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>Refresh</Text>
           </Pressable>
           <Pressable
+            accessibilityLabel={editorOpen ? "Cancel memory editor" : "Add memory entry"}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: editorOpen }}
             onPress={() => {
               if (editorOpen) {
                 setEditorOpen(false);
@@ -159,6 +178,8 @@ export default function MemoryScreen() {
               openEditor();
             }}
             style={({ pressed }) => ({
+              minHeight: minimumTouchTarget(),
+              justifyContent: "center",
               borderRadius: 999,
               backgroundColor: pressed ? theme.accent : theme.primary,
               paddingHorizontal: 14,
@@ -182,8 +203,13 @@ export default function MemoryScreen() {
               {(["workspace", "user"] as const).map((scope) => (
                 <Pressable
                   key={scope}
+                  accessibilityLabel={`Save memory for ${scope}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: scope === draftScope }}
                   onPress={() => setDraftScope(scope)}
                   style={{
+                    minHeight: minimumTouchTarget(),
+                    justifyContent: "center",
                     borderRadius: 999,
                     borderWidth: 1,
                     borderColor: scope === draftScope ? theme.primary : theme.border,
@@ -193,6 +219,7 @@ export default function MemoryScreen() {
                   }}
                 >
                   <Text
+                    maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
                     style={{
                       color: scope === draftScope ? theme.primaryText : theme.text,
                       fontSize: 13,
@@ -206,6 +233,7 @@ export default function MemoryScreen() {
               ))}
             </View>
             <TextInput
+              accessibilityLabel="Memory entry ID"
               value={draftId}
               onChangeText={setDraftId}
               placeholder="Entry ID (defaults to hot)"
@@ -213,6 +241,7 @@ export default function MemoryScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               style={{
+                minHeight: minimumTouchTarget(),
                 borderRadius: 16,
                 borderWidth: 1,
                 borderColor: theme.border,
@@ -224,6 +253,7 @@ export default function MemoryScreen() {
               }}
             />
             <TextInput
+              accessibilityLabel="Memory content"
               value={draftContent}
               onChangeText={setDraftContent}
               placeholder="Memory content..."
@@ -242,8 +272,14 @@ export default function MemoryScreen() {
               }}
             />
             <Pressable
+              accessibilityLabel="Save memory entry"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !draftContent.trim() }}
+              disabled={!draftContent.trim()}
               onPress={() => void handleSave()}
               style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
                 alignSelf: "flex-start",
                 borderRadius: 999,
                 backgroundColor: pressed ? theme.accent : theme.primary,
@@ -263,7 +299,7 @@ export default function MemoryScreen() {
         <SectionCard title="Entries" description={`${filtered.length} memory entries`}>
           <View style={{ gap: 10 }}>
             {filtered.map((entry) => (
-              <Pressable
+              <View
                 key={entry.id}
                 style={{
                   gap: 6,
@@ -293,15 +329,19 @@ export default function MemoryScreen() {
                 </View>
                 <Text
                   selectable
-                  numberOfLines={4}
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
                   style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 19 }}
                 >
                   {entry.content}
                 </Text>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                   <Pressable
+                    accessibilityLabel={`Edit ${entry.id}`}
+                    accessibilityRole="button"
                     onPress={() => openEditor(entry)}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.border,
@@ -313,8 +353,12 @@ export default function MemoryScreen() {
                     <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
                   </Pressable>
                   <Pressable
+                    accessibilityLabel={`Delete ${entry.id}`}
+                    accessibilityRole="button"
                     onPress={() => handleDelete(entry)}
                     style={({ pressed }) => ({
+                      minHeight: minimumTouchTarget(),
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: theme.danger,
@@ -328,7 +372,7 @@ export default function MemoryScreen() {
                     </Text>
                   </Pressable>
                 </View>
-              </Pressable>
+              </View>
             ))}
           </View>
         </SectionCard>

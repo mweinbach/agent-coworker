@@ -7,6 +7,10 @@ import {
 import { parseRichBlocks, type RichBlock } from "@/components/thread/markdownParser";
 import { SourcesCarousel } from "@/components/thread/sources-carousel";
 import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
+import {
   formatLinkDisplayLabel,
   normalizeInlineLinkHref,
   parseInlineMarkdown,
@@ -46,7 +50,11 @@ function InlineText({
   }
 
   return (
-    <Text selectable style={{ color, fontSize, lineHeight, letterSpacing: -0.2 }}>
+    <Text
+      maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+      selectable
+      style={{ color, fontSize, lineHeight, letterSpacing: -0.2 }}
+    >
       {runs.map((run, index) => {
         const runKey = `${run.type}:${index}:${"content" in run ? run.content : run.label}`;
         if (run.type === "code") {
@@ -82,6 +90,8 @@ function InlineText({
           return (
             <Text
               key={runKey}
+              accessibilityRole="link"
+              accessibilityLabel={formatLinkDisplayLabel(run.label, run.href)}
               onPress={() => void openLink(run.href)}
               style={{
                 color: theme.primary,
@@ -151,8 +161,13 @@ function CodeBlock({ language, content }: { language: string; content: string })
       </Text>
       {isLong ? (
         <Pressable
+          accessibilityLabel={expanded ? "Collapse code block" : "Expand code block"}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
           onPress={() => setExpanded(!expanded)}
           style={{
+            minHeight: minimumTouchTarget(),
+            justifyContent: "center",
             paddingHorizontal: 12,
             paddingVertical: 8,
             borderTopWidth: 1,

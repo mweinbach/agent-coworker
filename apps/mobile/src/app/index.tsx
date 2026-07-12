@@ -6,5 +6,5 @@ export default function IndexScreen() {
   const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));
   const hasTrustedDesktop = usePairingStore((state) => state.trustedMacs.length > 0);
   const shouldEnterApp = isConnected || hasTrustedDesktop;
-  return <Redirect href={shouldEnterApp ? "/(app)/(tabs)/threads" : "/(pairing)"} />;
+  return <Redirect href={shouldEnterApp ? "/threads" : "/(pairing)"} />;
 }

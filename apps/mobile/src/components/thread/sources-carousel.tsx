@@ -1,6 +1,11 @@
 import { Image } from "expo-image";
 import { useState } from "react";
 import { Linking, Pressable, ScrollView, Text, View } from "react-native";
+
+import {
+  MAX_DYNAMIC_TYPE_MULTIPLIER,
+  minimumTouchTarget,
+} from "@/features/accessibility/mobile-accessibility";
 import { normalizeInlineLinkHref } from "@/features/cowork/inlineMarkdown";
 import {
   displaySourceSubtitle,
@@ -32,6 +37,7 @@ function SourceFavicon({ url }: { url: string }) {
         }}
       >
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textSecondary,
             fontSize: 10,
@@ -47,6 +53,7 @@ function SourceFavicon({ url }: { url: string }) {
 
   return (
     <Image
+      accessible={false}
       source={{ uri: src }}
       style={{ width: 20, height: 20, borderRadius: 4 }}
       contentFit="contain"
@@ -76,8 +83,12 @@ function SourceCard({ item }: { item: SourceLinkItem }) {
   return (
     <Pressable
       onPress={() => void openLink()}
+      accessibilityRole="link"
+      accessibilityLabel={`${title}, ${domain}`}
+      accessibilityHint="Opens this source in your browser"
       style={({ pressed }) => ({
         width: CARD_WIDTH,
+        minHeight: minimumTouchTarget(),
         flexDirection: "row",
         alignItems: "flex-start",
         gap: 10,
@@ -93,7 +104,7 @@ function SourceCard({ item }: { item: SourceLinkItem }) {
       <SourceFavicon url={item.href} />
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text
-          numberOfLines={2}
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.text,
             fontSize: 12,
@@ -104,7 +115,7 @@ function SourceCard({ item }: { item: SourceLinkItem }) {
           {title}
         </Text>
         <Text
-          numberOfLines={1}
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textTertiary,
             fontSize: 10,
@@ -129,6 +140,8 @@ export function SourcesCarousel({ items }: { items: SourceLinkItem[] }) {
     <View style={{ gap: 6 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Text
+          accessibilityRole="header"
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textTertiary,
             fontSize: 10,
@@ -140,6 +153,7 @@ export function SourcesCarousel({ items }: { items: SourceLinkItem[] }) {
           Sources
         </Text>
         <Text
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           style={{
             color: theme.textTertiary,
             fontSize: 10,
@@ -150,6 +164,7 @@ export function SourcesCarousel({ items }: { items: SourceLinkItem[] }) {
         </Text>
       </View>
       <ScrollView
+        accessibilityLabel={`${items.length} sources`}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ gap: 8, paddingRight: 4 }}

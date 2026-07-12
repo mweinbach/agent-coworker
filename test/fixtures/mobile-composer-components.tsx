@@ -29,8 +29,19 @@ const nativeContainer = ({ children, ...props }: Record<string, unknown>) =>
   createElement("div", props, children as React.ReactNode);
 
 mock.module("react-native", () => ({
+  AccessibilityInfo: {
+    addEventListener: () => ({ remove: () => undefined }),
+    announceForAccessibilityWithOptions: () => undefined,
+    isReduceMotionEnabled: async () => false,
+    setAccessibilityFocus: () => undefined,
+  },
+  LayoutAnimation: {
+    configureNext: () => undefined,
+    Presets: { easeInEaseOut: {} },
+  },
   Platform: { OS: "android" },
   View: nativeContainer,
+  findNodeHandle: () => null,
   Text: ({ children, ...props }: Record<string, unknown>) =>
     createElement("span", props, children as React.ReactNode),
   TextInput: ({

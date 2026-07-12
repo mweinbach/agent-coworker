@@ -14,6 +14,7 @@ import { useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import type { SFSymbol as NativeSFSymbol } from "sf-symbols-typescript";
 
+import { MAX_DYNAMIC_TYPE_MULTIPLIER } from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type ComposerBarProps = {
@@ -30,10 +31,10 @@ type ComposerBarProps = {
   helperText?: string | null;
 };
 
-const MIN_INPUT_HEIGHT = 36;
+const MIN_INPUT_HEIGHT = 44;
 const MAX_INPUT_HEIGHT = 116;
 const VERTICAL_CHROME = 16;
-const BUTTON_SIZE = 34;
+const BUTTON_SIZE = 44;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -122,6 +123,9 @@ export function ComposerBar({
     <View style={{ gap: 8, width: "100%", backgroundColor: "transparent" }}>
       {helperText ? (
         <Text
+          accessibilityLiveRegion="polite"
+          allowFontScaling
+          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
           selectable
           style={{
             color: theme.textTertiary,
@@ -185,6 +189,10 @@ export function ComposerBar({
                   placeholder="Message…"
                   placeholderTextColor={theme.textTertiary}
                   accessibilityLabel="Message"
+                  accessibilityHint={canEdit ? "Enter a message" : "Message editing is unavailable"}
+                  accessibilityState={{ disabled: !canEdit }}
+                  allowFontScaling
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
                   multiline
                   onContentSizeChange={(event) => {
                     setInputHeight(

@@ -120,7 +120,7 @@ describe("main CI workflow", () => {
     );
   });
 
-  test("runs the mobile install, typecheck, autolinking, and export lane", () => {
+  test("runs the mobile install, typecheck, autolinking, and dual-platform export lane", () => {
     expect(workflow).toContain("mobile:");
     expect(workflow).toContain("name: Mobile");
     expect(workflow).toContain("timeout-minutes: 10");
@@ -132,8 +132,14 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("expo-modules-autolinking resolve --platform apple --json");
     expect(workflow).toContain("expo-modules-autolinking resolve --platform android --json");
     expect(workflow).toContain('"packageName":"cowork-pinned-https"');
-    expect(workflow).toContain("- name: Export mobile bundle");
-    expect(workflow).toContain("bunx expo export --platform ios --output-dir dist-export-ci");
+    expect(workflow).toContain("- name: Export iOS mobile bundle");
+    expect(workflow).toContain(
+      'bunx expo export --platform ios --output-dir "$RUNNER_TEMP/cowork-mobile-ios" --clear',
+    );
+    expect(workflow).toContain("- name: Export Android mobile bundle");
+    expect(workflow).toContain(
+      'bunx expo export --platform android --output-dir "$RUNNER_TEMP/cowork-mobile-android" --clear',
+    );
     expect(workflow).not.toContain("- name: Android native build smoke");
     expect(workflow).not.toContain("./gradlew :app:assembleDebug");
     expect(workflow).not.toContain("actions/setup-java@v4");

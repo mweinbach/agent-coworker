@@ -39,6 +39,31 @@ const EXEMPT_FILES = new Set(["test/platform-boundary.test.ts"]);
 
 const SCANNED_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 
+// Ask git for the small candidate set before reading file contents. The prior
+// implementation read every tracked JS/TS file even though almost all could
+// not contain a banned token, which made this synchronous ratchet block Bun's
+// shared test event loop long enough for unrelated websocket tests to time out.
+// Keep the broad import names so multiline `node:os` imports remain candidates;
+// the precise regexes below are still the source of truth for offenses.
+const BANNED_TOKEN_CANDIDATE_LITERALS = [
+  "process.platform",
+  "os.platform",
+  "os.homedir",
+  "os.tmpdir",
+  "Bun.which",
+  "process.arch",
+  "os.arch",
+  "path.win32",
+  "path.posix",
+  "path/win32",
+  "path/posix",
+  // Named imports may span lines, so select every file importing this module
+  // and let the precise full-file regex distinguish the imported identifier.
+  "node:os",
+  'from "os"',
+  "from 'os'",
+] as const;
+
 type BannedToken = { name: string; re: RegExp; hint: string };
 
 const BANNED_TOKENS: BannedToken[] = [
@@ -105,7 +130,9 @@ const BANNED_TOKENS: BannedToken[] = [
 ];
 
 function listTrackedSourceFiles(): string[] {
-  const out = execFileSync("git", ["ls-files", "-z"], {
+  const patternArgs = BANNED_TOKEN_CANDIDATE_LITERALS.flatMap((literal) => ["-e", literal]);
+  const extensionArgs = [...SCANNED_EXTENSIONS].map((extension) => `*${extension}`);
+  const out = execFileSync("git", ["grep", "-IlFz", ...patternArgs, "--", ...extensionArgs], {
     cwd: REPO_ROOT,
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -120,8 +147,7 @@ function listTrackedSourceFiles(): string[] {
 
 type Offense = { token: string; count: number; hint: string };
 
-function scanFile(relPath: string): Offense[] {
-  const content = fs.readFileSync(path.join(REPO_ROOT, relPath), "utf8");
+function scanContent(content: string): Offense[] {
   const offenses: Offense[] = [];
   for (const token of BANNED_TOKENS) {
     const matches = content.match(token.re);
@@ -132,10 +158,16 @@ function scanFile(relPath: string): Offense[] {
   return offenses;
 }
 
-function scanRepo(): Map<string, Offense[]> {
+async function scanRepo(): Promise<Map<string, Offense[]>> {
   const result = new Map<string, Offense[]>();
-  for (const file of listTrackedSourceFiles()) {
-    const offenses = scanFile(file);
+  const files = listTrackedSourceFiles();
+  const scannedFiles = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      offenses: scanContent(await fs.promises.readFile(path.join(REPO_ROOT, file), "utf8")),
+    })),
+  );
+  for (const { file, offenses } of scannedFiles) {
     if (offenses.length > 0) result.set(file, offenses);
   }
   return result;
@@ -151,8 +183,8 @@ function loadBaseline(): Record<string, number> {
 }
 
 describe("platform boundary", () => {
-  test("no new platform branching outside src/platform (ratchet)", () => {
-    const scanned = scanRepo();
+  test("no new platform branching outside src/platform (ratchet)", async () => {
+    const scanned = await scanRepo();
     const baseline = loadBaseline();
 
     if (process.env.PLATFORM_BOUNDARY_UPDATE === "1") {

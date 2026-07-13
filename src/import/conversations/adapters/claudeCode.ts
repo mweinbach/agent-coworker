@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { absolutePathStyle, samePath } from "../../../platform/pathString";
 import {
   extractTextFromContent,
   makeExternalItemId,
@@ -32,10 +33,60 @@ function claudeProjectsPath(homedir: string): string {
   return path.join(homedir, ".claude", "projects");
 }
 
+function encodeClaudeProjectPath(projectPath: string): string {
+  return projectPath.replace(/[:\\/]/g, "-");
+}
+
 function decodeProjectPath(projectDirName: string): string | null {
-  if (!projectDirName.startsWith("-")) return null;
-  const decoded = projectDirName.replace(/-/g, path.sep);
-  return decoded.startsWith(path.sep) ? decoded : null;
+  if (projectDirName.startsWith("-")) {
+    return `/${projectDirName.slice(1).replaceAll("-", "/")}`;
+  }
+  const windowsDrive = /^([A-Za-z])--(.+)$/.exec(projectDirName);
+  if (windowsDrive) {
+    return `${windowsDrive[1]}:\\${windowsDrive[2]?.replaceAll("-", "\\") ?? ""}`;
+  }
+  return null;
+}
+
+async function readKnownClaudeProjectPaths(
+  projectsRoot: string,
+): Promise<Map<string, string | null>> {
+  const claudeDir = path.dirname(projectsRoot);
+  if (path.basename(projectsRoot) !== "projects" || path.basename(claudeDir) !== ".claude") {
+    return new Map();
+  }
+
+  try {
+    const configPath = path.join(path.dirname(claudeDir), ".claude.json");
+    const config = asRecord(JSON.parse(await fs.readFile(configPath, "utf8")) as unknown);
+    const projects = asRecord(config?.projects);
+    if (!projects) return new Map();
+    const pathsByEncodedName = new Map<string, string | null>();
+    for (const projectPath of Object.keys(projects)) {
+      const encodedName = encodeClaudeProjectPath(projectPath);
+      if (!pathsByEncodedName.has(encodedName)) {
+        pathsByEncodedName.set(encodedName, projectPath);
+        continue;
+      }
+      const previous = pathsByEncodedName.get(encodedName);
+      const style = absolutePathStyle(projectPath);
+      const previousStyle = previous ? absolutePathStyle(previous) : null;
+      if (
+        !previous ||
+        !style ||
+        style !== previousStyle ||
+        !samePath(previous, projectPath, style)
+      ) {
+        // Claude's folder encoding is lossy: literal hyphens and separators both
+        // become "-". Never pick an arbitrary cwd when two genuinely different
+        // registered projects collide.
+        pathsByEncodedName.set(encodedName, null);
+      }
+    }
+    return pathsByEncodedName;
+  } catch {
+    return new Map();
+  }
 }
 
 async function countClaudeJsonl(root: string): Promise<number | undefined> {
@@ -354,11 +405,17 @@ export const claudeCodeConversationAdapter: ConversationSourceAdapter = {
     );
     sorted.sort((left, right) => (right.stat?.mtimeMs ?? 0) - (left.stat?.mtimeMs ?? 0));
     const selected = sorted.slice(0, limit);
+    const knownProjectPaths = stat?.isFile()
+      ? new Map<string, string | null>()
+      : await readKnownClaudeProjectPaths(candidate.path);
     const conversations: ExternalConversation[] = [];
     for (const entry of selected) {
       const relative = path.relative(candidate.path, entry.filePath);
       const projectDir = relative.split(path.sep)[0] ?? "";
-      conversations.push(await parseClaudeCodeJsonl(entry.filePath, decodeProjectPath(projectDir)));
+      const fallback = knownProjectPaths.has(projectDir)
+        ? (knownProjectPaths.get(projectDir) ?? null)
+        : decodeProjectPath(projectDir);
+      conversations.push(await parseClaudeCodeJsonl(entry.filePath, fallback));
     }
     return conversations;
   },

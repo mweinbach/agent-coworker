@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { App } from "electron";
 
+import { hardenPrivateDir, hardenPrivateFile, writeFileAtomic } from "../../../../src/platform/fs";
 import type { ThemeSource } from "../../src/lib/desktopApi";
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -24,7 +25,14 @@ export function normalizeThemeSource(value: unknown): ThemeSource {
 export class AppearancePreferences {
   private pendingWrite: Promise<void> = Promise.resolve();
 
-  constructor(private readonly electronApp: Pick<App, "getPath">) {}
+  constructor(
+    private readonly electronApp: Pick<App, "getPath">,
+    private readonly deps: {
+      hardenPrivateDir?: (directory: string) => Promise<void>;
+      hardenPrivateFile?: (filePath: string) => Promise<void>;
+      writeFileAtomic?: typeof writeFileAtomic;
+    } = {},
+  ) {}
 
   private get filePath(): string {
     return path.join(this.electronApp.getPath("userData"), "appearance.json");
@@ -49,18 +57,14 @@ export class AppearancePreferences {
     const normalized = normalizeThemeSource(themeSource);
     const write = this.pendingWrite.then(async () => {
       const directory = path.dirname(this.filePath);
-      const temporaryPath = `${this.filePath}.tmp`;
       await fs.mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
-      await fs.writeFile(
-        temporaryPath,
+      await (this.deps.hardenPrivateDir ?? hardenPrivateDir)(directory);
+      await (this.deps.writeFileAtomic ?? writeFileAtomic)(
+        this.filePath,
         `${JSON.stringify({ themeSource: normalized }, null, 2)}\n`,
-        {
-          encoding: "utf8",
-          mode: PRIVATE_FILE_MODE,
-        },
+        { mode: PRIVATE_FILE_MODE },
       );
-      await fs.rename(temporaryPath, this.filePath);
-      await fs.chmod(this.filePath, PRIVATE_FILE_MODE);
+      await (this.deps.hardenPrivateFile ?? hardenPrivateFile)(this.filePath);
     });
     this.pendingWrite = write.catch(() => {});
     await write;

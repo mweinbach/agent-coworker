@@ -303,10 +303,17 @@ describe("CanvasDocumentPersistenceService", () => {
     await fs.mkdir(documentsPath);
     await fs.writeFile(filePath, "original");
     await fs.writeFile(outsideFilePath, "outside");
+    let outsideTempDecoyPath: string | undefined;
     const service = new CanvasDocumentPersistenceService({
       beforeAtomicCommit: async () => {
+        const tempName = (await fs.readdir(documentsPath)).find((name) => name.endsWith(".tmp"));
+        if (!tempName) {
+          throw new Error("Expected an atomic-save temporary file.");
+        }
         await fs.rename(documentsPath, movedDocumentsPath);
         await symlinkOrJunction(outside, documentsPath, { type: "dir" });
+        outsideTempDecoyPath = path.join(outside, tempName);
+        await fs.writeFile(outsideTempDecoyPath, "outside temp decoy");
       },
     });
     await service.open(cwd, {
@@ -327,7 +334,46 @@ describe("CanvasDocumentPersistenceService", () => {
       expect(result.error.kind).toBe("outside_workspace");
     }
     expect(await fs.readFile(outsideFilePath, "utf8")).toBe("outside");
+    if (!outsideTempDecoyPath) {
+      throw new Error("Expected an outside temporary-file decoy.");
+    }
+    expect(await fs.readFile(outsideTempDecoyPath, "utf8")).toBe("outside temp decoy");
     expect(await fs.readFile(path.join(movedDocumentsPath, "notes.md"), "utf8")).toBe("original");
+  });
+
+  test("rejects a replacement of its staged file before commit", async () => {
+    const cwd = await makeWorkspace();
+    const filePath = path.join(cwd, "notes.md");
+    await fs.writeFile(filePath, "original");
+    const service = new CanvasDocumentPersistenceService({
+      beforeAtomicCommit: async () => {
+        const tempName = (await fs.readdir(cwd)).find((name) => name.endsWith(".tmp"));
+        if (!tempName) {
+          throw new Error("Expected an atomic-save temporary file.");
+        }
+        const tempPath = path.join(cwd, tempName);
+        await fs.rm(tempPath);
+        await fs.writeFile(tempPath, "replacement staging content");
+      },
+    });
+    await service.open(cwd, {
+      path: filePath,
+      documentId: "canvas-1",
+      generation: 1,
+    });
+
+    const result = await service.save(cwd, {
+      documentId: "canvas-1",
+      generation: 1,
+      editRevision: 1,
+      content: "local edit",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("outside_workspace");
+    }
+    expect(await fs.readFile(filePath, "utf8")).toBe("original");
   });
 
   test("close waits for an in-flight final save and then retires the session", async () => {

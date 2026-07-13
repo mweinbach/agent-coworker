@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +54,12 @@ export interface FsDeps extends RetryTuning {
   fsImpl?: FsLike;
   platform?: NodeJS.Platform;
   sleepImpl?: (ms: number) => Promise<void>;
+}
+
+export interface PrivatePathSyncDeps {
+  chmodSync?: typeof fsSync.chmodSync;
+  debugLog?: (message: string) => void;
+  platform?: NodeJS.Platform;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 8;
@@ -806,4 +813,24 @@ export async function hardenPrivateFile(
     return;
   }
   await ctx.fsImpl.chmod(p, 0o600);
+}
+
+/** Synchronous counterpart for sync-only persistence boundaries such as bun:sqlite. */
+export function hardenPrivateDirSync(p: string, deps: PrivatePathSyncDeps = {}): void {
+  const platform = deps.platform ?? hostPlatform();
+  if (platform === "win32") {
+    logWin32HardenGap("hardenPrivateDirSync", p, deps.debugLog);
+    return;
+  }
+  (deps.chmodSync ?? fsSync.chmodSync)(p, 0o700);
+}
+
+/** Synchronous counterpart for sync-only persistence boundaries such as bun:sqlite. */
+export function hardenPrivateFileSync(p: string, deps: PrivatePathSyncDeps = {}): void {
+  const platform = deps.platform ?? hostPlatform();
+  if (platform === "win32") {
+    logWin32HardenGap("hardenPrivateFileSync", p, deps.debugLog);
+    return;
+  }
+  (deps.chmodSync ?? fsSync.chmodSync)(p, 0o600);
 }

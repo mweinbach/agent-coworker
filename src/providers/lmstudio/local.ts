@@ -1,5 +1,6 @@
-import { homedir as nodeHomedir } from "node:os";
-import { join } from "node:path";
+import { hostPlatform } from "../../platform/host";
+import { join, styleFor } from "../../platform/pathString";
+import { home as resolveHome } from "../../platform/paths";
 import { type ExecFileCompatRunner, execFileCompat } from "../../utils/execFileCompat";
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./client";
 
@@ -60,11 +61,15 @@ export function isLoopbackBaseUrl(baseUrl: string): boolean {
 }
 
 export function resolveLmsCliPath(deps?: LmStudioLocalDeps): string {
-  const platform = deps?.platform ?? process.platform;
-  const home = (deps?.homedir ?? nodeHomedir)();
-  return platform === "win32"
-    ? join(home, ".lmstudio", "bin", "lms.exe")
-    : join(home, ".lmstudio", "bin", "lms");
+  const platform = deps?.platform ?? hostPlatform();
+  const home = deps?.homedir?.() ?? resolveHome(deps?.env, platform);
+  return join(
+    styleFor(platform),
+    home,
+    ".lmstudio",
+    "bin",
+    platform === "win32" ? "lms.exe" : "lms",
+  );
 }
 
 async function defaultFileExists(path: string): Promise<boolean> {

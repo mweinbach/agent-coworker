@@ -93,7 +93,7 @@ describe("WorkspaceDirectoryWatcher", () => {
     const events: WorkspaceFileChangeEvent[] = [];
     const watcher = new WorkspaceDirectoryWatcher({
       debounceMs: 0,
-      pathExists: async (candidatePath) => candidatePath.endsWith("/new"),
+      pathExists: async (candidatePath) => path.basename(candidatePath) === "new",
       watch: (_rootPath, listener) => {
         callback = listener;
         return { close() {} };

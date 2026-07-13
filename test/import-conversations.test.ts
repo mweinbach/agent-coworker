@@ -545,6 +545,79 @@ describe("conversation import parsers", () => {
     expect(conversations[0]).toMatchObject({ cwd: projectPath, sourceId: "claude-project" });
   });
 
+  test("uses Claude's project registry when folder encoding loses literal hyphens", async () => {
+    const home = await makeTempDir();
+    const projectPaths = ["/Users/alice/Projects/demo-app", "C:\\Users\\alice\\Projects\\demo-app"];
+    await fs.writeFile(
+      path.join(home, ".claude.json"),
+      JSON.stringify({
+        projects: Object.fromEntries(projectPaths.map((projectPath) => [projectPath, {}])),
+      }),
+    );
+
+    for (const [index, projectPath] of projectPaths.entries()) {
+      const encodedProject = projectPath.replace(/[:\\/]/g, "-");
+      const projectDir = path.join(home, ".claude", "projects", encodedProject);
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(
+        path.join(projectDir, `session-${index}.jsonl`),
+        jsonl([
+          {
+            type: "user",
+            timestamp: `2026-01-01T00:00:0${index}.000Z`,
+            sessionId: `claude-project-${index}`,
+            message: { role: "user", content: "hello" },
+          },
+        ]),
+      );
+    }
+
+    const [candidate] = await claudeCodeConversationAdapter.discover({ homedir: home });
+    if (!candidate) throw new Error("missing Claude Code candidate");
+    const conversations = await claudeCodeConversationAdapter.preview(candidate, { limit: 10 });
+    expect(conversations).toHaveLength(2);
+    for (const [index, projectPath] of projectPaths.entries()) {
+      expect(
+        conversations.find((conversation) => conversation.sourceId === `claude-project-${index}`),
+      ).toMatchObject({
+        cwd: projectPath,
+      });
+    }
+  });
+
+  test("does not guess a cwd when Claude project folder encodings collide", async () => {
+    const home = await makeTempDir();
+    const encodedProject = "-Users-alice-Projects-demo-app";
+    await fs.writeFile(
+      path.join(home, ".claude.json"),
+      JSON.stringify({
+        projects: {
+          "/Users/alice/Projects/demo-app": {},
+          "/Users/alice/Projects/demo/app": {},
+        },
+      }),
+    );
+    const projectDir = path.join(home, ".claude", "projects", encodedProject);
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "session.jsonl"),
+      jsonl([
+        {
+          type: "user",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          sessionId: "claude-ambiguous-project",
+          message: { role: "user", content: "hello" },
+        },
+      ]),
+    );
+
+    const [candidate] = await claudeCodeConversationAdapter.discover({ homedir: home });
+    if (!candidate) throw new Error("missing Claude Code candidate");
+    const [conversation] = await claudeCodeConversationAdapter.preview(candidate, { limit: 10 });
+    expect(conversation?.cwd).toBeNull();
+    expect(conversation?.warnings).toContainEqual(expect.objectContaining({ code: "missing_cwd" }));
+  });
+
   test("discovers Cowork backup directories and rejects the current sessions database", async () => {
     const dir = await makeTempDir();
     const workspace = path.join(dir, "workspace");

@@ -21,6 +21,7 @@ type EnsureObservabilityRuntimeResult = {
 };
 
 const DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com";
+const DEFAULT_RUNTIME_INITIALIZATION_TIMEOUT_MS = 3_000;
 const WARN_ONCE_KEYS = new Set<string>();
 const MAX_METADATA_STRING_LENGTH = 2048;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
@@ -38,11 +39,23 @@ type ResolvedRuntime =
       release?: string;
     };
 
+type ReadyRuntime = Extract<ResolvedRuntime, { kind: "ready" }>;
+type RuntimeSdk = Pick<NodeSDK, "start" | "shutdown"> & {
+  forceFlush?: () => Promise<void>;
+};
+type RuntimeSpanProcessor = {
+  forceFlush: () => Promise<void> | void;
+};
+type RuntimeFactory = (
+  resolved: ReadyRuntime,
+) => Promise<{ sdk: RuntimeSdk; spanProcessor: RuntimeSpanProcessor }>;
+
 type RuntimeState = {
-  sdk: NodeSDK | null;
-  spanProcessor: { forceFlush: () => Promise<void> | void } | null;
+  sdk: RuntimeSdk | null;
+  spanProcessor: RuntimeSpanProcessor | null;
   initPromise: Promise<void> | null;
   signature: string | null;
+  generation: number;
   health: ObservabilityHealth;
 };
 
@@ -51,12 +64,34 @@ const state: RuntimeState = {
   spanProcessor: null,
   initPromise: null,
   signature: null,
+  generation: 0,
   health: {
     status: "disabled",
     reason: "observability_disabled",
     updatedAt: new Date().toISOString(),
   },
 };
+
+async function createDefaultRuntime(
+  resolved: ReadyRuntime,
+): Promise<{ sdk: RuntimeSdk; spanProcessor: RuntimeSpanProcessor }> {
+  const [{ LangfuseSpanProcessor }, { NodeSDK }] = await Promise.all([
+    import("@langfuse/otel"),
+    import("@opentelemetry/sdk-node"),
+  ]);
+  const spanProcessor = new LangfuseSpanProcessor({
+    publicKey: resolved.publicKey,
+    secretKey: resolved.secretKey,
+    baseUrl: resolved.baseUrl,
+    ...(resolved.tracingEnvironment ? { environment: resolved.tracingEnvironment } : {}),
+    ...(resolved.release ? { release: resolved.release } : {}),
+  });
+  const sdk = new NodeSDK({ spanProcessors: [spanProcessor] });
+  return { sdk, spanProcessor };
+}
+
+let runtimeFactory: RuntimeFactory = createDefaultRuntime;
+let runtimeInitializationTimeoutMs = DEFAULT_RUNTIME_INITIALIZATION_TIMEOUT_MS;
 
 export function formatErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -163,6 +198,7 @@ function setHealth(next: Omit<ObservabilityHealth, "updatedAt">): {
 
 async function shutdownRuntime(): Promise<void> {
   const sdk = state.sdk;
+  state.generation += 1;
   state.sdk = null;
   state.spanProcessor = null;
   state.initPromise = null;
@@ -174,6 +210,64 @@ async function shutdownRuntime(): Promise<void> {
   } catch {
     // best-effort shutdown
   }
+}
+
+async function shutdownSdkBestEffort(sdk: RuntimeSdk): Promise<void> {
+  try {
+    await sdk.shutdown();
+  } catch {
+    // best-effort cleanup for failed or superseded initialization attempts
+  }
+}
+
+async function waitForInitialization(
+  initPromise: Promise<void>,
+  timeoutMs: number,
+): Promise<"completed" | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  const result = await Promise.race([initPromise.then(() => "completed" as const), timeout]);
+  if (timer) clearTimeout(timer);
+  return result;
+}
+
+async function waitForRuntimeInitialization(
+  resolved: ReadyRuntime,
+  initPromise: Promise<void>,
+  healthChangeOwner: boolean,
+): Promise<EnsureObservabilityRuntimeResult> {
+  const timeoutMs = runtimeInitializationTimeoutMs;
+  const waitResult = await waitForInitialization(initPromise, timeoutMs);
+  if (
+    waitResult === "timeout" &&
+    state.initPromise === initPromise &&
+    state.signature === resolved.signature
+  ) {
+    const update = setHealth({
+      status: "degraded",
+      reason: "runtime_init_timeout",
+      message: `Langfuse runtime initialization exceeded ${timeoutMs}ms; it will continue in the background.`,
+    });
+    return {
+      ready: false,
+      health: update.health,
+      // A joiner may win the timer race and apply the shared health state first,
+      // but only the call that created this initialization attempt owns the
+      // outward health-change notification.
+      healthChanged: healthChangeOwner,
+    };
+  }
+
+  const attemptStillCurrent = state.signature === resolved.signature;
+  const health = state.health;
+  return {
+    ready: attemptStillCurrent && state.sdk !== null && health.status === "ready",
+    health,
+    healthChanged:
+      healthChangeOwner && attemptStillCurrent && health.reason === "runtime_initialized",
+  };
 }
 
 function applyResolutionHealth(
@@ -217,7 +311,7 @@ export async function ensureObservabilityRuntime(
   const resolved = resolveRuntime(config);
 
   if (resolved.kind !== "ready") {
-    if (state.sdk) {
+    if (state.sdk || state.initPromise) {
       await shutdownRuntime();
     }
     const update = applyResolutionHealth(resolved);
@@ -230,9 +324,10 @@ export async function ensureObservabilityRuntime(
   }
 
   if (state.initPromise && state.signature === resolved.signature) {
-    await state.initPromise;
-    const health = getObservabilityHealth(config);
-    return { ready: health.status === "ready", health, healthChanged: false };
+    if (state.health.status === "degraded" && state.health.reason === "runtime_init_timeout") {
+      return { ready: false, health: state.health, healthChanged: false };
+    }
+    return await waitForRuntimeInitialization(resolved, state.initPromise, false);
   }
 
   if (state.sdk && state.signature !== resolved.signature) {
@@ -240,55 +335,49 @@ export async function ensureObservabilityRuntime(
   }
 
   state.signature = resolved.signature;
+  const generation = state.generation + 1;
+  state.generation = generation;
   const initPromise = (async () => {
+    let sdk: RuntimeSdk | null = null;
     try {
-      const [{ LangfuseSpanProcessor }, { NodeSDK }] = await Promise.all([
-        import("@langfuse/otel"),
-        import("@opentelemetry/sdk-node"),
-      ]);
-      const spanProcessor = new LangfuseSpanProcessor({
-        publicKey: resolved.publicKey,
-        secretKey: resolved.secretKey,
-        baseUrl: resolved.baseUrl,
-        ...(resolved.tracingEnvironment ? { environment: resolved.tracingEnvironment } : {}),
-        ...(resolved.release ? { release: resolved.release } : {}),
-      });
-
-      const sdk = new NodeSDK({
-        spanProcessors: [spanProcessor],
-      });
-
+      const components = await runtimeFactory(resolved);
+      sdk = components.sdk;
+      if (state.generation !== generation || state.signature !== resolved.signature) {
+        await shutdownSdkBestEffort(sdk);
+        return;
+      }
       await Promise.resolve(sdk.start());
+      if (state.generation !== generation || state.signature !== resolved.signature) {
+        await shutdownSdkBestEffort(sdk);
+        return;
+      }
       state.sdk = sdk;
-      state.spanProcessor = spanProcessor;
+      state.spanProcessor = components.spanProcessor;
       setHealth({
         status: "ready",
         reason: "runtime_initialized",
       });
     } catch (err) {
-      state.sdk = null;
-      state.spanProcessor = null;
-      setHealth({
-        status: "degraded",
-        reason: "runtime_init_failed",
-        message: formatErrorMessage(err),
-      });
+      if (sdk) await shutdownSdkBestEffort(sdk);
+      if (state.generation === generation && state.signature === resolved.signature) {
+        state.sdk = null;
+        state.spanProcessor = null;
+        setHealth({
+          status: "degraded",
+          reason: "runtime_init_failed",
+          message: formatErrorMessage(err),
+        });
+      }
     }
   })();
 
   state.initPromise = initPromise;
-  await initPromise.finally(() => {
+  void initPromise.finally(() => {
     if (state.initPromise === initPromise) {
       state.initPromise = null;
     }
   });
-
-  const health = getObservabilityHealth(config);
-  return {
-    ready: health.status === "ready",
-    health,
-    healthChanged: health.reason === "runtime_initialized",
-  };
+  return await waitForRuntimeInitialization(resolved, initPromise, true);
 }
 
 let ensureObservabilityRuntimeForTelemetry = ensureObservabilityRuntime;
@@ -389,6 +478,8 @@ export const __internal = {
   async resetForTests() {
     WARN_ONCE_KEYS.clear();
     ensureObservabilityRuntimeForTelemetry = ensureObservabilityRuntime;
+    runtimeFactory = createDefaultRuntime;
+    runtimeInitializationTimeoutMs = DEFAULT_RUNTIME_INITIALIZATION_TIMEOUT_MS;
     await shutdownRuntime();
     state.health = {
       status: "disabled",
@@ -409,6 +500,12 @@ export const __internal = {
     ensureRuntime: (config: AgentConfig) => Promise<EnsureObservabilityRuntimeResult>,
   ) {
     ensureObservabilityRuntimeForTelemetry = ensureRuntime;
+  },
+  setRuntimeFactoryForTests(factory: RuntimeFactory) {
+    runtimeFactory = factory;
+  },
+  setRuntimeInitializationTimeoutForTests(timeoutMs: number) {
+    runtimeInitializationTimeoutMs = Math.max(1, timeoutMs);
   },
   resolveRuntime,
 } as const;

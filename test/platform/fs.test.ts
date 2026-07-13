@@ -10,7 +10,9 @@ import {
   FileLockedError,
   type FsLike,
   hardenPrivateDir,
+  hardenPrivateDirSync,
   hardenPrivateFile,
+  hardenPrivateFileSync,
   type LockDirOwner,
   moveWithFallback,
   removeWithRetry,
@@ -1085,6 +1087,33 @@ describe("hardenPrivateDir / hardenPrivateFile", () => {
       { path: "/secrets", mode: 0o700 },
       { path: "/secrets/auth.json", mode: 0o600 },
     ]);
+  });
+
+  test("sync hardeners preserve the same platform contract", () => {
+    const calls: Array<{ path: string; mode: number }> = [];
+    const chmodSync = (candidate: string, mode: number) => {
+      calls.push({ path: candidate, mode });
+    };
+    hardenPrivateDirSync("/secrets", { chmodSync, platform: "linux" });
+    hardenPrivateFileSync("/secrets/auth.json", { chmodSync, platform: "darwin" });
+    expect(calls).toEqual([
+      { path: "/secrets", mode: 0o700 },
+      { path: "/secrets/auth.json", mode: 0o600 },
+    ]);
+
+    const logs: string[] = [];
+    hardenPrivateDirSync("C:\\secrets", {
+      chmodSync,
+      platform: "win32",
+      debugLog: (message) => logs.push(message),
+    });
+    hardenPrivateFileSync("C:\\secrets\\auth.json", {
+      chmodSync,
+      platform: "win32",
+      debugLog: (message) => logs.push(message),
+    });
+    expect(calls).toHaveLength(2);
+    expect(logs).toHaveLength(2);
   });
 
   test.skipIf(isWindowsHost)("posix hosts: real modes end up 0o700 / 0o600", async () => {

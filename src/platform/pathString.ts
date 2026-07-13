@@ -577,6 +577,19 @@ export function isAbsolute(p: string, style: PathStyle): boolean {
   );
 }
 
+/**
+ * Infers the syntax of a fully-qualified local path from the path itself, independent of
+ * the current host. Drive-qualified and UNC/device paths are win32; slash-rooted paths
+ * are posix. A single leading backslash is deliberately rejected because it is only
+ * drive-rooted (not fully qualified), and relative paths have no intrinsic style.
+ */
+export function absolutePathStyle(p: string): PathStyle | null {
+  if (/^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p)) {
+    return "win32";
+  }
+  return p.startsWith("/") ? "posix" : null;
+}
+
 // ---------------------------------------------------------------------------
 // Comparison keys
 // ---------------------------------------------------------------------------
@@ -615,6 +628,31 @@ export function canonicalKeyLexical(p: string, style: PathStyle): string {
  */
 export function samePath(a: string, b: string, style: PathStyle): boolean {
   return canonicalKeyLexical(a, style) === canonicalKeyLexical(b, style);
+}
+
+/**
+ * Pure lexical containment for already-absolute paths whose syntax may differ from the
+ * host. This is useful at serialization and IPC boundaries, where node:path would
+ * otherwise reinterpret a posix path as win32 (or vice versa). Filesystem-facing callers
+ * must still realpath/canonicalize native paths before granting access so symlinks cannot
+ * escape the boundary.
+ */
+export function isPathEqualOrInsideLexical(
+  root: string,
+  target: string,
+  style: PathStyle,
+): boolean {
+  if (!isAbsolute(root, style) || !isAbsolute(target, style)) {
+    return false;
+  }
+  const rootKey = canonicalKeyLexical(root, style);
+  const targetKey = canonicalKeyLexical(target, style);
+  if (rootKey === targetKey) {
+    return true;
+  }
+  const separator = style === "win32" ? "\\" : "/";
+  const boundaryPrefix = rootKey.endsWith(separator) ? rootKey : `${rootKey}${separator}`;
+  return targetKey.startsWith(boundaryPrefix);
 }
 
 // ---------------------------------------------------------------------------

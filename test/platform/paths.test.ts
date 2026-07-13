@@ -475,6 +475,8 @@ describe("home / coworkHome / coworkPaths", () => {
 
   test("COWORK_HOME_OVERRIDE is the only lever and is resolved", () => {
     expect(home({ COWORK_HOME_OVERRIDE: realTmp })).toBe(path.resolve(realTmp));
+    expect(home({ COWORK_HOME_OVERRIDE: "/srv/cowork/../agent" }, "linux")).toBe("/srv/agent");
+    expect(home({ COWORK_HOME_OVERRIDE: "C:/cowork/../agent" }, "win32")).toBe("C:\\agent");
     expect(home({ COWORK_HOME_OVERRIDE: "   " })).toBe(os.homedir());
     expect(home({ COWORK_HOME_OVERRIDE: "" })).toBe(os.homedir());
   });

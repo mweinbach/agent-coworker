@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import nodePath from "node:path";
 import {
+  absolutePathStyle,
   basename,
   canonicalKeyLexical,
   dirname,
   fromFileUrl,
   isAbsolute,
+  isPathEqualOrInsideLexical,
   join,
   localPathPattern,
   normalizeSeparators,
@@ -514,6 +516,34 @@ describe("canonicalKeyLexical / samePath", () => {
     expect(canonicalKeyLexical("A/..\\B", "win32")).toBe("b");
     expect(canonicalKeyLexical("a/../b", "posix")).toBe("b");
     expect(canonicalKeyLexical("..", "posix")).toBe("..");
+  });
+});
+
+describe("absolute path style and lexical containment", () => {
+  test("infers path syntax without consulting the host", () => {
+    expect(absolutePathStyle("/Users/alice/project")).toBe("posix");
+    expect(absolutePathStyle("C:\\Users\\alice\\project")).toBe("win32");
+    expect(absolutePathStyle("C:/Users/alice/project")).toBe("win32");
+    expect(absolutePathStyle("\\\\server\\share\\project")).toBe("win32");
+    expect(absolutePathStyle("//server/share/project")).toBe("win32");
+    expect(absolutePathStyle("relative/project")).toBeNull();
+    expect(absolutePathStyle("\\drive-rooted")).toBeNull();
+  });
+
+  test("checks containment with the path's syntax rather than the host's", () => {
+    expect(isPathEqualOrInsideLexical("/Users/alice/ws", "/Users/alice/ws/a.png", "posix")).toBe(
+      true,
+    );
+    expect(isPathEqualOrInsideLexical("/Users/alice/ws", "/Users/alice/ws2/a.png", "posix")).toBe(
+      false,
+    );
+    expect(
+      isPathEqualOrInsideLexical("C:\\Users\\Alice\\ws", "c:/users/alice/ws/a.png", "win32"),
+    ).toBe(true);
+    expect(
+      isPathEqualOrInsideLexical("C:\\Users\\Alice\\ws", "D:\\Users\\Alice\\ws\\a.png", "win32"),
+    ).toBe(false);
+    expect(isPathEqualOrInsideLexical("relative", "relative/a.png", "posix")).toBe(false);
   });
 });
 

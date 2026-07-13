@@ -70,17 +70,125 @@ describe("observability runtime", () => {
 
   test("runtime initializes when enabled and fully configured", async () => {
     const cfg = makeConfig();
+    const start = mock(() => {});
+    const shutdown = mock(async () => {});
+    const forceFlush = mock(async () => {});
+    __internal.setRuntimeFactoryForTests(async () => ({
+      sdk: { start, shutdown },
+      spanProcessor: { forceFlush },
+    }));
+
     const runtime = await ensureObservabilityRuntime(cfg);
     expect(runtime.ready).toBe(true);
     expect(runtime.health.status).toBe("ready");
+    expect(runtime.healthChanged).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
 
     const snapshot = __internal.getStateSnapshot();
     expect(snapshot.hasSdk).toBe(true);
     expect(snapshot.hasSpanProcessor).toBe(true);
   });
 
+  test("only the initialization owner reports a health change to concurrent callers", async () => {
+    const cfg = makeConfig();
+    let releaseStart: (() => void) | undefined;
+    let markStartEntered: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const startEntered = new Promise<void>((resolve) => {
+      markStartEntered = resolve;
+    });
+    __internal.setRuntimeFactoryForTests(async () => ({
+      sdk: {
+        start: async () => {
+          markStartEntered?.();
+          await startGate;
+        },
+        shutdown: async () => {},
+      },
+      spanProcessor: { forceFlush: async () => {} },
+    }));
+
+    try {
+      const ownerPromise = ensureObservabilityRuntime(cfg);
+      await startEntered;
+      const joinerPromise = ensureObservabilityRuntime(cfg);
+      releaseStart?.();
+      const [owner, joiner] = await Promise.all([ownerPromise, joinerPromise]);
+
+      expect(owner.ready).toBe(true);
+      expect(owner.healthChanged).toBe(true);
+      expect(joiner.ready).toBe(true);
+      expect(joiner.healthChanged).toBe(false);
+    } finally {
+      releaseStart?.();
+    }
+  });
+
+  test("runtime initialization is bounded and stale completion cannot reattach after disable", async () => {
+    const cfg = makeConfig();
+    let releaseStart: (() => void) | undefined;
+    let markStartEntered: (() => void) | undefined;
+    let markStaleShutdown: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const startEntered = new Promise<void>((resolve) => {
+      markStartEntered = resolve;
+    });
+    const staleShutdown = new Promise<void>((resolve) => {
+      markStaleShutdown = resolve;
+    });
+    __internal.setRuntimeInitializationTimeoutForTests(10);
+    __internal.setRuntimeFactoryForTests(async () => ({
+      sdk: {
+        start: async () => {
+          markStartEntered?.();
+          await startGate;
+        },
+        shutdown: async () => {
+          markStaleShutdown?.();
+        },
+      },
+      spanProcessor: { forceFlush: async () => {} },
+    }));
+    const realWarn = console.warn;
+    console.warn = mock(() => {}) as typeof console.warn;
+
+    try {
+      const runtimePromise = ensureObservabilityRuntime(cfg);
+      await startEntered;
+      const runtime = await runtimePromise;
+      expect(runtime.ready).toBe(false);
+      expect(runtime.health.reason).toBe("runtime_init_timeout");
+      expect(runtime.healthChanged).toBe(true);
+
+      const repeated = await ensureObservabilityRuntime(cfg);
+      expect(repeated.health.reason).toBe("runtime_init_timeout");
+      expect(repeated.healthChanged).toBe(false);
+
+      const disabled = await ensureObservabilityRuntime({ ...cfg, observabilityEnabled: false });
+      expect(disabled.health.status).toBe("disabled");
+      releaseStart?.();
+      await staleShutdown;
+      const snapshot = __internal.getStateSnapshot();
+      expect(snapshot.hasSdk).toBe(false);
+      expect(snapshot.hasSpanProcessor).toBe(false);
+      expect(snapshot.health.status).toBe("disabled");
+    } finally {
+      releaseStart?.();
+      console.warn = realWarn;
+    }
+  });
+
   test("buildRuntimeTelemetrySettings is metadata-only by default", async () => {
     const cfg = makeConfig();
+    __internal.setEnsureObservabilityRuntimeForTests(async () => ({
+      ready: true,
+      health: { status: "ready", reason: "runtime_ready", updatedAt: new Date(0).toISOString() },
+      healthChanged: false,
+    }));
     const telemetry = await buildRuntimeTelemetrySettings(cfg, {
       functionId: "session.turn",
       metadata: {
@@ -111,6 +219,11 @@ describe("observability runtime", () => {
         recordOutputs: true,
       },
     });
+    __internal.setEnsureObservabilityRuntimeForTests(async () => ({
+      ready: true,
+      health: { status: "ready", reason: "runtime_ready", updatedAt: new Date(0).toISOString() },
+      healthChanged: false,
+    }));
     const telemetry = await buildRuntimeTelemetrySettings(cfg, {
       functionId: "session.turn",
     });

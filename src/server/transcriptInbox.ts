@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { hardenPrivateDirSync, hardenPrivateFileSync } from "../platform/fs";
 import {
   TRANSCRIPT_EVENTS_MAX_BYTES,
   TRANSCRIPT_REQUEST_MAX_EVENTS,
@@ -60,9 +61,10 @@ function errorCode(error: unknown): string {
     : "";
 }
 
-function chmodIfPresent(filePath: string, mode: number): void {
+function hardenIfPresent(filePath: string, harden: (path: string) => void): void {
   try {
-    fs.chmodSync(filePath, mode);
+    fs.statSync(filePath);
+    harden(filePath);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") {
       throw error;
@@ -149,23 +151,29 @@ export class TranscriptInbox {
   private readonly now: () => number;
   private readonly maxBatches: number;
   private readonly retentionMs: number;
+  private readonly hardenPrivateDir: (path: string) => void;
+  private readonly hardenPrivateFile: (path: string) => void;
 
   constructor(options: {
     userDataDir: string;
     now?: () => number;
     maxBatches?: number;
     retentionMs?: number;
+    hardenPrivateDir?: (path: string) => void;
+    hardenPrivateFile?: (path: string) => void;
   }) {
     this.databasePath = path.join(options.userDataDir, "transcript-inbox.sqlite");
     this.transcriptsDir = path.join(options.userDataDir, "transcripts");
     this.now = options.now ?? (() => Date.now());
     this.maxBatches = Math.max(1, options.maxBatches ?? TRANSCRIPT_DEDUPE_MAX_BATCHES);
     this.retentionMs = Math.max(0, options.retentionMs ?? TRANSCRIPT_DEDUPE_RETENTION_MS);
+    this.hardenPrivateDir = options.hardenPrivateDir ?? hardenPrivateDirSync;
+    this.hardenPrivateFile = options.hardenPrivateFile ?? hardenPrivateFileSync;
     fs.mkdirSync(options.userDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-    fs.chmodSync(options.userDataDir, PRIVATE_DIR_MODE);
+    this.hardenPrivateDir(options.userDataDir);
     const databaseHandle = fs.openSync(this.databasePath, "a", PRIVATE_FILE_MODE);
     fs.closeSync(databaseHandle);
-    fs.chmodSync(this.databasePath, PRIVATE_FILE_MODE);
+    this.hardenPrivateFile(this.databasePath);
     this.withDatabase(() => {});
   }
 
@@ -360,13 +368,14 @@ export class TranscriptInbox {
           }
         }
         fs.mkdirSync(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+        this.hardenPrivateDir(this.transcriptsDir);
         for (const [threadId, lines] of appendByThread) {
           const filePath = this.transcriptFilePath(threadId);
           fs.appendFileSync(filePath, `${lines.join("\n")}\n`, {
             encoding: "utf8",
             mode: PRIVATE_FILE_MODE,
           });
-          fs.chmodSync(filePath, PRIVATE_FILE_MODE);
+          this.hardenPrivateFile(filePath);
         }
         database
           .query(
@@ -438,10 +447,10 @@ export class TranscriptInbox {
   }
 
   private enforcePrivateDatabasePermissions(): void {
-    fs.chmodSync(path.dirname(this.databasePath), PRIVATE_DIR_MODE);
-    chmodIfPresent(this.databasePath, PRIVATE_FILE_MODE);
-    chmodIfPresent(`${this.databasePath}-wal`, PRIVATE_FILE_MODE);
-    chmodIfPresent(`${this.databasePath}-shm`, PRIVATE_FILE_MODE);
+    this.hardenPrivateDir(path.dirname(this.databasePath));
+    hardenIfPresent(this.databasePath, this.hardenPrivateFile);
+    hardenIfPresent(`${this.databasePath}-wal`, this.hardenPrivateFile);
+    hardenIfPresent(`${this.databasePath}-shm`, this.hardenPrivateFile);
   }
 
   private withImmediateTransaction<T>(operation: (database: Database) => T): T {

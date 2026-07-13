@@ -302,16 +302,23 @@ describe("default global skills bootstrap", () => {
     const baseFetch = createGitHubFetchStub(tree, files);
     let releaseAlphaFetch: (() => void) | undefined;
     let markAlphaFetchBlocked: (() => void) | undefined;
+    let markBetaFetchStarted: (() => void) | undefined;
     const alphaFetchGate = new Promise<void>((resolve) => {
       releaseAlphaFetch = resolve;
     });
     const alphaFetchBlocked = new Promise<void>((resolve) => {
       markAlphaFetchBlocked = resolve;
     });
+    const betaFetchStarted = new Promise<void>((resolve) => {
+      markBetaFetchStarted = resolve;
+    });
     const fetchImpl = (async (input: RequestInfo | URL) => {
       if (String(input) === "https://download.test/alpha/plugin.json") {
         markAlphaFetchBlocked?.();
         await alphaFetchGate;
+      }
+      if (String(input) === "https://download.test/beta/plugin.json") {
+        markBetaFetchStarted?.();
       }
       return await baseFetch(input);
     }) as typeof fetch;
@@ -335,21 +342,24 @@ describe("default global skills bootstrap", () => {
         fetchImpl,
         env,
       });
-      const second = await Promise.race([
-        secondPromise,
-        new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 100)),
-      ]);
-
-      expect(second).not.toBe("timed_out");
-      if (second === "timed_out") {
-        throw new Error("beta bootstrap unexpectedly waited on alpha bootstrap");
-      }
+      // Synchronize on beta's own work starting. A 100ms Promise.race made this
+      // correctness check depend on suite load and failed while unrelated
+      // synchronous scans held Bun's event loop.
+      await betaFetchStarted;
+      const second = await secondPromise;
       expect(second?.installed).toEqual(["beta"]);
       releaseAlphaFetch?.();
       const first = await firstPromise;
       expect(first?.installed).toEqual(["alpha"]);
       await fs.access(path.join(home, ".cowork", "plugins", "alpha"));
       await fs.access(path.join(home, ".cowork", "plugins", "beta"));
+      expect(
+        (
+          JSON.parse(await fs.readFile(defaultGlobalSkillsStateFile(home), "utf-8")) as {
+            plugins: string[];
+          }
+        ).plugins,
+      ).toEqual(["alpha", "beta"]);
     } finally {
       releaseAlphaFetch?.();
       defaultGlobalSkillsInternal.resetForTests();

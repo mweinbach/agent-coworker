@@ -295,13 +295,14 @@ export function home(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = hostPlatform(),
 ): string {
+  const impl = pathImplForPlatform(platform);
   const override = env.COWORK_HOME_OVERRIDE?.trim();
   if (override) {
-    return path.resolve(override);
+    return impl.resolve(override);
   }
   const posixHome = env.HOME?.trim();
   if (platform !== "win32" && posixHome) {
-    return path.resolve(posixHome);
+    return impl.resolve(posixHome);
   }
   return os.homedir();
 }

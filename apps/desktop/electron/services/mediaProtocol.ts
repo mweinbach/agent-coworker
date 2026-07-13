@@ -1,8 +1,13 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
 import type * as Electron from "electron";
 
+import { hostPlatform } from "../../../../src/platform/host";
+import {
+  absolutePathStyle,
+  type PathStyle,
+  resolve as resolvePathString,
+  styleFor,
+  toFileUrl,
+} from "../../../../src/platform/pathString";
 import {
   DESKTOP_MEDIA_PROTOCOL_SCHEME,
   decodeDesktopMediaUrl,
@@ -23,33 +28,58 @@ export type DesktopMediaWorkspaceRoots = Pick<
 >;
 
 /**
+ * Explicit path semantics for the pure resolver. Production always supplies the
+ * host adapter; tests may inject a lexical adapter for another platform without
+ * allowing that foreign path to reach Electron's filesystem fetch.
+ */
+export type DesktopMediaPathAdapter = {
+  style: PathStyle;
+  resolveAllowedPath: (workspaceRoots: string[], requestedPath: string) => string;
+};
+
+function hostDesktopMediaPathAdapter(): DesktopMediaPathAdapter {
+  return {
+    style: styleFor(hostPlatform()),
+    resolveAllowedPath,
+  };
+}
+
+/**
  * Resolves a `cowork-media:` request URL to the absolute image path it may
  * serve, or null when the request is malformed, targets a non-image file, or
- * escapes the approved workspace roots (including via `..` traversal or
- * symlinks). Enforces the same boundary as the file IPC handlers
- * (`resolveAllowedPath`, which also admits the one-off chats home). Pure so
- * tests can cover it directly.
+ * escapes the approved workspace roots. The production host adapter enforces
+ * the same realpath-backed boundary as the file IPC handlers
+ * (`resolveAllowedPath`, which also admits the one-off chats home); the explicit
+ * adapter seam lets tests exercise other path syntaxes without sending them to
+ * the host filesystem.
  */
 export function resolveDesktopMediaRequestPath(
   requestUrl: string,
   approvedWorkspaceRoots: readonly string[],
+  pathAdapter: DesktopMediaPathAdapter = hostDesktopMediaPathAdapter(),
 ): string | null {
   const decoded = decodeDesktopMediaUrl(requestUrl);
   if (!decoded) {
     return null;
   }
+  if (absolutePathStyle(decoded) !== pathAdapter.style) {
+    return null;
+  }
   // Normalize away any `..` traversal segments, then re-check that the file
   // we would actually read still looks like a displayable image.
-  const resolved = path.resolve(decoded);
+  const resolved = resolvePathString(decoded, pathAdapter.style);
   if (!isDesktopMediaImagePath(resolved)) {
     return null;
   }
   // Rendered chat content must not read arbitrary local files: only serve
   // paths inside approved workspace roots, exactly like openPath /
   // readFileForPreview do across the IPC boundary.
+  const rootsWithMatchingSyntax = approvedWorkspaceRoots.filter(
+    (root) => absolutePathStyle(root) === pathAdapter.style,
+  );
   let bounded: string;
   try {
-    bounded = resolveAllowedPath([...approvedWorkspaceRoots], resolved);
+    bounded = pathAdapter.resolveAllowedPath(rootsWithMatchingSyntax, resolved);
   } catch {
     return null;
   }
@@ -84,6 +114,7 @@ export function registerDesktopMediaProtocolHandler(
   net: typeof Electron.net,
   workspaceRoots: DesktopMediaWorkspaceRoots,
 ): void {
+  const hostPathAdapter = hostDesktopMediaPathAdapter();
   protocol.handle(DESKTOP_MEDIA_PROTOCOL_SCHEME, async (request) => {
     let absPath: string | null = null;
     try {
@@ -91,6 +122,7 @@ export function registerDesktopMediaProtocolHandler(
       absPath = resolveDesktopMediaRequestPath(
         request.url,
         workspaceRoots.getApprovedWorkspaceRoots(),
+        hostPathAdapter,
       );
     } catch {
       absPath = null;
@@ -99,7 +131,10 @@ export function registerDesktopMediaProtocolHandler(
       return new Response("Not found", { status: 404 });
     }
     try {
-      const fileResponse = await net.fetch(pathToFileURL(absPath).toString());
+      if (absolutePathStyle(absPath) !== hostPathAdapter.style) {
+        return new Response("Not found", { status: 404 });
+      }
+      const fileResponse = await net.fetch(toFileUrl(absPath, hostPathAdapter.style));
       if (!fileResponse.ok) {
         return new Response("Not found", { status: 404 });
       }

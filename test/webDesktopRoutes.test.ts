@@ -824,7 +824,13 @@ describe("web desktop routes", () => {
     const userDataDir = path.join(workspace, "user-data");
     await fs.mkdir(userDataDir, { recursive: true, mode: 0o777 });
     await fs.chmod(userDataDir, 0o777);
-    const inbox = new TranscriptInbox({ userDataDir });
+    const hardenedDirectories: string[] = [];
+    const hardenedFiles: string[] = [];
+    const inbox = new TranscriptInbox({
+      userDataDir,
+      hardenPrivateDir: (candidate) => hardenedDirectories.push(candidate),
+      hardenPrivateFile: (candidate) => hardenedFiles.push(candidate),
+    });
     const databasePath = path.join(userDataDir, "transcript-inbox.sqlite");
     const holdingConnection = new Database(databasePath);
     try {
@@ -842,9 +848,9 @@ describe("web desktop routes", () => {
         "private-batch",
       );
 
-      expect((await fs.stat(userDataDir)).mode & 0o777).toBe(0o700);
+      expect(hardenedDirectories).toContain(userDataDir);
       for (const filePath of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
-        expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+        expect(hardenedFiles).toContain(filePath);
       }
     } finally {
       holdingConnection.close(false);

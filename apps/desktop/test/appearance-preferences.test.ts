@@ -12,6 +12,8 @@ const temporaryDirectories: string[] = [];
 
 async function createPreferences(): Promise<{
   directory: string;
+  hardenedDirectories: string[];
+  hardenedFiles: string[];
   preferences: AppearancePreferences;
 }> {
   const [scratchRoot] = scratchRoots();
@@ -19,12 +21,24 @@ async function createPreferences(): Promise<{
     throw new Error("No platform scratch root is available for appearance preference tests.");
   }
   const directory = await fs.mkdtemp(path.join(scratchRoot, "cowork-appearance-"));
+  const hardenedDirectories: string[] = [];
+  const hardenedFiles: string[] = [];
   temporaryDirectories.push(directory);
   return {
     directory,
-    preferences: new AppearancePreferences({
-      getPath: () => directory,
-    }),
+    hardenedDirectories,
+    hardenedFiles,
+    preferences: new AppearancePreferences(
+      { getPath: () => directory },
+      {
+        hardenPrivateDir: async (candidate) => {
+          hardenedDirectories.push(candidate);
+        },
+        hardenPrivateFile: async (candidate) => {
+          hardenedFiles.push(candidate);
+        },
+      },
+    ),
   };
 }
 
@@ -44,14 +58,16 @@ describe("appearance preferences", () => {
   });
 
   test("round-trips the native first-paint theme source", async () => {
-    const { directory, preferences } = await createPreferences();
+    const { directory, hardenedDirectories, hardenedFiles, preferences } =
+      await createPreferences();
 
     expect(await preferences.loadThemeSource()).toBe("system");
     await preferences.saveThemeSource("dark");
 
     expect(await preferences.loadThemeSource()).toBe("dark");
-    const stat = await fs.stat(path.join(directory, "appearance.json"));
-    expect(stat.mode & 0o777).toBe(0o600);
+    const filePath = path.join(directory, "appearance.json");
+    expect(hardenedDirectories).toEqual([directory]);
+    expect(hardenedFiles).toEqual([filePath]);
   });
 
   test("falls back safely when the preference file is malformed", async () => {
@@ -59,5 +75,13 @@ describe("appearance preferences", () => {
     await fs.writeFile(path.join(directory, "appearance.json"), "{not json", "utf8");
 
     expect(await preferences.loadThemeSource()).toBe("system");
+  });
+
+  test("serializes concurrent saves so the latest theme wins atomically", async () => {
+    const { preferences } = await createPreferences();
+
+    await Promise.all([preferences.saveThemeSource("dark"), preferences.saveThemeSource("light")]);
+
+    expect(await preferences.loadThemeSource()).toBe("light");
   });
 });

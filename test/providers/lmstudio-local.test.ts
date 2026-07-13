@@ -53,8 +53,8 @@ describe("resolveLmsCliPath", () => {
   });
 
   test("uses lms.exe under the profile dir on Windows", () => {
-    expect(resolveLmsCliPath({ homedir: () => "C:\\Users\\tester", platform: "win32" })).toContain(
-      "lms.exe",
+    expect(resolveLmsCliPath({ homedir: () => "C:\\Users\\tester", platform: "win32" })).toBe(
+      "C:\\Users\\tester\\.lmstudio\\bin\\lms.exe",
     );
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toPosix } from "../src/platform/pathString";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -41,7 +42,11 @@ function dryRunPackPaths(): string[] {
   const unique = new Set<string>();
   for (const pattern of includePatterns) {
     const glob = new Bun.Glob(pattern);
-    for (const file of glob.scanSync({ cwd: repoRoot, dot: true })) {
+    for (const scannedFile of glob.scanSync({ cwd: repoRoot, dot: true })) {
+      // `package.json#files` and Bun.Glob patterns use portable `/` separators,
+      // while scanSync emits native separators on Windows. Normalize before
+      // matching exclusions as well as before asserting the packed paths.
+      const file = toPosix(scannedFile);
       if (ignoreMatchers.some((matcher) => matcher.match(file))) continue;
       unique.add(file);
     }

@@ -474,7 +474,13 @@ describe("desktop chat message scroller", () => {
 
       viewport.scrollTop = 100;
       await act(async () => {
-        viewport.dispatchEvent(new harness.dom.window.Event("wheel", { bubbles: true }));
+        // Model the actual user input that moves away from the live edge. A
+        // generic Event has no deltaY, so it bypasses the synchronous detach
+        // path and makes the result depend on whether the previous
+        // programmatic-scroll animation frame happened to clear first.
+        viewport.dispatchEvent(
+          new harness.dom.window.WheelEvent("wheel", { bubbles: true, deltaY: -80 }),
+        );
         viewport.dispatchEvent(new harness.dom.window.Event("scroll", { bubbles: true }));
         await new Promise((resolve) => setTimeout(resolve, 10));
       });

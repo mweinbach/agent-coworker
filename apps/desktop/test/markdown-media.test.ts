@@ -5,7 +5,17 @@ import type * as Electron from "electron";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { hostPlatform } from "../../../src/platform/host";
 import {
+  isPathEqualOrInsideLexical,
+  type PathStyle,
+  resolve as resolvePathString,
+  styleFor,
+  toFileUrl,
+} from "../../../src/platform/pathString";
+import { scratchRoots } from "../../../src/platform/sandbox";
+import {
+  type DesktopMediaPathAdapter,
   type DesktopMediaWorkspaceRoots,
   registerDesktopMediaProtocolHandler,
   resolveDesktopMediaRequestPath,
@@ -17,6 +27,19 @@ import {
   isAbsoluteDesktopPath,
 } from "../src/lib/mediaProtocol";
 import { DesktopMarkdown, rewriteDesktopImageUrl } from "../src/ui/markdown";
+
+function lexicalMediaPathAdapter(style: PathStyle): DesktopMediaPathAdapter {
+  return {
+    style,
+    resolveAllowedPath: (roots, requestedPath) => {
+      const resolved = resolvePathString(requestedPath, style);
+      if (roots.some((root) => isPathEqualOrInsideLexical(root, resolved, style))) {
+        return resolved;
+      }
+      throw new Error("path is outside allowed workspace roots");
+    },
+  };
+}
 
 describe("cowork-media protocol helpers", () => {
   test("encodes absolute image paths into cowork-media URLs", () => {
@@ -74,44 +97,54 @@ describe("cowork-media protocol helpers", () => {
 
 describe("resolveDesktopMediaRequestPath", () => {
   const WS_ROOT = "/Users/test/ws";
+  const POSIX_PATHS = lexicalMediaPathAdapter("posix");
+  const WIN32_PATHS = lexicalMediaPathAdapter("win32");
   const mediaUrl = (p: string) => `cowork-media://media?path=${encodeURIComponent(p)}`;
+  const resolvePosix = (p: string, roots: string[]) =>
+    resolveDesktopMediaRequestPath(mediaUrl(p), roots, POSIX_PATHS);
 
   test("resolves image request URLs inside an approved workspace root", () => {
-    expect(resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/chart.png"), [WS_ROOT])).toBe(
-      "/Users/test/ws/chart.png",
+    expect(resolvePosix("/Users/test/ws/chart.png", [WS_ROOT])).toBe("/Users/test/ws/chart.png");
+    expect(resolvePosix("/Users/test/ws/outputs/plot.webp", [WS_ROOT])).toBe(
+      "/Users/test/ws/outputs/plot.webp",
     );
     expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/outputs/plot.webp"), [WS_ROOT]),
-    ).toBe("/Users/test/ws/outputs/plot.webp");
+      resolveDesktopMediaRequestPath(
+        mediaUrl("C:\\Users\\Test\\ws\\chart.png"),
+        ["C:\\Users\\Test\\ws"],
+        WIN32_PATHS,
+      ),
+    ).toBe("C:\\Users\\Test\\ws\\chart.png");
+  });
+
+  test("never reinterprets roots from a different path syntax", () => {
+    expect(resolvePosix("/Users/test/ws/chart.png", ["C:\\Users\\test\\ws"])).toBeNull();
+    expect(
+      resolveDesktopMediaRequestPath(
+        mediaUrl("C:\\Users\\test\\ws\\chart.png"),
+        ["/Users/test/ws"],
+        WIN32_PATHS,
+      ),
+    ).toBeNull();
   });
 
   test("rejects absolute image paths outside every approved root", () => {
     // The finding-1 case: rendered chat content pointing at arbitrary local images.
-    expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/home/user/Pictures/private.png"), [WS_ROOT]),
-    ).toBeNull();
-    expect(resolveDesktopMediaRequestPath(mediaUrl("/outside-root/secret.png"), [])).toBeNull();
+    expect(resolvePosix("/home/user/Pictures/private.png", [WS_ROOT])).toBeNull();
+    expect(resolvePosix("/outside-root/secret.png", [])).toBeNull();
   });
 
   test("rejects traversal that escapes the approved root", () => {
-    expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/../secret.png"), [WS_ROOT]),
-    ).toBeNull();
-    expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/a/../../../etc/leak.png"), [WS_ROOT]),
-    ).toBeNull();
+    expect(resolvePosix("/Users/test/ws/../secret.png", [WS_ROOT])).toBeNull();
+    expect(resolvePosix("/Users/test/ws/a/../../../etc/leak.png", [WS_ROOT])).toBeNull();
   });
 
   test("normalizes in-root traversal segments and re-validates the target", () => {
-    expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/a/../chart.png"), [WS_ROOT]),
-    ).toBe("/Users/test/ws/chart.png");
+    expect(resolvePosix("/Users/test/ws/a/../chart.png", [WS_ROOT])).toBe(
+      "/Users/test/ws/chart.png",
+    );
     // Traversal that lands on a non-image target is rejected.
-    expect(
-      resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/chart.png/../secrets.env"), [
-        WS_ROOT,
-      ]),
-    ).toBeNull();
+    expect(resolvePosix("/Users/test/ws/chart.png/../secrets.env", [WS_ROOT])).toBeNull();
   });
 
   test("allows the one-off chats home like the file IPC boundary does", () => {
@@ -120,14 +153,20 @@ describe("resolveDesktopMediaRequestPath", () => {
   });
 
   test("rejects non-media and malformed requests", () => {
-    expect(resolveDesktopMediaRequestPath(mediaUrl("/Users/test/ws/passwd"), [WS_ROOT])).toBeNull();
-    expect(resolveDesktopMediaRequestPath("https://example.com/x.png", [WS_ROOT])).toBeNull();
-    expect(resolveDesktopMediaRequestPath("", [WS_ROOT])).toBeNull();
+    expect(resolvePosix("/Users/test/ws/passwd", [WS_ROOT])).toBeNull();
+    expect(
+      resolveDesktopMediaRequestPath("https://example.com/x.png", [WS_ROOT], POSIX_PATHS),
+    ).toBeNull();
+    expect(resolveDesktopMediaRequestPath("", [WS_ROOT], POSIX_PATHS)).toBeNull();
   });
 });
 
 describe("registerDesktopMediaProtocolHandler", () => {
-  const WS_ROOT = "/Users/test/ws";
+  const HOST_PATH_STYLE = styleFor(hostPlatform());
+  const HOST_SCRATCH_ROOT = scratchRoots(hostPlatform())[0];
+  if (!HOST_SCRATCH_ROOT) throw new Error("host platform has no scratch root");
+  const WS_ROOT = path.join(HOST_SCRATCH_ROOT, "cowork-media-handler-test", "ws");
+  const IMAGE_PATH = path.join(WS_ROOT, "chart.png");
   const mediaUrl = (p: string) => `cowork-media://media?path=${encodeURIComponent(p)}`;
 
   type MediaHandler = (request: Request) => Promise<Response>;
@@ -165,23 +204,35 @@ describe("registerDesktopMediaProtocolHandler", () => {
 
   test("serves images inside approved workspace roots", async () => {
     const { handler, fetchedUrls, wasEnsured } = setupHandler([WS_ROOT]);
-    const response = await handler(new Request(mediaUrl("/Users/test/ws/chart.png")));
+    const response = await handler(new Request(mediaUrl(IMAGE_PATH)));
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(wasEnsured()).toBe(true);
-    expect(fetchedUrls).toEqual(["file:///Users/test/ws/chart.png"]);
+    expect(fetchedUrls).toEqual([toFileUrl(IMAGE_PATH, HOST_PATH_STYLE)]);
+  });
+
+  test("rejects foreign-style paths before net.fetch", async () => {
+    const foreignRoot = HOST_PATH_STYLE === "win32" ? "/Users/test/ws" : "C:\\Users\\Test\\ws";
+    const foreignImage =
+      HOST_PATH_STYLE === "win32" ? `${foreignRoot}/chart.png` : `${foreignRoot}\\chart.png`;
+    const { handler, fetchedUrls } = setupHandler([foreignRoot]);
+    const response = await handler(new Request(mediaUrl(foreignImage)));
+    expect(response.status).toBe(404);
+    expect(fetchedUrls).toEqual([]);
   });
 
   test("returns 404 without touching disk for out-of-root images", async () => {
     const { handler, fetchedUrls } = setupHandler([WS_ROOT]);
-    const response = await handler(new Request(mediaUrl("/home/user/Pictures/private.png")));
+    const response = await handler(
+      new Request(mediaUrl(path.join(HOST_SCRATCH_ROOT, "outside-workspace", "private.png"))),
+    );
     expect(response.status).toBe(404);
     expect(fetchedUrls).toEqual([]);
   });
 
   test("returns 404 when approved roots cannot be loaded", async () => {
     const { handler, fetchedUrls } = setupHandler([WS_ROOT], { ensureRejects: true });
-    const response = await handler(new Request(mediaUrl("/Users/test/ws/chart.png")));
+    const response = await handler(new Request(mediaUrl(IMAGE_PATH)));
     expect(response.status).toBe(404);
     expect(fetchedUrls).toEqual([]);
   });

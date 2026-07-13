@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -89,6 +90,23 @@ function revisionMetadataMatches(
 ): boolean {
   return (
     left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+  );
+}
+
+function fileIdentityMatches(
+  left: Pick<Stats, "dev" | "ino">,
+  right: Pick<Stats, "dev" | "ino">,
+): boolean {
+  const leftHasStableIdentity = left.dev !== 0 || left.ino !== 0;
+  const rightHasStableIdentity = right.dev !== 0 || right.ino !== 0;
+  if (!leftHasStableIdentity && !rightHasStableIdentity) {
+    return true;
+  }
+  return (
+    leftHasStableIdentity &&
+    rightHasStableIdentity &&
+    left.dev === right.dev &&
+    left.ino === right.ino
   );
 }
 
@@ -261,10 +279,12 @@ async function revalidateNewWorkspaceFile(
   }
 }
 
-async function revalidateTemporaryWorkspaceFile(
+async function openValidatedTemporaryWorkspaceFile(
   workspaceRoot: string,
   tempPath: string,
-): Promise<void> {
+  expectedStat: Stats,
+  expectedDigest: string,
+): Promise<FileHandle> {
   await revalidateCanonicalParent(workspaceRoot, tempPath);
   let currentPath: string;
   try {
@@ -277,8 +297,110 @@ async function revalidateTemporaryWorkspaceFile(
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   const stat = await fs.lstat(tempPath);
-  if (stat.isSymbolicLink() || !stat.isFile()) {
+  if (stat.isSymbolicLink() || !stat.isFile() || !fileIdentityMatches(stat, expectedStat)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+
+  const handle = await fs.open(tempPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      !fileIdentityMatches(before, expectedStat) ||
+      !revisionMetadataMatches(before, expectedStat)
+    ) {
+      throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+    }
+    const digest = await digestFileHandle(handle);
+    const verifiedStat = await handle.stat();
+    if (
+      !fileIdentityMatches(before, verifiedStat) ||
+      !revisionMetadataMatches(before, verifiedStat) ||
+      digest !== expectedDigest
+    ) {
+      throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+    }
+    // Bind the verified descriptor back to the path while retaining the handle
+    // through commit. The staging handle is closed before the testable race
+    // window above so Windows can observe a parent rename, then reopened here so
+    // a later staging-path replacement cannot change the inode we commit.
+    await revalidateCanonicalParent(workspaceRoot, tempPath);
+    const currentStat = await fs.lstat(tempPath);
+    if (
+      currentStat.isSymbolicLink() ||
+      !currentStat.isFile() ||
+      !fileIdentityMatches(currentStat, verifiedStat) ||
+      !revisionMetadataMatches(currentStat, verifiedStat)
+    ) {
+      throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function revisionForCommittedStagedFile(
+  workspaceRoot: string,
+  filePath: string,
+  handle: FileHandle,
+  stagedStat: Stats,
+  expectedDigest: string,
+): Promise<CanvasDocumentRevision> {
+  await revalidateExistingWorkspaceFile(workspaceRoot, filePath);
+  const pathStat = await fs.lstat(filePath);
+  const before = await handle.stat();
+  if (
+    pathStat.isSymbolicLink() ||
+    !pathStat.isFile() ||
+    !fileIdentityMatches(pathStat, stagedStat) ||
+    !fileIdentityMatches(pathStat, before) ||
+    pathStat.size !== stagedStat.size
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  const digest = await digestFileHandle(handle);
+  const after = await handle.stat();
+  if (
+    !fileIdentityMatches(before, after) ||
+    !revisionMetadataMatches(before, after) ||
+    digest !== expectedDigest
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  await revalidateExistingWorkspaceFile(workspaceRoot, filePath);
+  const currentPathStat = await fs.lstat(filePath);
+  if (
+    currentPathStat.isSymbolicLink() ||
+    !currentPathStat.isFile() ||
+    !fileIdentityMatches(currentPathStat, after) ||
+    !revisionMetadataMatches(currentPathStat, after)
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  return revisionFromStatAndDigest(after, digest);
+}
+
+async function removeTemporaryWorkspaceFile(
+  workspaceRoot: string,
+  tempPath: string,
+  expectedStat?: Stats,
+): Promise<boolean> {
+  try {
+    await revalidateCanonicalParent(workspaceRoot, tempPath);
+    const stat = await fs.lstat(tempPath);
+    if (
+      stat.isSymbolicLink() ||
+      !stat.isFile() ||
+      (expectedStat && !fileIdentityMatches(stat, expectedStat))
+    ) {
+      return false;
+    }
+    await fs.rm(tempPath, { force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -632,6 +754,7 @@ export class CanvasDocumentPersistenceService {
     const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
     let tempExists = false;
     let handle: FileHandle | undefined;
+    let stagedStat: Stats | undefined;
     try {
       await this.hooks.beforeTempCreate?.({ path: filePath });
       await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
@@ -641,27 +764,42 @@ export class CanvasDocumentPersistenceService {
       await handle.writeFile(content, "utf8");
       await handle.sync();
       const digest = digestContent(content);
+      stagedStat = await handle.stat();
+      await handle.close();
+      handle = undefined;
       await this.hooks.beforeAtomicCommit?.({
         path: filePath,
         content,
         expectedRevision,
       });
       await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
-      await revalidateTemporaryWorkspaceFile(session.workspaceRoot, tempPath);
+      handle = await openValidatedTemporaryWorkspaceFile(
+        session.workspaceRoot,
+        tempPath,
+        stagedStat,
+        digest,
+      );
       const revisionBeforeCommit = await readFileRevision(filePath);
       if (revisionBeforeCommit.fingerprint !== expectedRevision.fingerprint) {
         throw new CanvasDocumentConflictError();
       }
+      await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
       await fs.rename(tempPath, filePath);
       tempExists = false;
-      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      const revision = await revisionForCommittedStagedFile(
+        session.workspaceRoot,
+        filePath,
+        handle,
+        stagedStat,
+        digest,
+      );
       await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
       await syncDirectory(directory);
       return revision;
     } finally {
       await handle?.close();
       if (tempExists) {
-        await fs.rm(tempPath, { force: true }).catch(() => {});
+        await removeTemporaryWorkspaceFile(session.workspaceRoot, tempPath, stagedStat);
       }
     }
   }
@@ -676,6 +814,7 @@ export class CanvasDocumentPersistenceService {
     const tempPath = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
     let tempExists = false;
     let handle: FileHandle | undefined;
+    let stagedStat: Stats | undefined;
     try {
       await this.hooks.beforeTempCreate?.({ path: filePath });
       await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
@@ -684,24 +823,37 @@ export class CanvasDocumentPersistenceService {
       await handle.writeFile(content, "utf8");
       await handle.sync();
       const digest = digestContent(content);
+      stagedStat = await handle.stat();
+      await handle.close();
+      handle = undefined;
       await this.hooks.beforeAtomicCommit?.({
         path: filePath,
         content,
         expectedRevision: null,
       });
       await revalidateNewWorkspaceFile(workspaceRoot, requestedPath, filePath);
-      await revalidateTemporaryWorkspaceFile(workspaceRoot, tempPath);
+      handle = await openValidatedTemporaryWorkspaceFile(
+        workspaceRoot,
+        tempPath,
+        stagedStat,
+        digest,
+      );
       await fs.link(tempPath, filePath);
-      await fs.rm(tempPath, { force: true });
-      tempExists = false;
-      const revision = revisionFromStatAndDigest(await handle.stat(), digest);
+      const revision = await revisionForCommittedStagedFile(
+        workspaceRoot,
+        filePath,
+        handle,
+        stagedStat,
+        digest,
+      );
+      tempExists = !(await removeTemporaryWorkspaceFile(workspaceRoot, tempPath, stagedStat));
       await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
       await syncDirectory(directory);
       return revision;
     } finally {
       await handle?.close();
       if (tempExists) {
-        await fs.rm(tempPath, { force: true }).catch(() => {});
+        await removeTemporaryWorkspaceFile(workspaceRoot, tempPath, stagedStat);
       }
     }
   }

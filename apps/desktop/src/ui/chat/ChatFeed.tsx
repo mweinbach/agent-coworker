@@ -65,18 +65,23 @@ const COMPLETION_ANNOUNCEMENT_LIFETIME_MS = 4_000;
 const FEED_NEAR_TOP_PX = 160;
 
 const ResponseCompletionAnnouncement = memo(function ResponseCompletionAnnouncement({
+  busy,
   streamingAssistantMessageId,
 }: {
+  busy: boolean;
   streamingAssistantMessageId: string | null | undefined;
 }) {
-  const previousStreamingAssistantMessageIdRef = useRef(streamingAssistantMessageId);
+  const pendingStreamingAssistantMessageIdRef = useRef(streamingAssistantMessageId);
   const announcementSequenceRef = useRef(0);
   const [announcement, setAnnouncement] = useState<{ id: number; message: string } | null>(null);
 
   useEffect(() => {
-    const previousId = previousStreamingAssistantMessageIdRef.current;
-    previousStreamingAssistantMessageIdRef.current = streamingAssistantMessageId;
-    if (!previousId || previousId === streamingAssistantMessageId) return;
+    if (streamingAssistantMessageId) {
+      pendingStreamingAssistantMessageIdRef.current = streamingAssistantMessageId;
+      return;
+    }
+    if (busy || !pendingStreamingAssistantMessageIdRef.current) return;
+    pendingStreamingAssistantMessageIdRef.current = null;
 
     const timeout = window.setTimeout(() => {
       announcementSequenceRef.current += 1;
@@ -86,7 +91,7 @@ const ResponseCompletionAnnouncement = memo(function ResponseCompletionAnnouncem
       });
     }, COMPLETION_ANNOUNCEMENT_DELAY_MS);
     return () => window.clearTimeout(timeout);
-  }, [streamingAssistantMessageId]);
+  }, [busy, streamingAssistantMessageId]);
 
   useEffect(() => {
     if (!announcement) return;
@@ -573,6 +578,7 @@ function TranscriptScroller(props: {
 }
 
 export const ChatFeed = memo(function ChatFeed(props: {
+  busy: boolean;
   transcriptOnly: boolean;
   disconnected: boolean;
   visibleFeedLength: number;
@@ -602,6 +608,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   onShowAllOlderFeed?: () => void;
 }) {
   const {
+    busy,
     transcriptOnly,
     disconnected,
     visibleFeedLength,
@@ -658,7 +665,10 @@ export const ChatFeed = memo(function ChatFeed(props: {
 
   return (
     <MessageScrollerProvider key={threadId} autoScroll={false} defaultScrollPosition="start">
-      <ResponseCompletionAnnouncement streamingAssistantMessageId={streamingAssistantMessageId} />
+      <ResponseCompletionAnnouncement
+        busy={busy}
+        streamingAssistantMessageId={streamingAssistantMessageId}
+      />
       <TranscriptScroller
         bottomOffset={bottomOffset}
         hydrating={hydrating}

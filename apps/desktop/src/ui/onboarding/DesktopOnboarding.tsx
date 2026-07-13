@@ -1034,37 +1034,37 @@ export function DesktopOnboarding() {
   const workspaces = useAppStore((s) => s.workspaces);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
-  const [dismissPending, setDismissPending] = useState(false);
   const dismissPendingRef = useRef(false);
 
   const requestDismiss = useCallback(async () => {
     if (dismissPendingRef.current) return;
     dismissPendingRef.current = true;
-    setDismissPending(true);
-    const hasConnectedProvider =
-      providerConnected.length > 0 ||
-      Object.values(providerStatusByName).some(
-        (status) => status?.authorized === true || status?.verified === true,
-      );
-    const incompleteSetup = workspaces.length === 0 || !hasConnectedProvider;
-    if (incompleteSetup) {
-      const confirmed = await confirmAction({
-        title: "Skip setup?",
-        message: "You have not finished connecting a provider or adding a workspace yet.",
-        detail:
-          "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
-        confirmLabel: "Skip for now",
-        cancelLabel: "Continue setup",
-        kind: "warning",
-        defaultAction: "cancel",
-      });
-      if (!confirmed) {
-        dismissPendingRef.current = false;
-        setDismissPending(false);
-        return;
+    try {
+      const hasConnectedProvider =
+        providerConnected.length > 0 ||
+        Object.values(providerStatusByName).some(
+          (status) => status?.authorized === true || status?.verified === true,
+        );
+      const incompleteSetup = workspaces.length === 0 || !hasConnectedProvider;
+      if (incompleteSetup) {
+        const confirmed = await confirmAction({
+          title: "Skip setup?",
+          message: "You have not finished connecting a provider or adding a workspace yet.",
+          detail:
+            "You can reopen setup later from Settings, but Cowork may feel incomplete until then.",
+          confirmLabel: "Skip for now",
+          cancelLabel: "Continue setup",
+          kind: "warning",
+          defaultAction: "cancel",
+        });
+        if (!confirmed) return;
       }
+      dismiss();
+    } catch {
+      // Keep onboarding open when the native confirmation cannot be shown.
+    } finally {
+      dismissPendingRef.current = false;
     }
-    dismiss();
   }, [dismiss, providerConnected.length, providerStatusByName, workspaces.length]);
   const complete = useAppStore((s) => s.completeOnboarding);
   const newThread = useAppStore((s) => s.newThread);
@@ -1073,7 +1073,6 @@ export function DesktopOnboarding() {
   useEffect(() => {
     if (visible) return;
     dismissPendingRef.current = false;
-    setDismissPending(false);
   }, [visible]);
 
   const goTo = useCallback((next: OnboardingStep) => setStep(next), [setStep]);
@@ -1110,7 +1109,7 @@ export function DesktopOnboarding() {
 
   return (
     <Dialog
-      open={!dismissPending}
+      open
       onOpenChange={(open) => {
         if (!open) void requestDismiss();
       }}

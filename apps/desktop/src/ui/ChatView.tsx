@@ -332,7 +332,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const ingestAttachmentFiles = useCallback(
     async (selectedFiles: File[]) => {
-      if (selectedFiles.length === 0) return;
+      if (selectedFiles.length === 0) return false;
 
       const validationMessage = getComposerDraftAttachmentValidationMessage(
         useAppStore.getState().composerDraftsByKey,
@@ -341,14 +341,16 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       );
       if (validationMessage) {
         setAttachmentPickerError(validationMessage);
-        return;
+        return false;
       }
 
       setAttachmentPickerError(null);
       try {
         await addComposerAttachments(selectedFiles);
+        return true;
       } catch (error) {
         setAttachmentPickerError(error instanceof Error ? error.message : String(error));
+        return false;
       }
     },
     [addComposerAttachments, composerDraftKey, setAttachmentPickerError],
@@ -827,6 +829,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
         <ChatFeed
+          busy={busy}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
           visibleFeedLength={visibleFeed.length}

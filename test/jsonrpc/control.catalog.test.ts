@@ -10,6 +10,9 @@ import { WorkspaceBackupService } from "../../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness";
 import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 
+const failRemoteMarketplaceFetch: typeof fetch = () =>
+  Promise.reject(new Error("Remote marketplace fetch disabled in JSON-RPC catalog tests."));
+
 describe("server JSON-RPC control methods", () => {
   test("memory list returns a session-event memory_list event payload", async () => {
     const tmpDir = await makeTmpProject();
@@ -127,6 +130,8 @@ describe("server JSON-RPC control methods", () => {
   test("skills catalog read returns a session-event skills_catalog event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = failRemoteMarketplaceFetch;
 
     try {
       const rpc = await connectJsonRpc(url);
@@ -136,8 +141,10 @@ describe("server JSON-RPC control methods", () => {
 
       expect(response.result.event.type).toBe("skills_catalog");
       expect(Array.isArray(response.result.event.catalog.installations)).toBe(true);
+      expect(response.result.event.availableSkillsPartial).toBe(true);
       rpc.close();
     } finally {
+      globalThis.fetch = originalFetch;
       await stopTestServer(server);
     }
   });

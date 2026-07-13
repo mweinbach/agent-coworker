@@ -34,6 +34,11 @@ type MessageComposerFileDropOptions = {
   disabled?: boolean;
 };
 
+type FileDropAnnouncement = {
+  kind: "error" | "status";
+  message: string;
+};
+
 export type MessageComposerAttachmentItem = {
   filename: string;
   mimeType: string;
@@ -51,6 +56,7 @@ export function MessageComposerRoot({
   ...props
 }: MessageComposerRootProps) {
   const [dragActive, setDragActive] = useState(false);
+  const [dropAnnouncement, setDropAnnouncement] = useState<FileDropAnnouncement | null>(null);
   const dropEnabled = Boolean(fileDrop) && !fileDrop?.disabled;
 
   const onDragEnter = useCallback(
@@ -62,6 +68,10 @@ export function MessageComposerRoot({
       const related = event.relatedTarget as Node | null;
       if (related && event.currentTarget.contains(related)) return;
       setDragActive(true);
+      setDropAnnouncement({
+        kind: "status",
+        message: "File drop ready. Drop files to attach them.",
+      });
     },
     [dropEnabled, fileDrop],
   );
@@ -97,7 +107,27 @@ export function MessageComposerRoot({
       setDragActive(false);
       const list = event.dataTransfer.files;
       if (!list || list.length === 0) return;
-      void Promise.resolve(fileDrop.onFiles(Array.from(list)));
+      const files = Array.from(list);
+      const fileLabel = files.length === 1 ? "file" : "files";
+      setDropAnnouncement({
+        kind: "status",
+        message: `Adding ${files.length} ${fileLabel}.`,
+      });
+      void Promise.resolve()
+        .then(() => fileDrop.onFiles(files))
+        .then(() => {
+          setDropAnnouncement({
+            kind: "status",
+            message: `${files.length} ${fileLabel} attached.`,
+          });
+        })
+        .catch((error: unknown) => {
+          const detail = error instanceof Error ? ` ${error.message}` : "";
+          setDropAnnouncement({
+            kind: "error",
+            message: `Could not attach ${files.length} ${fileLabel}.${detail}`,
+          });
+        });
     },
     [dropEnabled, fileDrop],
   );
@@ -113,13 +143,21 @@ export function MessageComposerRoot({
       onDragOver={onDragOver}
       onDrop={onDrop}
       className={cn(
-        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0 transition-shadow focus-within:shadow-[var(--shadow-overlay)]",
+        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0 transition-[box-shadow,border-color] focus-within:border-ring/70 focus-within:shadow-[var(--focus-ring-shadow)]",
         dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
       )}
     >
       {/* Fieldsets use an internal formatting box; a real flex wrapper pins the footer to the bottom. */}
       <div className="flex min-h-0 w-full flex-1 flex-col px-3 py-2.5">{children}</div>
+      <span
+        className="sr-only"
+        role={dropAnnouncement?.kind === "error" ? "alert" : "status"}
+        aria-live={dropAnnouncement?.kind === "error" ? "assertive" : "polite"}
+        aria-atomic="true"
+      >
+        {dropAnnouncement?.message}
+      </span>
     </fieldset>
   );
 }

@@ -1,6 +1,6 @@
 import { CopyIcon, PencilIcon, PlusIcon, RefreshCcwIcon, Trash2Icon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import type {
   AgentProfileCatalogEntry,
@@ -22,7 +22,7 @@ import {
   type WorkspaceRuntime,
 } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Dialog,
@@ -719,21 +719,24 @@ function WorkspaceTargetPicker({
   onValueChange: (workspaceId: string) => void;
   disabled?: boolean;
 }) {
+  const workspaceSelectId = useId();
   const selectedWorkspace = workspaces.find((entry) => entry.id === value) ?? workspaces[0] ?? null;
   if (!selectedWorkspace) return null;
 
   return (
     <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
       <div className="flex min-w-0 flex-col gap-1">
-        <Label className="text-xs text-muted-foreground">Profile workspace</Label>
+        <div className="text-xs text-muted-foreground">Profile workspace</div>
         <div className="truncate text-sm font-medium">{formatWorkspaceName(selectedWorkspace)}</div>
         <div className="truncate text-xs text-muted-foreground">{selectedWorkspace.path}</div>
       </div>
       {workspaces.length > 1 ? (
         <div className="flex flex-col gap-1 sm:items-end">
-          <Label className="text-xs text-muted-foreground">Workspace</Label>
+          <Label htmlFor={workspaceSelectId} className="text-xs text-muted-foreground">
+            Workspace
+          </Label>
           <Select value={selectedWorkspace.id} disabled={disabled} onValueChange={onValueChange}>
-            <SelectTrigger className="w-full sm:w-[220px]">
+            <SelectTrigger id={workspaceSelectId} className="w-full sm:w-[220px]">
               <SelectValue placeholder="Change workspace" />
             </SelectTrigger>
             <SelectContent>
@@ -785,27 +788,25 @@ function ProfileRow({
         <div className="line-clamp-1 text-xs text-muted-foreground">{description}</div>
       </div>
       <div className="flex shrink-0 items-center justify-end gap-1">
-        <Button variant="ghost" size="icon" aria-label="Edit profile" onClick={onEdit}>
+        <AccessibleIconButton variant="ghost" label="Edit profile" onClick={onEdit}>
           <PencilIcon />
-        </Button>
-        <Button
+        </AccessibleIconButton>
+        <AccessibleIconButton
           variant="ghost"
-          size="icon"
-          aria-label="Copy profile"
+          label="Copy profile"
           disabled={copyPending}
           onClick={onCopy}
         >
           <CopyIcon />
-        </Button>
-        <Button
+        </AccessibleIconButton>
+        <AccessibleIconButton
           variant="ghost"
-          size="icon"
-          aria-label="Delete profile"
+          label="Delete profile"
           disabled={(entry.builtIn && !entry.path) || deletePending}
           onClick={onDelete}
         >
           <Trash2Icon />
-        </Button>
+        </AccessibleIconButton>
       </div>
     </div>
   );
@@ -877,6 +878,7 @@ export function ProfileDialog({
   onSave: () => void;
   operation?: OperationState;
 }) {
+  const fieldIdPrefix = useId();
   const tools = ALL_BUILT_IN_TOOLS;
   const { groups: modelGroups, customOptions } = useMemo(
     () => buildProfileModelGroups(providerCatalog, draft?.model, modelVisibility),
@@ -890,6 +892,17 @@ export function ProfileDialog({
   const generatedProfileRef = draft?.id.trim()
     ? `${draft.scope}:${draft.id.trim()}`
     : "generated from name";
+  const fieldIds = {
+    description: `${fieldIdPrefix}-description`,
+    enabled: `${fieldIdPrefix}-enabled`,
+    model: `${fieldIdPrefix}-model`,
+    name: `${fieldIdPrefix}-name`,
+    prompt: `${fieldIdPrefix}-prompt`,
+    promptDescription: `${fieldIdPrefix}-prompt-description`,
+    reasoning: `${fieldIdPrefix}-reasoning`,
+    scope: `${fieldIdPrefix}-scope`,
+    template: `${fieldIdPrefix}-template`,
+  };
 
   return (
     <Dialog
@@ -910,7 +923,7 @@ export function ProfileDialog({
           <fieldset disabled={saving} className="flex flex-col gap-5 py-2">
             <div className="flex flex-col gap-2">
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Scope">
+                <ProfileField label="Scope" htmlFor={fieldIds.scope}>
                   <Select
                     value={draft.scope}
                     disabled={editingExisting}
@@ -918,7 +931,7 @@ export function ProfileDialog({
                       setDraft({ ...draft, scope: value as AgentProfileScope })
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id={fieldIds.scope}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -928,8 +941,8 @@ export function ProfileDialog({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                </Field>
-                <Field label="Template">
+                </ProfileField>
+                <ProfileField label="Template" htmlFor={fieldIds.template}>
                   <Select
                     value={draft.baseRole}
                     onValueChange={(value) => {
@@ -951,7 +964,7 @@ export function ProfileDialog({
                       });
                     }}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id={fieldIds.template}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -964,16 +977,17 @@ export function ProfileDialog({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                </Field>
-                <Field label="Enabled">
+                </ProfileField>
+                <ProfileField label="Enabled" htmlFor={fieldIds.enabled}>
                   <div className="flex h-9 items-center">
                     <Switch
+                      id={fieldIds.enabled}
                       checked={draft.locked ? true : draft.enabled}
                       disabled={disableEnabledSwitch}
                       onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
                     />
                   </div>
-                </Field>
+                </ProfileField>
               </div>
 
               <p className="text-xs text-muted-foreground">{ONE_OFF_CHAT_GLOBAL_PROFILE_NOTE}</p>
@@ -989,8 +1003,9 @@ export function ProfileDialog({
             ) : null}
 
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
-              <Field label="Name">
+              <ProfileField label="Name" htmlFor={fieldIds.name}>
                 <Input
+                  id={fieldIds.name}
                   value={draft.displayName}
                   onChange={(event) => {
                     const displayName = event.target.value;
@@ -1001,36 +1016,39 @@ export function ProfileDialog({
                     });
                   }}
                 />
-              </Field>
-              <Field label="Subagent id">
+              </ProfileField>
+              <ProfileField label="Subagent id">
                 <div className="flex min-h-9 items-center rounded-md border border-border/60 bg-muted/30 px-3 text-sm text-muted-foreground">
                   <code className="truncate text-xs">{generatedProfileRef}</code>
                 </div>
-              </Field>
+              </ProfileField>
             </div>
 
-            <Field label="Description">
+            <ProfileField label="Description" htmlFor={fieldIds.description}>
               <Input
+                id={fieldIds.description}
                 value={draft.description}
                 onChange={(event) => setDraft({ ...draft, description: event.target.value })}
               />
-            </Field>
+            </ProfileField>
 
-            <Field label="Prompt">
+            <ProfileField label="Prompt" htmlFor={fieldIds.prompt}>
               <Textarea
+                id={fieldIds.prompt}
+                aria-describedby={fieldIds.promptDescription}
                 value={draft.prompt}
                 className="min-h-32"
                 placeholder="Add or edit this subagent prompt."
                 onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
               />
-              <p className="text-xs text-muted-foreground">
+              <p id={fieldIds.promptDescription} className="text-xs text-muted-foreground">
                 Default role prompt is editable. Saved changes replace it while the shared subagent
                 contract still applies.
               </p>
-            </Field>
+            </ProfileField>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Model target">
+              <ProfileField label="Model target" htmlFor={fieldIds.model}>
                 <Select
                   value={draft.model?.trim() || INHERIT_MODEL_VALUE}
                   onValueChange={(value) => {
@@ -1044,7 +1062,7 @@ export function ProfileDialog({
                     });
                   }}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id={fieldIds.model} className="w-full">
                     <SelectValue placeholder="Inherit parent model" />
                   </SelectTrigger>
                   <SelectContent className="max-h-72">
@@ -1073,9 +1091,9 @@ export function ProfileDialog({
                     ))}
                   </SelectContent>
                 </Select>
-              </Field>
+              </ProfileField>
               {modelSupportsReasoning ? (
-                <Field label="Reasoning">
+                <ProfileField label="Reasoning" htmlFor={fieldIds.reasoning}>
                   <Select
                     value={draft.reasoningEffort ?? "inherit"}
                     onValueChange={(value) =>
@@ -1088,7 +1106,7 @@ export function ProfileDialog({
                       })
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id={fieldIds.reasoning}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1102,7 +1120,7 @@ export function ProfileDialog({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                </Field>
+                </ProfileField>
               ) : null}
             </div>
 
@@ -1158,10 +1176,24 @@ export function ProfileDialog({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function ProfileField({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      {htmlFor ? (
+        <Label htmlFor={htmlFor} className="text-xs text-muted-foreground">
+          {label}
+        </Label>
+      ) : (
+        <div className="text-xs text-muted-foreground">{label}</div>
+      )}
       {children}
     </div>
   );
@@ -1181,13 +1213,13 @@ function Checklist({
   onChange: (item: string, checked: boolean) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <Label className="text-xs text-muted-foreground">{title}</Label>
+    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+      <legend className="flex items-center gap-2 p-0">
+        <span className="text-xs text-muted-foreground">{title}</span>
         <Badge variant="outline" className="rounded-md text-[11px]">
           {selected.length}
         </Badge>
-      </div>
+      </legend>
       {values.length === 0 ? (
         <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
           {emptyLabel}
@@ -1216,6 +1248,6 @@ function Checklist({
           })}
         </div>
       )}
-    </div>
+    </fieldset>
   );
 }

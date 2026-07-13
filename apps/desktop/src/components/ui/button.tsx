@@ -59,4 +59,27 @@ function Button({
   );
 }
 
-export { Button, buttonVariants };
+type AccessibleIconButtonProps = Omit<
+  React.ComponentProps<typeof Button>,
+  "aria-label" | "children" | "size"
+> & {
+  children: React.ReactNode;
+  label: string;
+  size?: "icon" | "icon-xs" | "icon-sm" | "icon-lg";
+};
+
+function AccessibleIconButton({
+  children,
+  label,
+  size = "icon",
+  title,
+  ...props
+}: AccessibleIconButtonProps) {
+  return (
+    <Button aria-label={label} size={size} title={title ?? label} {...props}>
+      {children}
+    </Button>
+  );
+}
+
+export { AccessibleIconButton, Button, buttonVariants };

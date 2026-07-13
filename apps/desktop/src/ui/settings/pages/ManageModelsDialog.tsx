@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
+import { isImeComposing } from "../../../lib/keyboard";
 import {
   customModelPlaceholderForProvider,
   isCatalogModelEnabled,
@@ -290,7 +291,13 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
               value={customDraft}
               onChange={(event) => setCustomDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && customDraft.trim()) void submitCustomModel();
+                if (
+                  event.key === "Enter" &&
+                  !isImeComposing(event.nativeEvent) &&
+                  customDraft.trim()
+                ) {
+                  void submitCustomModel();
+                }
               }}
               disabled={addPending}
               aria-label={`${providerLabel} custom model ID`}

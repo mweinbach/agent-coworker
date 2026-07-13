@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createPortal } from "react-dom";
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
+import { AccessibleIconButton, Button } from "../components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +38,7 @@ import { runCanvasSaveAs } from "../lib/canvasSaveAs";
 import { confirmAction, openPath, pickCanvasSavePath, revealPath } from "../lib/desktopCommands";
 import { getDesktopPlatformInfo } from "../lib/desktopPlatform";
 import { getFilePreviewKind, isSlideModule } from "../lib/filePreviewKind";
+import { isEnterWithoutIme, isImeComposing } from "../lib/keyboard";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
 import { getDesktopWindowMode } from "../lib/windowMode";
@@ -74,6 +75,9 @@ function CanvasSaveBadge({ status }: CanvasSaveBadgeProps) {
   return (
     <Badge
       data-slot="canvas-save-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
       variant={status === "error" || status === "conflict" ? "destructive" : "outline"}
       className="text-[10px] uppercase tracking-wide"
     >
@@ -664,7 +668,7 @@ export function Canvas({ path }: { path: string }) {
               <>
                 <FileTextIcon className="size-3.5 text-muted-foreground shrink-0" />
                 <div className="flex min-w-0 items-center gap-1">
-                  <span className="text-xs font-semibold text-muted-foreground/80 shrink-0 select-none">
+                  <span className="shrink-0 select-none text-xs font-semibold text-muted-foreground">
                     {projectTitle}
                   </span>
                   <span className="text-[10px] text-muted-foreground/40 select-none">/</span>
@@ -677,15 +681,15 @@ export function Canvas({ path }: { path: string }) {
             trailing={
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button
+                  <AccessibleIconButton
                     type="button"
                     variant="ghost"
                     size="icon"
                     className="size-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg outline-none focus:outline-none"
-                    title="View options"
+                    label="View options"
                   >
                     <MoreVerticalIcon className="size-4" />
-                  </Button>
+                  </AccessibleIconButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44 outline-none">
                   {(isMarkdown || isSlide) && (
@@ -731,28 +735,28 @@ export function Canvas({ path }: { path: string }) {
 
         {showFormattingBar && isMarkdown && activeTab === "edit" && (
           <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
-            <Button
+            <AccessibleIconButton
               type="button"
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("bold")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
-              title="Bold"
+              label="Bold"
             >
               <BoldIcon className="size-3.5" />
-            </Button>
-            <Button
+            </AccessibleIconButton>
+            <AccessibleIconButton
               type="button"
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("italic")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
-              title="Italic"
+              label="Italic"
             >
               <ItalicIcon className="size-3.5" />
-            </Button>
+            </AccessibleIconButton>
             <div className="h-4 w-px bg-border/50 mx-1" aria-hidden />
             <Button
               type="button"
@@ -795,39 +799,46 @@ export function Canvas({ path }: { path: string }) {
               Normal
             </Button>
             <div className="h-4 w-px bg-border/50 mx-1" aria-hidden />
-            <Button
+            <AccessibleIconButton
               type="button"
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("ul")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
-              title="Bullet List"
+              label="Bullet list"
             >
               <ListIcon className="size-3.5" />
-            </Button>
-            <Button
+            </AccessibleIconButton>
+            <AccessibleIconButton
               type="button"
               variant="ghost"
               size="icon"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("ol")}
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
-              title="Numbered List"
+              label="Numbered list"
             >
               <span className="font-semibold text-[10px] font-mono">1.</span>
-            </Button>
+            </AccessibleIconButton>
           </div>
         )}
 
         <div className="min-h-0 flex-1 relative">
           {loading ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas text-sm text-muted-foreground">
+            <div
+              role="status"
+              aria-live="polite"
+              className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas text-sm text-muted-foreground"
+            >
               <Loader2Icon className="size-6 animate-spin text-primary" />
               <span>Reading file...</span>
             </div>
           ) : error ? (
-            <div className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground">
+            <div
+              role="alert"
+              className="mx-4 my-3 flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-foreground"
+            >
               <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold">Failed to load content</div>
@@ -1016,7 +1027,7 @@ export function Canvas({ path }: { path: string }) {
           pxClass,
         )}
       >
-        <div className="relative flex items-center bg-background border border-border/65 rounded-xl shadow-sm hover:border-border/80 transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/30">
+        <div className="relative flex items-center rounded-xl border border-border/65 bg-background shadow-sm transition hover:border-border/80 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/70 focus-within:ring-offset-2 focus-within:ring-offset-background">
           {promptError ? (
             <div
               role="alert"
@@ -1035,11 +1046,12 @@ export function Canvas({ path }: { path: string }) {
             onFocus={applyTempHighlight}
             onBlur={removeTempHighlight}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (isEnterWithoutIme(e) && !e.shiftKey) {
                 e.preventDefault();
                 void handleSendPrompt();
               }
             }}
+            aria-label="Canvas prompt"
             placeholder="Ask model to edit this document..."
             className="flex-1 border-none shadow-none h-11 focus-visible:ring-0 pr-12 text-sm pl-4.5 bg-transparent"
           />
@@ -1086,6 +1098,8 @@ export function Canvas({ path }: { path: string }) {
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] font-bold"
                   onClick={() => applyFormat("bold")}
+                  aria-label="Bold"
+                  title="Bold"
                 >
                   <BoldIcon className="size-3" />
                 </Button>
@@ -1096,6 +1110,8 @@ export function Canvas({ path }: { path: string }) {
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px] italic"
                   onClick={() => applyFormat("italic")}
+                  aria-label="Italic"
+                  title="Italic"
                 >
                   <ItalicIcon className="size-3" />
                 </Button>
@@ -1127,6 +1143,8 @@ export function Canvas({ path }: { path: string }) {
                   onPointerDown={(e) => e.preventDefault()}
                   className="h-6 px-1.5 text-[10px]"
                   onClick={() => applyFormat("ul")}
+                  aria-label="Bullet list"
+                  title="Bullet list"
                 >
                   <ListIcon className="size-3" />
                 </Button>
@@ -1136,7 +1154,7 @@ export function Canvas({ path }: { path: string }) {
               </div>
             )}
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 rounded-lg focus-within:ring-2 focus-within:ring-ring/70">
               <Input
                 value={floatingPromptText}
                 onChange={(e) => setFloatingPromptText(e.target.value)}
@@ -1150,14 +1168,15 @@ export function Canvas({ path }: { path: string }) {
                   e.stopPropagation();
                 }}
                 onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing) return;
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (isImeComposing(e.nativeEvent)) return;
+                  if (isEnterWithoutIme(e) && !e.shiftKey) {
                     e.preventDefault();
                     void handleSendPrompt(floatingPromptText);
                   } else if (e.key === "Escape") {
                     selectionEditorOwner?.handleEscape(e);
                   }
                 }}
+                aria-label="Edit selected text prompt"
                 placeholder="How should the model edit this selection?"
                 className="flex-1 border-none shadow-none h-8 text-xs px-2 focus-visible:ring-0 bg-transparent"
               />

@@ -29,6 +29,7 @@ import { useAppStore } from "../app/store";
 import { workspaceSupportsToolRetryLineage } from "../app/store.helpers/jsonRpcSocket";
 import { Button } from "../components/ui/button";
 import { buildComposerAttachmentSignature } from "../lib/composerAttachments";
+import { isImeComposing, isPlainEnterWithoutIme } from "../lib/keyboard";
 import { modelDisplayNamesFromCatalog, reasoningConfigFromCatalog } from "../lib/modelChoices";
 import { useFileChangeRevisionSignature } from "../lib/useFileChangeRevision";
 import type { ProviderName } from "../lib/wsProtocol";
@@ -682,20 +683,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      const isComposing =
-        event.nativeEvent.isComposing ||
-        // keyCode 229 is the classic IME composition signal (some browsers still rely on it).
-        event.nativeEvent.keyCode === 229;
+      const isComposing = isImeComposing(event.nativeEvent);
 
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey
-      ) {
-        if (isComposing) return;
-
+      if (isPlainEnterWithoutIme(event)) {
         const busy = rt?.busy === true;
         const hasPendingInput = Boolean(composerText.trim() || pendingAttachments.length > 0);
         const submitState = getComposerSubmitState({

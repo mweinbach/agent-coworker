@@ -175,7 +175,7 @@ function ResearchListItem({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
           {isChild ? (
-            <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+            <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Follow-up
             </span>
           ) : null}

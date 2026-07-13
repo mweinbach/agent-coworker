@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { isImeComposing } from "@/lib/keyboard";
 import { cn } from "@/lib/utils";
 import { MessageComposerTextarea } from "@/ui/composer/MessageComposer";
 import { useOverlayOwner } from "@/ui/OverlayStack";
@@ -247,7 +248,7 @@ export function ComposerMentionInput(props: {
 
   const handleKeyDownCapture = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+      const isComposing = isImeComposing(event.nativeEvent);
       if (event.key !== "Escape") suppressCaretRefreshRef.current = false;
       if (menuOpen && event.key === "Escape" && !isComposing) {
         dismissMenuFromEscape(event);
@@ -258,7 +259,7 @@ export function ComposerMentionInput(props: {
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+      const isComposing = isImeComposing(event.nativeEvent);
       if (isComposing) {
         onKeyDown(event);
         return;

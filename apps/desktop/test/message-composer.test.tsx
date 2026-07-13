@@ -158,21 +158,68 @@ describe("message composer", () => {
         composer.dispatchEvent(dragEnter);
       });
       expect(composer.hasAttribute("data-file-drag-active")).toBe(true);
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("File drop ready");
 
       const drop = new harness.dom.window.Event("drop", { bubbles: true });
       Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
       await act(async () => {
         composer.dispatchEvent(drop);
         await Promise.resolve();
+        await Promise.resolve();
       });
 
       expect(onFiles).toHaveBeenCalledTimes(1);
       expect(onFiles.mock.calls[0]?.[0]?.[0]?.name).toBe("notes.txt");
       expect(composer.hasAttribute("data-file-drag-active")).toBe(false);
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("1 file attached");
 
       await act(async () => {
         root.unmount();
       });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("announces file-drop failures as actionable alerts", async () => {
+    const harness = setupJsdom();
+    const onFiles = mock(async (_files: File[]) => {
+      throw new Error("Unsupported file");
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(
+          createElement(
+            MessageComposerRoot,
+            { fileDrop: { onFiles } },
+            createElement(MessageComposerTextarea, { "aria-label": "Draft" }),
+          ),
+        );
+      });
+
+      const composer = container.querySelector(
+        '[data-slot="message-composer"]',
+      ) as HTMLFieldSetElement | null;
+      if (!composer) throw new Error("missing composer");
+      const file = new harness.dom.window.File(["bad"], "bad.bin");
+      const drop = new harness.dom.window.Event("drop", { bubbles: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { files: [file], types: ["Files"], dropEffect: "none" },
+      });
+      await act(async () => {
+        composer.dispatchEvent(drop);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Could not attach 1 file. Unsupported file",
+      );
+      await act(async () => root.unmount());
     } finally {
       harness.restore();
     }

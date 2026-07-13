@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isImeComposing } from "../lib/keyboard";
 import {
   browserAccessHeaders,
   configureWebAdapter,
@@ -187,7 +188,7 @@ export function ConnectPage({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !busy && serverUrl) {
+    if (e.key === "Enter" && !isImeComposing(e.nativeEvent) && !busy && serverUrl) {
       handleConnect();
     }
   };

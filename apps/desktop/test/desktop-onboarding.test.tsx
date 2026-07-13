@@ -107,15 +107,17 @@ describe("desktop onboarding", () => {
         root?.render(createElement(DesktopOnboarding));
       });
 
-      const openAiButton = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("OpenAI"),
+      const openAiButton = [...harness.dom.window.document.body.querySelectorAll("button")].find(
+        (button) => button.textContent?.includes("OpenAI"),
       );
       if (!openAiButton) throw new Error("missing OpenAI provider button");
       await act(async () => {
         openAiButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      const input = container.querySelector('input[aria-label="OpenAI API key"]');
+      const input = harness.dom.window.document.body.querySelector(
+        'input[aria-label="OpenAI API key"]',
+      );
       if (!(input instanceof harness.dom.window.HTMLInputElement)) {
         throw new Error("missing OpenAI API key input");
       }
@@ -132,8 +134,10 @@ describe("desktop onboarding", () => {
         input.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
       });
 
-      expect(container.querySelector('[aria-label="Onboarding"]')).not.toBeNull();
-      expect(container.textContent).not.toContain("Something went wrong.");
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).not.toBeNull();
+      expect(harness.dom.window.document.body.textContent).not.toContain("Something went wrong.");
     } finally {
       if (root) {
         await act(async () => {
@@ -175,8 +179,8 @@ describe("desktop onboarding", () => {
         root?.render(createElement(DesktopOnboarding));
       });
 
-      const blankButton = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Start blank thread"),
+      const blankButton = [...harness.dom.window.document.body.querySelectorAll("button")].find(
+        (button) => button.textContent?.includes("Start blank thread"),
       );
       if (!blankButton) throw new Error("missing start blank thread button");
 
@@ -184,8 +188,10 @@ describe("desktop onboarding", () => {
         blankButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("Couldn't create the thread");
-      expect(container.querySelector('[aria-label="Onboarding"]')).not.toBeNull();
+      expect(harness.dom.window.document.body.textContent).toContain("Couldn't create the thread");
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {

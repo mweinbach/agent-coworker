@@ -3,7 +3,11 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import {
+import { OverlayStackProvider } from "../src/ui/OverlayStack";
+import { setupJsdom } from "./jsdomHarness";
+
+const moduleImportHarness = setupJsdom();
+const {
   DesktopMarkdown,
   decodeDesktopExternalHref,
   decodeDesktopLocalFileHref,
@@ -13,8 +17,8 @@ import {
   remarkRewriteDesktopFileLinks,
   rewriteBareDesktopFilePathsInTree,
   rewriteDesktopFileLinksInTree,
-} from "../src/ui/markdown";
-import { setupJsdom } from "./jsdomHarness";
+} = await import("../src/ui/markdown");
+moduleImportHarness.restore();
 
 describe("desktop message local file links", () => {
   test("converts file URLs into desktop paths", () => {
@@ -431,7 +435,7 @@ describe("desktop message local file links", () => {
   });
 
   test("citation chips open a source popup and navigate grouped sources with arrows", async () => {
-    const harness = setupJsdom();
+    const harness = setupJsdom({ includeAnimationFrame: true });
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -446,41 +450,45 @@ describe("desktop message local file links", () => {
       await act(async () => {
         root.render(
           createElement(
-            DesktopMarkdown,
-            {
-              normalizeDisplayCitations: true,
-              citationSources: [
-                { title: "Collision Report", url: "https://example.com/collision" },
-                { title: "Safety Memo", url: "https://example.com/killed" },
-                { title: "Hospital Update", url: "https://example.com/injuries" },
-              ],
-              citationAnnotations: [
-                {
-                  type: "url_citation",
-                  start_index: 0,
-                  end_index: text.indexOf("truck.") + "truck.".length - 1,
-                  url: "https://example.com/collision",
-                },
-                {
-                  type: "url_citation",
-                  start_index: 0,
-                  end_index: text.indexOf("killed.") + "killed.".length - 1,
-                  url: "https://example.com/killed",
-                },
-                {
-                  type: "url_citation",
-                  start_index: 0,
-                  end_index: text.indexOf("Most") + 2,
-                  url: "https://example.com/injuries",
-                },
-              ],
-              citationUrlsByIndex: new Map([
-                [1, "https://example.com/collision"],
-                [2, "https://example.com/killed"],
-                [3, "https://example.com/injuries"],
-              ]),
-            },
-            text,
+            OverlayStackProvider,
+            null,
+            createElement(
+              DesktopMarkdown,
+              {
+                normalizeDisplayCitations: true,
+                citationSources: [
+                  { title: "Collision Report", url: "https://example.com/collision" },
+                  { title: "Safety Memo", url: "https://example.com/killed" },
+                  { title: "Hospital Update", url: "https://example.com/injuries" },
+                ],
+                citationAnnotations: [
+                  {
+                    type: "url_citation",
+                    start_index: 0,
+                    end_index: text.indexOf("truck.") + "truck.".length - 1,
+                    url: "https://example.com/collision",
+                  },
+                  {
+                    type: "url_citation",
+                    start_index: 0,
+                    end_index: text.indexOf("killed.") + "killed.".length - 1,
+                    url: "https://example.com/killed",
+                  },
+                  {
+                    type: "url_citation",
+                    start_index: 0,
+                    end_index: text.indexOf("Most") + 2,
+                    url: "https://example.com/injuries",
+                  },
+                ],
+                citationUrlsByIndex: new Map([
+                  [1, "https://example.com/collision"],
+                  [2, "https://example.com/killed"],
+                  [3, "https://example.com/injuries"],
+                ]),
+              },
+              text,
+            ),
           ),
         );
       });
@@ -491,19 +499,27 @@ describe("desktop message local file links", () => {
       if (!chipButton) {
         throw new Error("missing grouped citation chip button");
       }
+      expect(chipButton.getAttribute("data-slot")).toBe("popover-trigger");
 
       await act(async () => {
-        chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        chipButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
       });
 
+      expect(chipButton.getAttribute("aria-expanded")).toBe("true");
       expect(harness.dom.window.document.body.textContent).toContain("1/2");
       expect(harness.dom.window.document.body.textContent).toContain("Safety Memo");
 
       const popup = harness.dom.window.document.querySelector(
-        '[role="dialog"][aria-label="Citation sources"]',
+        '[data-slot="popover-content"][aria-label="Citation sources"]',
       );
-      expect(popup?.getAttribute("class")).toContain("fixed");
-      expect(popup?.getAttribute("class")).toContain("z-[70]");
       expect(popup?.getAttribute("class")).toContain("w-[min(23rem,calc(100vw-2rem))]");
       expect(popup?.textContent).toContain("Safety Memo");
       expect(popup?.textContent).toContain("https://example.com/killed");

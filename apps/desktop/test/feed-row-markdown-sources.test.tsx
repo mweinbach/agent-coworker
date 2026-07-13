@@ -7,6 +7,7 @@ import type { CitationSource } from "../../../src/shared/displayCitationMarkers"
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
 import { ChatViewContext } from "../src/ui/chat/ChatViewContext";
 import type { MentionCatalog } from "../src/ui/chat/composerMentions";
+import { OverlayStackProvider } from "../src/ui/OverlayStack";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -173,6 +174,84 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("Policy Filing");
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toContain(">Sources<");
+  });
+
+  test("returns focus to an inline citation trigger when its shared popover closes", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const text = "The filing confirms the new policy.";
+      await act(async () => {
+        root.render(
+          createElement(
+            OverlayStackProvider,
+            null,
+            renderFeedRow({
+              id: "assistant-inline-citation-focus",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-06-18T10:01:00.000Z",
+              text,
+              annotations: [
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: text.length,
+                  title: "Policy Filing",
+                  url: "https://example.com/research/filing",
+                },
+              ],
+            }),
+          ),
+        );
+      });
+
+      const trigger = container.querySelector<HTMLButtonElement>(
+        'button[data-slot="popover-trigger"]',
+      );
+      if (!trigger) throw new Error("missing citation trigger");
+      trigger.focus();
+      await act(async () => {
+        trigger.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+      });
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      const copyMessage = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Copy message"]',
+      );
+      if (!copyMessage) {
+        throw new Error("missing copy message button");
+      }
+      copyMessage.focus();
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+        await Promise.resolve();
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+      });
+
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(harness.dom.window.document.activeElement).toBe(trigger);
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
   });
 
   test("renders user turns as end-aligned tinted bubbles with shadcn attachments", () => {

@@ -407,7 +407,7 @@ test("covers tool failures and quick chat", async ({ quality }) => {
   await expect(quickComposer).toBeFocused();
   expect(quickWindow.isClosed()).toBe(false);
 
-  await quickWindow.keyboard.press("Escape");
+  await quickComposer.press("Escape");
   expect(quickWindow.isClosed()).toBe(false);
 
   const quickWindowClosed = quickWindow.waitForEvent("close");
@@ -444,7 +444,7 @@ test("exposes usable diagnostics from the root crash fallback", async ({ quality
 
 test("covers file preview, Canvas popout, and resizers with bounded filesystem work", async ({
   quality,
-}) => {
+}, testInfo) => {
   const { electronApp, page } = quality;
   await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
 
@@ -462,6 +462,7 @@ test("covers file preview, Canvas popout, and resizers with bounded filesystem w
 
   await page.evaluate(() => window.__coworkQualityGate?.showFilePreview());
   await expect(page.getByRole("button", { name: "Open canvas in window" })).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
 
   const canvasWindow = await quality.openWindow(async () => {
     await page.getByRole("button", { name: "Open canvas in window" }).click();
@@ -543,12 +544,15 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   await expect(rightResizer).toHaveAttribute("aria-valuenow", savedRightWidth ?? "300");
 });
 
-test("persists settings through the production desktop state bridge", async ({ quality }) => {
+test("persists settings through the production desktop state bridge", async ({
+  quality,
+}, testInfo) => {
   const { electronApp, page } = quality;
   await electronApp.evaluate(() => globalThis.__coworkQualityGateMain?.resetMetrics());
 
   await page.evaluate(() => window.__coworkQualityGate?.openSettings("developer"));
   await expect(page.getByRole("switch", { name: "Show hidden files" })).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
   await page.getByRole("switch", { name: "Show hidden files" }).click();
   await expect
     .poll(async () => (await quality.getMainMetrics()).stateSaves)
@@ -557,6 +561,13 @@ test("persists settings through the production desktop state bridge", async ({ q
   await page.waitForFunction(() => Boolean(window.__coworkQualityGate));
   await page.evaluate(() => window.__coworkQualityGate?.openSettings("developer"));
   await expect(page.getByRole("switch", { name: "Show hidden files" })).toBeChecked();
+});
+
+test("keeps New Chat free of serious accessibility violations", async ({ quality }, testInfo) => {
+  const { page } = quality;
+  await page.evaluate(async () => await window.__coworkQualityGate?.showNewChat());
+  await expect(page.getByRole("combobox", { name: "New chat message" })).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
 });
 
 test("covers active task cancellation and supported research fixture states", async ({
@@ -577,13 +588,16 @@ test("covers active task cancellation and supported research fixture states", as
 
   await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("empty"));
   await expect(page.getByText("Select a run or follow-up")).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
 
   await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("completed"));
   await expect(page.getByText("Use a real Electron renderer")).toBeVisible();
   await expect(page.getByRole("button", { name: "Ask a follow-up" })).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
 
   await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("follow-up"));
   await expect(page.getByText("Quality audit follow-up")).toBeVisible();
+  await assertNoSeriousAxeViolations(page, testInfo);
 });
 
 test("aborts an external renderer request in the main process", async ({ quality }) => {

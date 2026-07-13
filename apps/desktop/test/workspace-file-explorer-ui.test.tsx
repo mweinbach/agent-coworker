@@ -29,6 +29,17 @@ function makeFileEntry(name: string, modifiedAtMs: number, sizeBytes = 512) {
   };
 }
 
+function makeDirectoryEntry(name: string, modifiedAtMs: number) {
+  return {
+    name,
+    path: `${rootPath}/${name}`,
+    isDirectory: true,
+    isHidden: false,
+    sizeBytes: null,
+    modifiedAtMs,
+  };
+}
+
 let rootEntries = [makeFileEntry("README.md", 1700000000000)];
 let listDirectoryImpl = async ({ path }: { path: string }) => {
   if (path === rootPath) return rootEntries;
@@ -42,12 +53,14 @@ const isStaleDirectoryListingErrorMock = mock(() => false);
 const watchWorkspaceDirectoryMock = mock(async () => true);
 const unwatchWorkspaceDirectoryMock = mock(async () => {});
 const onWorkspaceFileChangedMock = mock(() => () => {});
+const showContextMenuMock = mock(async () => null);
 const explorerCommands: WorkspaceFileExplorerCommands = {
   clearDirectoryListingScope: clearDirectoryListingScopeMock,
   invalidateDirectoryListing: invalidateDirectoryListingMock,
   isStaleDirectoryListingError: isStaleDirectoryListingErrorMock,
   listDirectory: listDirectoryMock,
   onWorkspaceFileChanged: onWorkspaceFileChangedMock,
+  showContextMenu: showContextMenuMock,
   unwatchWorkspaceDirectory: unwatchWorkspaceDirectoryMock,
   watchWorkspaceDirectory: watchWorkspaceDirectoryMock,
 };
@@ -123,6 +136,7 @@ describe("workspace file explorer UI", () => {
     isStaleDirectoryListingErrorMock.mockClear();
     listDirectoryMock.mockClear();
     onWorkspaceFileChangedMock.mockClear();
+    showContextMenuMock.mockClear();
     unwatchWorkspaceDirectoryMock.mockClear();
     watchWorkspaceDirectoryMock.mockClear();
     resetAppStore();
@@ -191,6 +205,94 @@ describe("workspace file explorer UI", () => {
       expect(className).toContain("group-hover:opacity-100");
       expect(className).toContain("group-focus-within:opacity-100");
       expect(className).toContain("focus-visible:opacity-100");
+    } finally {
+      await unmountExplorer(root);
+      harness.restore();
+    }
+  });
+
+  test.serial("uses one tree tab stop and supports standard tree navigation", async () => {
+    const harness = setupJsdom({
+      includeAnimationFrame: true,
+      extraGlobals: { ResizeObserver: MockResizeObserver },
+    });
+    let root: Root | null = null;
+    rootEntries = [
+      makeDirectoryEntry("docs", 1700000000000),
+      makeFileEntry("README.md", 1700000001000),
+    ];
+    listDirectoryImpl = async ({ path }: { path: string }) => {
+      if (path === rootPath) return rootEntries;
+      if (path === `${rootPath}/docs`) {
+        return [
+          {
+            ...makeFileEntry("guide.md", 1700000002000),
+            path: `${rootPath}/docs/guide.md`,
+          },
+        ];
+      }
+      return [];
+    };
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root.render(
+          createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+        );
+        await flushUi();
+      });
+
+      const tree = container.querySelector('[role="tree"]');
+      if (!(tree instanceof harness.dom.window.HTMLElement)) throw new Error("missing tree");
+      const initialRows = [...tree.querySelectorAll<HTMLElement>('[role="treeitem"]')];
+      expect(initialRows).toHaveLength(2);
+      expect(initialRows.filter((row) => row.tabIndex === 0)).toHaveLength(1);
+      const docsRow = initialRows[0];
+      if (!docsRow) throw new Error("missing docs row");
+      await act(async () => {
+        docsRow.focus();
+      });
+
+      const press = async (key: string, options: KeyboardEventInit = {}) => {
+        await act(async () => {
+          harness.dom.window.document.activeElement?.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key,
+              ...options,
+            }),
+          );
+          await flushUi();
+        });
+      };
+
+      await press("ArrowRight");
+      expect(docsRow.getAttribute("aria-expanded")).toBe("true");
+      await press("ArrowRight");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("guide.md");
+      await press("ArrowDown");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("README.md");
+      await press("Home");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("docs");
+      await press("End");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("README.md");
+      await press("ArrowUp");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("guide.md");
+      await press("ArrowLeft");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("docs");
+      await press("r");
+      expect(harness.dom.window.document.activeElement?.textContent).toContain("README.md");
+      await press("F10", { shiftKey: true });
+      expect(showContextMenuMock).toHaveBeenCalledTimes(1);
+      expect(
+        [...tree.querySelectorAll<HTMLElement>('[role="treeitem"]')].filter(
+          (row) => row.tabIndex === 0,
+        ),
+      ).toHaveLength(1);
     } finally {
       await unmountExplorer(root);
       harness.restore();

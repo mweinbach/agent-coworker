@@ -200,7 +200,7 @@
 
     --focus-ring-shadow:
       0 0 0 2px var(--surface-window),
-      0 0 0 4px color-mix(in srgb, var(--accent-base) 40%, transparent);
+      0 0 0 4px color-mix(in srgb, var(--accent-base) 72%, transparent);
     --scrollbar-thumb: color-mix(in srgb, var(--text-base) 18%, transparent);
     --scrollbar-thumb-hover: color-mix(in srgb, var(--text-base) 30%, transparent);
     --toolbar-button-filter: none;

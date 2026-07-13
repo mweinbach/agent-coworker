@@ -48,6 +48,7 @@ export type QualityGateRuntime = {
   showChat(): void;
   showFilePreview(): void;
   showPresentationPreview(): void;
+  showNewChat(): Promise<void>;
   showReconnect(): void;
   showResearch(state: "empty" | "completed" | "follow-up"): Promise<void>;
   showTaskReview(): void;
@@ -363,6 +364,11 @@ export function installQualityGateRuntime(): void {
     showPresentationPreview: () => {
       useAppStore.getState().openFilePreview({
         path: "/quality/project/quality-gate-presentation.pptx",
+      });
+    },
+    showNewChat: async () => {
+      await useAppStore.getState().openNewChatLanding({
+        target: { kind: "project", workspaceId: PROJECT_WORKSPACE_ID },
       });
     },
     showResearch: async (state) => {

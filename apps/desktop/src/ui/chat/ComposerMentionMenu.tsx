@@ -135,8 +135,10 @@ export function ComposerMentionMenu(props: {
         {groups.map((group) => {
           const headingId = `${id}-${group.kind}-heading`;
           return (
-            <fieldset
+            // biome-ignore lint/a11y/useSemanticElements: listbox option groups are not form fieldsets
+            <div
               key={group.kind}
+              role="group"
               aria-labelledby={headingId}
               className="m-0 min-w-0 border-0 p-0"
             >
@@ -191,7 +193,7 @@ export function ComposerMentionMenu(props: {
                   </div>
                 );
               })}
-            </fieldset>
+            </div>
           );
         })}
       </div>

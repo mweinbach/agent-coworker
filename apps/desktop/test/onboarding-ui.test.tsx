@@ -95,6 +95,7 @@ function setupOnboardingJsdom() {
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers");
 const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");
+const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
 
 const defaultProviderActions = {
@@ -251,8 +252,8 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      expect(container.textContent).not.toContain("Amazon Bedrock");
-      expect(container.textContent).toContain("OpenAI");
+      expect(harness.dom.window.document.body.textContent).not.toContain("Amazon Bedrock");
+      expect(harness.dom.window.document.body.textContent).toContain("OpenAI");
 
       await act(async () => {
         root.unmount();
@@ -299,8 +300,10 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      expect(container.textContent).toContain("Google");
-      expect(container.textContent).not.toContain("Exa API key (web search)");
+      expect(harness.dom.window.document.body.textContent).toContain("Google");
+      expect(harness.dom.window.document.body.textContent).not.toContain(
+        "Exa API key (web search)",
+      );
 
       await act(async () => {
         root.unmount();
@@ -369,8 +372,8 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      const lmStudioButton = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("LM Studio"),
+      const lmStudioButton = [...harness.dom.window.document.body.querySelectorAll("button")].find(
+        (button) => button.textContent?.includes("LM Studio"),
       );
       if (!lmStudioButton) throw new Error("missing LM Studio onboarding card");
 
@@ -378,17 +381,19 @@ describe("DeveloperPage rerun onboarding button", () => {
         lmStudioButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("LM Studio runs on a local server.");
-      expect(container.textContent).toContain("Connect");
-      expect(container.textContent).toContain("Refresh");
-      expect(container.textContent).not.toContain("Paste your API key");
-      expect(container.textContent).not.toContain("API token");
+      expect(harness.dom.window.document.body.textContent).toContain(
+        "LM Studio runs on a local server.",
+      );
+      expect(harness.dom.window.document.body.textContent).toContain("Connect");
+      expect(harness.dom.window.document.body.textContent).toContain("Refresh");
+      expect(harness.dom.window.document.body.textContent).not.toContain("Paste your API key");
+      expect(harness.dom.window.document.body.textContent).not.toContain("API token");
 
-      const connectButton = [...container.querySelectorAll("button")].find(
+      const connectButton = [...harness.dom.window.document.body.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Connect",
       );
       if (!connectButton) throw new Error("missing LM Studio connect button");
-      const refreshButton = [...container.querySelectorAll("button")].find(
+      const refreshButton = [...harness.dom.window.document.body.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Refresh",
       );
       if (!refreshButton) throw new Error("missing LM Studio refresh button");
@@ -513,8 +518,8 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      expect(container.textContent).toContain("Ready");
-      expect(container.textContent).not.toContain("Starting...");
+      expect(harness.dom.window.document.body.textContent).toContain("Ready");
+      expect(harness.dom.window.document.body.textContent).not.toContain("Starting...");
 
       await act(async () => {
         root.unmount();
@@ -564,13 +569,88 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      expect(container.textContent).toContain("Getting Cowork ready");
-      expect(container.textContent).toContain("Downloading runtime");
-      expect(container.textContent).toContain("25%");
-      expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
-        "25",
-      );
+      expect(harness.dom.window.document.body.textContent).toContain("Getting Cowork ready");
+      expect(harness.dom.window.document.body.textContent).toContain("Downloading runtime");
+      expect(harness.dom.window.document.body.textContent).toContain("25%");
+      expect(
+        harness.dom.window.document.body
+          .querySelector('[role="progressbar"]')
+          ?.getAttribute("aria-valuenow"),
+      ).toBe("25");
 
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("traps focus in onboarding and restores the prior control on Escape", async () => {
+    const harness = setupOnboardingJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: false,
+          onboardingStep: "welcome",
+          providerConnected: ["openai"],
+          workspaces: [
+            {
+              id: "ws-focus",
+              name: "Focus Workspace",
+              path: "/tmp/focus",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+        });
+        root.render(
+          createElement(
+            OverlayStackProvider,
+            null,
+            createElement("button", { type: "button" }, "Before onboarding"),
+            createElement(DesktopOnboarding),
+          ),
+        );
+      });
+      const trigger = container.querySelector("button");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing prior focus control");
+      }
+      trigger.focus();
+
+      await act(async () => {
+        useAppStore.setState({ onboardingVisible: true });
+        await Promise.resolve();
+      });
+      const dialog = harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]');
+      if (!(dialog instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing onboarding dialog");
+      }
+      expect(dialog.contains(harness.dom.window.document.activeElement)).toBe(true);
+      await act(async () => trigger.focus());
+      expect(dialog.contains(harness.dom.window.document.activeElement)).toBe(true);
+
+      await act(async () => {
+        dialog.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Escape",
+          }),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+      });
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(trigger);
       await act(async () => root.unmount());
     } finally {
       harness.restore();

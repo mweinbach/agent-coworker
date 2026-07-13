@@ -118,7 +118,12 @@ function ErrorFeedRow(props: { message: string }) {
     }
   };
   return (
-    <Card className="w-full min-w-0 overflow-hidden border-destructive/40 bg-destructive/10">
+    <Card
+      role="alert"
+      aria-live="assertive"
+      aria-atomic="true"
+      className="w-full min-w-0 overflow-hidden border-destructive/40 bg-destructive/10"
+    >
       <CardContent className="select-text p-3 text-sm">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="font-semibold uppercase tracking-wide text-destructive">Error</div>
@@ -307,7 +312,12 @@ export const FeedRow = memo(function FeedRow(props: {
     }
 
     return (
-      <Message align={item.role === "user" ? "end" : "start"}>
+      <Message
+        role="article"
+        aria-label={item.role === "user" ? "Message from you" : "Message from Cowork"}
+        aria-busy={isStreamingAssistant || undefined}
+        align={item.role === "user" ? "end" : "start"}
+      >
         <MessageContent className="relative">
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
@@ -398,7 +408,12 @@ export const FeedRow = memo(function FeedRow(props: {
     if (!developerMode) return null;
     return (
       <Marker variant="border" className="select-text items-start">
-        <MarkerContent className="flex flex-col gap-1 text-xs">
+        <MarkerContent
+          role="log"
+          aria-label="Developer log"
+          aria-live="off"
+          className="flex flex-col gap-1 text-xs"
+        >
           <span className="font-semibold uppercase tracking-wide text-primary">Log</span>
           <span className="whitespace-pre-wrap">{item.line}</span>
         </MarkerContent>
@@ -413,7 +428,7 @@ export const FeedRow = memo(function FeedRow(props: {
   if (item.kind === "system") {
     return (
       <Marker variant="border" className="select-text items-start">
-        <MarkerContent className="flex flex-col gap-1 text-xs">
+        <MarkerContent role="status" className="flex flex-col gap-1 text-xs">
           <span className="font-semibold uppercase tracking-wide text-primary">System</span>
           <span className="whitespace-pre-wrap">{item.line}</span>
         </MarkerContent>

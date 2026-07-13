@@ -450,6 +450,24 @@ describe("subagents settings page", () => {
       expect(harness.dom.window.document.body.textContent ?? "").toContain(
         "Default role prompt is editable.",
       );
+      for (const labelText of [
+        "Scope",
+        "Template",
+        "Enabled",
+        "Name",
+        "Description",
+        "Prompt",
+        "Model target",
+      ]) {
+        const label = [...harness.dom.window.document.querySelectorAll("label")].find(
+          (candidate) => candidate.textContent?.trim() === labelText,
+        );
+        expect(label?.htmlFor).not.toBe("");
+        expect(harness.dom.window.document.getElementById(label?.htmlFor ?? "")).not.toBeNull();
+      }
+      const promptDescriptionId = promptTextarea.getAttribute("aria-describedby");
+      expect(promptDescriptionId).not.toBeNull();
+      expect(harness.dom.window.document.getElementById(promptDescriptionId ?? "")).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {

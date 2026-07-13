@@ -145,7 +145,7 @@ export function MessageComposerRoot({
       onDragOver={onDragOver}
       onDrop={onDrop}
       className={cn(
-        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0 transition-[box-shadow,border-color] focus-within:border-ring/70 focus-within:shadow-[var(--focus-ring-shadow)]",
+        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0",
         dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
       )}

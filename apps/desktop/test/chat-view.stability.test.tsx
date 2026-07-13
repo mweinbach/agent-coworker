@@ -461,6 +461,9 @@ describe("desktop chat view stability", () => {
         false,
       );
       expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
+      expect(container.querySelector('[data-slot="message-composer"]')?.className).toContain(
+        "app-surface-opaque",
+      );
       expect(container.textContent).not.toContain("Press Enter to send");
     } finally {
       if (root) {

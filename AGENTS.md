@@ -276,6 +276,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Desktop UI Patterns
 
+- For a truly solid desktop surface, use `app-surface-opaque`; `bg-background` maps to `--surface-window`, which can be intentionally translucent even without opacity or backdrop-blur classes.
+- When removing a composer's typing focus frame, remove and test every root `focus-within` treatment, including both shadow and border-color classes; checking only the shadow can leave the visible outline intact.
 - Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
 - For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.

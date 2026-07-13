@@ -81,6 +81,7 @@ describe("message composer", () => {
     expect(html).toContain('data-slot="message-composer-status"');
     expect(html).toContain('aria-label="Draft"');
     expect(html).toContain('aria-label="Send message"');
+    expect(html).not.toContain("focus-within:");
   });
 
   test("renders shadcn attachment parts and removes an attachment", async () => {

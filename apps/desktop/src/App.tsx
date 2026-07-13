@@ -410,8 +410,8 @@ const ChatShell = memo(function ChatShell({
     const enteredRightOverlay = adaptiveLayout.rightOverlay && !previousRightOverlayRef.current;
     previousCanvasPathRef.current = activeCanvasPath;
     previousRightOverlayRef.current = adaptiveLayout.rightOverlay;
-    if (adaptiveLayout.rightOverlay && previousCanvasPath !== null && activeCanvasPath === null) {
-      if (canvasOpenedRightOverlayRef.current) {
+    if (previousCanvasPath !== null && activeCanvasPath === null) {
+      if (adaptiveLayout.rightOverlay && canvasOpenedRightOverlayRef.current) {
         setRightOverlayOpen(false);
       }
       canvasOpenedRightOverlayRef.current = false;

@@ -205,8 +205,12 @@ describe("proc.run — execFileCompat contract parity", () => {
     expect(result.exitCode).toBe(0);
     const [marker, cwd] = result.stdout.split(/\r?\n/);
     expect(marker).toBe("yes");
-    // win32 may differ in drive-letter case; compare case-folded.
-    expect((cwd ?? "").toLowerCase()).toBe(scratch.toLowerCase());
+    // The child may report a canonical spelling for an aliased host path
+    // (macOS commonly exposes /var through /private/var). Compare filesystem
+    // identity, while still allowing win32 drive-letter case differences.
+    expect(fs.realpathSync.native(cwd ?? "").toLowerCase()).toBe(
+      fs.realpathSync.native(scratch).toLowerCase(),
+    );
   });
 });
 

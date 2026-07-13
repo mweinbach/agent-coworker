@@ -199,6 +199,58 @@ test.serial("adaptive overlay rails permit focus in nested portaled menus", asyn
   }
 });
 
+test.serial("adaptive rails restore focus when an active overlay becomes inline", async () => {
+  const harness = setupJsdom({ includeAnimationFrame: true });
+  let setOverlayMode: ((overlay: boolean) => void) | null = null;
+
+  try {
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+
+    function Harness() {
+      const [overlay, setOverlay] = useState(false);
+      setOverlayMode = setOverlay;
+      return createElement(
+        OverlayStackProvider,
+        null,
+        createElement("button", { type: "button" }, "Resize trigger"),
+        createElement(
+          AdaptiveRailSurface,
+          {
+            active: true,
+            label: "Navigation",
+            onClose: () => {},
+            overlay,
+            side: "left",
+            width: 280,
+          },
+          createElement("button", { type: "button" }, "New chat"),
+        ),
+      );
+    }
+
+    await act(async () => root.render(createElement(Harness)));
+    const trigger = container.querySelector<HTMLButtonElement>("button");
+    if (!trigger || !setOverlayMode) throw new Error("missing adaptive rail controls");
+    trigger.focus();
+
+    await act(async () => setOverlayMode?.(true));
+    await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(harness.dom.window.document.activeElement?.getAttribute("aria-label")).toBe(
+      "Close Navigation",
+    );
+
+    await act(async () => setOverlayMode?.(false));
+    await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(trigger).toBe(harness.dom.window.document.activeElement);
+
+    await act(async () => root.unmount());
+  } finally {
+    harness.restore();
+  }
+});
+
 test.serial(
   "switching a rail between inline and overlay keeps its live child mounted",
   async () => {

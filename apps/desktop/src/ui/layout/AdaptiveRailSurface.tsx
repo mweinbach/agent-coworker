@@ -45,7 +45,7 @@ export function AdaptiveRailSurface({
     if (overlayActive && !wasOverlayActiveRef.current) {
       restoreFocusRef.current =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    } else if (wasOverlayActiveRef.current && overlay && !active) {
+    } else if (wasOverlayActiveRef.current && !overlayActive) {
       const target = restoreFocusRef.current;
       restoreFocusRef.current = null;
       const frame = window.requestAnimationFrame(() => {

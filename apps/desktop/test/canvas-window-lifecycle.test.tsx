@@ -208,6 +208,9 @@ describe("canvas window lifecycle", () => {
       expect(
         harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
       ).not.toBeNull();
+      expect(
+        harness.dom.window.document.querySelector('button[aria-label="Close context"]'),
+      ).not.toBeNull();
 
       await act(async () => {
         harness.dom.window.document
@@ -272,6 +275,54 @@ describe("canvas window lifecycle", () => {
           .querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]')
           ?.hasAttribute("aria-hidden"),
       ).toBe(false);
+    } finally {
+      if (root) {
+        const mountedRoot = root;
+        await act(async () => mountedRoot.unmount());
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("keeps a manually opened context overlay open after closing canvas", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 680,
+        writable: true,
+      });
+      useAppStore.setState({ filePreview: null });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const createdRoot = createRoot(container);
+      root = createdRoot;
+
+      await act(async () => {
+        createdRoot.render(createElement(App));
+        await flushUi();
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Show context"]')?.click();
+        await flushUi();
+      });
+      const context = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]');
+      expect(context?.hasAttribute("aria-hidden")).toBe(false);
+
+      await act(async () => {
+        useAppStore.setState({
+          filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
+        });
+        await flushUi();
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')?.click();
+        await flushUi();
+      });
+
+      expect(useAppStore.getState().filePreview).toBeNull();
+      expect(context?.hasAttribute("aria-hidden")).toBe(false);
     } finally {
       if (root) {
         const mountedRoot = root;

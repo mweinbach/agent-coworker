@@ -393,6 +393,8 @@ const ChatShell = memo(function ChatShell({
   const startupPresentation = startupStagePresentation(bootstrapStage);
   const activeCanvasPath = showCanvasSurface ? canvasPath : null;
   const previousCanvasPathRef = useRef<string | null>(null);
+  const previousRightOverlayRef = useRef(false);
+  const canvasOpenedRightOverlayRef = useRef(false);
   const overlayScope = `${adaptiveLayout.tier}:${effectiveView}:${selectedThreadId ?? "none"}`;
   const previousOverlayScopeRef = useRef(overlayScope);
 
@@ -405,20 +407,29 @@ const ChatShell = memo(function ChatShell({
 
   useEffect(() => {
     const previousCanvasPath = previousCanvasPathRef.current;
+    const enteredRightOverlay = adaptiveLayout.rightOverlay && !previousRightOverlayRef.current;
     previousCanvasPathRef.current = activeCanvasPath;
+    previousRightOverlayRef.current = adaptiveLayout.rightOverlay;
     if (adaptiveLayout.rightOverlay && previousCanvasPath !== null && activeCanvasPath === null) {
-      setRightOverlayOpen(false);
+      if (canvasOpenedRightOverlayRef.current) {
+        setRightOverlayOpen(false);
+      }
+      canvasOpenedRightOverlayRef.current = false;
       return;
     }
     if (
       adaptiveLayout.rightOverlay &&
       activeCanvasPath !== null &&
-      activeCanvasPath !== previousCanvasPath
+      (activeCanvasPath !== previousCanvasPath || enteredRightOverlay)
     ) {
-      setLeftOverlayOpen(false);
-      setRightOverlayOpen(true);
+      const openedByCanvas = enteredRightOverlay || !rightOverlayOpen;
+      canvasOpenedRightOverlayRef.current = openedByCanvas;
+      if (openedByCanvas) {
+        setLeftOverlayOpen(false);
+        setRightOverlayOpen(true);
+      }
     }
-  }, [activeCanvasPath, adaptiveLayout.rightOverlay]);
+  }, [activeCanvasPath, adaptiveLayout.rightOverlay, rightOverlayOpen]);
 
   useEffect(
     () =>

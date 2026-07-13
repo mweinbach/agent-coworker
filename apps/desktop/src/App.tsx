@@ -429,6 +429,15 @@ const ChatShell = memo(function ChatShell({
         setLeftOverlayOpen(false);
         setRightOverlayOpen(true);
       }
+      return;
+    }
+    if (
+      adaptiveLayout.rightOverlay &&
+      activeCanvasPath !== null &&
+      !rightOverlayOpen &&
+      canvasOpenedRightOverlayRef.current
+    ) {
+      canvasOpenedRightOverlayRef.current = false;
     }
   }, [activeCanvasPath, adaptiveLayout.rightOverlay, rightOverlayOpen]);
 

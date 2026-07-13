@@ -415,6 +415,7 @@ const ChatShell = memo(function ChatShell({
       activeCanvasPath !== null &&
       activeCanvasPath !== previousCanvasPath
     ) {
+      setLeftOverlayOpen(false);
       setRightOverlayOpen(true);
     }
   }, [activeCanvasPath, adaptiveLayout.rightOverlay]);

@@ -19,6 +19,7 @@ import type {
 import { createWorkspaceRouteHandlers } from "../src/server/jsonrpc/routes/workspace";
 import { jsonRpcWorkspaceResultSchemas } from "../src/server/jsonrpc/schema.workspace";
 import { readFileChangeVersion } from "../src/utils/filePreviewRead";
+import { pinHome } from "./helpers/platform";
 
 const WORKSPACE_BOOTSTRAP_METHOD = "cowork/workspace/bootstrap";
 
@@ -301,7 +302,13 @@ describe("workspace JSON-RPC route", () => {
   });
 
   test("Canvas document methods preserve the typed session-bound write contract", async () => {
-    const dir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-document-route-"));
+    const tempRoot = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-document-route-"),
+    );
+    const dir = path.join(tempRoot, "workspace");
+    const home = path.join(tempRoot, "home");
+    await Promise.all([fs.mkdir(dir), fs.mkdir(home)]);
+    const restoreHome = pinHome(home);
     try {
       const filePath = path.join(dir, "notes.md");
       await fs.writeFile(filePath, "original", "utf8");
@@ -363,7 +370,8 @@ describe("workspace JSON-RPC route", () => {
       });
       expect(harness.errors).toEqual([]);
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      restoreHome();
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 

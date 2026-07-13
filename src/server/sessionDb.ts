@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
@@ -64,6 +64,39 @@ export type { PersistedSessionSummary } from "./sessionStore";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const ANONYMOUS_IN_MEMORY_DB_PATH = ":memory:";
+
+// Bun caches query statements; explicit finalization makes close deterministic and
+// releases Windows file handles without depending on whole-heap garbage collection.
+class FinalizingDatabase extends Database {
+  private readonly statements = new Set<Statement>();
+
+  override query<ReturnType, ParamsType extends SQLQueryBindings | SQLQueryBindings[]>(
+    sql: string,
+    // biome-ignore lint/suspicious/noExplicitAny: Must exactly match Bun's Database.query signature.
+  ): Statement<ReturnType, ParamsType extends any[] ? ParamsType : [ParamsType]> {
+    const statement = super.query<ReturnType, ParamsType>(sql);
+    this.statements.add(statement);
+    return statement;
+  }
+
+  override prepare<ReturnType, ParamsType extends SQLQueryBindings | SQLQueryBindings[]>(
+    sql: string,
+    params?: ParamsType,
+    // biome-ignore lint/suspicious/noExplicitAny: Must exactly match Bun's Database.prepare signature.
+  ): Statement<ReturnType, ParamsType extends any[] ? ParamsType : [ParamsType]> {
+    const statement = super.prepare<ReturnType, ParamsType>(sql, params);
+    this.statements.add(statement);
+    return statement;
+  }
+
+  override close(throwOnError = false): void {
+    for (const statement of this.statements) {
+      statement.finalize();
+    }
+    this.statements.clear();
+    super.close(throwOnError);
+  }
+}
 
 export type SessionPersistenceStatus = "active" | "closed";
 
@@ -237,8 +270,8 @@ export type TaskDirectiveCommitHooks = {
 export class SessionDb {
   readonly dbPath: string;
 
-  private readonly db: Database;
-  private readonly committedReadDb: Database;
+  private readonly db: FinalizingDatabase;
+  private readonly committedReadDb: FinalizingDatabase;
   private readonly sessionsDir: string;
   private readonly busyTimeoutMs: number;
   private readonly repository: SessionDbRepository;
@@ -248,14 +281,17 @@ export class SessionDb {
   private readonly writeCoordinator: SessionDbWriteCoordinator;
 
   private constructor(opts: {
-    db: Database;
+    db: FinalizingDatabase;
     dbPath: string;
     sessionsDir: string;
     busyTimeoutMs: number;
     writeCoordinator: SessionDbWriteCoordinator;
   }) {
     this.db = opts.db;
-    this.committedReadDb = new Database(opts.dbPath, { readonly: true, strict: false });
+    this.committedReadDb = new FinalizingDatabase(opts.dbPath, {
+      readonly: true,
+      strict: false,
+    });
     this.dbPath = opts.dbPath;
     this.sessionsDir = opts.sessionsDir;
     this.busyTimeoutMs = opts.busyTimeoutMs;
@@ -284,9 +320,9 @@ export class SessionDb {
       rootDir: opts.paths.rootDir,
       emitTelemetry: opts.emitTelemetry,
     });
-    let db: Database;
+    let db: FinalizingDatabase;
     try {
-      db = new Database(dbPath, { create: true, strict: false });
+      db = new FinalizingDatabase(dbPath, { create: true, strict: false });
     } catch (error) {
       throw new Error(`Failed to open session database at ${dbPath}: ${String(error)}`);
     }
@@ -312,7 +348,7 @@ export class SessionDb {
       repo.close();
       await quarantineCorruptedDb(dbPath);
 
-      const recreated = new Database(dbPath, { create: true, strict: false });
+      const recreated = new FinalizingDatabase(dbPath, { create: true, strict: false });
       const recoveredRepo = new SessionDb({
         db: recreated,
         dbPath,
@@ -327,22 +363,8 @@ export class SessionDb {
   }
 
   close(): void {
-    let needsStatementFinalization = false;
-    const closeDatabase = (database: Database) => {
-      try {
-        database.close(true);
-      } catch (error) {
-        if (!String(error).toLowerCase().includes("database is locked")) throw error;
-        // Bun's cached SQLite statements can keep a WAL handle alive after
-        // sqlite3_close_v2 on Windows. Closing in deferred mode and forcing
-        // finalization releases those native handles before close() returns.
-        database.close();
-        needsStatementFinalization = true;
-      }
-    };
-    closeDatabase(this.committedReadDb);
-    closeDatabase(this.db);
-    if (needsStatementFinalization) Bun.gc(true);
+    this.committedReadDb.close(true);
+    this.db.close(true);
   }
 
   private recordTaskDirectiveCommitInOpenTransaction(

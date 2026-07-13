@@ -10,7 +10,7 @@ import {
 } from "../shared/modelPreferences";
 import type { ProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
-import { withFileLock } from "../utils/fileLock";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import { normalizeCustomModelId } from "./customModels";
 
 const MODEL_PREFERENCES_STORE_FILENAME = "model-preferences.json";
@@ -149,25 +149,29 @@ export async function setModelPreferences(
 
   // Serialize the read-modify-write cycle across workspace server processes
   // sharing the global store; a plain atomic write alone still loses updates.
-  await withFileLock(modelPreferencesStorePath(paths), async () => {
-    const store = await readModelPreferencesStore(paths);
-    const now = new Date().toISOString();
-    const existing = store.providers[provider] ?? [];
-    const byId = new Map(existing.map((entry) => [entry.id, entry] as const));
-    for (const model of models) {
-      const id = normalizeCustomModelId(model.id);
-      byId.set(id, { id, enabled: model.enabled, updatedAt: now });
-    }
+  await withFileLock(
+    modelPreferencesStorePath(paths),
+    async () => {
+      const store = await readModelPreferencesStore(paths);
+      const now = new Date().toISOString();
+      const existing = store.providers[provider] ?? [];
+      const byId = new Map(existing.map((entry) => [entry.id, entry] as const));
+      for (const model of models) {
+        const id = normalizeCustomModelId(model.id);
+        byId.set(id, { id, enabled: model.enabled, updatedAt: now });
+      }
 
-    await writeModelPreferencesStore(paths, {
-      version: 1,
-      updatedAt: now,
-      providers: {
-        ...store.providers,
-        [provider]: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
-      },
-    });
-  });
+      await writeModelPreferencesStore(paths, {
+        version: 1,
+        updatedAt: now,
+        providers: {
+          ...store.providers,
+          [provider]: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        },
+      });
+    },
+    { lockRoot: fileLockRootForCoworkHome(paths.rootDir) },
+  );
 }
 
 export async function resetModelPreferences(
@@ -177,16 +181,20 @@ export async function resetModelPreferences(
   if (!supportsModelPreferences(provider)) {
     throw new Error(`${provider} does not support model preferences.`);
   }
-  await withFileLock(modelPreferencesStorePath(paths), async () => {
-    const store = await readModelPreferencesStore(paths);
-    if (!(provider in store.providers)) return;
+  await withFileLock(
+    modelPreferencesStorePath(paths),
+    async () => {
+      const store = await readModelPreferencesStore(paths);
+      if (!(provider in store.providers)) return;
 
-    const providers = { ...store.providers };
-    delete providers[provider];
-    await writeModelPreferencesStore(paths, {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      providers,
-    });
-  });
+      const providers = { ...store.providers };
+      delete providers[provider];
+      await writeModelPreferencesStore(paths, {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        providers,
+      });
+    },
+    { lockRoot: fileLockRootForCoworkHome(paths.rootDir) },
+  );
 }

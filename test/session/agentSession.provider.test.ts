@@ -469,7 +469,7 @@ describe("AgentSession", () => {
 
       await session.refreshProviderStatus();
 
-      expect(mockGetAiCoworkerPaths).toHaveBeenCalledWith({ homedir: os.homedir() });
+      expect(mockGetAiCoworkerPaths).toHaveBeenCalledWith({ homedir: path.join(dir, "home") });
       expect(mockGetProviderStatuses).toHaveBeenCalledTimes(1);
 
       const evt = events.find((e) => e.type === "provider_status");

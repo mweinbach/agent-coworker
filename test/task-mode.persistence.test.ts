@@ -321,6 +321,27 @@ test("task coordinator rejects task IDs outside the requested workspace context"
   }
 });
 
+test("task persistence close finalizes cached statements before immediate directory rename", async () => {
+  const harness = await createHarness();
+  const renamedHome = `${harness.home}-closed`;
+  let closed = false;
+  try {
+    let { task } = await createIndependentlyReviewedTask(harness);
+    task = (await recordPass(harness, task, "reviewer-close")).task;
+    expect(task.revision).toBeGreaterThan(0);
+
+    harness.sessionDb.close();
+    closed = true;
+    await fs.rename(harness.home, renamedHome);
+  } finally {
+    if (!closed) harness.sessionDb.close();
+    await Promise.all([
+      removeTempDir(harness.home).catch(() => {}),
+      removeTempDir(renamedHome).catch(() => {}),
+    ]);
+  }
+});
+
 async function createReviewReadyTask(
   harness: Awaited<ReturnType<typeof createHarness>>,
   options: { reviewRequired?: boolean } = {},
@@ -4029,37 +4050,37 @@ describe("task mode persistence", () => {
     }
   });
 
-  test("rejects artifact mutations between final completion hash and awaiting review write", async () => {
-    const variants: Array<{
-      name: string;
-      mutate: (input: { artifactPath: string; siblingPath: string }) => Promise<void>;
-      restoreForFreshReview?: (input: { artifactPath: string }) => Promise<void>;
-    }> = [
-      {
-        name: "rewrite",
-        mutate: async ({ artifactPath }) => {
-          await fs.writeFile(artifactPath, "# Report\n\nChanged in the final proposal gap.\n");
-        },
+  const finalCompletionGapVariants: Array<{
+    name: string;
+    mutate: (input: { artifactPath: string; siblingPath: string }) => Promise<void>;
+    restoreForFreshReview?: (input: { artifactPath: string }) => Promise<void>;
+  }> = [
+    {
+      name: "rewrite",
+      mutate: async ({ artifactPath }) => {
+        await fs.writeFile(artifactPath, "# Report\n\nChanged in the final proposal gap.\n");
       },
-      {
-        name: "delete",
-        mutate: async ({ artifactPath }) => {
-          await fs.rm(artifactPath);
-        },
-        restoreForFreshReview: async ({ artifactPath }) => {
-          await fs.writeFile(artifactPath, "# Report\n\nRestored after gap deletion.\n");
-        },
+    },
+    {
+      name: "delete",
+      mutate: async ({ artifactPath }) => {
+        await fs.rm(artifactPath);
       },
-      {
-        name: "path-swap",
-        mutate: async ({ artifactPath, siblingPath }) => {
-          await fs.rm(artifactPath);
-          await fs.symlink(siblingPath, artifactPath);
-        },
+      restoreForFreshReview: async ({ artifactPath }) => {
+        await fs.writeFile(artifactPath, "# Report\n\nRestored after gap deletion.\n");
       },
-    ];
+    },
+    {
+      name: "path-swap",
+      mutate: async ({ artifactPath, siblingPath }) => {
+        await fs.rm(artifactPath);
+        await fs.symlink(siblingPath, artifactPath);
+      },
+    },
+  ];
 
-    for (const variant of variants) {
+  for (const variant of finalCompletionGapVariants) {
+    test(`rejects ${variant.name} between final completion hash and awaiting review write`, async () => {
       const harness = await createHarness();
       let originalDbClosed = false;
       const paths = {
@@ -4179,8 +4200,8 @@ describe("task mode persistence", () => {
           harness.sessionDb.close();
         }
       }
-    }
-  });
+    });
+  }
 
   test("rejects recording a pass when material changes after the reviewer starts", async () => {
     const harness = await createHarness();

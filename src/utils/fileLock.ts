@@ -1,204 +1,272 @@
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
+import { performance } from "node:perf_hooks";
+
+import { canonicalizeSync, coworkHome } from "../platform/paths";
 
 /**
- * Cross-process advisory file lock for read-modify-write cycles on shared
- * JSON stores (e.g. ~/.cowork/config/*.json used by one server process per
- * workspace). Uses an atomically-created sidecar lock directory next to the
- * target file, with pid-based stale-lock takeover and a bounded retry loop —
- * the same pattern as SessionDbWriteCoordinator, minus heartbeat/telemetry,
- * sized for millisecond-scale critical sections.
+ * Cross-process advisory lock for short read-modify-write cycles.
  *
- * Calls for the same target within one process are additionally serialized
- * on an in-process queue so they never contend on the filesystem loop.
+ * Every target maps to private SQLite databases under a Cowork lock cache. An
+ * open `BEGIN IMMEDIATE` transaction is the mutex, so the operating system and
+ * SQLite release it automatically when a process exits. This deliberately
+ * avoids owner-file stale cleanup: deleting or renaming a reusable lock path
+ * after inspecting its contents cannot be made into a portable filesystem CAS
+ * and can otherwise remove a successor lock (an ABA race).
+ *
+ * We lock both the stable lexical path and one canonical-path snapshot. The
+ * lexical identity keeps the same spelling serialized across a symlink swap;
+ * the canonical identity merges static aliases to the same file. Security-
+ * sensitive callers must still revalidate descriptors around path mutation,
+ * because no path lock can freeze an independently mutable alias graph.
+ *
+ * Calls with the same lock set within one process are additionally serialized
+ * on an in-process queue, avoiding needless SQLite contention.
  */
 
 /**
- * Longest a `withFileLock` caller waits to acquire the cross-process lock before
- * throwing. Exported so callers that surface store writes through a bounded
- * response (e.g. JSON-RPC mutation captures) can wait at least this long and not
- * time out while the write is still legitimately in progress behind the lock.
+ * Longest a `withFileLock` caller waits to acquire its complete lock set,
+ * including an in-process queue. Exported so bounded request handlers can use
+ * the same end-to-end budget.
  */
 export const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
-const DEFAULT_ACQUIRE_TIMEOUT_MS = FILE_LOCK_ACQUIRE_TIMEOUT_MS;
 const DEFAULT_RETRY_DELAY_MS = 25;
-const DEFAULT_STALE_LOCK_MS = 10_000;
+const LOCK_CACHE_DIR_SEGMENTS = ["locks", "files"] as const;
 
-const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
-
-const lockOwnerSchema = z
-  .object({
-    pid: z.number().int(),
-    createdAt: z.string(),
-  })
-  .passthrough();
-
-type LockOwner = z.infer<typeof lockOwnerSchema>;
+type LockDatabase = Pick<Database, "close" | "exec">;
 
 export type FileLockOptions = {
   acquireTimeoutMs?: number;
   retryDelayMs?: number;
+  /**
+   * Override the private cache root. Callers using an explicitly configured
+   * Cowork home should pass that home's lock root.
+   */
+  lockRoot?: string;
+  /** @deprecated SQLite transaction locks do not require stale-owner timers. */
   staleLockMs?: number;
 };
 
 type FileLockDeps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  processAlive?: (pid: number) => boolean;
-  // Test seam: invoked after the lock directory exists but before the exclusive
-  // owner.json write, so a test can simulate a competing process claiming the
-  // directory during the ownerless window. No-op in production.
-  onBeforeOwnerWrite?: () => Promise<void> | void;
+  openDatabase?: (filePath: string) => LockDatabase;
 };
 
-function errorCode(error: unknown): string | undefined {
-  const parsed = errorWithCodeSchema.safeParse(error);
-  return parsed.success ? parsed.data.code : undefined;
-}
+type ResolvedLockSet = {
+  paths: string[];
+  primaryPath: string;
+  queueKey: string;
+};
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function defaultProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function isSqliteContention(error: unknown): boolean {
+  const code = errorCode(error);
+  return code?.startsWith("SQLITE_BUSY") === true || code?.startsWith("SQLITE_LOCKED") === true;
+}
+
+export function fileLockRootForCoworkHome(coworkRoot: string): string {
+  return path.join(canonicalizeSync(coworkRoot), ...LOCK_CACHE_DIR_SEGMENTS);
+}
+
+function stablePathIdentity(targetPath: string): string {
+  // Case folding on every platform only adds conservative serialization on a
+  // case-sensitive volume; it never grants access or merges file contents.
+  return path.normalize(targetPath).toLowerCase();
+}
+
+function databasePathForIdentity(identity: string, lockRoot: string): string {
+  const targetHash = createHash("sha256").update(identity).digest("hex");
+  return path.join(lockRoot, `${targetHash}.sqlite`);
+}
+
+function resolvedLockRoot(lockRoot?: string): string {
+  return canonicalizeSync(lockRoot ?? fileLockRootForCoworkHome(coworkHome()));
+}
+
+export function lockDatabasePathFor(targetPath: string, lockRoot?: string): string {
+  const canonicalSnapshot = canonicalizeSync(targetPath);
+  return databasePathForIdentity(stablePathIdentity(canonicalSnapshot), resolvedLockRoot(lockRoot));
+}
+
+/** @deprecated The lock is now a SQLite file, not a directory. */
+export const lockDirPathFor = lockDatabasePathFor;
+
+function resolveLockSet(targetPath: string, lockRoot?: string): ResolvedLockSet {
+  const root = resolvedLockRoot(lockRoot);
+  const lexicalIdentity = stablePathIdentity(path.resolve(targetPath));
+  // Resolve exactly once. Root selection is independent of target spelling,
+  // and hashing below never re-reads the mutable filesystem.
+  const canonicalIdentity = stablePathIdentity(canonicalizeSync(targetPath));
+  const primaryPath = databasePathForIdentity(canonicalIdentity, root);
+  const paths = [
+    ...new Set([
+      databasePathForIdentity(lexicalIdentity, root),
+      databasePathForIdentity(canonicalIdentity, root),
+    ]),
+  ].sort((left, right) => left.localeCompare(right));
+  return { paths, primaryPath, queueKey: paths.join("\0") };
+}
+
+function openLockDatabase(filePath: string): LockDatabase {
+  const database = new Database(filePath, { create: true, strict: false });
+  database.exec("PRAGMA busy_timeout = 0");
+  return database;
+}
+
+function closeAfterFailedAcquire(database: LockDatabase): void {
   try {
-    process.kill(pid, 0);
-    return true;
+    database.close(true);
+  } catch {
+    // There are no prepared statements, but a non-strict close is still a safe
+    // final fallback if a runtime reports an unexpected strict-close error.
+    database.close();
+  }
+}
+
+function releaseTransaction(database: LockDatabase): void {
+  let rollbackError: unknown;
+  try {
+    database.exec("ROLLBACK");
   } catch (error) {
-    return errorCode(error) !== "ESRCH";
+    rollbackError = error;
   }
-}
 
-export function lockDirPathFor(targetPath: string): string {
-  const resolved = path.resolve(targetPath);
-  return path.join(path.dirname(resolved), `.${path.basename(resolved)}.lock`);
-}
-
-async function readLockOwner(ownerPath: string): Promise<LockOwner | null> {
+  let closeError: unknown;
   try {
-    const parsed = lockOwnerSchema.safeParse(JSON.parse(await fs.readFile(ownerPath, "utf-8")));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-async function cleanupStaleLock(
-  lockDir: string,
-  staleLockMs: number,
-  now: () => number,
-  processAlive: (pid: number) => boolean,
-): Promise<boolean> {
-  const staleCutoff = now() - staleLockMs;
-  const owner = await readLockOwner(path.join(lockDir, "owner.json"));
-  if (owner) {
-    // Never steal a lock whose owner process is still alive — a slow write or
-    // GC pause must not reopen the lost-update race this lock exists to close.
-    // A live-but-slow owner instead surfaces as an acquire timeout upstream.
-    if (processAlive(owner.pid)) return false;
-    await fs.rm(lockDir, { recursive: true, force: true });
-    return true;
-  }
-
-  // No readable owner metadata: fall back to the lock directory's mtime so a
-  // crash between mkdir and the owner write cannot wedge the lock forever.
-  try {
-    const stat = await fs.stat(lockDir);
-    if (stat.mtimeMs <= staleCutoff) {
-      await fs.rm(lockDir, { recursive: true, force: true });
-      return true;
+    database.close(true);
+  } catch (error) {
+    closeError = error;
+    try {
+      database.close();
+    } catch {
+      // Preserve the strict-close error below. Closing an active SQLite
+      // connection also rolls its transaction back at the native layer.
     }
-  } catch {
-    // Lock directory vanished; treat as recovered contention.
-    return true;
   }
-  return false;
+
+  if (rollbackError !== undefined) throw rollbackError;
+  if (closeError !== undefined) throw closeError;
+}
+
+function acquisitionTimeoutError(lockPath: string, startedAt: number, now: () => number): Error {
+  const waitedMs = Math.max(0, Math.round(now() - startedAt));
+  return new Error(`Timed out acquiring file lock at ${lockPath} after ${waitedMs}ms`);
 }
 
 async function acquireCrossProcessLock(
-  lockDir: string,
-  opts: Required<FileLockOptions>,
+  lockPath: string,
+  startedAt: number,
+  deadline: number,
+  retryDelayMs: number,
+  isCancelled: () => boolean,
   deps: Required<FileLockDeps>,
-): Promise<() => Promise<void>> {
-  await fs.mkdir(path.dirname(lockDir), { recursive: true });
-  const ownerPath = path.join(lockDir, "owner.json");
-  const startedAt = deps.now();
+): Promise<() => void> {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  // Pre-create with private POSIX permissions. SQLite opens the existing empty
+  // file and initializes it under its own locking protocol.
+  await (await fs.open(lockPath, "a", 0o600)).close();
 
+  if (isCancelled() || deps.now() >= deadline) {
+    throw acquisitionTimeoutError(lockPath, startedAt, deps.now);
+  }
+
+  const database = deps.openDatabase(lockPath);
   while (true) {
-    // Ensure the lock directory exists, but do NOT treat creating it as taking
-    // ownership: an existing directory may be an orphan left by a process that
-    // crashed (or was paused) between mkdir and its owner write, and this
-    // acquirer can legitimately claim it. Ownership is decided solely by the
-    // exclusive owner.json create below.
-    try {
-      await fs.mkdir(lockDir, { mode: 0o700 });
-    } catch (error) {
-      const code = errorCode(error);
-      // Windows can surface transient EPERM/EACCES while a competing writer
-      // creates or removes the lock directory; treat those like contention.
-      if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") {
-        throw error;
-      }
+    if (isCancelled() || deps.now() >= deadline) {
+      closeAfterFailedAcquire(database);
+      throw acquisitionTimeoutError(lockPath, startedAt, deps.now);
     }
 
-    await deps.onBeforeOwnerWrite();
-
     try {
-      const owner: LockOwner = {
-        pid: process.pid,
-        createdAt: new Date(deps.now()).toISOString(),
-      };
-      // The exclusive (wx / O_EXCL) create is the real mutex: at most one writer
-      // can create owner.json in a given directory. Even if a stale-lock reclaim
-      // races with a creator that was paused between mkdir and this write, only
-      // one of them wins the owner file and enters the critical section — closing
-      // the lost-update race an mtime-based ownerless reclaim would otherwise
-      // reopen when the paused creator resumed and overwrote the new owner.
-      await fs.writeFile(ownerPath, `${JSON.stringify(owner)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-        flag: "wx",
-      });
-      return async () => {
-        const liveOwner = await readLockOwner(ownerPath);
-        if (!liveOwner || liveOwner.pid === process.pid) {
-          await fs.rm(lockDir, { recursive: true, force: true });
-        }
-      };
+      database.exec("BEGIN IMMEDIATE");
     } catch (error) {
-      const code = errorCode(error);
-      if (code === "EEXIST") {
-        // Another writer already owns owner.json; reclaim only if that owner is
-        // provably dead or its metadata is stale, otherwise wait it out.
-        const recovered = await cleanupStaleLock(
-          lockDir,
-          opts.staleLockMs,
-          deps.now,
-          deps.processAlive,
-        );
-        if (recovered) continue;
-      } else if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") {
-        // ENOENT means the directory was removed under us by a competing reclaim;
-        // EPERM/EACCES are transient Windows contention. Anything else is fatal.
+      if (!isSqliteContention(error)) {
+        closeAfterFailedAcquire(database);
         throw error;
       }
 
-      const waitedMs = deps.now() - startedAt;
-      if (waitedMs >= opts.acquireTimeoutMs) {
-        throw new Error(`Timed out acquiring file lock at ${lockDir} after ${waitedMs}ms`);
+      const remainingMs = deadline - deps.now();
+      if (isCancelled() || remainingMs <= 0) {
+        closeAfterFailedAcquire(database);
+        throw acquisitionTimeoutError(lockPath, startedAt, deps.now);
       }
-      await deps.sleep(opts.retryDelayMs);
+      await deps.sleep(Math.min(retryDelayMs, remainingMs));
+      continue;
+    }
+
+    if (isCancelled() || deps.now() > deadline) {
+      try {
+        releaseTransaction(database);
+      } catch {
+        // The connection was still closed; preserve the timeout contract.
+      }
+      throw acquisitionTimeoutError(lockPath, startedAt, deps.now);
+    }
+    return () => releaseTransaction(database);
+  }
+}
+
+function releaseAll(releases: Array<() => void>): void {
+  let firstError: unknown;
+  for (const release of [...releases].reverse()) {
+    try {
+      release();
+    } catch (error) {
+      firstError ??= error;
     }
   }
+  if (firstError !== undefined) throw firstError;
+}
+
+async function acquireLockSet(
+  lockSet: ResolvedLockSet,
+  startedAt: number,
+  deadline: number,
+  retryDelayMs: number,
+  isCancelled: () => boolean,
+  deps: Required<FileLockDeps>,
+): Promise<() => void> {
+  const releases: Array<() => void> = [];
+  try {
+    for (const lockPath of lockSet.paths) {
+      releases.push(
+        await acquireCrossProcessLock(
+          lockPath,
+          startedAt,
+          deadline,
+          retryDelayMs,
+          isCancelled,
+          deps,
+        ),
+      );
+    }
+  } catch (error) {
+    try {
+      releaseAll(releases);
+    } catch {
+      // Every connection was closed; preserve the acquisition error.
+    }
+    throw error;
+  }
+  return () => releaseAll(releases);
 }
 
 const inProcessQueues = new Map<string, Promise<unknown>>();
 
 /**
- * Run `fn` while holding an exclusive advisory lock scoped to `targetPath`.
- * Throws if the lock cannot be acquired within `acquireTimeoutMs`.
+ * Run `fn` while holding exclusive advisory locks scoped to `targetPath`.
+ * Throws if the complete lock set is not acquired within `acquireTimeoutMs`.
  */
 export async function withFileLock<T>(
   targetPath: string,
@@ -206,40 +274,71 @@ export async function withFileLock<T>(
   opts: FileLockOptions = {},
   deps: FileLockDeps = {},
 ): Promise<T> {
-  const lockDir = lockDirPathFor(targetPath);
-  const resolvedOpts: Required<FileLockOptions> = {
-    acquireTimeoutMs: Math.max(1, opts.acquireTimeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS),
-    retryDelayMs: Math.max(1, opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS),
-    staleLockMs: Math.max(1, opts.staleLockMs ?? DEFAULT_STALE_LOCK_MS),
-  };
+  const acquireTimeoutMs = Math.max(1, opts.acquireTimeoutMs ?? FILE_LOCK_ACQUIRE_TIMEOUT_MS);
+  const retryDelayMs = Math.max(1, opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
   const resolvedDeps: Required<FileLockDeps> = {
-    now: deps.now ?? (() => Date.now()),
+    now: deps.now ?? (() => performance.now()),
     sleep: deps.sleep ?? defaultSleep,
-    processAlive: deps.processAlive ?? defaultProcessAlive,
-    onBeforeOwnerWrite: deps.onBeforeOwnerWrite ?? (() => {}),
+    openDatabase: deps.openDatabase ?? openLockDatabase,
   };
+  const startedAt = resolvedDeps.now();
+  const deadline = startedAt + acquireTimeoutMs;
+  const lockSet = resolveLockSet(targetPath, opts.lockRoot);
+  let cancelled = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const clearAcquisitionTimeout = (): void => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  };
+  const acquisitionTimeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(
+      () => {
+        cancelled = true;
+        reject(acquisitionTimeoutError(lockSet.primaryPath, startedAt, resolvedDeps.now));
+      },
+      Math.max(0, Math.ceil(deadline - resolvedDeps.now())),
+    );
+  });
 
   const runLocked = async (): Promise<T> => {
-    const release = await acquireCrossProcessLock(lockDir, resolvedOpts, resolvedDeps);
+    if (cancelled || resolvedDeps.now() >= deadline) {
+      clearAcquisitionTimeout();
+      throw acquisitionTimeoutError(lockSet.primaryPath, startedAt, resolvedDeps.now);
+    }
+
+    let release: () => void;
+    try {
+      release = await acquireLockSet(
+        lockSet,
+        startedAt,
+        deadline,
+        retryDelayMs,
+        () => cancelled,
+        resolvedDeps,
+      );
+    } catch (error) {
+      clearAcquisitionTimeout();
+      throw error;
+    }
+    clearAcquisitionTimeout();
+
     try {
       return await fn();
     } finally {
-      await release();
+      release();
     }
   };
 
-  const tail = inProcessQueues.get(lockDir) ?? Promise.resolve();
+  const tail = inProcessQueues.get(lockSet.queueKey) ?? Promise.resolve();
   const run = tail.then(runLocked, runLocked);
   const settled = run.then(
     () => undefined,
     () => undefined,
   );
-  inProcessQueues.set(lockDir, settled);
-  try {
-    return await run;
-  } finally {
-    if (inProcessQueues.get(lockDir) === settled) {
-      inProcessQueues.delete(lockDir);
+  inProcessQueues.set(lockSet.queueKey, settled);
+  void settled.then(() => {
+    if (inProcessQueues.get(lockSet.queueKey) === settled) {
+      inProcessQueues.delete(lockSet.queueKey);
     }
-  }
+  });
+  return await Promise.race([run, acquisitionTimeout]);
 }

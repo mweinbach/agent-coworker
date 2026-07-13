@@ -16,7 +16,7 @@ import {
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
 import { type AgentConfig, isInstalledPluginCatalogEntry } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
-import { withFileLock } from "../utils/fileLock";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const DEFAULT_SKILLS_FAILURE_FILE = "default-global-skills.failure.json";
@@ -93,36 +93,41 @@ async function mergeAndWriteState(
   stateFile: string,
   state: DefaultGlobalSkillsState,
   requestedPluginIds: ReadonlySet<string>,
+  lockRoot: string,
 ): Promise<void> {
   // Multiple workspace servers share the user-level bootstrap state. Distinct
   // plugin sets may install concurrently, so serialize the read-modify-write
   // cycle and preserve successful IDs recorded by a peer instead of letting
   // the last writer erase them. Atomic replacement also prevents readers from
   // observing partial JSON after a process interruption.
-  await withFileLock(stateFile, async () => {
-    const current = await readState(stateFile);
-    const plugins = new Set(state.plugins);
-    if (current?.marketplace === state.marketplace) {
-      for (const pluginId of current.plugins) {
-        // This invocation is authoritative for the IDs it evaluated (including
-        // explicit uninstall tombstones), while preserving disjoint IDs that a
-        // concurrent peer may have recorded.
-        if (!requestedPluginIds.has(pluginId)) plugins.add(pluginId);
+  await withFileLock(
+    stateFile,
+    async () => {
+      const current = await readState(stateFile);
+      const plugins = new Set(state.plugins);
+      if (current?.marketplace === state.marketplace) {
+        for (const pluginId of current.plugins) {
+          // This invocation is authoritative for the IDs it evaluated (including
+          // explicit uninstall tombstones), while preserving disjoint IDs that a
+          // concurrent peer may have recorded.
+          if (!requestedPluginIds.has(pluginId)) plugins.add(pluginId);
+        }
       }
-    }
-    await writeTextFileAtomic(
-      stateFile,
-      `${JSON.stringify(
-        {
-          ...state,
-          plugins: [...plugins].sort((left, right) => left.localeCompare(right)),
-        },
-        null,
-        2,
-      )}\n`,
-      { mode: 0o600 },
-    );
-  });
+      await writeTextFileAtomic(
+        stateFile,
+        `${JSON.stringify(
+          {
+            ...state,
+            plugins: [...plugins].sort((left, right) => left.localeCompare(right)),
+          },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+    },
+    { lockRoot },
+  );
 }
 
 function defaultStateFileForHomedir(homedir?: string): string {
@@ -381,7 +386,12 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
         .map((plugin) => plugin.id)
         .filter((pluginId) => recordedPluginIds.has(pluginId)),
     };
-    await mergeAndWriteState(stateFile, state, new Set(pluginSpecs.map((plugin) => plugin.id)));
+    await mergeAndWriteState(
+      stateFile,
+      state,
+      new Set(pluginSpecs.map((plugin) => plugin.id)),
+      fileLockRootForCoworkHome(paths.rootDir),
+    );
     await cleanupMigratedProductivitySkills({
       homedir: opts.homedir,
       recordedPluginIds,
@@ -451,7 +461,12 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
       .map((plugin) => plugin.id)
       .filter((pluginId) => recordedPluginIds.has(pluginId)),
   };
-  await mergeAndWriteState(stateFile, state, new Set(pluginSpecs.map((plugin) => plugin.id)));
+  await mergeAndWriteState(
+    stateFile,
+    state,
+    new Set(pluginSpecs.map((plugin) => plugin.id)),
+    fileLockRootForCoworkHome(paths.rootDir),
+  );
   await cleanupMigratedProductivitySkills({
     homedir: opts.homedir,
     recordedPluginIds,

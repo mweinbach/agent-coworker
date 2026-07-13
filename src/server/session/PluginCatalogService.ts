@@ -1,3 +1,4 @@
+import type { FetchLike } from "../../extensions/source";
 import {
   buildPluginCatalogSnapshot,
   buildRemoteMarketplacePluginDetail,
@@ -17,7 +18,10 @@ export class PluginCatalogService {
   private remoteCatalogRefreshQueued = false;
   private catalogEpoch = 0;
 
-  constructor(private readonly context: SessionContext) {}
+  constructor(
+    private readonly context: SessionContext,
+    private readonly fetchImpl: FetchLike = globalThis.fetch,
+  ) {}
 
   invalidateRemoteCatalogRefreshes() {
     this.catalogEpoch += 1;
@@ -31,6 +35,7 @@ export class PluginCatalogService {
       this.context.state.config,
       {
         includeRemoteMarketplace: opts.includeRemoteMarketplace ?? false,
+        fetchImpl: this.fetchImpl,
       },
     );
     if (opts.onlyIfEpoch !== undefined && opts.onlyIfEpoch !== this.catalogEpoch) {
@@ -98,6 +103,7 @@ export class PluginCatalogService {
   async emitPluginDetail(pluginId: string, scope?: PluginScope) {
     const localCatalog = await buildPluginCatalogSnapshot(this.context.state.config, {
       includeRemoteMarketplace: true,
+      fetchImpl: this.fetchImpl,
     });
     const localMatches = localCatalog.plugins.filter(
       (entry) => entry.id === pluginId && (scope === undefined || entry.scope === scope),
@@ -115,6 +121,7 @@ export class PluginCatalogService {
       plugin = await buildRemoteMarketplacePluginDetail({
         config: this.context.state.config,
         pluginId,
+        fetchImpl: this.fetchImpl,
       });
       if (plugin === null) {
         this.resolveInstalledPluginSelection(localCatalog, pluginId, scope);

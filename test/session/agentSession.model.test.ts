@@ -4,6 +4,7 @@ import { getAiCoworkerPaths } from "../../src/connect";
 import { upsertCustomModel } from "../../src/providers/customModels";
 import type { SessionEvent } from "../../src/server/protocol";
 import type { PersistedSessionMutation } from "../../src/server/sessionDb";
+import type { AgentConfig } from "../../src/types";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -392,19 +393,18 @@ describe("AgentSession", () => {
 
     test("configured custom model IDs can be selected for dynamic providers", async () => {
       const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-custom-model-"));
+      const config: AgentConfig = {
+        ...makeConfig(homeDir),
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        preferredChildModel: "claude-sonnet-4-5",
+      };
       await upsertCustomModel(
-        getAiCoworkerPaths({ homedir: homeDir }),
+        getAiCoworkerPaths({ homedir: path.dirname(config.userCoworkDir) }),
         "anthropic",
         "claude-custom-20260704",
       );
-      const { session, events } = makeSession({
-        config: {
-          ...makeConfig(homeDir),
-          provider: "anthropic",
-          model: "claude-sonnet-4-5",
-          preferredChildModel: "claude-sonnet-4-5",
-        },
-      });
+      const { session, events } = makeSession({ config });
 
       await session.setModel("claude-custom-20260704", "anthropic");
 
@@ -415,19 +415,22 @@ describe("AgentSession", () => {
 
     test("switching to a non-reasoning custom OpenAI model drops stale reasoning options", async () => {
       const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-reasoning-switch-"));
-      await upsertCustomModel(getAiCoworkerPaths({ homedir: homeDir }), "openai", "gpt-4o");
-      const { session, events } = makeSession({
-        config: {
-          ...makeConfig(homeDir),
-          provider: "openai",
-          model: "gpt-5.4",
-          preferredChildModel: "gpt-5.4",
-          // Prior reasoning-model selection left these in the config.
-          providerOptions: {
-            openai: { reasoningEffort: "high", reasoningSummary: "detailed" },
-          },
+      const config: AgentConfig = {
+        ...makeConfig(homeDir),
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        // Prior reasoning-model selection left these in the config.
+        providerOptions: {
+          openai: { reasoningEffort: "high", reasoningSummary: "detailed" },
         },
-      });
+      };
+      await upsertCustomModel(
+        getAiCoworkerPaths({ homedir: path.dirname(config.userCoworkDir) }),
+        "openai",
+        "gpt-4o",
+      );
+      const { session, events } = makeSession({ config });
 
       await session.setModel("gpt-4o", "openai");
 

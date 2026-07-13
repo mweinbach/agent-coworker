@@ -9,6 +9,13 @@ import axeBaseline from "./axe-baseline.json" with { type: "json" };
 
 const knownColorContrastSelectors = axeBaseline.colorContrast.selectors;
 
+type TextContrastOptions = {
+  backgroundSelector: string;
+  foregroundSelector: string;
+  label: string;
+  minimumRatio: number;
+};
+
 async function isKnownColorContrastTarget(
   page: Page,
   target: Array<string | string[]>,
@@ -39,6 +46,79 @@ export async function settleQualityPage(page: Page): Promise<void> {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
   });
+}
+
+export async function assertMinimumTextContrast(
+  page: Page,
+  options: TextContrastOptions,
+): Promise<void> {
+  const result = await page.evaluate(({ backgroundSelector, foregroundSelector }) => {
+    const foregroundElement = document.querySelector(foregroundSelector);
+    if (!foregroundElement) {
+      throw new Error(`Text contrast foreground was not found: ${foregroundSelector}`);
+    }
+    const backgroundElement = document.querySelector(backgroundSelector);
+    if (!backgroundElement) {
+      throw new Error(`Text contrast background was not found: ${backgroundSelector}`);
+    }
+
+    const sampleColor = (color: string) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        throw new Error("Canvas 2D context is unavailable for text contrast sampling");
+      }
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      return { alpha, blue, green, red };
+    };
+    const relativeLuminance = (red: number, green: number, blue: number) => {
+      const linearize = (channel: number) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
+    };
+
+    const foregroundCss = getComputedStyle(foregroundElement).color;
+    const backgroundCss = getComputedStyle(backgroundElement).backgroundColor;
+    const foreground = sampleColor(foregroundCss);
+    const background = sampleColor(backgroundCss);
+    if (background.alpha !== 255) {
+      throw new Error(
+        `Text contrast background must be opaque: ${backgroundSelector} resolved to ${backgroundCss}`,
+      );
+    }
+    const foregroundAlpha = foreground.alpha / 255;
+    const effectiveForeground = {
+      blue: foreground.blue * foregroundAlpha + background.blue * (1 - foregroundAlpha),
+      green: foreground.green * foregroundAlpha + background.green * (1 - foregroundAlpha),
+      red: foreground.red * foregroundAlpha + background.red * (1 - foregroundAlpha),
+    };
+    const foregroundLuminance = relativeLuminance(
+      effectiveForeground.red,
+      effectiveForeground.green,
+      effectiveForeground.blue,
+    );
+    const backgroundLuminance = relativeLuminance(
+      background.red,
+      background.green,
+      background.blue,
+    );
+    const ratio =
+      (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+      (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+    return { backgroundCss, foregroundCss, ratio };
+  }, options);
+
+  expect(
+    result.ratio,
+    `${options.label} contrast is ${result.ratio.toFixed(2)}:1 (${result.foregroundCss} on ${result.backgroundCss}); expected at least ${options.minimumRatio}:1`,
+  ).toBeGreaterThanOrEqual(options.minimumRatio);
 }
 
 export async function assertNoSeriousAxeViolations(

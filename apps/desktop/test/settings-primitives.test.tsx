@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 
-import { EntityIcon } from "../src/ui/settings/SettingsPrimitives";
+import { EntityIcon, SettingsStatusPill } from "../src/ui/settings/SettingsPrimitives";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("settings primitives", () => {
+  test("uses readable foreground text for success status pills", () => {
+    const html = renderToStaticMarkup(
+      createElement(SettingsStatusPill, { tone: "success" }, "Connected"),
+    );
+
+    expect(html).toContain("text-foreground");
+    expect(html).not.toContain("text-success");
+  });
+
   test("EntityIcon retries image rendering when src changes after an error", async () => {
     const harness = setupJsdom();
 

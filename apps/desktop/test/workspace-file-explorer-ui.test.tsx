@@ -128,6 +128,42 @@ describe("workspace file explorer UI", () => {
     resetAppStore();
   });
 
+  test.serial(
+    "uses effective drawer visibility instead of the persisted context preference",
+    async () => {
+      const harness = setupJsdom({
+        includeAnimationFrame: true,
+        extraGlobals: { ResizeObserver: MockResizeObserver },
+      });
+      let root: Root | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+        useAppStore.setState({ contextSidebarCollapsed: true });
+
+        await act(async () => {
+          root?.render(
+            createElement(WorkspaceFileExplorer, {
+              active: true,
+              commands: explorerCommands,
+              workspaceId,
+            }),
+          );
+          await flushUi();
+        });
+
+        expect(container.textContent).toContain("README.md");
+        expect(listDirectoryMock).toHaveBeenCalled();
+        expect(watchWorkspaceDirectoryMock).toHaveBeenCalled();
+      } finally {
+        await unmountExplorer(root);
+        harness.restore();
+      }
+    },
+  );
+
   test.serial("shows row overflow control on group focus-within for keyboard users", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: true,

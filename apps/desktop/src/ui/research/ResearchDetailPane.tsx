@@ -14,6 +14,7 @@ import type { ResearchDetail } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { formatRelativeAge } from "../../lib/time";
+import { useElementWidth } from "../../lib/useElementWidth";
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
@@ -30,7 +31,7 @@ const RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH = 36 * 16;
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
     case "completed":
-      return "border-success/25 bg-success/10 text-success";
+      return "border-success/25 bg-success/10 text-foreground";
     case "running":
     case "pending":
       return "border-primary/25 bg-primary/10 text-primary";
@@ -73,35 +74,6 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
     return 0;
   }
   return Math.max(0, nowMs - startedMs);
-}
-
-function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>): number {
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) {
-      return;
-    }
-
-    setWidth(node.getBoundingClientRect().width);
-
-    if (typeof ResizeObserver !== "function") {
-      return;
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      const nextWidth = entries[0]?.contentRect.width;
-      if (typeof nextWidth === "number") {
-        setWidth(nextWidth);
-      }
-    });
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [ref]);
-
-  return width;
 }
 
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
@@ -382,6 +354,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               )}
               aria-label="Sources"
               aria-hidden={!showSourcesPanel}
+              inert={!showSourcesPanel}
               style={{
                 ...sourcesPanelStyle,
                 zIndex: sourcesOverlay ? sourcesOwner?.zIndex : sourcesPanelStyle.zIndex,

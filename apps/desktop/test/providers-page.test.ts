@@ -560,6 +560,8 @@ describe("desktop providers page", () => {
     expect(html).toContain("Providers");
     expect(html).toContain("Codex CLI");
     expect(html).toContain("New Provider");
+    expect(html).toContain("bg-success/10 text-foreground border-success/20");
+    expect(html).not.toContain("bg-success/10 text-success border-success/20");
     // Unconnected providers live in the closed dialog, not on the page.
     expect(html).not.toContain("Google");
     expect(html).not.toContain("OpenAI");

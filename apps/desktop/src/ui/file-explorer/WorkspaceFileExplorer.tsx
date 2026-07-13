@@ -26,6 +26,7 @@ import { cn } from "../../lib/utils";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 
 export type WorkspaceFileExplorerProps = {
+  active?: boolean;
   workspaceId: string;
   className?: string;
   commands?: WorkspaceFileExplorerCommands;
@@ -512,6 +513,7 @@ const ExplorerTreeRowView = memo(
 );
 
 export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
+  active,
   workspaceId,
   className,
   commands = DEFAULT_EXPLORER_COMMANDS,
@@ -523,6 +525,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const refreshSignal = useAppStore((s) => s.workspaceExplorerRefreshById[workspaceId] ?? 0);
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
+  const explorerActive = active ?? !contextSidebarCollapsed;
   const refresh = useAppStore((s) => s.refreshWorkspaceFiles);
   const selectFile = useAppStore((s) => s.selectWorkspaceFile);
   const openFile = useAppStore((s) => s.openWorkspaceFile);
@@ -541,13 +544,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const scopeRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
-  const explorerActiveRef = useRef(!contextSidebarCollapsed);
+  const explorerActiveRef = useRef(explorerActive);
   const mountedRef = useRef(true);
   /** Latest directory snapshots (for expand: avoid toggling `loading` when cached data exists). */
   const directoryByPathRef = useRef<Record<string, DirectorySnapshot>>({});
   /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
   const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
-  explorerActiveRef.current = !contextSidebarCollapsed;
+  explorerActiveRef.current = explorerActive;
 
   const rootPath = useMemo(() => {
     const candidate = explorer?.rootPath ?? workspacePath ?? "";
@@ -587,10 +590,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, [directoryByPath]);
 
   useEffect(() => {
-    if (!contextSidebarCollapsed && !explorer && workspacePath) {
+    if (explorerActive && !explorer && workspacePath) {
       void refresh(workspaceId).catch(() => {});
     }
-  }, [contextSidebarCollapsed, explorer, refresh, workspaceId, workspacePath]);
+  }, [explorer, explorerActive, refresh, workspaceId, workspacePath]);
 
   const loadDirectory = useCallback(
     async (path: string, opts?: { background?: boolean; silent?: boolean }): Promise<void> => {
@@ -791,7 +794,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     setExpandedPaths(nextExpanded);
     selectFile(workspaceId, null);
 
-    if (!contextSidebarCollapsed) {
+    if (explorerActive) {
       const hasCachedListings = cached && Object.keys(cached).length > 0;
       if (hasCachedListings) {
         void loadDirectory(rootPath, { background: true }).catch(() => {});
@@ -799,7 +802,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         void loadDirectory(rootPath).catch(() => {});
       }
     }
-  }, [commands, contextSidebarCollapsed, loadDirectory, rootPath, selectFile, workspaceId]);
+  }, [commands, explorerActive, loadDirectory, rootPath, selectFile, workspaceId]);
 
   useEffect(() => {
     return () => {
@@ -814,7 +817,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, []);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed) {
+    if (!rootPath || !explorerActive) {
       setWatchSupported(null);
       return;
     }
@@ -898,29 +901,25 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       commands.clearDirectoryListingScope({ workspaceId, path: rootPath, recursive: true });
       void commands.unwatchWorkspaceDirectory({ workspaceId, rootPath }).catch(() => {});
     };
-  }, [commands, contextSidebarCollapsed, loadDirectory, rootPath, workspaceId]);
+  }, [commands, explorerActive, loadDirectory, rootPath, workspaceId]);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed) return;
+    if (!rootPath || !explorerActive) return;
     void refreshExpandedDirectories({ invalidate: true });
-  }, [contextSidebarCollapsed, rootPath, refreshExpandedDirectories, showHiddenFiles]);
+  }, [explorerActive, rootPath, refreshExpandedDirectories, showHiddenFiles]);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed || refreshSignal === 0) return;
+    if (!rootPath || !explorerActive || refreshSignal === 0) return;
     void refreshExpandedDirectories({ invalidate: true });
-  }, [contextSidebarCollapsed, refreshExpandedDirectories, refreshSignal, rootPath]);
+  }, [explorerActive, refreshExpandedDirectories, refreshSignal, rootPath]);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed) return;
+    if (!rootPath || !explorerActive) return;
     const intervalMs =
       watchSupported === true ? WATCH_REVALIDATION_INTERVAL_MS : FALLBACK_REFRESH_INTERVAL_MS;
     const interval = window.setInterval(() => {
       if (
-        !shouldAutoRefreshExplorer(
-          document.visibilityState,
-          document.hasFocus(),
-          !contextSidebarCollapsed,
-        )
+        !shouldAutoRefreshExplorer(document.visibilityState, document.hasFocus(), explorerActive)
       ) {
         return;
       }
@@ -928,10 +927,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     }, intervalMs);
 
     return () => window.clearInterval(interval);
-  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath, watchSupported]);
+  }, [explorerActive, refreshExpandedDirectories, rootPath, watchSupported]);
 
   useEffect(() => {
-    if (!rootPath || contextSidebarCollapsed) return;
+    if (!rootPath || !explorerActive) return;
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         void refreshExpandedDirectories({ invalidate: true });
@@ -948,7 +947,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [contextSidebarCollapsed, refreshExpandedDirectories, rootPath]);
+  }, [explorerActive, refreshExpandedDirectories, rootPath]);
 
   const openEntryMenu = useCallback(
     async (entry: ExplorerEntry) => {

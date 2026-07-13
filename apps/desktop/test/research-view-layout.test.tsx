@@ -11,6 +11,30 @@ const { DEFAULT_RESEARCH_SETTINGS } = await import("../src/app/types");
 const { ResearchView } = await import("../src/ui/ResearchView");
 const { collectResearchSubtreeIds } = await import("../src/ui/research/ResearchCardGrid");
 
+class LayoutResizeObserver {
+  static width = 640;
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(target: Element) {
+    this.callback(
+      [
+        {
+          target,
+          contentRect: { width: LayoutResizeObserver.width },
+        } as ResizeObserverEntry,
+      ],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  disconnect() {}
+  unobserve() {}
+}
+
 function resetAppStore(overrides: Record<string, unknown> = {}) {
   const state = useAppStore.getInitialState();
   useAppStore.setState({
@@ -85,10 +109,138 @@ describe("research view layout", () => {
       expect(detailPane?.className).toContain("min-w-0");
       expect(container.textContent).toContain("Select a run or follow-up");
       expect(container.textContent).not.toContain("Deep Research runs in the background");
+      const historyLabel = Array.from(container.querySelectorAll("div")).find(
+        (element) => element.textContent?.trim() === "Research",
+      );
+      expect(historyLabel?.className).toContain("text-foreground/72");
 
       await act(async () => {
         root.unmount();
       });
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("uses one-pane history navigation when its actual container is compact", async () => {
+    const harness = setupJsdom({ extraGlobals: { ResizeObserver: LayoutResizeObserver } });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const research = {
+        id: "research-compact",
+        parentResearchId: null,
+        title: "Compact research",
+        prompt: "Research prompt",
+        status: "completed",
+        interactionId: null,
+        lastEventId: null,
+        inputs: { files: [] },
+        settings: DEFAULT_RESEARCH_SETTINGS,
+        outputsMarkdown: "# Compact research\n\nSummary",
+        thoughtSummaries: [],
+        sources: [],
+        createdAt: "2026-04-21T21:00:00.000Z",
+        updatedAt: "2026-04-21T21:10:00.000Z",
+        error: null,
+      };
+      resetAppStore({
+        researchById: { [research.id]: research },
+        researchOrder: [research.id],
+        selectedResearchId: research.id,
+      });
+
+      await act(async () => root.render(createElement(ResearchView)));
+      await act(async () => await Promise.resolve());
+
+      const view = container.querySelector('[data-research-layout="compact"]');
+      const historyButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open research history"]',
+      );
+      expect(view).not.toBeNull();
+      expect(historyButton).not.toBeNull();
+      expect(container.textContent).toContain("Summary");
+
+      await act(async () => historyButton?.click());
+      expect(container.textContent).toContain("Select a run or follow-up");
+      expect(
+        container.querySelector('[role="listbox"][aria-label="Research history"]'),
+      ).not.toBeNull();
+
+      const option = container.querySelector<HTMLElement>('[role="option"]');
+      await act(async () => option?.click());
+      expect(container.textContent).toContain("Summary");
+
+      await act(async () => root.unmount());
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("returns from compact history to the preserved new-research draft", async () => {
+    const harness = setupJsdom({ extraGlobals: { ResizeObserver: LayoutResizeObserver } });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      const research = {
+        id: "research-existing",
+        parentResearchId: null,
+        title: "Existing research",
+        prompt: "Research prompt",
+        status: "completed",
+        interactionId: null,
+        lastEventId: null,
+        inputs: { files: [] },
+        settings: DEFAULT_RESEARCH_SETTINGS,
+        outputsMarkdown: "# Existing research",
+        thoughtSummaries: [],
+        sources: [],
+        createdAt: "2026-04-21T21:00:00.000Z",
+        updatedAt: "2026-04-21T21:10:00.000Z",
+        error: null,
+      };
+      resetAppStore({
+        researchById: { [research.id]: research },
+        researchOrder: [research.id],
+        selectedResearchId: null,
+        researchCreationDraft: {
+          ...useAppStore.getInitialState().researchCreationDraft,
+          text: "Keep this local draft",
+        },
+      });
+
+      await act(async () => root.render(createElement(ResearchView)));
+      await act(async () => await Promise.resolve());
+
+      const draft = container.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder^="Investigate a market"]',
+      );
+      expect(draft?.value).toBe("Keep this local draft");
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-label="Open research history"]')
+          ?.click(),
+      );
+      const returnButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Return to research draft"]',
+      );
+      expect(returnButton?.textContent).toContain("Back");
+
+      await act(async () => returnButton?.click());
+      expect(
+        container.querySelector<HTMLTextAreaElement>(
+          'textarea[placeholder^="Investigate a market"]',
+        )?.value,
+      ).toBe("Keep this local draft");
+
+      await act(async () => root.unmount());
     } finally {
       resetAppStore();
       harness.restore();

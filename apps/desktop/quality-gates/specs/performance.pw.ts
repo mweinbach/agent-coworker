@@ -170,6 +170,8 @@ test("1,000 streaming deltas stay inside publication and render budgets", async 
       budgets.deltaBurst.streamingMarkdownRenders,
     );
     expect(metrics.streamingMarkdownRenders).toBeLessThanOrEqual(metrics.feedRowRenders);
+    // Streaming work has its own metric above; this budget covers the static
+    // DesktopMarkdown pass after the streamed item is finalized.
     expect(metrics.desktopMarkdownRenders).toBeGreaterThan(0);
     expect(metrics.desktopMarkdownRenders).toBeLessThanOrEqual(
       budgets.deltaBurst.desktopMarkdownRenders,

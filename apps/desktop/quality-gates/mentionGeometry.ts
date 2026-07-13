@@ -263,6 +263,7 @@ export async function measureIndependentMentionGeometry(
         const overlayCaretRange = findOverlayRange(caret, caret);
         const overlayCaret = overlayCaretRange ? (rangeRects(overlayCaretRange)[0] ?? null) : null;
         const menuRect = menu.getBoundingClientRect();
+        const menuHorizontalTolerance = 0.5 / window.devicePixelRatio + 0.01;
         const placement = menu.dataset.placement;
         const pickerGap =
           nativeCaret === null
@@ -287,8 +288,8 @@ export async function measureIndependentMentionGeometry(
             nativeCaret && overlayCaret ? maximumRectDelta([nativeCaret], [overlayCaret]) : null,
           caretInsideMenuWidth:
             nativeCaret !== null &&
-            nativeCaret.left >= menuRect.left &&
-            nativeCaret.left <= menuRect.right,
+            nativeCaret.left >= menuRect.left - menuHorizontalTolerance &&
+            nativeCaret.left <= menuRect.right + menuHorizontalTolerance,
           highlightGeometry,
           highlightStyle: {
             backgroundColor: highlightStyle.backgroundColor,

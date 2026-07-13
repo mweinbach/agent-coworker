@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../src/platform/sandbox/policy";
 import {
   __internal,
   CODEX_APP_SERVER_MANAGED_VERSION,
@@ -11,6 +11,12 @@ import {
   resolveCodexAppServerCommand,
   updateManagedCodexAppServer,
 } from "../../src/providers/codexAppServerResolver";
+
+function testTempRoot(): string {
+  const root = scratchRoots()[0];
+  if (!root) throw new Error("No platform scratch root is available for tests");
+  return root;
+}
 
 // fakeReleaseFetch serves the literal bytes "managed app-server" for app-server
 // downloads and "managed code-mode host" for codex-code-mode-host downloads.
@@ -85,7 +91,7 @@ function fakeReleaseFetch(
 }
 
 async function createFakeCodexBin(prefix: string, name = "codex"): Promise<string> {
-  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const binDir = await fs.mkdtemp(path.join(testTempRoot(), prefix));
   const codexPath = path.join(binDir, name);
   await fs.writeFile(codexPath, "#!/bin/sh\n", "utf8");
   await fs.chmod(codexPath, 0o755);
@@ -185,7 +191,7 @@ describe("codex app-server resolver", () => {
     process.env.NODE_ENV = "production";
     process.env.COWORK_CODEX_APP_SERVER_COMMAND = "/tmp/custom-codex-app-server";
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "";
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-prod-ignore-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-prod-ignore-"));
     const requestedVersions: string[] = [];
 
     const command = await resolveCodexAppServerCommand({
@@ -207,7 +213,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("downloads the app-pinned managed app-server version", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-pinned-download-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-pinned-download-"));
     const requestedVersions: string[] = [];
 
     const command = await resolveCodexAppServerCommand({
@@ -228,7 +234,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("ignores other managed versions and downloads the app-pinned version", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-ignore-managed-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-ignore-managed-"));
     for (const version of ["0.135.0", "0.999.0"]) {
       await __internal.installCodexAppServer(
         { version },
@@ -259,7 +265,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("does not fall back to system codex when managed download fails", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-no-system-fallback-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-no-system-fallback-"));
     const binDir = await createFakeCodexBin("cowork-codex-no-system-fallback-bin-");
 
     await expect(
@@ -281,7 +287,7 @@ describe("codex app-server resolver", () => {
   test.serial(
     "status reports the missing app-pinned version without probing system codex",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-pin-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-status-pin-"));
 
       const status = await getCodexAppServerInstallStatus(
         { checkLatest: true },
@@ -312,7 +318,7 @@ describe("codex app-server resolver", () => {
   test.serial(
     "status reports the installed app-pinned version without update metadata",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-status-installed-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-status-installed-"));
       await updateManagedCodexAppServer(
         {},
         {
@@ -350,7 +356,7 @@ describe("codex app-server resolver", () => {
   );
 
   test.serial("update installs only the app-pinned managed app-server", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-update-pinned-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-update-pinned-"));
     const requestedVersions: string[] = [];
 
     const status = await updateManagedCodexAppServer(
@@ -378,7 +384,7 @@ describe("codex app-server resolver", () => {
   test.serial(
     "returns the promoted current path for app-pinned managed installs on darwin",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-darwin-current-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-darwin-current-"));
       const target = { platform: "darwin" as const, arch: "arm64" };
       const versionedPath = __internal.managedExecutablePath(
         homeDir,
@@ -442,7 +448,7 @@ describe("codex app-server resolver", () => {
   );
 
   test.serial("keeps Windows update usable when current promotion is locked", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-locked-current-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-locked-current-"));
     let attemptedPromotion = false;
 
     const status = await updateManagedCodexAppServer(
@@ -481,7 +487,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("system helper skips repo-local node_modules codex binaries", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-shadow-root-"));
+    const rootDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-shadow-root-"));
     const localBinDir = path.join(rootDir, "node_modules", ".bin");
     const systemBinDir = path.join(rootDir, "system-bin");
     await fs.mkdir(localBinDir, { recursive: true });
@@ -517,7 +523,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("system helper discovers codex.cmd on Windows PATH", async () => {
-    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-win-path-bin-"));
+    const binDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-win-path-bin-"));
     const codexCmdPath = path.join(binDir, "codex.cmd");
     const probedCalls: string[] = [];
     process.env.PATHEXT = ".CMD;.EXE";
@@ -586,7 +592,7 @@ describe("codex app-server resolver", () => {
   });
 
   test.serial("installs the code-mode host companion next to the app-server", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-install-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-host-install-"));
     const target = { platform: "win32" as const, arch: "x64" };
 
     const command = await resolveCodexAppServerCommand({
@@ -610,39 +616,42 @@ describe("codex app-server resolver", () => {
     expect(await fs.readFile(currentHostPath, "utf8")).toBe("managed code-mode host");
   });
 
-  test.serial("repairs an existing managed install that is missing the code-mode host", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-repair-"));
-    const target = { platform: "win32" as const, arch: "x64" };
-    const versionedPath = __internal.managedExecutablePath(
-      homeDir,
-      CODEX_APP_SERVER_MANAGED_VERSION,
-      target,
-    );
-    await fs.mkdir(path.dirname(versionedPath), { recursive: true });
-    await fs.writeFile(versionedPath, "managed app-server", "utf8");
-    await fs.writeFile(
-      `${versionedPath}.version`,
-      `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
-      "utf8",
-    );
+  test.serial(
+    "repairs an existing managed install that is missing the code-mode host",
+    async () => {
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-host-repair-"));
+      const target = { platform: "win32" as const, arch: "x64" };
+      const versionedPath = __internal.managedExecutablePath(
+        homeDir,
+        CODEX_APP_SERVER_MANAGED_VERSION,
+        target,
+      );
+      await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+      await fs.writeFile(versionedPath, "managed app-server", "utf8");
+      await fs.writeFile(
+        `${versionedPath}.version`,
+        `${CODEX_APP_SERVER_MANAGED_VERSION}\n`,
+        "utf8",
+      );
 
-    const command = await resolveCodexAppServerCommand({
-      homeDir,
-      platform: "win32",
-      arch: "x64",
-      fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
-      expectedChecksums: FAKE_ASSET_CHECKSUMS,
-    });
+      const command = await resolveCodexAppServerCommand({
+        homeDir,
+        platform: "win32",
+        arch: "x64",
+        fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+        expectedChecksums: FAKE_ASSET_CHECKSUMS,
+      });
 
-    expect(command.command).toBe(versionedPath);
-    const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
-    expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
-  });
+      expect(command.command).toBe(versionedPath);
+      const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
+      expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
+    },
+  );
 
   test.serial(
     "falls back to the installed app-server when the code-mode host repair fails",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-fallback-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-host-fallback-"));
       const target = { platform: "win32" as const, arch: "x64" };
       const versionedPath = __internal.managedExecutablePath(
         homeDir,
@@ -676,7 +685,7 @@ describe("codex app-server resolver", () => {
   test.serial(
     "rejects an install whose code-mode host bytes fail checksum verification",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-host-bad-sum-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-host-bad-sum-"));
       const target = { platform: "win32" as const, arch: "x64" };
 
       await expect(
@@ -712,7 +721,7 @@ describe("codex app-server resolver", () => {
   test.serial(
     "rejects a managed install whose downloaded bytes fail checksum verification",
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-bad-checksum-"));
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-bad-checksum-"));
       const target = { platform: "win32" as const, arch: "x64" };
 
       // No expectedChecksums override -> verified against the real repo-pinned
@@ -741,7 +750,7 @@ describe("codex app-server resolver", () => {
   );
 
   test.serial("refuses to install a managed version with no pinned checksum", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-unpinned-version-"));
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-unpinned-version-"));
 
     await expect(
       __internal.installCodexAppServer(

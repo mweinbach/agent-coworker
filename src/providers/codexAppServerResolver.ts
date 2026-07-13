@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { fetchWithGitHubAuth } from "../extensions/github";
+import { hostArch, hostPlatform } from "../platform/host";
+import { scratchRoots } from "../platform/sandbox/policy";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
 import { sha256FileHex } from "../utils/hash";
@@ -192,8 +193,8 @@ function normalizeBuildArch(arch: string): string {
 
 function currentTarget(overrides: CodexAppServerResolverOverrides = {}): BuildTarget {
   return {
-    platform: overrides.platform ?? process.platform,
-    arch: normalizeBuildArch(overrides.arch ?? process.arch),
+    platform: overrides.platform ?? hostPlatform(),
+    arch: normalizeBuildArch(overrides.arch ?? hostArch()),
   };
 }
 
@@ -349,7 +350,7 @@ async function resolveSystemCodexCandidates(
   overrides: CodexAppServerResolverOverrides,
 ): Promise<string[]> {
   const pathEnv = overrides.pathEnv ?? process.env.PATH ?? "";
-  const platform = overrides.platform ?? process.platform;
+  const platform = overrides.platform ?? hostPlatform();
   const candidates: string[] = [];
   const seen = new Set<string>();
   for (const rawDir of pathEnv.split(path.delimiter)) {
@@ -668,7 +669,7 @@ async function repairCodeModeHostBestEffort(opts: {
   overrides: CodexAppServerResolverOverrides;
 }): Promise<void> {
   const tempRoot = path.join(
-    os.tmpdir(),
+    scratchRoots(opts.target.platform)[0] ?? resolveAuthHomeDir(),
     `cowork-codex-code-mode-host-${process.pid}-${++installTmpCounter}`,
   );
   try {
@@ -809,7 +810,10 @@ async function installCodexAppServer(
 
   const installPromise: Promise<CodexAppServerCommand> = (async () => {
     const parent = path.dirname(executablePath);
-    const tempRoot = path.join(os.tmpdir(), `cowork-codex-app-server-${process.pid}-${Date.now()}`);
+    const tempRoot = path.join(
+      scratchRoots(target.platform)[0] ?? homeDir,
+      `cowork-codex-app-server-${process.pid}-${Date.now()}`,
+    );
     await fs.mkdir(parent, { recursive: true });
     await fs.mkdir(tempRoot, { recursive: true });
     try {

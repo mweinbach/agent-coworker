@@ -24,6 +24,7 @@ mock.module("../src/lib/agentSocket", () => ({
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
 const { CommandPalette } = await import("../src/ui/CommandPalette");
+const { requestDesktopRailCommand } = await import("../src/lib/desktopRailCommands");
 const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
 
 const defaultStoreState = useAppStore.getState();
@@ -400,6 +401,44 @@ describe("app window-mode notification routing", () => {
         await act(async () => {
           root?.unmount();
         });
+      }
+      harness.restore();
+    }
+  });
+
+  test("settings handles sidebar commands with its local narrow navigation drawer", async () => {
+    const harness = setupJsdom();
+    const toggleSidebar = mock(() => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 680,
+        writable: true,
+      });
+      seedReadyState();
+      useAppStore.setState({ view: "settings", toggleSidebar } as never);
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(App));
+      });
+      const navigation = container.querySelector<HTMLElement>(
+        '[role="dialog"][aria-label="Settings navigation"]',
+      );
+      expect(navigation?.getAttribute("aria-hidden")).toBe("true");
+
+      await act(async () => requestDesktopRailCommand("toggle-sidebar"));
+
+      expect(navigation?.hasAttribute("aria-hidden")).toBe(false);
+      expect(navigation?.hasAttribute("inert")).toBe(false);
+      expect(toggleSidebar).not.toHaveBeenCalled();
+    } finally {
+      if (root) {
+        await act(async () => root?.unmount());
       }
       harness.restore();
     }

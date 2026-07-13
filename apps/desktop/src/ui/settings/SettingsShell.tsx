@@ -8,6 +8,7 @@ import {
   HistoryIcon,
   type LucideIcon,
   MonitorIcon,
+  PanelLeftIcon,
   RefreshCcwIcon,
   ShieldCheckIcon,
   SlidersHorizontalIcon,
@@ -16,14 +17,18 @@ import {
   WifiIcon,
   WrenchIcon,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
 import { includeDevelopmentSettings } from "../../app/settingsPageAvailability";
 import { useAppStore } from "../../app/store";
 import type { SettingsPageId } from "../../app/types";
+import { Button } from "../../components/ui/button";
 import { isPackagedDesktopApp } from "../../lib/desktopCommands";
 import { type DesktopPlatformInfo, getDesktopPlatformInfo } from "../../lib/desktopPlatform";
+import { onDesktopRailCommand } from "../../lib/desktopRailCommands";
+import { useAdaptiveLayout } from "../../lib/useAdaptiveLayout";
 import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
+import { AdaptiveRailSurface } from "../layout/AdaptiveRailSurface";
 import { BackupPage } from "./pages/BackupPage";
 import { DesktopPage } from "./pages/DesktopPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
@@ -283,7 +288,7 @@ function SettingsNavigation({
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
-    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 min-w-0 flex-col border-r border-border/50 max-[860px]:border-r-0 max-[860px]:border-b">
+    <>
       <div className="shrink-0 settings-shell__nav-header border-b border-border/50">
         <div className="settings-shell__nav-titleband">
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
@@ -312,10 +317,10 @@ function SettingsNavigation({
         className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2 pb-4"
         aria-label="Settings sections"
       >
-        <div className="flex flex-col gap-3 max-[860px]:flex-row max-[860px]:flex-wrap max-[860px]:gap-x-4 max-[860px]:gap-y-3">
+        <div className="flex flex-col gap-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/58">
+              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/72">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
@@ -348,7 +353,7 @@ function SettingsNavigation({
           ))}
         </div>
       </nav>
-    </aside>
+    </>
   );
 }
 
@@ -360,6 +365,31 @@ export function SettingsShell() {
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const adaptiveLayout = useAdaptiveLayout({
+    contextSidebarCollapsed: true,
+    hasContextSidebar: false,
+    leftSidebarWidth: sidebarWidth,
+    rightSidebarMaximumWidth: 0,
+    rightSidebarMinimumWidth: 0,
+    rightSidebarWidth: 0,
+    sidebarCollapsed: false,
+  });
+  const effectiveSidebarWidth = adaptiveLayout.leftOverlay
+    ? Math.max(160, Math.min(440, sidebarWidth))
+    : adaptiveLayout.leftWidth;
+  const navigationActive =
+    adaptiveLayout.leftInline || (adaptiveLayout.leftOverlay && navigationOpen);
+  useEffect(
+    () =>
+      onDesktopRailCommand((command) => {
+        if (command !== "toggle-sidebar") return;
+        if (adaptiveLayout.leftOverlay) {
+          setNavigationOpen((open) => !open);
+        }
+      }),
+    [adaptiveLayout.leftOverlay],
+  );
   const settingsGroups = getSettingsGroups(remoteAccessAvailable, {
     includeDevelopmentPages: includeDevelopmentSettings(packaged || isPackagedDesktopApp()),
   });
@@ -373,16 +403,49 @@ export function SettingsShell() {
   const handleChromeChange = useCallback((next: SettingsChromeState) => {
     setPageChromeState(next);
   }, []);
+  const handleSelectPage = useCallback(
+    (page: SettingsPageId) => {
+      setSettingsPage(page);
+      if (adaptiveLayout.leftOverlay) {
+        setNavigationOpen(false);
+      }
+    },
+    [adaptiveLayout.leftOverlay, setSettingsPage],
+  );
   const platformInfo = getDesktopPlatformInfo();
-  const settingsDragZoneStyle = getSettingsDragZoneStyle(sidebarWidth, platformInfo);
+  const settingsDragZoneStyle = getSettingsDragZoneStyle(
+    adaptiveLayout.leftInline ? adaptiveLayout.leftWidth : 0,
+    platformInfo,
+  );
   const isMacos = platformInfo.platform === "macos";
 
   const isBackupPage = activePage.id === "backup";
+  const navigationToggle = adaptiveLayout.leftOverlay ? (
+    <Button
+      aria-expanded={navigationOpen}
+      aria-label={navigationOpen ? "Close settings navigation" : "Open settings navigation"}
+      className="app-native-no-drag shrink-0"
+      onClick={() => setNavigationOpen((open) => !open)}
+      size="icon-sm"
+      type="button"
+      variant="ghost"
+    >
+      <PanelLeftIcon aria-hidden="true" />
+    </Button>
+  ) : null;
 
   return (
     <div
       className="settings-shell relative grid h-full min-h-0 min-w-0 bg-transparent"
-      style={{ "--settings-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+      data-layout-tier={adaptiveLayout.tier}
+      style={
+        {
+          "--settings-sidebar-width": `${effectiveSidebarWidth}px`,
+          gridTemplateColumns: adaptiveLayout.leftInline
+            ? `${adaptiveLayout.leftWidth}px minmax(0, 1fr)`
+            : "minmax(0, 1fr)",
+        } as CSSProperties
+      }
     >
       {platformInfo.sidebarTitlebandMode === "native" ? (
         <div
@@ -396,12 +459,22 @@ export function SettingsShell() {
         style={settingsDragZoneStyle}
         aria-hidden="true"
       />
-      <SettingsNavigation
-        activePage={activePage.id}
-        onSelectPage={setSettingsPage}
-        onBack={closeSettings}
-        settingsGroups={settingsGroups}
-      />
+      <AdaptiveRailSurface
+        active={navigationActive}
+        className="settings-shell__nav app-left-sidebar-pane flex h-full min-h-0 min-w-0 flex-col border-r border-border/50"
+        label="Settings navigation"
+        onClose={() => setNavigationOpen(false)}
+        overlay={adaptiveLayout.leftOverlay}
+        side="left"
+        width={effectiveSidebarWidth}
+      >
+        <SettingsNavigation
+          activePage={activePage.id}
+          onSelectPage={handleSelectPage}
+          onBack={closeSettings}
+          settingsGroups={settingsGroups}
+        />
+      </AdaptiveRailSurface>
 
       <main className="settings-shell__main app-main-content flex min-h-0 min-w-0 flex-col">
         <SettingsChromeProvider onChromeChange={handleChromeChange}>
@@ -419,7 +492,7 @@ export function SettingsShell() {
                     ? ""
                     : "sticky top-0 z-10"
                   : cn(
-                      "px-5 max-[860px]:px-4",
+                      "px-5 max-[719px]:px-4",
                       isBackupPage ? "pb-3 pt-4" : "sticky top-0 z-10 py-4",
                     ),
               )}
@@ -427,10 +500,13 @@ export function SettingsShell() {
               {isMacos ? (
                 <>
                   <div className="settings-shell__page-titleband">
-                    <div className="settings-shell__page-titleband-row flex flex-col gap-3 px-5 max-[860px]:px-4 sm:flex-row sm:items-end sm:justify-between">
-                      <h1 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">
-                        {meta.title}
-                      </h1>
+                    <div className="settings-shell__page-titleband-row flex flex-col gap-3 px-5 max-[719px]:px-4 sm:flex-row sm:items-end sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {navigationToggle}
+                        <h1 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">
+                          {meta.title}
+                        </h1>
+                      </div>
                       {pageChrome.headerActions ? (
                         <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2">
                           {pageChrome.headerActions}
@@ -440,7 +516,7 @@ export function SettingsShell() {
                   </div>
                   <div
                     className={cn(
-                      "settings-shell__page-intro px-5 max-[860px]:px-4",
+                      "settings-shell__page-intro px-5 max-[719px]:px-4",
                       isBackupPage ? "pb-3 pt-3" : "pb-4 pt-3",
                     )}
                   >
@@ -452,9 +528,12 @@ export function SettingsShell() {
               ) : (
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 space-y-1">
-                    <h1 className="text-xl font-semibold tracking-tight text-foreground">
-                      {meta.title}
-                    </h1>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {navigationToggle}
+                      <h1 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">
+                        {meta.title}
+                      </h1>
+                    </div>
                     <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
                       {meta.description}
                     </p>
@@ -473,8 +552,8 @@ export function SettingsShell() {
                 className={cn(
                   "settings-shell__content w-full",
                   isBackupPage
-                    ? "flex min-h-0 flex-1 flex-col max-[860px]:px-4 max-[860px]:pb-4 min-[861px]:px-5 min-[861px]:pb-6"
-                    : "max-[860px]:p-4 min-[861px]:px-5 min-[861px]:pb-6 min-[861px]:pt-4",
+                    ? "flex min-h-0 flex-1 flex-col max-[719px]:px-4 max-[719px]:pb-4 min-[720px]:px-5 min-[720px]:pb-6"
+                    : "max-[719px]:p-4 min-[720px]:px-5 min-[720px]:pb-6 min-[720px]:pt-4",
                 )}
               >
                 <div

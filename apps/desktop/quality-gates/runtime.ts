@@ -45,7 +45,9 @@ export type QualityGateRuntime = {
   resetMetrics(): void;
   showDisconnect(): void;
   showCrashFallback(): void;
+  showChat(): void;
   showFilePreview(): void;
+  showPresentationPreview(): void;
   showReconnect(): void;
   showResearch(state: "empty" | "completed" | "follow-up"): Promise<void>;
   showTaskReview(): void;
@@ -225,9 +227,6 @@ export function installQualityGateRuntime(): void {
     return;
   }
   installed = true;
-  if (window.innerWidth <= 640) {
-    useAppStore.setState({ contextSidebarCollapsed: true });
-  }
   setDesktopRenderMetricObserver(recordRenderMetric);
   useAppStore.subscribe((state, previousState) => {
     metrics.storePublications += 1;
@@ -347,9 +346,23 @@ export function installQualityGateRuntime(): void {
         },
       }));
     },
+    showChat: () => {
+      useAppStore.setState({
+        filePreview: null,
+        isCanvasMaximized: false,
+        selectedTaskId: null,
+        selectedThreadId: PROJECT_THREAD_ID,
+        view: "chat",
+      });
+    },
     showFilePreview: () => {
       useAppStore.getState().openFilePreview({
         path: "/quality/project/quality-gate-report.md",
+      });
+    },
+    showPresentationPreview: () => {
+      useAppStore.getState().openFilePreview({
+        path: "/quality/project/quality-gate-presentation.pptx",
       });
     },
     showResearch: async (state) => {
@@ -357,6 +370,8 @@ export function installQualityGateRuntime(): void {
       const parent = state === "follow-up" ? makeResearchFixture("completed") : null;
       const research = [parent, fixture].filter((entry): entry is ResearchRecord => entry !== null);
       useAppStore.setState({
+        filePreview: null,
+        isCanvasMaximized: false,
         providerStatusByName: { google: googleProviderStatus() },
         providerConnected: ["google"],
         researchById: {},
@@ -373,6 +388,8 @@ export function installQualityGateRuntime(): void {
         }
       }
       useAppStore.setState({
+        filePreview: null,
+        isCanvasMaximized: false,
         researchById: Object.fromEntries(research.map((entry) => [entry.id, entry])),
         researchOrder: research.map((entry) => entry.id),
         selectedResearchId: fixture?.id ?? null,
@@ -384,6 +401,8 @@ export function installQualityGateRuntime(): void {
     showTaskReview: () => {
       const task = createQualityTaskFixture();
       useAppStore.setState({
+        filePreview: null,
+        isCanvasMaximized: false,
         selectedWorkspaceId: PROJECT_WORKSPACE_ID,
         selectedTaskId: task.id,
         selectedThreadId: null,

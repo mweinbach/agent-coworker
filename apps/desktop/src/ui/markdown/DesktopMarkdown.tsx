@@ -1517,8 +1517,10 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   mermaid: mermaidOptions,
   ...props
 }: DesktopMarkdownProps) {
-  recordDesktopRenderMetric("desktop-markdown");
   const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
+  if (restProps.mode !== "streaming") {
+    recordDesktopRenderMetric("desktop-markdown");
+  }
   const isDark = useDocumentIsDark();
   const desktopFileLinksPlugin = useMemo<
     [typeof remarkRewriteDesktopFileLinks, { basePath: string | null }]

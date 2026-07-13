@@ -323,4 +323,42 @@ describe("desktop context sidebar", () => {
       harness.restore();
     }
   });
+
+  test.serial("keeps Canvas resizing aligned with its effective viewport bounds", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      resetAppStore({ canvasSidebarWidth: 900 });
+
+      await act(async () => {
+        root.render(
+          createElement(ContextSidebarResizer, {
+            effectiveWidth: 320,
+            maximumWidth: 320,
+            minimumWidth: 320,
+          }),
+        );
+      });
+
+      const separator = container.querySelector<HTMLElement>(
+        '[aria-label="Resize context sidebar"]',
+      );
+      expect(separator?.getAttribute("aria-valuemin")).toBe("320");
+      expect(separator?.getAttribute("aria-valuenow")).toBe("320");
+      expect(separator?.getAttribute("aria-valuemax")).toBe("320");
+      await act(async () => {
+        separator?.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
+        );
+      });
+      expect(useAppStore.getState().contextSidebarWidth).toBe(320);
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
 });

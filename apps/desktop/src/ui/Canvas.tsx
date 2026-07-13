@@ -730,7 +730,7 @@ export function Canvas({ path }: { path: string }) {
         ) : null}
 
         {showFormattingBar && isMarkdown && activeTab === "edit" && (
-          <div className="flex items-center gap-0.5 px-2.5 py-1 border-b border-border/40 bg-muted/15 shrink-0 select-none">
+          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
             <Button
               type="button"
               variant="ghost"
@@ -907,7 +907,7 @@ export function Canvas({ path }: { path: string }) {
                     >
                       <ScrollArea className="h-full">
                         <div className="mx-auto w-full max-w-[840px] px-4 py-8">
-                          <div className="mx-auto w-full max-w-none p-12 md:p-16 text-left select-text">
+                          <div className="mx-auto w-full max-w-none p-[clamp(1rem,6%,4rem)] text-left select-text">
                             <DesktopMarkdown className="prose prose-neutral dark:prose-invert max-w-none">
                               {content}
                             </DesktopMarkdown>

@@ -4,13 +4,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { cn } from "../../lib/utils";
 
-export function SidebarResizer() {
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+type SidebarResizerProps = {
+  effectiveWidth?: number;
+  maximumWidth?: number;
+};
+
+export function SidebarResizer({ effectiveWidth, maximumWidth = 440 }: SidebarResizerProps = {}) {
+  const savedSidebarWidth = useAppStore((s) => s.sidebarWidth);
   const setSidebarWidth = useAppStore((s) => s.setSidebarWidth);
   const [dragging, setDragging] = useState(false);
+  const resolvedMaximumWidth = Math.max(160, maximumWidth);
+  const sidebarWidth = Math.max(
+    160,
+    Math.min(resolvedMaximumWidth, effectiveWidth ?? savedSidebarWidth),
+  );
 
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+
+  const commitWidth = useCallback(
+    (width: number) => setSidebarWidth(Math.max(160, Math.min(resolvedMaximumWidth, width))),
+    [resolvedMaximumWidth, setSidebarWidth],
+  );
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent) => {
@@ -28,19 +43,19 @@ export function SidebarResizer() {
       const step = event.shiftKey ? 32 : 16;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setSidebarWidth(sidebarWidth - step);
+        commitWidth(sidebarWidth - step);
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        setSidebarWidth(sidebarWidth + step);
+        commitWidth(sidebarWidth + step);
       } else if (event.key === "Home") {
         event.preventDefault();
-        setSidebarWidth(160);
+        commitWidth(160);
       } else if (event.key === "End") {
         event.preventDefault();
-        setSidebarWidth(440);
+        commitWidth(resolvedMaximumWidth);
       }
     },
-    [setSidebarWidth, sidebarWidth],
+    [commitWidth, resolvedMaximumWidth, sidebarWidth],
   );
 
   useEffect(() => {
@@ -56,7 +71,7 @@ export function SidebarResizer() {
       if (pendingWidth === null) {
         return;
       }
-      setSidebarWidth(pendingWidth);
+      commitWidth(pendingWidth);
       pendingWidth = null;
     };
 
@@ -74,7 +89,7 @@ export function SidebarResizer() {
         frameId = null;
       }
       if (pendingWidth !== null) {
-        setSidebarWidth(pendingWidth);
+        commitWidth(pendingWidth);
         pendingWidth = null;
       }
       document.body.classList.remove("app-resizing-sidebars");
@@ -94,7 +109,7 @@ export function SidebarResizer() {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dragging, setSidebarWidth]);
+  }, [commitWidth, dragging]);
 
   return (
     <hr
@@ -105,7 +120,7 @@ export function SidebarResizer() {
       aria-orientation="vertical"
       aria-label="Resize sidebar"
       aria-valuemin={160}
-      aria-valuemax={440}
+      aria-valuemax={resolvedMaximumWidth}
       aria-valuenow={sidebarWidth}
       tabIndex={0}
       onPointerDown={handlePointerDown}

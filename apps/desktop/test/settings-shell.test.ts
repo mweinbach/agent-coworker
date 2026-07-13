@@ -114,6 +114,34 @@ describe("settings shell", () => {
     );
   });
 
+  test("keeps overlay navigation opaque above the backdrop", () => {
+    const css = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    expect(css).toMatch(
+      /:root \.settings-shell__nav\[data-presentation="overlay"\]\s*\{[^}]*background:\s*var\(--sidebar-bg\);/s,
+    );
+  });
+
+  test("uses the shared narrow tier for a focus-managed settings navigation drawer", () => {
+    const settingsSource = readFileSync(
+      resolve(import.meta.dir, "../src/ui/settings/SettingsShell.tsx"),
+      "utf8",
+    );
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+
+    expect(settingsSource).toContain("useAdaptiveLayout");
+    expect(settingsSource).toContain("onDesktopRailCommand");
+    expect(settingsSource).toContain('command !== "toggle-sidebar"');
+    expect(settingsSource).toContain("setNavigationOpen((open) => !open)");
+    expect(settingsSource).toContain('label="Settings navigation"');
+    expect(settingsSource).toContain("Open settings navigation");
+    expect(settingsSource).toContain("text-foreground/72");
+    expect(settingsSource).not.toContain("text-foreground/58");
+    expect(settingsSource).not.toContain("max-[860px]");
+    expect(settingsSource).not.toContain("min-[861px]");
+    expect(stylesCss).not.toContain("max-width: 860px");
+    expect(stylesCss).not.toContain("min-width: 861px");
+  });
+
   test("resolves legacy settings page ids to their canonical nav id", () => {
     const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));
     for (const [legacy, canonical] of Object.entries(SETTINGS_PAGE_ALIASES)) {

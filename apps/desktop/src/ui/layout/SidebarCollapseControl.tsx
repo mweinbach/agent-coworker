@@ -7,14 +7,16 @@ interface SidebarCollapseControlProps {
   onToggleSidebar: () => void;
   onNewChat: () => void;
   sidebarCollapsed: boolean;
+  sidebarLabel?: string;
 }
 
 export function SidebarCollapseControl({
   onToggleSidebar,
   onNewChat,
   sidebarCollapsed,
+  sidebarLabel,
 }: SidebarCollapseControlProps) {
-  const label = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
+  const label = sidebarLabel ?? (sidebarCollapsed ? "Show sidebar" : "Hide sidebar");
 
   return (
     <div className="app-sidebar-collapse-control flex items-center">

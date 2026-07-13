@@ -1,11 +1,12 @@
 import type { CSSProperties } from "react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "./app/store";
 import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
 import { isOneOffChatWorkspace } from "./app/types";
 import { Spinner } from "./components/ui/spinner";
+import { resolveRightRailSizing } from "./lib/adaptiveLayout";
 import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
 import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
@@ -26,11 +27,13 @@ import {
   showQuickChatWindow,
   writeRendererLog,
 } from "./lib/desktopCommands";
+import { onDesktopRailCommand, requestDesktopRailCommand } from "./lib/desktopRailCommands";
 import { getFilePreviewKind, isCanvasSupportedFile } from "./lib/filePreviewKind";
 import { workspaceFileChangeEvents } from "./lib/filePreviewResource";
 import { applyPlatformChromeToDocument, syncPlatformChromeCssVars } from "./lib/platformChromeDom";
 import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./lib/themeBootstrap";
+import { useAdaptiveLayout } from "./lib/useAdaptiveLayout";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
 import { Canvas } from "./ui/Canvas";
@@ -42,6 +45,7 @@ import { shouldShowReconnectBanner } from "./ui/chat/chatLogic";
 import { LmStudioStartDialog } from "./ui/chat/LmStudioStartDialog";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { InAppToasts } from "./ui/InAppToasts";
+import { AdaptiveRailSurface } from "./ui/layout/AdaptiveRailSurface";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
@@ -59,25 +63,54 @@ import { TaskContextSidebar } from "./ui/tasks/TaskContextSidebar";
 
 const EMPTY_AGENTS: never[] = [];
 
-const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
-
+const LeftSidebarPane = memo(function LeftSidebarPane({
+  active,
+  maximumWidth,
+  onClose,
+  overlay,
+  width,
+}: {
+  active: boolean;
+  maximumWidth: number;
+  onClose: () => void;
+  overlay: boolean;
+  width: number;
+}) {
   return (
-    <div
-      className="app-left-sidebar-pane relative h-full min-h-0 shrink-0 overflow-hidden border-r border-border/70"
-      style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
+    <AdaptiveRailSurface
+      active={active}
+      className="app-left-sidebar-pane h-full border-r border-border/70"
+      label="Sidebar"
+      onClose={onClose}
+      overlay={overlay}
+      side="left"
+      width={width}
     >
-      <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
+      <div className="absolute inset-y-0 right-0 flex w-full">
         <Sidebar />
       </div>
-      {!collapsed ? <SidebarResizer /> : null}
-    </div>
+      {active && !overlay ? (
+        <SidebarResizer effectiveWidth={width} maximumWidth={maximumWidth} />
+      ) : null}
+    </AdaptiveRailSurface>
   );
 });
 
-const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collapsed: boolean }) {
-  const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
-  const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
+const RightSidebarPane = memo(function RightSidebarPane({
+  active,
+  maximumWidth,
+  minimumWidth,
+  onClose,
+  overlay,
+  width,
+}: {
+  active: boolean;
+  maximumWidth: number;
+  minimumWidth: number;
+  onClose: () => void;
+  overlay: boolean;
+  width: number;
+}) {
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
@@ -86,12 +119,6 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   const isCanvasSupported = filePreview?.path && isCanvasSupportedFile(filePreview.path);
   const showCanvas = canvasEnabled && isCanvasSupported;
   const canvasMaximized = showCanvas && isCanvasMaximized;
-  const activeWidth =
-    showCanvas && !canvasMaximized
-      ? canvasSidebarWidth
-      : view === "task"
-        ? Math.max(contextSidebarWidth, 360)
-        : contextSidebarWidth;
   const canvasContainerStyle: CSSProperties = canvasMaximized
     ? {
         top: "calc(var(--platform-drag-strip-height) + var(--platform-titlebar-height))",
@@ -99,17 +126,28 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
         bottom: 0,
         left: 0,
       }
-    : { width: activeWidth };
+    : { width: "100%" };
 
   return (
-    <div
+    <AdaptiveRailSurface
+      active={canvasMaximized || active}
       className={cn(
-        "app-right-sidebar-pane relative shrink-0",
+        "app-right-sidebar-pane h-full",
         canvasMaximized ? "overflow-visible" : "overflow-hidden",
       )}
-      style={{ width: collapsed || canvasMaximized ? 0 : activeWidth }}
+      label="Context"
+      onClose={onClose}
+      overlay={!canvasMaximized && overlay}
+      side="right"
+      width={canvasMaximized ? 0 : width}
     >
-      {!collapsed && !canvasMaximized ? <ContextSidebarResizer /> : null}
+      {active && !overlay && !canvasMaximized ? (
+        <ContextSidebarResizer
+          effectiveWidth={width}
+          maximumWidth={maximumWidth}
+          minimumWidth={minimumWidth}
+        />
+      ) : null}
       <div
         className={cn(
           "flex bg-background",
@@ -124,10 +162,10 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
         ) : view === "task" ? (
           <TaskContextSidebar variant="sidebar" />
         ) : (
-          <ContextSidebar />
+          <ContextSidebar active={canvasMaximized || active} />
         )}
       </div>
-    </div>
+    </AdaptiveRailSurface>
   );
 });
 
@@ -202,6 +240,8 @@ const ChatShell = memo(function ChatShell({
   const openNewChatLanding = useAppStore((s) => s.openNewChatLanding);
   const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
+  const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
+  const canvasSidebarWidth = useAppStore((s) => s.canvasSidebarWidth);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const filePreview = useAppStore((s) => s.filePreview);
   const canvasEnabled = useAppStore((s) => s.desktopFeatureFlags?.canvas === true);
@@ -212,6 +252,8 @@ const ChatShell = memo(function ChatShell({
   const setCanvasShowFormattingBar = useAppStore((s) => s.setCanvasShowFormattingBar);
   const isCanvasMaximized = useAppStore((s) => s.isCanvasMaximized);
   const setCanvasMaximized = useAppStore((s) => s.setCanvasMaximized);
+  const [leftOverlayOpen, setLeftOverlayOpen] = useState(false);
+  const [rightOverlayOpen, setRightOverlayOpen] = useState(false);
   const hasAnimatedSidebarsRef = useRef(false);
   const previousSidebarStateRef = useRef({
     sidebarCollapsed,
@@ -232,6 +274,55 @@ const ChatShell = memo(function ChatShell({
   const showContextSidebar =
     (effectiveView === "chat" && activeThread !== null) ||
     (effectiveView === "task" && selectedTask !== null);
+  const canvasPath = filePreview?.path ?? null;
+  const canvasSupported = canvasPath !== null && isCanvasSupportedFile(canvasPath);
+  const showCanvasSurface = isConversationView && canvasEnabled && canvasSupported;
+  const rightRailKind = showCanvasSurface
+    ? "canvas"
+    : effectiveView === "task"
+      ? "task"
+      : "context";
+  const rightRailSizing = resolveRightRailSizing(rightRailKind, {
+    canvas: canvasSidebarWidth,
+    context: contextSidebarWidth,
+  });
+  const adaptiveLayout = useAdaptiveLayout({
+    contextSidebarCollapsed,
+    hasContextSidebar: showContextSidebar,
+    leftSidebarWidth: sidebarWidth,
+    rightSidebarMaximumWidth: rightRailSizing.maximumWidth,
+    rightSidebarMinimumWidth: rightRailSizing.minimumWidth,
+    rightSidebarWidth: rightRailSizing.preferredWidth,
+    sidebarCollapsed,
+  });
+  const leftOverlayWidth = Math.max(160, Math.min(440, sidebarWidth));
+  const rightOverlayWidth = rightRailSizing.preferredWidth;
+  const leftRailActive =
+    adaptiveLayout.leftInline || (adaptiveLayout.leftOverlay && leftOverlayOpen);
+  const rightRailActive =
+    adaptiveLayout.rightInline || (adaptiveLayout.rightOverlay && rightOverlayOpen);
+  const leftRailWidth = adaptiveLayout.leftOverlay ? leftOverlayWidth : adaptiveLayout.leftWidth;
+  const rightRailWidth = adaptiveLayout.rightOverlay
+    ? rightOverlayWidth
+    : adaptiveLayout.rightWidth;
+  const toggleAdaptiveSidebar = useCallback(() => {
+    if (adaptiveLayout.leftOverlay) {
+      const nextOpen = !leftOverlayOpen;
+      setLeftOverlayOpen(nextOpen);
+      if (nextOpen) setRightOverlayOpen(false);
+      return;
+    }
+    toggleSidebar();
+  }, [adaptiveLayout.leftOverlay, leftOverlayOpen, toggleSidebar]);
+  const toggleAdaptiveContextSidebar = useCallback(() => {
+    if (adaptiveLayout.rightOverlay) {
+      const nextOpen = !rightOverlayOpen;
+      setRightOverlayOpen(nextOpen);
+      if (nextOpen) setLeftOverlayOpen(false);
+      return;
+    }
+    toggleContextSidebar();
+  }, [adaptiveLayout.rightOverlay, rightOverlayOpen, toggleContextSidebar]);
   const activeWorkspaceId = activeWorkspace?.id ?? null;
   const workspaceStartupProgress = useMemo(() => {
     const activeRuntime = activeWorkspaceId ? workspaceRuntimeById[activeWorkspaceId] : null;
@@ -268,13 +359,7 @@ const ChatShell = memo(function ChatShell({
     effectiveView === "chat" && activeThread && canPopOutQuickChatThread(activeThread)
       ? activeThread.id
       : null;
-  const canvasPath = filePreview?.path ?? null;
-  const showCanvasInTopBar =
-    isConversationView &&
-    canvasEnabled &&
-    canvasPath !== null &&
-    isCanvasSupportedFile(canvasPath) &&
-    (!contextSidebarCollapsed || isCanvasMaximized);
+  const showCanvasInTopBar = showCanvasSurface;
   const canvasKind = canvasPath !== null ? getFilePreviewKind(canvasPath) : "other";
   const canvasIsMarkdown = canvasKind === "markdown";
   const canvasIsSpreadsheet = canvasKind === "csv" || canvasKind === "xlsx";
@@ -306,6 +391,70 @@ const ChatShell = memo(function ChatShell({
   const preserveCachedContentOnStartupError =
     Boolean(startupError) && ready && (workspaces.length > 0 || threads.length > 0);
   const startupPresentation = startupStagePresentation(bootstrapStage);
+  const activeCanvasPath = showCanvasSurface ? canvasPath : null;
+  const previousCanvasPathRef = useRef<string | null>(null);
+  const previousRightOverlayRef = useRef(false);
+  const canvasOpenedRightOverlayRef = useRef(false);
+  const overlayScope = `${adaptiveLayout.tier}:${effectiveView}:${selectedThreadId ?? "none"}`;
+  const previousOverlayScopeRef = useRef(overlayScope);
+
+  useEffect(() => {
+    if (previousOverlayScopeRef.current === overlayScope) return;
+    previousOverlayScopeRef.current = overlayScope;
+    setLeftOverlayOpen(false);
+    setRightOverlayOpen(false);
+  }, [overlayScope]);
+
+  useEffect(() => {
+    const previousCanvasPath = previousCanvasPathRef.current;
+    const enteredRightOverlay = adaptiveLayout.rightOverlay && !previousRightOverlayRef.current;
+    previousCanvasPathRef.current = activeCanvasPath;
+    previousRightOverlayRef.current = adaptiveLayout.rightOverlay;
+    if (previousCanvasPath !== null && activeCanvasPath === null) {
+      if (adaptiveLayout.rightOverlay && canvasOpenedRightOverlayRef.current) {
+        setRightOverlayOpen(false);
+      }
+      canvasOpenedRightOverlayRef.current = false;
+      return;
+    }
+    if (
+      adaptiveLayout.rightOverlay &&
+      activeCanvasPath !== null &&
+      (activeCanvasPath !== previousCanvasPath || enteredRightOverlay)
+    ) {
+      const openedByCanvas =
+        canvasOpenedRightOverlayRef.current ||
+        enteredRightOverlay ||
+        (previousCanvasPath === null && !rightOverlayOpen);
+      canvasOpenedRightOverlayRef.current = openedByCanvas;
+      if (openedByCanvas) {
+        setLeftOverlayOpen(false);
+        setRightOverlayOpen(true);
+      }
+      return;
+    }
+    if (
+      adaptiveLayout.rightOverlay &&
+      activeCanvasPath !== null &&
+      !rightOverlayOpen &&
+      canvasOpenedRightOverlayRef.current
+    ) {
+      canvasOpenedRightOverlayRef.current = false;
+    }
+  }, [activeCanvasPath, adaptiveLayout.rightOverlay, rightOverlayOpen]);
+
+  useEffect(
+    () =>
+      onDesktopRailCommand((command) => {
+        if (command === "toggle-sidebar") {
+          toggleAdaptiveSidebar();
+        } else {
+          toggleAdaptiveContextSidebar();
+        }
+      }),
+    [toggleAdaptiveContextSidebar, toggleAdaptiveSidebar],
+  );
+
   useEffect(() => {
     const documentBody = document.body;
     const windowTarget = window;
@@ -335,7 +484,10 @@ const ChatShell = memo(function ChatShell({
   }, [contextSidebarCollapsed, sidebarCollapsed]);
 
   return (
-    <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
+    <div
+      className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground"
+      data-layout-tier={adaptiveLayout.tier}
+    >
       <a
         href="#main-content"
         className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground shadow-md focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:outline-none focus:ring-2 focus:ring-ring/50"
@@ -345,19 +497,34 @@ const ChatShell = memo(function ChatShell({
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
         busy={isConversationView ? busy : false}
-        onToggleSidebar={toggleSidebar}
+        onToggleSidebar={toggleAdaptiveSidebar}
         onNewChat={() => void openNewChatLanding()}
-        sidebarCollapsed={sidebarCollapsed}
-        sidebarWidth={sidebarWidth}
-        contextSidebarCollapsed={contextSidebarCollapsed}
-        onToggleContextSidebar={toggleContextSidebar}
+        sidebarCollapsed={!adaptiveLayout.leftInline}
+        sidebarWidth={adaptiveLayout.leftWidth}
+        sidebarToggleLabel={
+          adaptiveLayout.leftOverlay
+            ? leftOverlayOpen
+              ? "Close sidebar"
+              : "Show sidebar"
+            : undefined
+        }
+        contextSidebarCollapsed={!rightRailActive}
+        contextSidebarToggleLabel={
+          adaptiveLayout.rightOverlay
+            ? rightOverlayOpen
+              ? "Close context"
+              : "Show context"
+            : undefined
+        }
+        onToggleContextSidebar={toggleAdaptiveContextSidebar}
         onPopOutQuickChat={
           quickChatPopOutThreadId
             ? () => void showQuickChatWindow({ threadId: quickChatPopOutThreadId })
             : undefined
         }
         title={topBarTitle}
-        subtitle={topBarSubtitle}
+        subtitle={adaptiveLayout.tier === "full" ? topBarSubtitle : null}
+        compactToolbar={adaptiveLayout.tier !== "full"}
         suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
         sessionUsage={isConversationView ? selectedSessionUsage : null}
@@ -367,9 +534,7 @@ const ChatShell = memo(function ChatShell({
         onClearHardCap={
           selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
         }
-        showContextToggle={
-          showContextSidebar && !showCanvasInTopBar && workspaceStartupProgress === null
-        }
+        showContextToggle={showContextSidebar && workspaceStartupProgress === null}
         canvasMode={showCanvasInTopBar}
         canvasIsMarkdown={canvasIsMarkdown}
         canvasActiveTab={canvasActiveTab}
@@ -420,7 +585,13 @@ const ChatShell = memo(function ChatShell({
         />
       ) : null}
       <div className="app-chat-body relative flex min-h-0 min-w-0 flex-1 flex-row">
-        <LeftSidebarPane collapsed={sidebarCollapsed} />
+        <LeftSidebarPane
+          active={leftRailActive}
+          maximumWidth={Math.max(160, adaptiveLayout.leftMaximumWidth)}
+          onClose={() => setLeftOverlayOpen(false)}
+          overlay={adaptiveLayout.leftOverlay}
+          width={leftRailWidth}
+        />
         <main
           id="main-content"
           tabIndex={-1}
@@ -436,7 +607,10 @@ const ChatShell = memo(function ChatShell({
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div
+              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+              data-slot="primary-content-pane"
+            >
               <PrimaryContent
                 init={init}
                 ready={ready}
@@ -454,7 +628,17 @@ const ChatShell = memo(function ChatShell({
               />
             </div>
             {showContextSidebar && workspaceStartupProgress === null ? (
-              <RightSidebarPane collapsed={contextSidebarCollapsed} />
+              <RightSidebarPane
+                active={rightRailActive}
+                maximumWidth={Math.max(
+                  rightRailSizing.minimumWidth,
+                  adaptiveLayout.rightMaximumWidth,
+                )}
+                minimumWidth={rightRailSizing.minimumWidth}
+                onClose={() => setRightOverlayOpen(false)}
+                overlay={adaptiveLayout.rightOverlay}
+                width={rightRailWidth}
+              />
             ) : null}
           </div>
         </main>
@@ -633,7 +817,7 @@ function AppContent() {
         return;
       }
       if (command === "toggleSidebar") {
-        state.toggleSidebar();
+        requestDesktopRailCommand("toggle-sidebar");
         return;
       }
       if (command === "openSettings") {

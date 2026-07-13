@@ -205,6 +205,71 @@ describe("AgentSession", () => {
       }
     });
 
+    test("plugin catalog refreshes retain the fetch transport captured by the session", async () => {
+      const root = await makeTmpDir();
+      const home = path.join(root, "home");
+      const originalFetch = globalThis.fetch;
+      const capturedFetchCalls: string[] = [];
+      const marketplaceResponse = (url: string): Response => {
+        if (url.includes(".agents/plugins/marketplace.json")) {
+          return new Response(
+            JSON.stringify({
+              type: "file",
+              name: "marketplace.json",
+              path: ".agents/plugins/marketplace.json",
+              url: "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+              download_url: "https://download.test/marketplace.json",
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url === "https://download.test/marketplace.json") {
+          return new Response(JSON.stringify({ name: "cowork-test", plugins: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(`Unexpected URL: ${url}`, { status: 404 });
+      };
+      const capturedFetch = mock(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        capturedFetchCalls.push(url);
+        return marketplaceResponse(url);
+      });
+      const replacementFetch = mock(async (input: RequestInfo | URL) =>
+        marketplaceResponse(String(input)),
+      );
+      globalThis.fetch = capturedFetch as typeof fetch;
+
+      try {
+        const cfg: AgentConfig = {
+          ...makeConfig(root),
+          workspaceAgentsDir: path.join(root, ".agents"),
+          userAgentsDir: path.join(home, ".agents"),
+          workspacePluginsDir: path.join(root, ".agents", "plugins"),
+          userPluginsDir: path.join(home, ".agents", "plugins"),
+        };
+        const { session, events } = makeSession({ config: cfg });
+
+        // Force the lazy service to capture its transport before another
+        // session (or test) replaces the process-wide fetch implementation.
+        session.listTools();
+        globalThis.fetch = replacementFetch as typeof fetch;
+        await session.getPluginsCatalog();
+        await waitForCondition(
+          () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
+        );
+
+        expect(capturedFetchCalls).toEqual([
+          "https://api.github.com/repos/mweinbach/cowork-skills-plugins/contents/.agents/plugins/marketplace.json?ref=main",
+          "https://download.test/marketplace.json",
+        ]);
+        expect(replacementFetch).not.toHaveBeenCalled();
+      } finally {
+        globalThis.fetch = originalFetch;
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
     test("stale remote plugin catalog refreshes do not override later mutations", async () => {
       const root = await makeTmpDir();
       const home = path.join(root, "home");
@@ -242,6 +307,11 @@ describe("AgentSession", () => {
         expect(events.filter((event) => event.type === "plugins_catalog")).toHaveLength(1);
 
         await session.disablePlugin("figma-toolkit", "user");
+        expect(
+          JSON.parse(
+            await fs.readFile(path.join(home, ".cowork", "config", "plugins.json"), "utf-8"),
+          ),
+        ).toMatchObject({ plugins: { "figma-toolkit": false } });
         await waitForCondition(
           () => events.filter((event) => event.type === "plugins_catalog").length >= 2,
         );
@@ -346,11 +416,11 @@ describe("AgentSession", () => {
           ),
         );
 
-        await waitForCondition(() => fetchCalls.length === 4);
         await waitForCondition(
           () => events.filter((event) => event.type === "plugins_catalog").length >= 4,
         );
         const pluginCatalogs = events.filter((event) => event.type === "plugins_catalog");
+        expect(fetchCalls).toHaveLength(4);
         expect(pluginCatalogs).toHaveLength(4);
         expect(pluginCatalogs.at(-1)?.catalog.plugins[0]?.enabled).toBe(false);
       } finally {

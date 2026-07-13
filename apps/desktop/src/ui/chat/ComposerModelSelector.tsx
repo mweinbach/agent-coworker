@@ -136,7 +136,7 @@ export function ComposerModelSelector({
           aria-label="Model"
           data-slot="composer-model-selector"
           title={model ? `${triggerLabel} (${model})` : "Choose a model"}
-          className="h-7 min-w-0 max-w-[220px] gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground/85 hover:bg-muted/30 hover:text-foreground"
+          className="h-7 min-w-0 max-w-[220px] gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-muted/30 hover:text-foreground"
         >
           <span className="truncate">{triggerLabel || "Model"}</span>
           <ChevronDownIcon className="size-3 shrink-0 opacity-60" aria-hidden />

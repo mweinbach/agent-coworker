@@ -1,5 +1,6 @@
 import {
   assertKeyboardFocusJourney,
+  assertMinimumTextContrast,
   assertNoSeriousAxeViolations,
   assertNoViewportClipping,
   assertUsablePrimaryContentWidth,
@@ -50,6 +51,12 @@ for (const entry of visualMatrix) {
       await assertUsablePrimaryContentWidth(page);
       await assertNoViewportClipping(page, undefined, criticalControlSelector);
       await assertKeyboardFocusJourney(page);
+      await assertMinimumTextContrast(page, {
+        backgroundSelector: '[data-slot="message-composer"]',
+        foregroundSelector: '[data-slot="composer-model-selector"] > span',
+        label: "Composer model label",
+        minimumRatio: 5,
+      });
       await assertNoSeriousAxeViolations(page, testInfo);
       await expect(page).toHaveScreenshot(
         `shipping-chat-${entry.width}-${entry.mode satisfies QualityMode}.png`,

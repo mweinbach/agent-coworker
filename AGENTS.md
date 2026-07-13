@@ -221,6 +221,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.
 - Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
 - Before commiting, always run "bun run check", "bun run test", "bun run lint".
+- Treat Bun's default 5-second test timeout as a profiling signal, not a value to raise globally. Remove synchronous whole-heap or blocking cleanup work from normal lifecycle paths, explicitly release native resources, and split parameterized integration scenarios into independently reported tests without dropping recovery coverage.
 - When a repair flow opens Settings from a creation-readiness alert, invalidate and rerun the preflight after the underlying provider status changes; do not leave a cached blocked result visible after authentication succeeds.
 
 

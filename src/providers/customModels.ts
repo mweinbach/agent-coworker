@@ -10,7 +10,7 @@ import {
 } from "../shared/customModels";
 import type { ProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
-import { withFileLock } from "../utils/fileLock";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 
 const CUSTOM_MODEL_STORE_FILENAME = "custom-models.json";
 const MAX_CUSTOM_MODEL_ID_LENGTH = 2048;
@@ -172,24 +172,28 @@ export async function upsertCustomModel(
   const id = normalizeCustomModelId(modelIdRaw);
   // Serialize the read-modify-write cycle across workspace server processes
   // sharing the global store; a plain atomic write alone still loses updates.
-  return await withFileLock(customModelStorePath(paths), async () => {
-    const store = await readCustomModelStore(paths);
-    const now = new Date().toISOString();
-    const existing = store.providers[provider] ?? [];
-    const nextEntry: CustomModelEntry = { id, updatedAt: now };
-    const byId = new Map(existing.map((entry) => [entry.id, entry] as const));
-    byId.set(id, { ...byId.get(id), ...nextEntry });
-    const nextStore: CustomModelStore = {
-      version: 1,
-      updatedAt: now,
-      providers: {
-        ...store.providers,
-        [provider]: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
-      },
-    };
-    await writeCustomModelStore(paths, nextStore);
-    return nextEntry;
-  });
+  return await withFileLock(
+    customModelStorePath(paths),
+    async () => {
+      const store = await readCustomModelStore(paths);
+      const now = new Date().toISOString();
+      const existing = store.providers[provider] ?? [];
+      const nextEntry: CustomModelEntry = { id, updatedAt: now };
+      const byId = new Map(existing.map((entry) => [entry.id, entry] as const));
+      byId.set(id, { ...byId.get(id), ...nextEntry });
+      const nextStore: CustomModelStore = {
+        version: 1,
+        updatedAt: now,
+        providers: {
+          ...store.providers,
+          [provider]: [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        },
+      };
+      await writeCustomModelStore(paths, nextStore);
+      return nextEntry;
+    },
+    { lockRoot: fileLockRootForCoworkHome(paths.rootDir) },
+  );
 }
 
 export async function deleteCustomModel(
@@ -201,24 +205,28 @@ export async function deleteCustomModel(
     throw new Error(`${provider} does not support custom model IDs.`);
   }
   const id = normalizeCustomModelId(modelIdRaw);
-  await withFileLock(customModelStorePath(paths), async () => {
-    const store = await readCustomModelStore(paths);
-    const existing = store.providers[provider] ?? [];
-    const nextEntries = existing.filter((entry) => entry.id !== id);
-    if (nextEntries.length === existing.length) return;
+  await withFileLock(
+    customModelStorePath(paths),
+    async () => {
+      const store = await readCustomModelStore(paths);
+      const existing = store.providers[provider] ?? [];
+      const nextEntries = existing.filter((entry) => entry.id !== id);
+      if (nextEntries.length === existing.length) return;
 
-    const now = new Date().toISOString();
-    const providers = { ...store.providers };
-    if (nextEntries.length > 0) {
-      providers[provider] = nextEntries;
-    } else {
-      delete providers[provider];
-    }
+      const now = new Date().toISOString();
+      const providers = { ...store.providers };
+      if (nextEntries.length > 0) {
+        providers[provider] = nextEntries;
+      } else {
+        delete providers[provider];
+      }
 
-    await writeCustomModelStore(paths, {
-      version: 1,
-      updatedAt: now,
-      providers,
-    });
-  });
+      await writeCustomModelStore(paths, {
+        version: 1,
+        updatedAt: now,
+        providers,
+      });
+    },
+    { lockRoot: fileLockRootForCoworkHome(paths.rootDir) },
+  );
 }

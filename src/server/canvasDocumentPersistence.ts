@@ -128,9 +128,13 @@ function digestContent(content: string): string {
 
 async function digestFileHandle(handle: FileHandle): Promise<string> {
   const hash = createHash("sha256");
-  const stream = handle.createReadStream({ autoClose: false, start: 0 });
-  for await (const chunk of stream) {
-    hash.update(chunk);
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
   }
   return hash.digest("hex");
 }
@@ -347,7 +351,7 @@ async function revisionForCommittedStagedFile(
   handle: FileHandle,
   stagedStat: Stats,
   expectedDigest: string,
-): Promise<CanvasDocumentRevision> {
+): Promise<void> {
   await revalidateExistingWorkspaceFile(workspaceRoot, filePath);
   const pathStat = await fs.lstat(filePath);
   const before = await handle.stat();
@@ -379,7 +383,28 @@ async function revisionForCommittedStagedFile(
   ) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
-  return revisionFromStatAndDigest(after, digest);
+}
+
+async function revisionAfterCommittedHandleClose(
+  workspaceRoot: string,
+  filePath: string,
+  stagedStat: Stats,
+  expectedDigest: string,
+): Promise<CanvasDocumentRevision> {
+  // Windows can publish final link/rename ctime only after the staging handle
+  // closes, so sample the user-visible revision after that close.
+  await revalidateExistingWorkspaceFile(workspaceRoot, filePath);
+  const stat = await fs.lstat(filePath);
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    !fileIdentityMatches(stat, stagedStat) ||
+    stat.size !== stagedStat.size ||
+    stat.mtimeMs !== stagedStat.mtimeMs
+  ) {
+    throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
+  }
+  return revisionFromStatAndDigest(stat, expectedDigest);
 }
 
 async function removeTemporaryWorkspaceFile(
@@ -786,10 +811,18 @@ export class CanvasDocumentPersistenceService {
       await revalidateExistingWorkspaceFile(session.workspaceRoot, filePath);
       await fs.rename(tempPath, filePath);
       tempExists = false;
-      const revision = await revisionForCommittedStagedFile(
+      await revisionForCommittedStagedFile(
         session.workspaceRoot,
         filePath,
         handle,
+        stagedStat,
+        digest,
+      );
+      await handle.close();
+      handle = undefined;
+      const revision = await revisionAfterCommittedHandleClose(
+        session.workspaceRoot,
+        filePath,
         stagedStat,
         digest,
       );
@@ -839,14 +872,19 @@ export class CanvasDocumentPersistenceService {
         digest,
       );
       await fs.link(tempPath, filePath);
-      const revision = await revisionForCommittedStagedFile(
+      if (!(await removeTemporaryWorkspaceFile(workspaceRoot, tempPath, stagedStat))) {
+        throw new Error("Failed to finalize the Canvas document staging file.");
+      }
+      tempExists = false;
+      await revisionForCommittedStagedFile(workspaceRoot, filePath, handle, stagedStat, digest);
+      await handle.close();
+      handle = undefined;
+      const revision = await revisionAfterCommittedHandleClose(
         workspaceRoot,
         filePath,
-        handle,
         stagedStat,
         digest,
       );
-      tempExists = !(await removeTemporaryWorkspaceFile(workspaceRoot, tempPath, stagedStat));
       await this.hooks.afterAtomicCommit?.({ path: filePath, content, revision });
       await syncDirectory(directory);
       return revision;

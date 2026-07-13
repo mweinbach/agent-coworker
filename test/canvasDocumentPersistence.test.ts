@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
-import { symlinkOrJunction } from "./helpers/platform";
+import { pinHome, symlinkOrJunction } from "./helpers/platform";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -21,6 +21,16 @@ function deferred<T>(): Deferred<T> {
 }
 
 const temporaryDirectories: string[] = [];
+let pinnedHome: string | undefined;
+let restoreHome: (() => void) | undefined;
+
+beforeEach(async () => {
+  pinnedHome = await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", "cowork-canvas-document-home-"),
+  );
+  temporaryDirectories.push(pinnedHome);
+  restoreHome = pinHome(pinnedHome);
+});
 
 async function makeWorkspace(): Promise<string> {
   const directory = await fs.mkdtemp(
@@ -31,6 +41,9 @@ async function makeWorkspace(): Promise<string> {
 }
 
 afterEach(async () => {
+  restoreHome?.();
+  restoreHome = undefined;
+  pinnedHome = undefined;
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -39,6 +52,60 @@ afterEach(async () => {
 });
 
 describe("CanvasDocumentPersistenceService", () => {
+  test("stores cross-process locks under the configured Cowork home", async () => {
+    const cwd = await makeWorkspace();
+    const filePath = path.join(cwd, "notes.md");
+    await fs.writeFile(filePath, "original");
+    const service = new CanvasDocumentPersistenceService();
+    await service.open(cwd, {
+      path: filePath,
+      documentId: "canvas-lock-home",
+      generation: 1,
+    });
+
+    const saved = await service.save(cwd, {
+      documentId: "canvas-lock-home",
+      generation: 1,
+      editRevision: 1,
+      content: "saved",
+    });
+
+    expect(saved.ok).toBe(true);
+    if (!pinnedHome) {
+      throw new Error("Expected the test Cowork home to be pinned.");
+    }
+    const lockFiles = await fs.readdir(path.join(pinnedHome, ".cowork", "locks", "files"));
+    expect(lockFiles.some((name) => name.endsWith(".sqlite"))).toBe(true);
+  });
+
+  test("hashes staged files larger than one descriptor read buffer", async () => {
+    const cwd = await makeWorkspace();
+    const filePath = path.join(cwd, "large.md");
+    const content = "0123456789abcdef".repeat(4_097);
+    await fs.writeFile(filePath, "original");
+    const service = new CanvasDocumentPersistenceService();
+    await service.open(cwd, {
+      path: filePath,
+      documentId: "canvas-large-digest",
+      generation: 1,
+    });
+
+    const saved = await service.save(cwd, {
+      documentId: "canvas-large-digest",
+      generation: 1,
+      editRevision: 1,
+      content,
+    });
+
+    expect(saved.ok).toBe(true);
+    if (saved.ok) {
+      expect(saved.revision.fingerprint).toBe(
+        `sha256:${createHash("sha256").update(content).digest("hex")}`,
+      );
+    }
+    expect(await fs.readFile(filePath, "utf8")).toBe(content);
+  });
+
   test("binds each generation to its opened path so A content cannot target B", async () => {
     const cwd = await makeWorkspace();
     const pathA = path.join(cwd, "a.md");
@@ -507,6 +574,15 @@ describe("CanvasDocumentPersistenceService", () => {
     expect(copied.ok).toBe(true);
     expect(await fs.readFile(sourcePath, "utf8")).toBe("original");
     expect(await fs.readFile(copyPath, "utf8")).toBe("local edit");
+    const copiedRevision = await service.revision(cwd, {
+      documentId: "canvas-1",
+      generation: 1,
+    });
+    expect(copiedRevision.ok).toBe(true);
+    if (copied.ok && copiedRevision.ok) {
+      expect(copiedRevision.path).toBe(copyPath);
+      expect(copiedRevision.revision).toEqual(copied.revision);
+    }
   });
 
   test("reports revision read failures and recovers on the next explicit retry", async () => {

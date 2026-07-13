@@ -13,6 +13,16 @@ async function makeTmpHome(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-provider-status-test-"));
 }
 
+// getProviderStatuses probes the LM Studio endpoint with real fetch and the
+// process env unless both are injected; keep these tests offline and hermetic.
+const rejectNetworkFetch = (async () => {
+  throw new Error("network disabled in providerStatus tests");
+}) as unknown as typeof fetch;
+
+function statusTestOptions<T extends object>(opts: T): T & { fetchImpl: typeof fetch } {
+  return { env: {} as NodeJS.ProcessEnv, fetchImpl: rejectNetworkFetch, ...opts };
+}
+
 function mockBedrockDiscovery(modelId = "custom.bedrock-model-v1") {
   const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
   const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
@@ -79,7 +89,7 @@ describe("getProviderStatuses", () => {
       "utf-8",
     );
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const openai = statuses.find((s) => s.provider === "openai");
     expect(openai).toBeDefined();
     expect(openai?.authorized).toBe(false);
@@ -105,7 +115,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const google = statuses.find((s) => s.provider === "google");
     expect(google).toBeDefined();
     expect(google?.savedApiKeyMasks?.api_key).toBe("goog...1234");
@@ -128,7 +138,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const opencode = statuses.find((s) => s.provider === "opencode-go");
     expect(opencode).toBeDefined();
     expect(opencode?.authorized).toBe(true);
@@ -152,7 +162,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const opencodeZen = statuses.find((s) => s.provider === "opencode-zen");
     expect(opencodeZen).toBeDefined();
     expect(opencodeZen?.authorized).toBe(true);
@@ -172,7 +182,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const google = statuses.find((s) => s.provider === "google");
     expect(google).toBeDefined();
     expect(google?.authorized).toBe(false);
@@ -193,7 +203,7 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths });
+    const statuses = await getProviderStatuses(statusTestOptions({ paths }));
     const google = statuses.find((s) => s.provider === "google");
     expect(google).toBeDefined();
     expect(google?.authorized).toBe(false);
@@ -223,7 +233,9 @@ describe("getProviderStatuses", () => {
       await refreshBedrockDiscoveryCache({ paths, env: {} as NodeJS.ProcessEnv });
       mockedDiscovery.resetCalls();
 
-      const statuses = await getProviderStatuses({ paths, env: {} as NodeJS.ProcessEnv });
+      const statuses = await getProviderStatuses(
+        statusTestOptions({ paths, env: {} as NodeJS.ProcessEnv }),
+      );
       const bedrock = statuses.find((s) => s.provider === "bedrock");
 
       expect(mockedDiscovery.getListFoundationModelsCalls()).toBe(0);
@@ -255,11 +267,13 @@ describe("getProviderStatuses", () => {
 
     const mockedDiscovery = mockBedrockDiscovery();
     try {
-      const statuses = await getProviderStatuses({
-        paths,
-        env: {} as NodeJS.ProcessEnv,
-        refreshBedrockDiscovery: true,
-      });
+      const statuses = await getProviderStatuses(
+        statusTestOptions({
+          paths,
+          env: {} as NodeJS.ProcessEnv,
+          refreshBedrockDiscovery: true,
+        }),
+      );
       const bedrock = statuses.find((s) => s.provider === "bedrock");
 
       expect(mockedDiscovery.getListFoundationModelsCalls()).toBe(1);
@@ -287,7 +301,7 @@ describe("getProviderStatuses", () => {
       }),
     });
     try {
-      const statuses = await getProviderStatuses({ paths });
+      const statuses = await getProviderStatuses(statusTestOptions({ paths }));
       const codex = statuses.find((s) => s.provider === "codex-cli");
       expect(codex).toBeDefined();
       expect(codex?.authorized).toBe(true);
@@ -327,7 +341,7 @@ describe("getProviderStatuses", () => {
       readAccount: async () => ({ account: null, requiresOpenaiAuth: true }),
     });
     try {
-      const statuses = await getProviderStatuses({ paths });
+      const statuses = await getProviderStatuses(statusTestOptions({ paths }));
       const codex = statuses.find((s) => s.provider === "codex-cli");
       expect(codex).toBeDefined();
       expect(codex?.authorized).toBe(false);
@@ -355,7 +369,7 @@ describe("getProviderStatuses", () => {
       },
     });
     try {
-      const statuses = await getProviderStatuses({ paths });
+      const statuses = await getProviderStatuses(statusTestOptions({ paths }));
       const codex = statuses.find((s) => s.provider === "codex-cli");
       expect(codex).toBeDefined();
       expect(codex?.authorized).toBe(false);
@@ -377,7 +391,7 @@ describe("getProviderStatuses", () => {
       },
     });
     try {
-      const statuses = await getProviderStatuses({ paths });
+      const statuses = await getProviderStatuses(statusTestOptions({ paths }));
       const codex = statuses.find((s) => s.provider === "codex-cli");
       expect(codex).toBeDefined();
       expect(codex?.authorized).toBe(false);
@@ -392,7 +406,9 @@ describe("getProviderStatuses", () => {
   test("antigravity: reports missing/not connected when no keys are available", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
-    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({ paths, env: {}, platform: "linux" }),
+    );
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(false);
@@ -415,7 +431,9 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({ paths, env: {}, platform: "linux" }),
+    );
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
@@ -440,7 +458,9 @@ describe("getProviderStatuses", () => {
       },
     });
 
-    const statuses = await getProviderStatuses({ paths, env: {}, platform: "linux" });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({ paths, env: {}, platform: "linux" }),
+    );
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
@@ -454,7 +474,9 @@ describe("getProviderStatuses", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const env = { GEMINI_API_KEY: "gemini-env-key-789" };
 
-    const statuses = await getProviderStatuses({ paths, env, platform: "linux" });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({ paths, env, platform: "linux" }),
+    );
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(true);
@@ -468,7 +490,9 @@ describe("getProviderStatuses", () => {
     const paths = getAiCoworkerPaths({ homedir: home });
     const env = { GEMINI_API_KEY: "gemini-env-key-789" };
 
-    const statuses = await getProviderStatuses({ paths, env, platform: "win32" });
+    const statuses = await getProviderStatuses(
+      statusTestOptions({ paths, env, platform: "win32" }),
+    );
     const status = statuses.find((s) => s.provider === "antigravity");
     expect(status).toBeDefined();
     expect(status?.authorized).toBe(false);

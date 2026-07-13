@@ -303,7 +303,11 @@ describe("task workspace subscription routing", () => {
       await fs.mkdir(catalogWorkspace, { recursive: true });
       await fs.mkdir(oneOffWorkspace, { recursive: true });
       await fs.mkdir(outsideWorkspace, { recursive: true });
-      await fs.symlink(catalogWorkspace, catalogAlias, "dir");
+      await fs.symlink(
+        catalogWorkspace,
+        catalogAlias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
       const activePath = await fs.realpath(activeWorkspace);
       const catalogPath = await fs.realpath(catalogWorkspace);
       const canonicalCatalogPath = canonicalWorkspacePath(catalogPath);

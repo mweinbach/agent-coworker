@@ -486,6 +486,51 @@ describe("canvas window lifecycle", () => {
     }
   });
 
+  test.serial("keeps a dismissed canvas overlay closed when switching files", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      Object.defineProperty(harness.dom.window, "innerWidth", {
+        configurable: true,
+        value: 680,
+        writable: true,
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const createdRoot = createRoot(container);
+      root = createdRoot;
+
+      await act(async () => {
+        createdRoot.render(createElement(App));
+        await flushUi();
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Close context"]')?.click();
+        await flushUi();
+      });
+      const context = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]');
+      expect(context?.getAttribute("aria-hidden")).toBe("true");
+
+      await act(async () => {
+        useAppStore.setState({
+          filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
+        });
+        await flushUi();
+      });
+
+      expect(context?.getAttribute("aria-hidden")).toBe("true");
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Show context"]'),
+      ).not.toBeNull();
+    } finally {
+      if (root) {
+        const mountedRoot = root;
+        await act(async () => mountedRoot.unmount());
+      }
+      harness.restore();
+    }
+  });
+
   test.serial(
     "does not expose spreadsheet pop-out while the embedded editor is active",
     async () => {

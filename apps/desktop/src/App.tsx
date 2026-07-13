@@ -423,7 +423,9 @@ const ChatShell = memo(function ChatShell({
       (activeCanvasPath !== previousCanvasPath || enteredRightOverlay)
     ) {
       const openedByCanvas =
-        canvasOpenedRightOverlayRef.current || enteredRightOverlay || !rightOverlayOpen;
+        canvasOpenedRightOverlayRef.current ||
+        enteredRightOverlay ||
+        (previousCanvasPath === null && !rightOverlayOpen);
       canvasOpenedRightOverlayRef.current = openedByCanvas;
       if (openedByCanvas) {
         setLeftOverlayOpen(false);

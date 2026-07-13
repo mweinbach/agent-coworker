@@ -427,7 +427,16 @@ function DesktopCitationChip({
             className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border-border/32 p-0 text-card-foreground"
             onMouseEnter={handleHoverEnter}
             onMouseLeave={handleHoverLeave}
-            onOpenAutoFocus={(event) => event.preventDefault()}
+            onKeyDown={(event) => {
+              if (sources.length <= 1) return;
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+              } else if (event.key === "ArrowRight") {
+                event.preventDefault();
+                setActiveIndex((index) => (index + 1) % sources.length);
+              }
+            }}
           >
             <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
               <AccessibleIconButton

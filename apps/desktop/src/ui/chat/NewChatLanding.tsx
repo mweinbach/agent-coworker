@@ -237,7 +237,7 @@ export function NewChatLanding() {
 
   const ingestAttachmentFiles = useCallback(
     async (selectedFiles: File[]) => {
-      if (selectedFiles.length === 0 || composerLocked) return;
+      if (selectedFiles.length === 0 || composerLocked) return false;
 
       const validationMessage = getComposerDraftAttachmentValidationMessage(
         useAppStore.getState().composerDraftsByKey,
@@ -246,14 +246,16 @@ export function NewChatLanding() {
       );
       if (validationMessage) {
         setAttachmentPickerError(validationMessage);
-        return;
+        return false;
       }
 
       setAttachmentPickerError(null);
       try {
         await addComposerAttachments(selectedFiles);
+        return true;
       } catch (error) {
         setAttachmentPickerError(error instanceof Error ? error.message : String(error));
+        return false;
       }
     },
     [addComposerAttachments, composerDraftKey, composerLocked, setAttachmentPickerError],

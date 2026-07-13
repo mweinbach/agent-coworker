@@ -179,6 +179,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
           onFiles: async (files) => {
             try {
               await addResearchCreationAttachments(files);
+              return true;
             } catch (error) {
               setResearchCreationError(
                 draft.revision,

@@ -54,4 +54,12 @@ describe("IME-safe submit shortcuts", () => {
     expect(sources[1]).toContain("isPlainEnterWithoutIme(event)");
     expect(sources[2]).toContain("isEnterWithoutIme(e)");
   });
+
+  test("lets the spreadsheet IME handle composing Enter", async () => {
+    const source = await readFile(
+      new URL("../src/ui/UniverSpreadsheetCanvas.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain('event.key === "Enter" && isImeComposing');
+  });
 });

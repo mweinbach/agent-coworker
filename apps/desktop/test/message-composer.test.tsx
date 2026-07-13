@@ -124,7 +124,7 @@ describe("message composer", () => {
 
   test("preserves drag-and-drop file ingestion", async () => {
     const harness = setupJsdom();
-    const onFiles = mock(async (_files: File[]) => {});
+    const onFiles = mock(async (_files: File[]) => true);
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -219,6 +219,47 @@ describe("message composer", () => {
       expect(container.querySelector('[role="alert"]')?.textContent).toContain(
         "Could not attach 1 file. Unsupported file",
       );
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("does not announce attachment success when ingestion rejects the files", async () => {
+    const harness = setupJsdom();
+    const onFiles = mock(async (_files: File[]) => false);
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(
+          createElement(
+            MessageComposerRoot,
+            { fileDrop: { onFiles } },
+            createElement(MessageComposerTextarea, { "aria-label": "Draft" }),
+          ),
+        );
+      });
+
+      const composer = container.querySelector(
+        '[data-slot="message-composer"]',
+      ) as HTMLFieldSetElement | null;
+      if (!composer) throw new Error("missing composer");
+      const file = new harness.dom.window.File(["bad"], "bad.bin");
+      const drop = new harness.dom.window.Event("drop", { bubbles: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { files: [file], types: ["Files"], dropEffect: "none" },
+      });
+      await act(async () => {
+        composer.dispatchEvent(drop);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("No file attached");
+      expect(container.textContent).not.toContain("1 file attached");
       await act(async () => root.unmount());
     } finally {
       harness.restore();

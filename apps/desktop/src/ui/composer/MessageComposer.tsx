@@ -30,7 +30,7 @@ type MessageComposerSubmissionStatus = "ready" | "pending";
 type MessageComposerMode = "send" | "steer-ready" | "steer-pending";
 
 type MessageComposerFileDropOptions = {
-  onFiles: (files: File[]) => void | Promise<void>;
+  onFiles: (files: File[]) => boolean | Promise<boolean>;
   disabled?: boolean;
 };
 
@@ -115,10 +115,12 @@ export function MessageComposerRoot({
       });
       void Promise.resolve()
         .then(() => fileDrop.onFiles(files))
-        .then(() => {
+        .then((attached) => {
           setDropAnnouncement({
             kind: "status",
-            message: `${files.length} ${fileLabel} attached.`,
+            message: attached
+              ? `${files.length} ${fileLabel} attached.`
+              : `No ${fileLabel} attached.`,
           });
         })
         .catch((error: unknown) => {

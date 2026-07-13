@@ -41,7 +41,7 @@ export function ChatComposer(props: {
   messageBarHeight: number;
   inputDisabled: boolean;
   transcriptOnly: boolean;
-  ingestAttachmentFiles: (files: File[]) => void;
+  ingestAttachmentFiles: (files: File[]) => Promise<boolean>;
   isUploading: boolean;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
@@ -129,9 +129,7 @@ export function ChatComposer(props: {
           className="w-full max-w-full rounded-[28px] border border-border/55 bg-background/95 app-shadow-overlay backdrop-blur-md"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
-            inputDisabled || transcriptOnly
-              ? undefined
-              : { onFiles: (files) => void ingestAttachmentFiles(files) }
+            inputDisabled || transcriptOnly ? undefined : { onFiles: ingestAttachmentFiles }
           }
         >
           {isUploading && !attachmentPickerError && (

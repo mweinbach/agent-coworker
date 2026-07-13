@@ -50,7 +50,6 @@ import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { openExternalUrl } from "../lib/desktopCommands";
-import { isImeComposing } from "../lib/keyboard";
 import { reportSpreadsheetBackgroundSaveFailure } from "../lib/spreadsheetSaveNotifications";
 import { buildUniverSheetsFooterConfig } from "../lib/univerCanvasConfig";
 import {
@@ -744,11 +743,6 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
             className="h-8 border-border bg-[var(--surface-spreadsheet)] text-sm shadow-none"
             value={promptText}
             onChange={(event) => setPromptText(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && isImeComposing(event.nativeEvent)) {
-                event.preventDefault();
-              }
-            }}
             aria-label="Spreadsheet prompt"
             placeholder="Ask agent about this selection..."
           />

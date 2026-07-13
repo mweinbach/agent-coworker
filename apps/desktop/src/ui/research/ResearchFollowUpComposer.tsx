@@ -80,6 +80,7 @@ export function ResearchFollowUpComposer({
           disabled: disabled || submitting,
           onFiles: async (files) => {
             addFiles(files);
+            return true;
           },
         }}
       >

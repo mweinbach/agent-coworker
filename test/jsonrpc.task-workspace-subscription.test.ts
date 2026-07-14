@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRunTurn } from "../src/agent";
+import { hostPlatform } from "../src/platform/host";
 import type { RuntimeRunTurnParams } from "../src/runtime";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import type { StartServerSocket } from "../src/server/startServer/types";
@@ -306,7 +307,7 @@ describe("task workspace subscription routing", () => {
       await fs.symlink(
         catalogWorkspace,
         catalogAlias,
-        process.platform === "win32" ? "junction" : "dir",
+        hostPlatform() === "win32" ? "junction" : "dir",
       );
       const activePath = await fs.realpath(activeWorkspace);
       const catalogPath = await fs.realpath(catalogWorkspace);

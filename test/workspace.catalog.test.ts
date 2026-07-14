@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hostPlatform } from "../src/platform/host";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
 import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
@@ -42,7 +43,7 @@ describe("workspace catalog and path rules", () => {
       await fs.mkdir(outsideRoot, { recursive: true });
       const projectDir = await fs.realpath(projectRoot);
       const outsideDir = await fs.realpath(outsideRoot);
-      await fs.symlink(projectDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(projectDir, aliasDir, hostPlatform() === "win32" ? "junction" : "dir");
 
       expect(requireWorkspacePath({}, "task/list", projectDir, homedir)).toBe(
         await fs.realpath(projectDir),

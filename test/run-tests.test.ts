@@ -3,7 +3,9 @@ import path from "node:path";
 
 import {
   buildTestInvocation,
+  formatFailureSummary,
   FULL_RUN_TEST_BATCH_SIZE,
+  parseJUnitFailures,
   partitionTestFiles,
 } from "../scripts/run_tests";
 
@@ -84,5 +86,85 @@ describe("project test runner", () => {
     });
 
     expect(invocation.command).toContain("--max-concurrency=1");
+  });
+
+  test.each([
+    "win32",
+    "linux",
+    "darwin",
+  ] as const)("writes a junit report for each full-suite file on %s", (platform) => {
+    const junitOutfile = path.join(repoRoot, "report.junit.xml");
+    const invocation = buildTestInvocation({
+      platform,
+      repoRoot,
+      bunPath,
+      args: [path.join(repoRoot, "test", "example.test.ts")],
+      fullRunFile: true,
+      junitOutfile,
+    });
+
+    expect(invocation.command).toContain("--reporter=junit");
+    expect(invocation.command).toContain(`--reporter-outfile=${junitOutfile}`);
+  });
+
+  test("collects failing tests from a Bun junit report", () => {
+    const report = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="4" failures="2" skipped="1">
+  <testsuite name="sample.test.ts" file="sample.test.ts">
+    <testsuite name="outer" file="sample.test.ts" line="3">
+      <testcase name="passes" classname="outer" file="sample.test.ts" line="4" assertions="1" />
+      <testcase name="fails one" classname="outer" file="sample.test.ts" line="5" assertions="1">
+        <failure type="AssertionError" />
+      </testcase>
+      <testsuite name="inner" file="sample.test.ts" line="6">
+        <testcase name="fails two" classname="inner &amp;gt; outer" file="sample.test.ts" line="7">
+          <failure type="AssertionError" />
+        </testcase>
+        <testcase name="skipped" classname="inner &amp;gt; outer" file="sample.test.ts" line="8">
+          <skipped />
+        </testcase>
+      </testsuite>
+    </testsuite>
+  </testsuite>
+</testsuites>`;
+
+    expect(parseJUnitFailures(report)).toEqual([
+      { name: "fails one", classname: "outer" },
+      { name: "fails two", classname: "inner > outer" },
+    ]);
+  });
+
+  test("returns no failures for a passing junit report", () => {
+    const report = `<testsuites><testsuite name="ok.test.ts">
+      <testcase name="passes" classname="suite" />
+    </testsuite></testsuites>`;
+
+    expect(parseJUnitFailures(report)).toEqual([]);
+  });
+
+  test("summarizes every failing file and test at the bottom of a full run", () => {
+    const summary = formatFailureSummary([
+      {
+        files: ["test/foo.test.ts"],
+        exitCode: 1,
+        failures: [
+          { name: "fails one", classname: "outer" },
+          { name: "fails two", classname: "outer > inner" },
+        ],
+      },
+      { files: ["test/bar.test.ts"], exitCode: 134, failures: [] },
+    ]);
+
+    expect(summary).toBe(
+      [
+        "2 test files failed (2 failing tests):",
+        "",
+        "✗ test/foo.test.ts",
+        "    outer > fails one",
+        "    outer > inner > fails two",
+        "✗ test/bar.test.ts",
+        "    (exited with code 134 before reporting test results)",
+      ].join("\n"),
+    );
   });
 });

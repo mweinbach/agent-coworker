@@ -1,7 +1,7 @@
 import fsSync, { type FSWatcher } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeSync } from "../../platform/paths";
 import type { WorkspaceFileChangeEvent } from "../../shared/fileVersion";
 import { readFileChangeVersion } from "../../utils/filePreviewRead";
 
@@ -22,7 +22,7 @@ export class WorkspaceFileChangeMonitor {
   private stopped = false;
 
   constructor(options: WorkspaceFileChangeMonitorOptions) {
-    this.cwd = fsSync.realpathSync(path.resolve(options.cwd));
+    this.cwd = canonicalizeSync(path.resolve(options.cwd));
     this.debounceMs = options.debounceMs ?? 25;
     this.onChange = options.onChange;
     this.watcher = fsSync.watch(
@@ -85,7 +85,7 @@ export class WorkspaceFileChangeMonitor {
       return;
     }
     try {
-      const resolvedPath = await fs.realpath(changedPath);
+      const resolvedPath = canonicalizeSync(changedPath);
       if (!this.shouldMonitorPath(resolvedPath)) {
         return;
       }

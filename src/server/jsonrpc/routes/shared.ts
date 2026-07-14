@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { canonicalizeSync } from "../../../platform/paths";
 import { getOneOffChatsRoot } from "../../../utils/oneOffChats";
 import type { SessionEvent } from "../../protocol";
 import type { SessionRuntime } from "../../session/SessionRuntime";
@@ -75,12 +76,12 @@ function resolveExistingDirectory(input: string, label: string): string {
   if (!stat.isDirectory()) {
     throw new Error(`${label} is not a directory`);
   }
-  return fs.realpathSync(resolved);
+  return canonicalizeSync(resolved);
 }
 
 function normalizeBoundaryPath(input: string): string {
   try {
-    return fs.realpathSync(input);
+    return canonicalizeSync(input);
   } catch {
     return path.resolve(input);
   }

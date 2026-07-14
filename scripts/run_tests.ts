@@ -7,7 +7,7 @@ export type TestInvocation = {
   cwd: string;
 };
 
-export const MACOS_TEST_BATCH_SIZE = 1;
+export const FULL_RUN_TEST_BATCH_SIZE = 1;
 
 export function partitionTestFiles(testFiles: string[], batchSize: number): string[][] {
   const batches: string[][] = [];
@@ -22,11 +22,13 @@ export function buildTestInvocation(options: {
   repoRoot: string;
   bunPath: string;
   args: string[];
+  fullRunFile?: boolean;
 }): TestInvocation {
-  const { platform, repoRoot, bunPath, args } = options;
+  const { platform, repoRoot, bunPath, args, fullRunFile = false } = options;
+  const concurrencyArgs = fullRunFile ? ["--max-concurrency=1"] : [];
   if (platform !== "darwin") {
     return {
-      command: [bunPath, "test", ...args],
+      command: [bunPath, "test", ...concurrencyArgs, ...args],
       cwd: repoRoot,
     };
   }
@@ -42,6 +44,7 @@ export function buildTestInvocation(options: {
     command: [
       bunPath,
       "test",
+      ...concurrencyArgs,
       "--isolate",
       "--preload",
       path.join(repoRoot, "test", "bun-test-bootstrap.ts"),
@@ -78,14 +81,20 @@ if (import.meta.main) {
   const repoRoot = path.resolve(import.meta.dir, "..");
   const platform = hostPlatform();
   const args = process.argv.slice(2);
-  const argumentBatches =
-    platform === "darwin" && args.length === 0
-      ? partitionTestFiles(await discoverProjectTestFiles(repoRoot), MACOS_TEST_BATCH_SIZE)
-      : [args];
+  const fullRun = args.length === 0;
+  const argumentBatches = fullRun
+    ? partitionTestFiles(await discoverProjectTestFiles(repoRoot), FULL_RUN_TEST_BATCH_SIZE)
+    : [args];
 
   for (const batch of argumentBatches) {
     const exitCode = await runTestInvocation(
-      buildTestInvocation({ platform, repoRoot, bunPath: process.execPath, args: batch }),
+      buildTestInvocation({
+        platform,
+        repoRoot,
+        bunPath: process.execPath,
+        args: batch,
+        fullRunFile: fullRun,
+      }),
     );
     if (exitCode !== 0) process.exit(exitCode);
   }

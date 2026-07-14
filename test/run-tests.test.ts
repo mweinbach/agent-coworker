@@ -3,7 +3,7 @@ import path from "node:path";
 
 import {
   buildTestInvocation,
-  MACOS_TEST_BATCH_SIZE,
+  FULL_RUN_TEST_BATCH_SIZE,
   partitionTestFiles,
 } from "../scripts/run_tests";
 
@@ -62,11 +62,27 @@ describe("project test runner", () => {
     ]);
   });
 
-  test("runs each macOS test file in a fresh Bun canary process", () => {
+  test("runs each full-suite test file in a fresh Bun canary process on every platform", () => {
     const testFiles = Array.from({ length: 3 }, (_, index) => `test/case-${index}.test.ts`);
 
     expect(
-      partitionTestFiles(testFiles, MACOS_TEST_BATCH_SIZE).map((batch) => batch.length),
+      partitionTestFiles(testFiles, FULL_RUN_TEST_BATCH_SIZE).map((batch) => batch.length),
     ).toEqual([1, 1, 1]);
+  });
+
+  test.each([
+    "win32",
+    "linux",
+    "darwin",
+  ] as const)("serializes tests within each isolated full-suite file on %s", (platform) => {
+    const invocation = buildTestInvocation({
+      platform,
+      repoRoot,
+      bunPath,
+      args: [path.join(repoRoot, "test", "example.test.ts")],
+      fullRunFile: true,
+    });
+
+    expect(invocation.command).toContain("--max-concurrency=1");
   });
 });

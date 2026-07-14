@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getAiCoworkerPaths } from "../../src/connect";
+import { scratchRoots } from "../../src/platform/sandbox";
 import {
   getProviderCatalog,
   listProviderCatalogEntries,
@@ -81,7 +82,14 @@ function withCuratedOpenDefaults(entry: ExpectedCatalogEntry): ExpectedCatalogEn
 
 describe("providers/connectionCatalog", () => {
   test("marks models with selector-ready reasoning effort metadata", async () => {
-    const entries = await listProviderCatalogEntries({ platform: "linux" });
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-reasoning-");
+    const entries = await listProviderCatalogEntries({
+      paths: staticOpts.paths,
+      store: staticOpts.store,
+      env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      platform: "linux",
+    });
     const openAiModel = entries
       .find((entry) => entry.id === "openai")
       ?.models.find((model) => model.id === "gpt-5.4");
@@ -108,6 +116,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       platform: "linux",
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
@@ -120,6 +129,7 @@ describe("providers/connectionCatalog", () => {
         paths: staticOpts.paths,
         store: staticOpts.store,
         env: staticOpts.env,
+        lmstudioFetchImpl: unavailableLmStudioFetch,
         platform: "linux",
       }),
     );
@@ -130,7 +140,11 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("omits Antigravity from the Windows catalog", async () => {
+    const staticOpts = await staticCatalogTestOptions("connection-catalog-static-antigravity-");
     const payload = await getProviderCatalog({
+      paths: staticOpts.paths,
+      env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       platform: "win32",
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -157,6 +171,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -571,6 +586,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -608,6 +624,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -645,6 +662,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -696,6 +714,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -721,6 +740,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -749,6 +769,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -783,6 +804,7 @@ describe("providers/connectionCatalog", () => {
       homedir: staticOpts.home,
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -806,6 +828,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -841,6 +864,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -888,6 +912,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -932,6 +957,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -980,6 +1006,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -1009,6 +1036,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       platform: "linux",
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
@@ -1047,6 +1075,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -1101,6 +1130,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -1131,6 +1161,7 @@ describe("providers/connectionCatalog", () => {
     const payload = await getProviderCatalog({
       paths: staticOpts.paths,
       env: staticOpts.env,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readCodexAppServerAccountImpl: staticOpts.readCodexAppServerAccountImpl,
       readStore: staticOpts.readStore,
     });
@@ -1152,8 +1183,13 @@ describe("providers/connectionCatalog", () => {
   });
 
   test("connected providers exclude oauth_pending entries", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "connection-catalog-oauth-pending-"),
+    );
     const payload = await getProviderCatalog({
+      paths: getAiCoworkerPaths({ homedir: home }),
       readCodexAppServerAccountImpl: noCodexAccount,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       // Pin env so ambient provider API keys can't mark providers connected.
       env: {},
       readStore: async () => ({
@@ -1191,6 +1227,8 @@ describe("providers/connectionCatalog", () => {
 
     const payload = await getProviderCatalog({
       paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1249,6 +1287,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {} as NodeJS.ProcessEnv,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       modelDiscoveryFetchImpl: fetchImpl as unknown as typeof fetch,
       readCodexAppServerAccountImpl: noCodexAccount,
       readStore: async () => ({
@@ -1293,6 +1332,8 @@ describe("providers/connectionCatalog", () => {
 
     const payload = await getProviderCatalog({
       paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1430,6 +1471,7 @@ describe("providers/connectionCatalog", () => {
       paths,
       refresh: true,
       env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1529,6 +1571,8 @@ describe("providers/connectionCatalog", () => {
 
     const payload = await getProviderCatalog({
       paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1557,6 +1601,8 @@ describe("providers/connectionCatalog", () => {
 
     const payload = await getProviderCatalog({
       paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",

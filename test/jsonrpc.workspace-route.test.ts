@@ -10,6 +10,7 @@ import type {
   JsonRpcLiteRequest,
 } from "../src/server/jsonrpc/protocol";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
+import { shouldIncludeJsonRpcThreadSummary } from "../src/server/jsonrpc/routes/shared";
 import type {
   JsonRpcRequestHandlerMap,
   JsonRpcRouteContext,
@@ -127,16 +128,11 @@ function createWorkspaceRouteHarness() {
         }
         return makeThread(runtime.id, "Live only", "2026-05-16T10:01:00.000Z");
       },
+      // Delegate to the REAL pure predicate so bootstrap filtering tests
+      // exercise the production filter semantics; only record the calls here.
       shouldIncludeThreadSummary: (summary: JsonRpcThreadSummaryFilter) => {
-        if (summary.titleSource !== "default") return true;
         summaryFilters.push(summary);
-        return (
-          summary.titleSource !== "default" ||
-          (summary.messageCount ?? 0) > 0 ||
-          summary.hasPendingAsk === true ||
-          summary.hasPendingApproval === true ||
-          summary.executionState === "running"
-        );
+        return shouldIncludeJsonRpcThreadSummary(summary);
       },
     },
   } as unknown as JsonRpcRouteContext;

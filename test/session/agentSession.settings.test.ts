@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { MemoryStore } from "../../src/memoryStore";
+import { scratchRoots } from "../../src/platform/sandbox";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -271,58 +273,95 @@ describe("AgentSession", () => {
       ]);
     });
 
-    test("upsertMemory refreshes the cached system prompt for later turns", async () => {
-      const loadSystemPromptWithSkillsImpl = mock(async () => ({
-        prompt: "prompt:memory-updated",
-        discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
-      }));
-      const { session, events } = makeSession({
-        loadSystemPromptWithSkillsImpl,
-        system: "prompt:stale",
-      });
+    test("upsertMemory writes the real store and refreshes the cached system prompt for later turns", async () => {
+      const dir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "agent-session-memory-upsert-"),
+      );
+      try {
+        const loadSystemPromptWithSkillsImpl = mock(async () => ({
+          prompt: "prompt:memory-updated",
+          discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
+        }));
+        const { session, events } = makeSession({
+          config: makeConfig(dir),
+          loadSystemPromptWithSkillsImpl,
+          system: "prompt:stale",
+        });
 
-      const memoryStore = (session as any).memoryStore;
-      memoryStore.upsert = mock(async () => ({
-        id: "note",
-        scope: "workspace",
-        content: "Remember this",
-        createdAt: "2026-03-13T00:00:00.000Z",
-        updatedAt: "2026-03-13T00:00:00.000Z",
-      }));
-      memoryStore.list = mock(async () => []);
+        await session.upsertMemory("workspace", "note", "Remember this");
+        await session.sendUserMessage("hello");
 
-      await session.upsertMemory("workspace", "note", "Remember this");
-      await session.sendUserMessage("hello");
+        expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
 
-      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
-      expect(events.some((evt) => evt.type === "memory_list")).toBe(true);
+        const listEvt = events.find((evt) => evt.type === "memory_list") as any;
+        expect(listEvt).toBeDefined();
+        expect(listEvt.memories).toHaveLength(1);
+        expect(listEvt.memories[0]).toMatchObject({
+          id: "note",
+          scope: "workspace",
+          content: "Remember this",
+        });
 
-      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
-      expect(runTurnArgs.system).toBe("prompt:memory-updated");
+        // The write is plain file I/O: a fresh store reading the same on-disk
+        // workspace DB observes the entry.
+        const workspaceDbPath = path.join(dir, ".cowork", "memory.sqlite");
+        const userDbPath = path.join(dir, "home", ".cowork", "memory.sqlite");
+        await expect(fs.stat(workspaceDbPath)).resolves.toBeDefined();
+        const readBackStore = new MemoryStore(workspaceDbPath, userDbPath);
+        expect(await readBackStore.getById("note", "workspace")).toMatchObject({
+          id: "note",
+          scope: "workspace",
+          content: "Remember this",
+        });
+
+        const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+        expect(runTurnArgs.system).toBe("prompt:memory-updated");
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     });
 
-    test("deleteMemory refreshes the cached system prompt for later turns", async () => {
-      const loadSystemPromptWithSkillsImpl = mock(async () => ({
-        prompt: "prompt:memory-deleted",
-        discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
-      }));
-      const { session, events } = makeSession({
-        loadSystemPromptWithSkillsImpl,
-        system: "prompt:stale",
-      });
+    test("deleteMemory removes the real store entry and refreshes the cached system prompt for later turns", async () => {
+      const dir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "agent-session-memory-delete-"),
+      );
+      try {
+        const loadSystemPromptWithSkillsImpl = mock(async () => ({
+          prompt: "prompt:memory-deleted",
+          discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
+        }));
+        const { session, events } = makeSession({
+          config: makeConfig(dir),
+          loadSystemPromptWithSkillsImpl,
+          system: "prompt:stale",
+        });
 
-      const memoryStore = (session as any).memoryStore;
-      memoryStore.remove = mock(async () => true);
-      memoryStore.list = mock(async () => []);
+        // Seed the real workspace DB, then reset observation state so the
+        // assertions below only cover the delete flow.
+        await session.upsertMemory("workspace", "note", "Remember this");
+        events.length = 0;
+        loadSystemPromptWithSkillsImpl.mockClear();
 
-      await session.deleteMemory("workspace", "note");
-      await session.sendUserMessage("hello");
+        await session.deleteMemory("workspace", "note");
+        await session.sendUserMessage("hello");
 
-      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
-      expect(events.some((evt) => evt.type === "memory_list")).toBe(true);
+        expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
 
-      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
-      expect(runTurnArgs.system).toBe("prompt:memory-deleted");
+        const listEvt = events.find((evt) => evt.type === "memory_list") as any;
+        expect(listEvt).toBeDefined();
+        expect(listEvt.memories).toEqual([]);
+
+        const readBackStore = new MemoryStore(
+          path.join(dir, ".cowork", "memory.sqlite"),
+          path.join(dir, "home", ".cowork", "memory.sqlite"),
+        );
+        expect(await readBackStore.getById("note", "workspace")).toBeNull();
+
+        const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+        expect(runTurnArgs.system).toBe("prompt:memory-deleted");
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
     });
 
     test("upsertMemory emits a structured error when the memory store write fails", async () => {

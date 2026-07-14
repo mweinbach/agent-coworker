@@ -1,7 +1,50 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 import { createRunTurn } from "../src/agent";
 import { startAgentServer } from "../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer, withSession } from "./helpers/wsHarness";
+
+/**
+ * Deterministically wait for the session persistence queue to flush a harness
+ * context mutation into the on-disk sessions DB before the server restarts.
+ * Polling the persisted artifact replaces the previous fixed sleep, which was
+ * race-prone on slow Windows CI machines.
+ */
+async function waitForPersistedHarnessContext(opts: {
+  tmpDir: string;
+  sessionId: string;
+  expectedRunId: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const dbPath = path.join(opts.tmpDir, ".cowork", "sessions.db");
+  const deadline = Date.now() + (opts.timeoutMs ?? 15_000);
+  let lastSeen: string | null = null;
+
+  while (Date.now() < deadline) {
+    let db: Database | null = null;
+    try {
+      db = new Database(dbPath, { readonly: true });
+      const row = db
+        .query("SELECT harness_context_json FROM session_state WHERE session_id = ?")
+        .get(opts.sessionId) as { harness_context_json: string | null } | null;
+      lastSeen = row?.harness_context_json ?? null;
+      if (lastSeen?.includes(opts.expectedRunId)) {
+        return;
+      }
+    } catch {
+      // DB may not exist yet or may briefly be mid-write; keep polling.
+    } finally {
+      db?.close(false);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(
+    `Timed out waiting for harness context "${opts.expectedRunId}" to persist to ${dbPath} ` +
+      `for session ${opts.sessionId} (last persisted harness_context_json: ${String(lastSeen)})`,
+  );
+}
 
 describe("WebSocket harness context runtime visibility", () => {
   test("root-session turns inject harness context into the runtime system prompt", async () => {
@@ -121,8 +164,10 @@ describe("WebSocket harness context runtime visibility", () => {
           return;
         }
 
-        if (message.type === "agent_spawned") {
-          setTimeout(() => resolve(undefined), 50);
+        // Resolve on the child's terminal status notification instead of a
+        // fixed sleep, so a slow child turn cannot race the assertions below.
+        if (message.type === "agent_status" && message.agent?.executionState === "completed") {
+          resolve(undefined);
         }
       });
 
@@ -169,7 +214,13 @@ describe("WebSocket harness context runtime visibility", () => {
           }
         },
       );
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Wait for the persisted artifact instead of sleeping a fixed interval:
+      // the resume below only works once the mutation reaches the sessions DB.
+      await waitForPersistedHarnessContext({
+        tmpDir,
+        sessionId,
+        expectedRunId: "run-persisted",
+      });
     } finally {
       await stopTestServer(first.server);
     }
@@ -410,8 +461,10 @@ describe("WebSocket harness golden flows", () => {
           return;
         }
 
-        if (message.type === "agent_spawned") {
-          setTimeout(() => resolve(undefined), 50);
+        // Resolve on the child's terminal status notification instead of a
+        // fixed sleep, so a slow child turn cannot race the assertions below.
+        if (message.type === "agent_status" && message.agent?.executionState === "completed") {
+          resolve(undefined);
         }
       });
     };

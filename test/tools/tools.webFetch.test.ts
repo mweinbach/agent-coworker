@@ -149,8 +149,8 @@ describe("webFetch tool", () => {
       expect(out).toContain("Hello world");
       expect(out).toContain("Local HTML should win.");
       expect(out).not.toContain("Hello from Exa");
-      expect(out).not.toContain("window.hacked");
-      expect(out).not.toContain(".bad");
+      // Script/style stripping is covered by the real-pipeline suite below;
+      // here htmlToMarkdown is stubbed, so asserting cleaning would be circular.
       expect(out).toContain("Links:");
       expect(out).toContain("https://example.com/about");
       expect(out).toContain("Image Links:");
@@ -1406,6 +1406,137 @@ describe("webFetch tool", () => {
     } finally {
       globalThis.fetch = originalFetch;
       webFetchInternal.setResponseTimeoutMs(5_000);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// webFetch real html-to-markdown pipeline (no stub): exercises the actual
+// Readability/JSDOM/Turndown conversion plus the fallback converter. The fetch
+// itself stays mocked, so no network is touched — only the conversion is real.
+// ---------------------------------------------------------------------------
+
+describe("webFetch real html-to-markdown pipeline", () => {
+  beforeEach(() => {
+    // Make sure no stub from another suite leaks in: these tests exist to
+    // cover the real conversion pipeline.
+    webFetchInternal.resetHtmlToMarkdownForTests();
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
+  });
+
+  afterEach(() => {
+    webSafetyInternal.resetDnsLookup();
+  });
+
+  const htmlResponse = (html: string) =>
+    new Response(html, { status: 200, headers: { "Content-Type": "text/html" } });
+
+  test("strips scripts/styles and extracts the main article with the Readability title", async () => {
+    const dir = await tmpDir();
+    const paragraph =
+      "The quarterly infrastructure review covers storage tiering, network throughput, and " +
+      "capacity planning in enough detail for Readability to classify this section as the " +
+      "primary article content of the fetched page. ";
+    const html = [
+      "<!doctype html>",
+      "<html>",
+      "<head>",
+      "<title>Real Pipeline Extraction</title>",
+      "<style>.decoy { display: none; }</style>",
+      "<script>window.realPipelineHacked = true;</script>",
+      "</head>",
+      "<body>",
+      '<nav><a href="/home">Boilerplate navigation chrome</a></nav>',
+      "<main><article>",
+      "<h2>Findings Overview</h2>",
+      `<p>${paragraph.repeat(4)}</p>`,
+      "<script>window.inlineArticleScript = true;</script>",
+      `<p>${paragraph.repeat(4)}</p>`,
+      "</article></main>",
+      "</body>",
+      "</html>",
+    ].join("\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => htmlResponse(html)) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({
+        url: "https://example.com/quarterly-report",
+        maxLength: 50000,
+      });
+
+      // Article body survives as markdown text.
+      expect(out).toContain("storage tiering");
+      // Both head and inline article scripts are removed, along with styles.
+      expect(out).not.toContain("window.realPipelineHacked");
+      expect(out).not.toContain("window.inlineArticleScript");
+      expect(out).not.toContain(".decoy");
+      // The output is markdown, not raw HTML.
+      expect(out).not.toContain("<script");
+      expect(out).not.toContain("<style");
+      expect(out).not.toContain("<h2>");
+      // Turndown converted the section heading to an ATX heading.
+      expect(out).toMatch(/^## Findings Overview$/m);
+      // Readability extracted the document title, and htmlToMarkdown prefixes
+      // it as a top-level heading when the article body does not include it.
+      expect(out).toMatch(/^# Real Pipeline Extraction$/m);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("fallback converter strips noise and extracts the main fragment in desktop-bundle mode", async () => {
+    const dir = await tmpDir();
+    // COWORK_DESKTOP_BUNDLE=1 makes htmlToMarkdown take the deterministic
+    // fallbackHtmlToMarkdown path (no Readability), covering stripHtmlNoise,
+    // extractLikelyContentFragment, and the Turndown conversion directly.
+    const html = [
+      "<!doctype html>",
+      "<html>",
+      "<head>",
+      "<title>Fallback Page</title>",
+      "<style>.fallback-decoy { color: red; }</style>",
+      "<script>window.fallbackHacked = true;</script>",
+      "</head>",
+      "<body>",
+      "<!-- hidden-comment-content -->",
+      "<aside>outside-main boilerplate</aside>",
+      "<main>",
+      "<h2>Tiny Fragment</h2>",
+      "<p>Fallback body text.</p>",
+      "<script>window.fallbackInlineScript = true;</script>",
+      "<svg><text>svg-noise</text></svg>",
+      "</main>",
+      "</body>",
+      "</html>",
+    ].join("\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => htmlResponse(html)) as any;
+
+    try {
+      await withEnv("COWORK_DESKTOP_BUNDLE", "1", async () => {
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({
+          url: "https://example.com/fallback-page",
+          maxLength: 50000,
+        });
+
+        // Main-fragment extraction: only <main> content survives.
+        expect(out).toMatch(/^## Tiny Fragment$/m);
+        expect(out).toContain("Fallback body text.");
+        expect(out).not.toContain("outside-main boilerplate");
+        // Noise stripping: scripts, styles, comments, and svg are removed.
+        expect(out).not.toContain("window.fallbackHacked");
+        expect(out).not.toContain("window.fallbackInlineScript");
+        expect(out).not.toContain(".fallback-decoy");
+        expect(out).not.toContain("hidden-comment-content");
+        expect(out).not.toContain("svg-noise");
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

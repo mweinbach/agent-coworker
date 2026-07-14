@@ -227,6 +227,22 @@ describe("desktop chat activity groups", () => {
     expect(summary.elapsedLabel).toBe("1s");
   });
 
+  test("normalizes concatenated Markdown boundaries in the reasoning preview", () => {
+    const summary = summarizeActivityGroup([
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "**Filtering the queue****Identifying affected projects**",
+      },
+    ]);
+
+    expect(summary.preview).toContain("Filtering the queue");
+    expect(summary.preview).toContain("Identifying affected projects");
+    expect(summary.preview).not.toContain("****");
+  });
+
   test("summary elapsed time floors activity timestamps and ignores invalid values", () => {
     const summary = summarizeActivityGroup([
       {

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { scratchRoots } from "../../../src/platform/sandbox";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
+import { pinHome } from "../../../test/helpers/platform";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
 
@@ -1142,8 +1143,12 @@ describe("files IPC", () => {
   });
 
   test("listDirectory lists a global chat session dir without any approved project roots", async () => {
+    const scratchRoot = scratchRoots()[0];
+    if (!scratchRoot) throw new Error("No platform scratch root is available");
+    const tempHome = await fs.mkdtemp(path.join(scratchRoot, "cowork-ipc-files-home-"));
+    const restoreHome = pinHome(tempHome);
     const registerFilesIpc = await loadRegisterFilesIpc();
-    const chatsRoot = getOneOffChatsRoot();
+    const chatsRoot = getOneOffChatsRoot(tempHome);
     await fs.mkdir(chatsRoot, { recursive: true });
     const sessionDir = await fs.mkdtemp(path.join(chatsRoot, "20260601T000000Z-research-"));
     await fs.writeFile(path.join(sessionDir, "report.md"), "# findings\n", "utf-8");
@@ -1194,7 +1199,8 @@ describe("files IPC", () => {
       expect(entries.map((entry) => entry.name)).toEqual(["assets", "report.md"]);
       expect(entries[0]?.isDirectory).toBe(true);
     } finally {
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      restoreHome();
+      await fs.rm(tempHome, { recursive: true, force: true });
     }
   });
 

@@ -66,7 +66,10 @@ export function assertLoopbackRpcRemote(
   // Bun may omit requestIP for some local harness paths; require an explicit
   // loopback address when the runtime reports one.
   if (ip && !isLoopbackAddress(ip.address)) {
-    return jsonResponse({ error: "Loopback HTTP RPC is restricted to local clients." }, { status: 403 });
+    return jsonResponse(
+      { error: "Loopback HTTP RPC is restricted to local clients." },
+      { status: 403 },
+    );
   }
   return null;
 }

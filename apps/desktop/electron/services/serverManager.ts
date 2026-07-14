@@ -410,6 +410,7 @@ function runWindowsSandboxHelper(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(helperPath, args, {
+      cwd: path.dirname(helperPath),
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

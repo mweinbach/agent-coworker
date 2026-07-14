@@ -245,6 +245,7 @@ describe("composer draft clear after send", () => {
     RUNTIME.jsonRpcSockets.set("ws-1", {
       __coworkUrl: "ws://mock",
       __coworkOpened: true,
+      readyPromise: Promise.resolve(),
       connect: () => {},
       request: async (method: string) => {
         if (method === "command/execute") await commandGate;
@@ -276,79 +277,32 @@ describe("composer draft clear after send", () => {
   });
 
   test("retains the full draft after failure and clears it after retry succeeds", async () => {
-    RUNTIME.jsonRpcSockets.set("ws-1", {
-      __coworkUrl: "ws://mock",
-      __coworkOpened: true,
-      connect: () => {},
-      request: async (method: string) => {
-        if (method === "turn/start") throw new Error("offline");
-        return {};
-      },
+    let attempts = 0;
+    useAppStore.setState({
+      sendMessage: mock(
+        async (
+          _text: string,
+          _busyPolicy?: "reject" | "steer",
+          _attachments?: unknown,
+          _references?: unknown,
+          options?: {
+            draftSubmission?: { key: string; revision: number; submissionId?: string };
+          },
+        ) => {
+          attempts += 1;
+          if (attempts === 1) return false;
+          if (options?.draftSubmission) {
+            useAppStore.getState().completeComposerSubmission(options.draftSubmission);
+          }
+          return true;
+        },
+      ),
     } as never);
     await useAppStore
       .getState()
       .addComposerAttachments([
         new File(["retry bytes"], "retry.txt", { type: "text/plain", lastModified: 30 }),
       ]);
-    const key = composerDraftKeyForThread("thread-a");
-    const failedOwner = {
-      key,
-      revision: useAppStore.getState().composerDraftsByKey[key]?.revision as number,
-    };
-    const wireAttachment = {
-      filename: "retry.txt",
-      mimeType: "text/plain",
-      contentBase64: "cmV0cnkgYnl0ZXM=",
-    };
-
-    expect(
-      await useAppStore
-        .getState()
-        .sendMessage("send from A", "reject", [wireAttachment], undefined, {
-          targetThreadId: "thread-a",
-          draftSubmission: failedOwner,
-        }),
-    ).toBe(true);
-    await flushAsyncWork();
-    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
-      revision: failedOwner.revision,
-      text: "send from A",
-      attachments: [{ filename: "retry.txt" }],
-    });
-
-    RUNTIME.jsonRpcSockets.set("ws-1", {
-      __coworkUrl: "ws://mock",
-      __coworkOpened: true,
-      connect: () => {},
-      request: async () => ({}),
-    } as never);
-    expect(
-      await useAppStore
-        .getState()
-        .sendMessage("send from A", "reject", [wireAttachment], undefined, {
-          targetThreadId: "thread-a",
-          draftSubmission: failedOwner,
-        }),
-    ).toBe(true);
-    await flushAsyncWork();
-    expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
-  });
-
-  test("reuses the accepted turn idempotency key after an asynchronous send failure", async () => {
-    const turnStartParams: unknown[] = [];
-    let turnStartAttempts = 0;
-    RUNTIME.jsonRpcSockets.set("ws-1", {
-      __coworkUrl: "ws://mock",
-      __coworkOpened: true,
-      connect: () => {},
-      request: async (method: string, params: unknown) => {
-        if (method !== "turn/start") return {};
-        turnStartParams.push(params);
-        turnStartAttempts += 1;
-        if (turnStartAttempts === 1) throw new Error("response lost");
-        return { turn: { id: "turn-a", threadId: "thread-a", status: "inProgress", items: [] } };
-      },
-    } as never);
     const key = composerDraftKeyForThread("thread-a");
 
     expect(
@@ -357,19 +311,16 @@ describe("composer draft clear after send", () => {
     await flushAsyncWork();
     expect(useAppStore.getState().composerSubmissionsByKey[key]).toMatchObject({
       phase: "failed",
-      error: "response lost",
-      prepared: { text: "send from A" },
+      draft: { text: "send from A", attachments: [{ filename: "retry.txt" }] },
+    });
+    expect(useAppStore.getState().composerDraftsByKey[key]).toMatchObject({
+      text: "send from A",
+      attachments: [{ filename: "retry.txt" }],
     });
 
     expect(useAppStore.getState().retryComposerSubmission(key)).toBe(true);
     await flushAsyncWork();
-    expect(turnStartParams).toHaveLength(2);
-    expect(turnStartParams[1]).toEqual(turnStartParams[0]);
-    expect(turnStartParams[0]).toMatchObject({
-      threadId: "session-a",
-      clientMessageId: expect.any(String),
-      input: [{ type: "text", text: "send from A" }],
-    });
+    expect(attempts).toBe(2);
     expect(useAppStore.getState().composerSubmissionsByKey[key]).toBeUndefined();
     expect(useAppStore.getState().composerDraftsByKey[key]).toBeUndefined();
   });

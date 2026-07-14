@@ -139,7 +139,7 @@ export function createHttpJsonRpcConnection(
       protocolMode: options?.protocolMode ?? "h3",
       transportType: options?.transportType,
       selectedSubprotocol: options?.selectedSubprotocol ?? "cowork.jsonrpc.v1",
-      workspaceControlEventsAllowed: options?.transportType === "http" ? true : false,
+      workspaceControlEventsAllowed: options?.transportType === "http",
       taskReadAllowed: options?.transportType === "http" ? true : undefined,
       taskMutationAllowed: options?.transportType === "http" ? true : undefined,
     },

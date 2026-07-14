@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { act, type ComponentType, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -16,6 +17,12 @@ type ComposerProps = {
   isBusy: boolean;
   isStopping: boolean;
 };
+const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
+
+function mockMobileModule(alias: string, factory: () => unknown): void {
+  mock.module(alias, factory);
+  mock.module(mobileRequire.resolve(alias), factory);
+}
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => unknown) {
   mock.module(alias, factory);
@@ -28,7 +35,7 @@ function mockLocalModule(alias: string, relativePath: string, factory: () => unk
 const nativeContainer = ({ children, ...props }: Record<string, unknown>) =>
   createElement("div", props, children as React.ReactNode);
 
-mock.module("react-native", () => ({
+const reactNativeMockFactory = () => ({
   AccessibilityInfo: {
     addEventListener: () => ({ remove: () => undefined }),
     announceForAccessibilityWithOptions: () => undefined,
@@ -85,7 +92,9 @@ mock.module("react-native", () => ({
       },
       children as React.ReactNode,
     ),
-}));
+});
+mockMobileModule("react-native", reactNativeMockFactory);
+mock.module(path.resolve("apps/mobile/node_modules/react-native"), reactNativeMockFactory);
 
 type Modifier = {
   kind: string;
@@ -95,7 +104,7 @@ type Modifier = {
 const modifier = (kind: string) => (value: unknown) => ({ kind, value });
 const swiftContainer = ({ children, ...props }: Record<string, unknown>) =>
   createElement("div", props, children as React.ReactNode);
-mock.module("@expo/ui/swift-ui", () => ({
+mockMobileModule("@expo/ui/swift-ui", () => ({
   Button: ({ onPress }: { onPress?: () => void }) => createElement("button", { onClick: onPress }),
   Group: swiftContainer,
   Host: swiftContainer,
@@ -124,7 +133,7 @@ mock.module("@expo/ui/swift-ui", () => ({
     });
   },
 }));
-mock.module("@expo/ui/swift-ui/modifiers", () => ({
+mockMobileModule("@expo/ui/swift-ui/modifiers", () => ({
   accessibilityAddTraits: modifier("accessibilityAddTraits"),
   accessibilityLabel: modifier("accessibilityLabel"),
   background: (value: unknown, shape: unknown) => ({ kind: "background", value, shape }),
@@ -140,7 +149,7 @@ mock.module("@expo/ui/swift-ui/modifiers", () => ({
   },
   tint: modifier("tint"),
 }));
-mock.module("expo-glass-effect", () => ({
+mockMobileModule("expo-glass-effect", () => ({
   GlassView: nativeContainer,
   isLiquidGlassAvailable: () => false,
 }));

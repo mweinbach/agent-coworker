@@ -69,7 +69,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Unit tests
-        run: bun test
+        run: bun run test
 
   electron-quality:
     name: Electron UI quality gates
@@ -186,12 +186,12 @@ jobs:
           & $helperPath setup --sandbox-home $env:COWORK_WIN_SANDBOX_HOME --cwd $setupWorkspace --mode workspace-write --writable-root $setupWorkspace
           if ($LASTEXITCODE -ne 0) { throw "Windows sandbox setup or enforcement probe failed with exit code $LASTEXITCODE" }
 
-          bun test test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
+          bun run test -- test/platform/sandbox.enforcement.integration.test.ts test/platform/sandbox.test.ts test/build-desktop-resources.test.ts apps/desktop/test/after-pack.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Windows path and desktop smoke tests
         run: >
-          bun test
+          bun run test --
           test/tools/tools.bash.test.ts
           test/tools/tools.glob.test.ts
           test/workspace-path.test.ts
@@ -209,7 +209,7 @@ jobs:
 
       - name: Cross-platform task and preview regressions
         run: >
-          bun test
+          bun run test --
           test/task-artifact-versions.test.ts
           test/task-mode.persistence.test.ts
           test/jsonrpc.task-workspace-subscription.test.ts
@@ -235,7 +235,7 @@ jobs:
 
       - name: macOS sandbox and runtime enforcement
         run: >
-          bun test
+          bun run test --
           test/platform/sandbox.enforcement.integration.test.ts
           test/platform/sandbox.test.ts
           test/tools/tools.bash.test.ts
@@ -246,7 +246,7 @@ jobs:
 
       - name: Cross-platform task and preview regressions
         run: >
-          bun test
+          bun run test --
           test/workspace-path.test.ts
           test/task-artifact-versions.test.ts
           test/task-mode.persistence.test.ts
@@ -273,7 +273,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Remote MCP smoke tests
-        run: bun test test/mcp.remote.grep.test.ts
+        run: bun run test -- test/mcp.remote.grep.test.ts
 
   build-smoke:
     name: Build smoke tests

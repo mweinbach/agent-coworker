@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { canonicalizeSync } from "../src/platform/paths";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
@@ -405,9 +406,10 @@ describe("web desktop routes", () => {
   test("desktop service allows fs access to global one-off chat session dirs", async () => {
     const userDataDir = await makeTempDir("cowork-web-desktop-oneoff-userdata-");
     const workspace = await makeTempDir("cowork-web-desktop-oneoff-ws-");
-    const service = new WebDesktopService({ userDataDir });
+    const homedir = await makeTempDir("cowork-web-desktop-oneoff-home-");
+    const service = new WebDesktopService({ userDataDir, homedir });
 
-    const chatsRoot = getOneOffChatsRoot();
+    const chatsRoot = getOneOffChatsRoot(homedir);
     await fs.mkdir(chatsRoot, { recursive: true });
     const sessionDir = await fs.mkdtemp(path.join(chatsRoot, "20260601T000000Z-research-"));
     cleanupPaths.add(sessionDir);
@@ -428,7 +430,7 @@ describe("web desktop routes", () => {
           isHidden: false,
           modifiedAtMs: expect.any(Number),
           name: "report.md",
-          path: path.join(sessionDir, "report.md"),
+          path: canonicalizeSync(path.join(sessionDir, "report.md")),
           sizeBytes: 11,
         },
       ]);
@@ -1016,7 +1018,9 @@ describe("web desktop routes", () => {
       { cwd: workspace },
     );
     expect(preview?.status).toBe(200);
-    expect(decodeURIComponent(preview?.headers.get("x-cowork-file-path") ?? "")).toBe(filePath);
+    expect(decodeURIComponent(preview?.headers.get("x-cowork-file-path") ?? "")).toBe(
+      canonicalizeSync(filePath),
+    );
     expect(Number(preview?.headers.get("x-cowork-file-size"))).toBe(9);
     expect(preview?.headers.get("x-cowork-file-fingerprint")).toBeTruthy();
 
@@ -1056,10 +1060,10 @@ describe("web desktop routes", () => {
     );
     expect(renamed?.status).toBe(204);
     expect(events).toEqual([
-      { kind: "deleted", path: sourcePath, version: null },
+      { kind: "deleted", path: canonicalizeSync(sourcePath), version: null },
       {
         kind: "changed",
-        path: renamedPath,
+        path: canonicalizeSync(renamedPath),
         version: expect.objectContaining({ size: 9 }),
       },
     ]);
@@ -1074,7 +1078,9 @@ describe("web desktop routes", () => {
       opts,
     );
     expect(trashed?.status).toBe(204);
-    expect(events).toEqual([{ kind: "deleted", path: renamedPath, version: null }]);
+    expect(events).toEqual([
+      { kind: "deleted", path: canonicalizeSync(renamedPath), version: null },
+    ]);
   });
 
   test("serves active-content files as attachments while keeping plain text inline", async () => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { hostPlatform } from "../src/platform/host";
+import { canonicalizeSync } from "../src/platform/paths";
 import { lockDatabasePathFor, withFileLock } from "../src/utils/fileLock";
 import { symlinkOrJunction } from "./helpers/platform";
 
@@ -261,7 +262,7 @@ describe("withFileLock", () => {
     await withFileLock(target, async () => undefined, { lockRoot });
     const stat = await fs.stat(lockPath);
     expect(stat.isFile()).toBe(true);
-    expect(path.dirname(lockPath)).toBe(lockRoot);
+    expect(path.dirname(lockPath)).toBe(canonicalizeSync(lockRoot));
 
     await expect(withFileLock(target, async () => "reacquired", { lockRoot })).resolves.toBe(
       "reacquired",

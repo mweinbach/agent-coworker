@@ -248,7 +248,7 @@ When listening on non-loopback hosts, the server requires an access token for `/
 Common commands:
 
 ```bash
-bun test                    # run all tests
+bun run test                # run all tests through the cross-platform project runner
 bun run typecheck           # typecheck root, harness, and desktop
 bun run docs:check          # verify docs/protocol consistency
 bun run desktop:dev         # run Electron desktop app in dev mode

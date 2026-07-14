@@ -222,9 +222,9 @@ Credentials are stored separately from server configs:
 Tests use **Bun's built-in test runner** and live in the `test/` directory.
 
 ```bash
-bun test                        # Run all tests
-bun test test/agent             # Run tests matching a pattern
-bun test test/tools.test.ts     # Run a specific test file
+bun run test                    # Run all tests
+bun run test -- test/agent      # Run tests matching a pattern
+bun run test -- test/tools.test.ts # Run a specific test file
 ```
 
 Key testing patterns:
@@ -235,7 +235,7 @@ Key testing patterns:
 ## Commits & PRs
 
 - **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
-- **Always run tests** before pushing: `bun test`
+- **Always run tests** before pushing: `bun run test`
 - **Focused PRs**: Keep pull requests small and focused on a single concern.
 - **TypeScript strict mode** is the primary code quality check (`tsc --noEmit` via tsconfig). There is no linter or formatter configured.
 

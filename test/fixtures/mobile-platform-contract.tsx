@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement, forwardRef, type ReactNode, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -33,6 +34,12 @@ type SnapshotControl = {
   minHeight?: number;
   state?: AccessibilityState;
 };
+const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
+
+function mockMobileModule(alias: string, factory: () => unknown): void {
+  mock.module(alias, factory);
+  mock.module(mobileRequire.resolve(alias), factory);
+}
 
 const platformValue = process.env.EXPO_OS;
 if (platformValue !== "ios" && platformValue !== "android") {
@@ -266,7 +273,7 @@ function NativeSwitch({
   });
 }
 
-mock.module("react-native", () => ({
+const reactNativeMockFactory = () => ({
   AccessibilityInfo: {
     addEventListener: () => ({ remove: () => undefined }),
     announceForAccessibilityWithOptions: (message: string) => {
@@ -299,7 +306,9 @@ mock.module("react-native", () => ({
   TextInput: NativeTextInput,
   View: NativeView,
   findNodeHandle: () => 1,
-}));
+});
+mockMobileModule("react-native", reactNativeMockFactory);
+mock.module(path.resolve("apps/mobile/node_modules/react-native"), reactNativeMockFactory);
 
 const modifier = (kind: string) => (value?: unknown) => ({ kind, value });
 const modifierValue = (modifiers: unknown, kind: string): unknown => {
@@ -310,7 +319,7 @@ const modifierValue = (modifiers: unknown, kind: string): unknown => {
 };
 const SwiftContainer = ({ children }: HostProps) => createElement("div", null, children);
 
-mock.module("@expo/ui/swift-ui", () => ({
+mockMobileModule("@expo/ui/swift-ui", () => ({
   Button: ({ children, modifiers, onPress }: HostProps) => {
     const disabled = modifierValue(modifiers, "disabled") === true;
     const frame = flattenStyle(modifierValue(modifiers, "frame"));
@@ -366,7 +375,7 @@ mock.module("@expo/ui/swift-ui", () => ({
     createElement("span", { "data-effective-font-scale": fontScale }, children),
 }));
 
-mock.module("@expo/ui/swift-ui/modifiers", () => ({
+mockMobileModule("@expo/ui/swift-ui/modifiers", () => ({
   accessibilityAddTraits: modifier("accessibilityAddTraits"),
   accessibilityLabel: modifier("accessibilityLabel"),
   background: (value: unknown, shape: unknown) => ({ kind: "background", shape, value }),
@@ -383,7 +392,7 @@ mock.module("@expo/ui/swift-ui/modifiers", () => ({
   tint: modifier("tint"),
 }));
 
-mock.module("expo-camera", () => ({
+mockMobileModule("expo-camera", () => ({
   CameraView: ({ accessibilityLabel }: HostProps) =>
     createElement("div", {
       ...accessibilityAttributes("image", accessibilityLabel, undefined, undefined, undefined),
@@ -391,12 +400,12 @@ mock.module("expo-camera", () => ({
   useCameraPermissions: () => [{ granted: true }, async () => ({ granted: true })],
 }));
 
-mock.module("expo-glass-effect", () => ({
+mockMobileModule("expo-glass-effect", () => ({
   GlassView: NativeView,
   isLiquidGlassAvailable: () => false,
 }));
 
-mock.module("expo-image", () => ({
+mockMobileModule("expo-image", () => ({
   Image: ({ accessible, accessibilityLabel }: HostProps) =>
     createElement("img", {
       alt: accessible === false ? "" : String(accessibilityLabel ?? ""),
@@ -404,9 +413,10 @@ mock.module("expo-image", () => ({
     }),
 }));
 
-mock.module("react-native-gesture-handler/Swipeable", () => ({
+const swipeableMockFactory = () => ({
   default: SwiftContainer,
-}));
+});
+mockMobileModule("react-native-gesture-handler/Swipeable", swipeableMockFactory);
 
 const NativeTabsTrigger = Object.assign(
   ({ children, name }: HostProps) =>
@@ -429,7 +439,7 @@ const NativeTabs = Object.assign(
   { Trigger: NativeTabsTrigger },
 );
 
-mock.module("expo-router/unstable-native-tabs", () => ({ NativeTabs }));
+mockMobileModule("expo-router/unstable-native-tabs", () => ({ NativeTabs }));
 
 const Stack = Object.assign(
   ({ children }: HostProps) => createElement("div", { "data-stack": true }, children),
@@ -458,11 +468,11 @@ const routerMock = {
   back: () => undefined,
   replace: () => undefined,
 };
-mock.module("expo-router", () => ({
+mockMobileModule("expo-router", () => ({
   Stack,
   useRouter: () => routerMock,
 }));
-mock.module("expo-router/stack", () => ({ Stack }));
+mockMobileModule("expo-router/stack", () => ({ Stack }));
 
 mockLocalModule("@/components/ui/sf-symbol", "apps/mobile/src/components/ui/sf-symbol", () => ({
   SFSymbol: ({ name }: { name: string }) =>

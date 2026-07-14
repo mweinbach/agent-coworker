@@ -32,7 +32,7 @@ jobs:
         run: bun run docs:check
 
       - name: Unit tests
-        run: bun test
+        run: bun run test
 
       - name: Typecheck
         run: bun run typecheck
@@ -222,7 +222,7 @@ jobs:
       - name: Verify native macOS sandbox and runtime
         if: ${{ runner.os == 'macOS' }}
         run: >
-          bun test
+          bun run test --
           test/platform/sandbox.enforcement.integration.test.ts
           test/platform/sandbox.test.ts
           test/coworkRuntime.test.ts

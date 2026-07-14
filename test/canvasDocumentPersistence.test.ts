@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
 import { pinHome, symlinkOrJunction } from "./helpers/platform";
@@ -580,7 +581,7 @@ describe("CanvasDocumentPersistenceService", () => {
     });
     expect(copiedRevision.ok).toBe(true);
     if (copied.ok && copiedRevision.ok) {
-      expect(copiedRevision.path).toBe(copyPath);
+      expect(copiedRevision.path).toBe(canonicalizeSync(copyPath));
       expect(copiedRevision.revision).toEqual(copied.revision);
     }
   });

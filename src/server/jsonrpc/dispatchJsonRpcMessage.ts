@@ -15,7 +15,7 @@ import {
 type DispatchJsonRpcMessageArgs = {
   ws: StartServerSocket;
   message: JsonRpcLiteRequest | JsonRpcLiteNotification | JsonRpcLiteClientResponse;
-  transportType?: "websocket" | "h3";
+  transportType?: "websocket" | "h3" | "http";
   onRequest?: (message: JsonRpcLiteRequest) => void;
   onNotification?: (message: JsonRpcLiteNotification) => void;
   onResponse?: (message: JsonRpcLiteClientResponse) => void;

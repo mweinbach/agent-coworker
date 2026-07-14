@@ -44,7 +44,13 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("- name: Typecheck");
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
-    expect(workflow).toContain("run: bun test --max-concurrency 1");
+    // Single-process serial run. Do not reintroduce `--max-concurrency 1` (a
+    // no-op: it only gates test.concurrent, which this repo never uses) and do
+    // not adopt `--parallel`/`--shard` without re-validating: per-file isolation
+    // re-imports the module graph (measured ~+2.2s/file, slower than serial on
+    // <=4-vCPU CI runners) and sharding breaks cross-file mock.module coupling.
+    expect(workflow).toMatch(/- name: Unit tests\s*\n\s*run: bun test\n/);
+    expect(workflow).not.toContain("--max-concurrency");
     expect(workflow).not.toContain("run: bun run test:stable");
   });
 

@@ -547,8 +547,18 @@ rl.on("line", (line) => {
       send({ id: msg.id, error: { message: "wrong model" } });
       return;
     }
-    send({ id: msg.id, result: { turn: { id: "turn_1", status: "inProgress", items: [], error: null } } });
-    send({ method: "turn/completed", params: { turn: { id: "turn_1", status: "completed", items: [{ type: "agentMessage", id: "item_1", text: "fallback ok" }], error: null } } });
+    // Write the turn/start response and turn/completed notification as ONE
+    // stdout chunk. Under full-suite load the pipe coalesces them anyway; doing
+    // it explicitly makes that ordering deterministic instead of a rare flake.
+    // The notification must carry threadId (like the real app-server does):
+    // when both lines land in one chunk, the client routes turn/completed
+    // before the turn/start response continuation records the turn id, and a
+    // threadId-less notification is dropped by the thread guard, hanging the
+    // turn forever.
+    process.stdout.write(
+      JSON.stringify({ id: msg.id, result: { turn: { id: "turn_1", threadId: "thread_1", status: "inProgress", items: [], error: null } } }) + "\\n" +
+      JSON.stringify({ method: "turn/completed", params: { threadId: "thread_1", turn: { id: "turn_1", threadId: "thread_1", status: "completed", items: [{ type: "agentMessage", id: "item_1", text: "fallback ok" }], error: null } } }) + "\\n"
+    );
   }
 });
 `,

@@ -2136,6 +2136,7 @@ describe("desktop chat view stability", () => {
       expect(
         container.querySelector('[aria-label="Sending guidance to current response"]'),
       ).not.toBeNull();
+      expect(container.querySelector('[data-slot="composer-preparing"]')).not.toBeNull();
       expect(container.textContent).toContain("Uploading and preparing message…");
       await act(async () => {
         resolvePreparation?.(new Uint8Array([1, 2, 3]).buffer);
@@ -2145,6 +2146,7 @@ describe("desktop chat view stability", () => {
 
       expect(submittedAttachmentSignature).not.toBe("");
       expect(container.textContent).toContain("diagram.png");
+      expect(container.querySelector('[data-slot="composer-preparing"]')).toBeNull();
 
       await act(async () => {
         useAppStore.setState((state) => ({

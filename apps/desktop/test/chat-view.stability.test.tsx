@@ -229,6 +229,7 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
+      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
       expect(container.querySelector('[data-slot="composer-model-selector"]')).not.toBeNull();
       const reasoningSelector = container.querySelector<HTMLButtonElement>(
         '[data-slot="composer-reasoning-selector"]',

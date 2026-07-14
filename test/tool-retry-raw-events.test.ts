@@ -116,7 +116,7 @@ describe("raw provider tool retry tracking", () => {
   });
 
   test("matches a complete OpenAI output item without relying on incremental chunks", () => {
-    const args = { command: "bun test --max-concurrency 1" };
+    const args = { command: "bun test" };
     const inputDigest = digestToolInput("bash", args);
     if (!inputDigest) throw new Error("expected input digest");
     const tracker = createRawToolRetryEventTracker(

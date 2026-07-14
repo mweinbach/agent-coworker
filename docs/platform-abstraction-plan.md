@@ -719,7 +719,7 @@ Biome 2 GritQL plugin (`.biome/no-raw-platform.grit`) flagging `process.platform
 
 Today (per `test/ci.workflow.test.ts:51`): full `bun test` on Linux only; Windows/macOS run curated smoke lists — the structural enabler of the ping-pong.
 
-Target: **`bun test --max-concurrency 1` + `bun run typecheck` + `bun run lint` + `bun run docs:check` on `ubuntu-latest`, `windows-latest`, `macos-latest`** — same lane everywhere.
+Target: **`bun test` + `bun run typecheck` + `bun run lint` + `bun run docs:check` on `ubuntu-latest`, `windows-latest`, `macos-latest`** — same lane everywhere.
 
 Staged flip (Phase 6): the blockers are known and enumerated — the execFileCompat fixture (row 18), the ~10 symlink-skip suites (`symlinkOrJunction` helper), platform-parameterized sandbox argv suites (`test/platform/sandbox.test.ts:39` describe.skip), and HOME-only test pins (`pinHome`). Until the flip, every phase **adds its new module tests to the windows/macos smoke lists** so new platform code is cross-verified from day one. `test/ci.workflow.test.ts` is rewritten to pin the full-matrix contract (it currently pins the smoke-list shape and would otherwise block the flip). Native-gated integration suites (seatbelt/bwrap/win-sandbox enforcement) keep their host gating — but their **argv-construction** assertions run on every host via platform-parameterized builders.
 

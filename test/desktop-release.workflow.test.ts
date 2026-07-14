@@ -23,7 +23,8 @@ describe("desktop release workflow", () => {
   test("uses standard Bun tests for release validation", () => {
     const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
 
-    expect(validateJob).toContain("run: bun test --max-concurrency 1");
+    expect(validateJob).toMatch(/- name: Unit tests\s*\n\s*run: bun test\n/);
+    expect(validateJob).not.toContain("--max-concurrency");
     expect(validateJob).not.toContain("run: bun run test:stable");
   });
 

@@ -216,7 +216,6 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 ### Verification Before Done
 
 - Run the same lane CI runs (`bun run test` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite. Always run the full project test command, not just specific tests.
-- When a platform-specific fix claims cross-platform support, run the relevant suite in the available native guest environments before declaring it verified: use Parallels CLI for Windows and Apple Containers for Linux. Structural mocks or host-only platform overrides do not substitute for native guest execution.
 - For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
 - For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.

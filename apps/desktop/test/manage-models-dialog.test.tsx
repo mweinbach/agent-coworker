@@ -1,15 +1,20 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
+import {
+  clearJsonRpcSocketOverride,
+  NoopJsonRpcSocket,
+  setJsonRpcSocketOverride,
+} from "./helpers/jsonRpcSocketMock";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({}));
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
+installDesktopCommandsBridge();
+
+const desktopApiMock = createDesktopApiMock();
 
 const { useAppStore } = await import("../src/app/store");
 const { ManageModelsDialog } = await import("../src/ui/settings/pages/ManageModelsDialog");
@@ -34,7 +39,14 @@ const CATALOG = [
 
 describe("manage models dialog", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState({ providerCatalog: CATALOG });
+  });
+
+  afterEach(() => {
+    clearJsonRpcSocketOverride();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("lists every model with its enabled state and custom badge", async () => {

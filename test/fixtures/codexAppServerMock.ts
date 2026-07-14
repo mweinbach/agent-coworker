@@ -19,7 +19,11 @@ const readline = require("node:readline");
 const fs = require("node:fs");
 const rl = readline.createInterface({ input: process.stdin });
 process.stdin.resume();
-setInterval(() => {}, 1000);
+// Exit as soon as the parent closes stdin so abnormal test teardown (where the
+// kill path never runs) cannot leave node.exe zombies on Windows.
+rl.on("close", () => process.exit(0));
+process.stdin.on("end", () => process.exit(0));
+process.stdin.on("close", () => process.exit(0));
 function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
 function capture(msg) {
   if (!process.env.CODEX_APP_SERVER_CAPTURE_PATH) return;

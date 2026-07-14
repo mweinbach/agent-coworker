@@ -1,35 +1,40 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox";
 
-const workspaceSource = readFileSync(
-  new URL("../apps/mobile/src/app/(app)/(tabs)/(workspace)/workspace/index.tsx", import.meta.url),
-  "utf8",
-);
+test("renders mobile hub headers and grouped lists in an isolated component harness", async () => {
+  const fixturePath = path.join(import.meta.dir, "fixtures", "mobile-header-glass-button.tsx");
+  // Assert against the child's JUnit report, not reporter text: the default
+  // reporter's per-test output changes across Bun versions.
+  const junitDir = mkdtempSync(path.join(scratchRoots()[0] ?? "/tmp", "mobile-header-junit-"));
+  const junitPath = path.join(junitDir, "results.xml");
+  try {
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "test",
+        "--reporter=junit",
+        `--reporter-outfile=${junitPath}`,
+        fixturePath,
+      ],
+      cwd: path.resolve(import.meta.dir, ".."),
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
 
-const settingsSource = readFileSync(
-  new URL("../apps/mobile/src/app/(app)/(tabs)/(settings)/settings/index.tsx", import.meta.url),
-  "utf8",
-);
-
-const pairingSource = readFileSync(
-  new URL("../apps/mobile/src/app/(pairing)/_layout.tsx", import.meta.url),
-  "utf8",
-);
-
-describe("mobile native header toolbar", () => {
-  test("uses grouped native workspace and settings lists", () => {
-    expect(workspaceSource).toContain("<GroupedScreen");
-    expect(workspaceSource).toContain("<GroupedSection");
-    expect(settingsSource).toContain("<GroupedScreen");
-    expect(settingsSource).toContain("<GroupedSection");
-  });
-
-  test("does not use the green native-stack prominent header item chrome", () => {
-    expect(workspaceSource).not.toContain("unstable_headerRightItems");
-    expect(settingsSource).not.toContain("unstable_headerRightItems");
-    expect(pairingSource).toContain("unstable_headerRightItems: () => []");
-    expect(workspaceSource).not.toContain('variant: "prominent"');
-    expect(settingsSource).not.toContain('variant: "prominent"');
-    expect(pairingSource).not.toContain('variant: "prominent"');
-  });
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    const report = readFileSync(junitPath, "utf8");
+    expect(report).toContain("workspace hub renders a grouped native list");
+    expect(report).toContain("settings hub renders a grouped native list");
+    expect(report).toContain("hub stacks omit prominent header items and pairing empties them");
+  } finally {
+    rmSync(junitDir, { recursive: true, force: true });
+  }
 });

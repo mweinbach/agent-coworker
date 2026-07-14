@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox";
 
 test("renders Android and iOS composer policies in an isolated component harness", async () => {
   const fixturePath = path.join(import.meta.dir, "fixtures", "mobile-composer-components.tsx");
   // Assert against the child's JUnit report, not reporter text: the default
   // reporter's per-test output changes across Bun versions.
-  const junitDir = mkdtempSync(path.join(tmpdir(), "mobile-composer-junit-"));
+  const junitDir = mkdtempSync(path.join(scratchRoots()[0] ?? "/tmp", "mobile-composer-junit-"));
   const junitPath = path.join(junitDir, "results.xml");
   try {
     const child = Bun.spawn({

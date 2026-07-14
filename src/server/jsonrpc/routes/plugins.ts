@@ -16,7 +16,7 @@ type PluginInstallResponseEvent =
   | PluginMutationResponseEvent
   | Extract<SessionEvent, { type: "plugin_install_preview" | "plugin_detail" }>;
 type PluginUpdateCheckResponseEvent = Extract<SessionEvent, { type: "plugin_update_check" }>;
-const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
+export const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
 
 function isPluginMutationResponseEvent(event: SessionEvent): event is PluginMutationResponseEvent {
   return (
@@ -36,6 +36,8 @@ function isPluginInstallResponseEvent(event: SessionEvent): event is PluginInsta
 }
 
 export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
+  const installEventsTimeoutMs =
+    context.pluginInstallEventsTimeoutMs ?? PLUGIN_INSTALL_EVENTS_TIMEOUT_MS;
   return {
     "cowork/plugins/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
@@ -103,7 +105,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         cwd,
         async (runtime) => await runtime.plugins.install(sourceInput, targetScope),
         isPluginInstallResponseEvent,
-        { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
+        { timeoutMs: installEventsTimeoutMs },
       );
       const error = events.find(context.utils.isSessionError);
       if (error) {
@@ -143,7 +145,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
         cwd,
         async (runtime) => await runtime.plugins.update(pluginId, scope),
         isPluginInstallResponseEvent,
-        { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
+        { timeoutMs: installEventsTimeoutMs },
       );
       const error = events.find(context.utils.isSessionError);
       if (error) {

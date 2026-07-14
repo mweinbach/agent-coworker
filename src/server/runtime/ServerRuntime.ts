@@ -114,12 +114,19 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  /**
+   * Optional observability sink used wherever the server emits telemetry
+   * spans. Defaults to the real `emitObservabilityEvent`; tests can inject a
+   * capture function instead of mock.module-ing src/observability/otel.
+   */
+  emitObservabilityEventImpl?: typeof emitObservabilityEventFn;
   loadAgentPromptImpl?: typeof loadAgentPromptFn;
   loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkillsFn;
   ensureCoworkRuntimeReadyImpl?: typeof ensureCoworkRuntimeReady;
   ensureDefaultGlobalSkillsReadyImpl?: typeof ensureDefaultGlobalSkillsReady;
   preloadSystemPrompt?: boolean;
   taskTerminalQuiesceTimeoutMs?: number;
+  pluginInstallEventsTimeoutMs?: number;
   onCoworkRuntimeBootstrapProgress?: (progress: CoworkRuntimeBootstrapProgress) => void;
 }
 
@@ -193,6 +200,12 @@ export async function createAgentServerRuntime(
     opts.taskTerminalQuiesceTimeoutMs >= 0
       ? Math.floor(opts.taskTerminalQuiesceTimeoutMs)
       : 30_000;
+  const pluginInstallEventsTimeoutMs =
+    typeof opts.pluginInstallEventsTimeoutMs === "number" &&
+    Number.isFinite(opts.pluginInstallEventsTimeoutMs) &&
+    opts.pluginInstallEventsTimeoutMs >= 0
+      ? Math.floor(opts.pluginInstallEventsTimeoutMs)
+      : undefined;
 
   const builtInDir =
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
@@ -227,10 +240,11 @@ export async function createAgentServerRuntime(
   };
 
   const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
+  const emitObservabilityEvent = opts.emitObservabilityEventImpl ?? lazyEmitObservabilityEvent;
   const sessionDb = await SessionDb.create({
     paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
     emitTelemetry: (name, status, attributes, durationMs) => {
-      void lazyEmitObservabilityEvent(config, {
+      void emitObservabilityEvent(config, {
         name,
         at: new Date().toISOString(),
         status,
@@ -446,6 +460,7 @@ export async function createAgentServerRuntime(
     connectProviderImpl: opts.connectProviderImpl,
     getAiCoworkerPathsImpl,
     runTurnImpl: opts.runTurnImpl,
+    emitObservabilityEventImpl: opts.emitObservabilityEventImpl,
     sessionDb,
     taskCoordinator: tasks,
     threadJournal,
@@ -719,6 +734,7 @@ export async function createAgentServerRuntime(
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
     homedir: opts.homedir,
+    ...(pluginInstallEventsTimeoutMs !== undefined ? { pluginInstallEventsTimeoutMs } : {}),
     research,
     skillImprovement,
     tasks,

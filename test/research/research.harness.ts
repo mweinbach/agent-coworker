@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { __internal as citationMetadataInternal } from "../../src/server/citationMetadata";
 import { exportResearch } from "../../src/server/research/export";
+import {
+  ResearchService as RealResearchService,
+  type ResearchServiceOptions,
+  type ResearchServiceRuntime,
+} from "../../src/server/research/ResearchService";
 import { type ResearchRecord, researchRecordSchema } from "../../src/server/research/types";
 import { SessionDb } from "../../src/server/sessionDb";
 
@@ -38,16 +43,30 @@ const deleteResearchFileSearchStoreMock = mock(
   async (opts: unknown) => await researchRuntimeImpls.deleteResearchFileSearchStore(opts),
 );
 
-mock.module("../../src/server/research/researchRuntime", () => ({
+// The mocked Google research runtime is injected through the ResearchService
+// `runtime` DI option below. Do NOT register a mock.module for researchRuntime
+// here: Bun's mock.module has no restore and would leak the mocks into later
+// test files (e.g. test/research-runtime.test.ts exercises the real module).
+const mockResearchRuntime = {
   createResearchInteractionStream: createResearchInteractionStreamMock,
   resumeResearchInteractionStream: resumeResearchInteractionStreamMock,
   cancelResearchInteraction: cancelResearchInteractionMock,
   createResearchFileSearchStore: createResearchFileSearchStoreMock,
   uploadFileToResearchFileSearchStore: uploadFileToResearchFileSearchStoreMock,
   deleteResearchFileSearchStore: deleteResearchFileSearchStoreMock,
-}));
+} as unknown as ResearchServiceRuntime;
 
-const { ResearchService } = await import("../../src/server/research/ResearchService");
+/**
+ * Drop-in ResearchService whose runtime calls hit this harness's mocks.
+ * Keeps the harness public API stable: consumers `new ResearchService({...})`
+ * exactly as before.
+ */
+class ResearchService extends RealResearchService {
+  constructor(opts: ResearchServiceOptions) {
+    super({ ...opts, runtime: { ...mockResearchRuntime, ...opts.runtime } });
+  }
+}
+
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
 
 function emptyStream(): AsyncIterable<RuntimeEvent> {

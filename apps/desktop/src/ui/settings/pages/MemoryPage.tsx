@@ -225,7 +225,12 @@ function futureRelativeTime(isoString: string): string {
   return `in ${days}d`;
 }
 
-export function MemoryPage() {
+export function MemoryPage({
+  loadingStallMs = MEMORY_LOADING_STALL_MS,
+}: {
+  /** Grace period before a pending memory load renders as stalled. Injectable for tests. */
+  loadingStallMs?: number;
+} = {}) {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaces = useAppStore((s) => s.workspaces);
@@ -450,7 +455,7 @@ export function MemoryPage() {
       setMemoryLoadRequestedAt(requestedAt);
     }
 
-    if (isMemoryLoadStalled(true, requestedAt, Date.now())) {
+    if (isMemoryLoadStalled(true, requestedAt, Date.now(), loadingStallMs)) {
       setMemoryLoadStalled(true);
       return;
     }
@@ -459,10 +464,10 @@ export function MemoryPage() {
       () => {
         setMemoryLoadStalled(true);
       },
-      Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)),
+      Math.max(0, loadingStallMs - (Date.now() - requestedAt)),
     );
     return () => window.clearTimeout(timer);
-  }, [memoriesLoading, memoryLoadRequestedAt]);
+  }, [memoriesLoading, memoryLoadRequestedAt, loadingStallMs]);
 
   const filtered =
     filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);

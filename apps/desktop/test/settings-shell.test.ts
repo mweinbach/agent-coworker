@@ -1,12 +1,23 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { useAppStore } from "../src/app/store";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import type { DesktopPlatformInfo } from "../src/lib/desktopPlatform";
+import { requestDesktopRailCommand } from "../src/lib/desktopRailCommands";
+import { OverlayStackProvider } from "../src/ui/OverlayStack";
 import {
   getSettingsDragZoneStyle,
   getSettingsGroups,
   SETTINGS_PAGE_ALIASES,
+  SettingsShell,
 } from "../src/ui/settings/SettingsShell";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
+
+const defaultStoreState = useAppStore.getState();
 
 function makePlatformInfo(overrides: Partial<DesktopPlatformInfo> = {}): DesktopPlatformInfo {
   return {
@@ -121,26 +132,103 @@ describe("settings shell", () => {
     );
   });
 
-  test("uses the shared narrow tier for a focus-managed settings navigation drawer", () => {
-    const settingsSource = readFileSync(
-      resolve(import.meta.dir, "../src/ui/settings/SettingsShell.tsx"),
-      "utf8",
-    );
-    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+  test.serial(
+    "narrow-tier settings navigation is a focus-managed drawer toggled by the rail command",
+    async () => {
+      const harness = setupJsdom({
+        includeAnimationFrame: true,
+        extraGlobals: { [DESKTOP_API_OVERRIDE_KEY]: createDesktopApiMock() },
+        setupWindow: (dom) => {
+          // Below the shared narrow breakpoint the left nav must present as an
+          // overlay drawer instead of an inline column.
+          Object.defineProperty(dom.window, "innerWidth", {
+            configurable: true,
+            value: 640,
+          });
+        },
+      });
+      const setSettingsPage = mock(() => {});
+      let root: ReturnType<typeof createRoot> | null = null;
 
-    expect(settingsSource).toContain("useAdaptiveLayout");
-    expect(settingsSource).toContain("onDesktopRailCommand");
-    expect(settingsSource).toContain('command !== "toggle-sidebar"');
-    expect(settingsSource).toContain("setNavigationOpen((open) => !open)");
-    expect(settingsSource).toContain('label="Settings navigation"');
-    expect(settingsSource).toContain("Open settings navigation");
-    expect(settingsSource).toContain("text-foreground/72");
-    expect(settingsSource).not.toContain("text-foreground/58");
-    expect(settingsSource).not.toContain("max-[860px]");
-    expect(settingsSource).not.toContain("min-[861px]");
-    expect(stylesCss).not.toContain("max-width: 860px");
-    expect(stylesCss).not.toContain("min-width: 861px");
-  });
+      try {
+        useAppStore.setState({
+          ...defaultStoreState,
+          settingsPage: "updates",
+          setSettingsPage,
+        } as Partial<ReturnType<typeof useAppStore.getState>> as ReturnType<
+          typeof useAppStore.getState
+        >);
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+
+        await act(async () => {
+          root?.render(createElement(OverlayStackProvider, null, createElement(SettingsShell)));
+        });
+
+        const shell = container.querySelector<HTMLElement>(".settings-shell");
+        expect(shell?.dataset.layoutTier).toBe("narrow");
+
+        const toggle = container.querySelector<HTMLButtonElement>(
+          '[aria-label="Open settings navigation"]',
+        );
+        if (!toggle) throw new Error("missing settings navigation toggle");
+        expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+        const drawerIsOpen = () => {
+          const drawer = harness.dom.window.document.querySelector<HTMLElement>(
+            '[role="dialog"][aria-label="Settings navigation"]',
+          );
+          return drawer !== null && drawer.getAttribute("aria-hidden") !== "true";
+        };
+        expect(drawerIsOpen()).toBe(false);
+
+        // Opening from the header toggle reveals the drawer and moves focus in.
+        await act(async () => toggle.click());
+        await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+        expect(drawerIsOpen()).toBe(true);
+        const closeButton = harness.dom.window.document.querySelector<HTMLButtonElement>(
+          '[aria-label="Close Settings navigation"]',
+        );
+        expect(closeButton).toBe(harness.dom.window.document.activeElement as HTMLButtonElement);
+
+        // The desktop rail command toggles the same drawer.
+        await act(async () => {
+          requestDesktopRailCommand("toggle-sidebar");
+        });
+        await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+        expect(drawerIsOpen()).toBe(false);
+
+        await act(async () => {
+          requestDesktopRailCommand("toggle-sidebar");
+        });
+        await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+        expect(drawerIsOpen()).toBe(true);
+
+        // Selecting a page routes the selection and dismisses the overlay.
+        const drawer = harness.dom.window.document.querySelector<HTMLElement>(
+          '[role="dialog"][aria-label="Settings navigation"]',
+        );
+        const usageButton = Array.from(drawer?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Usage",
+        );
+        if (!usageButton) throw new Error("missing Usage nav button");
+        await act(async () => usageButton.click());
+        await act(async () => await new Promise((resolve) => requestAnimationFrame(resolve)));
+
+        expect(setSettingsPage).toHaveBeenCalledWith("usage");
+        expect(drawerIsOpen()).toBe(false);
+      } finally {
+        if (root) {
+          await act(async () => {
+            root?.unmount();
+          });
+        }
+        useAppStore.setState(defaultStoreState);
+        harness.restore();
+      }
+    },
+  );
 
   test("resolves legacy settings page ids to their canonical nav id", () => {
     const pageIds = getSettingsGroups(true).flatMap((group) => group.pages.map((page) => page.id));

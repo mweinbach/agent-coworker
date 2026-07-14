@@ -121,10 +121,7 @@ describe("codex app-server runtime", () => {
 
   test.serial("initializes app-server with the Cowork package version", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-init-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -147,97 +144,108 @@ describe("codex app-server runtime", () => {
     });
   });
 
-  test.serial("drives a turn through codex app-server JSONL", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
-    const script = await writeMockAppServer(dir);
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+  test.serial(
+    "drives a turn through codex app-server JSONL",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-runtime-"));
+      const script = await writeMockAppServer(dir);
+      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      // True end-to-end spawn coverage: clear the in-process mock factory that
+      // installCodexAppServerTestHooks installs so this test exercises the real
+      // spawn/stdio/JSONL client path against the mock node script.
+      codexAppServerClientInternal.setClientFactoryForTests(undefined);
 
-    const streamParts: unknown[] = [];
-    const rawEvents: unknown[] = [];
-    const timeline: Array<{ type: "raw" | "part"; value: unknown }> = [];
-    const runtime = createRuntime(makeConfig(dir));
-    const result = await runtime.runTurn({
-      config: makeConfig(dir),
-      system: "You are Codex.",
-      messages: [{ role: "user", content: "Say hi" }],
-      tools: {},
-      maxSteps: 1,
-      onModelStreamPart: (part) => {
-        streamParts.push(part);
-        timeline.push({ type: "part", value: part });
-      },
-      onModelRawEvent: (event) => {
-        rawEvents.push(event);
-        timeline.push({ type: "raw", value: event });
-      },
-    });
+      const streamParts: unknown[] = [];
+      const rawEvents: unknown[] = [];
+      const timeline: Array<{ type: "raw" | "part"; value: unknown }> = [];
+      const runtime = createRuntime(makeConfig(dir));
+      const result = await runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Say hi" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+          timeline.push({ type: "part", value: part });
+        },
+        onModelRawEvent: (event) => {
+          rawEvents.push(event);
+          timeline.push({ type: "raw", value: event });
+        },
+      });
 
-    expect(result.text).toBe("hello from app-server");
-    expect(result.usage).toEqual({
-      promptTokens: 3,
-      completionTokens: 4,
-      totalTokens: 7,
-      cachedPromptTokens: 0,
-      reasoningOutputTokens: 2,
-    });
-    expect(result.providerState).toMatchObject({
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      threadId: "thread_1",
-    });
-    expect(streamParts.some((part) => (part as { type?: string }).type === "text-delta")).toBe(
-      true,
-    );
-    expect(rawEvents).toContainEqual(
-      expect.objectContaining({
-        format: "codex-app-server-v2",
-      }),
-    );
-    expect(rawEvents).toContainEqual(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          direction: "client_request",
-          message: expect.objectContaining({
-            method: "turn/start",
-            params: expect.objectContaining({
-              threadId: "thread_1",
-              input: [{ type: "text", text: "User: Say hi", text_elements: [] }],
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(rawEvents).toContainEqual(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          direction: "server_response",
-          message: expect.objectContaining({
-            result: expect.objectContaining({
-              turn: expect.objectContaining({ id: "turn_1" }),
-            }),
-          }),
-        }),
-      }),
-    );
-    const rawDeltaIndex = timeline.findIndex(({ type, value }) => {
-      const raw = value as {
-        event?: { direction?: string; message?: { method?: string; params?: { delta?: string } } };
-      };
-      return (
-        type === "raw" &&
-        raw.event?.direction === "server_notification" &&
-        raw.event.message?.method === "item/agentMessage/delta" &&
-        raw.event.message.params?.delta === "hello from app-server"
+      expect(result.text).toBe("hello from app-server");
+      expect(result.usage).toEqual({
+        promptTokens: 3,
+        completionTokens: 4,
+        totalTokens: 7,
+        cachedPromptTokens: 0,
+        reasoningOutputTokens: 2,
+      });
+      expect(result.providerState).toMatchObject({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        threadId: "thread_1",
+      });
+      expect(streamParts.some((part) => (part as { type?: string }).type === "text-delta")).toBe(
+        true,
       );
-    });
-    const textDeltaIndex = timeline.findIndex(
-      ({ type, value }) => type === "part" && (value as { type?: string }).type === "text-delta",
-    );
-    expect(rawDeltaIndex).toBeGreaterThanOrEqual(0);
-    expect(textDeltaIndex).toBeGreaterThanOrEqual(0);
-    expect(rawDeltaIndex).toBeLessThanOrEqual(textDeltaIndex);
-  });
+      expect(rawEvents).toContainEqual(
+        expect.objectContaining({
+          format: "codex-app-server-v2",
+        }),
+      );
+      expect(rawEvents).toContainEqual(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            direction: "client_request",
+            message: expect.objectContaining({
+              method: "turn/start",
+              params: expect.objectContaining({
+                threadId: "thread_1",
+                input: [{ type: "text", text: "User: Say hi", text_elements: [] }],
+              }),
+            }),
+          }),
+        }),
+      );
+      expect(rawEvents).toContainEqual(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            direction: "server_response",
+            message: expect.objectContaining({
+              result: expect.objectContaining({
+                turn: expect.objectContaining({ id: "turn_1" }),
+              }),
+            }),
+          }),
+        }),
+      );
+      const rawDeltaIndex = timeline.findIndex(({ type, value }) => {
+        const raw = value as {
+          event?: {
+            direction?: string;
+            message?: { method?: string; params?: { delta?: string } };
+          };
+        };
+        return (
+          type === "raw" &&
+          raw.event?.direction === "server_notification" &&
+          raw.event.message?.method === "item/agentMessage/delta" &&
+          raw.event.message.params?.delta === "hello from app-server"
+        );
+      });
+      const textDeltaIndex = timeline.findIndex(
+        ({ type, value }) => type === "part" && (value as { type?: string }).type === "text-delta",
+      );
+      expect(rawDeltaIndex).toBeGreaterThanOrEqual(0);
+      expect(textDeltaIndex).toBeGreaterThanOrEqual(0);
+      expect(rawDeltaIndex).toBeLessThanOrEqual(textDeltaIndex);
+    },
+    30_000,
+  );
 
   test.serial(
     "preserves app-server assistant phases and excludes commentary from final text",
@@ -323,10 +331,7 @@ describe("codex app-server runtime", () => {
     "forwards Codex verbosity and rich web search config to app-server threads",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-"));
-      const script = await writeMockAppServer(dir);
       const capturePath = path.join(dir, "requests.jsonl");
-      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
       const config = {
@@ -380,10 +385,7 @@ describe("codex app-server runtime", () => {
 
   test.serial("omits Codex web search config when network is disabled", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-network-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const config = {
@@ -418,10 +420,7 @@ describe("codex app-server runtime", () => {
 
   test.serial("does not emit empty rich web search config", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-empty-web-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const config = {
@@ -510,25 +509,20 @@ describe("codex app-server runtime", () => {
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-model-"));
       const script = path.join(dir, "model-gated-codex-app-server.js");
-      const capturePath = path.join(dir, "requests.jsonl");
       await fs.writeFile(
         script,
         `
 const readline = require("node:readline");
-const fs = require("node:fs");
 const rl = readline.createInterface({ input: process.stdin });
 process.stdin.resume();
-setInterval(() => {}, 1000);
+// Exit as soon as the parent closes stdin so abnormal test teardown cannot
+// leave node.exe zombies on Windows.
+rl.on("close", () => process.exit(0));
+process.stdin.on("end", () => process.exit(0));
+process.stdin.on("close", () => process.exit(0));
 function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
-function capture(msg) {
-  if (!process.env.CODEX_APP_SERVER_CAPTURE_PATH) return;
-  if (msg.method === "thread/start" || msg.method === "turn/start") {
-    fs.appendFileSync(process.env.CODEX_APP_SERVER_CAPTURE_PATH, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n");
-  }
-}
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
-  capture(msg);
   if (msg.method === "initialize") {
     send({ id: msg.id, result: { userAgent: "mock" } });
     return;
@@ -562,9 +556,15 @@ rl.on("line", (line) => {
       );
       process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
       process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
-      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+      // True end-to-end spawn coverage of the JSON-RPC error/fallback path:
+      // clear the in-process mock factory so the real spawn/stdio/JSONL client
+      // talks to the model-gated mock node script. Note the spawn env strips
+      // CODEX_* variables, so requests are asserted via raw JSONL events
+      // instead of the CODEX_APP_SERVER_CAPTURE_PATH capture file.
+      codexAppServerClientInternal.setClientFactoryForTests(undefined);
 
       const logs: string[] = [];
+      const rawEvents: unknown[] = [];
       const runtime = createRuntime(makeConfig(dir));
       const result = await runtime.runTurn({
         config: makeConfig(dir),
@@ -573,6 +573,9 @@ rl.on("line", (line) => {
         tools: {},
         maxSteps: 1,
         log: (line) => logs.push(line),
+        onModelRawEvent: (event) => {
+          rawEvents.push(event);
+        },
       });
 
       expect(result.text).toBe("fallback ok");
@@ -583,22 +586,33 @@ rl.on("line", (line) => {
       expect(logs.join("\n")).toContain(
         'model "gpt-5.4" is not available from the resolved app-server',
       );
-      const requests = await readCapturedRequests(capturePath);
-      expect(requests.find((entry) => entry.method === "thread/start")?.params.model).toBe(
-        "gpt-5.3-codex-spark",
-      );
-      expect(requests.find((entry) => entry.method === "turn/start")?.params.model).toBe(
-        "gpt-5.3-codex-spark",
-      );
+      const clientRequests = rawEvents
+        .map(
+          (event) =>
+            (
+              event as {
+                event?: {
+                  direction?: string;
+                  message?: { method?: string; params?: { model?: string } };
+                };
+              }
+            ).event,
+        )
+        .filter((event) => event?.direction === "client_request")
+        .map((event) => event?.message);
+      expect(
+        clientRequests.find((message) => message?.method === "thread/start")?.params?.model,
+      ).toBe("gpt-5.3-codex-spark");
+      expect(
+        clientRequests.find((message) => message?.method === "turn/start")?.params?.model,
+      ).toBe("gpt-5.3-codex-spark");
     },
+    30_000,
   );
 
   test.serial("registers Cowork coordination tools as Codex dynamic tools", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-tools-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -796,10 +810,7 @@ rl.on("line", (line) => {
     "passes workspace-write sandbox and approval prompts for regular Codex turns",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-sandbox-"));
-      const script = await writeMockAppServer(dir);
       const capturePath = path.join(dir, "requests.jsonl");
-      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
       const runtime = createRuntime(makeConfig(dir));
@@ -843,10 +854,7 @@ rl.on("line", (line) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-memory-"));
     const memoryHome = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-memory-home-"));
     const memoriesDir = path.join(memoryHome, "memories");
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
     const config = {
       ...makeConfig(dir),
@@ -880,10 +888,7 @@ rl.on("line", (line) => {
 
   test.serial("passes configured read-only sandbox to Codex app-server turns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-config-ro-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -911,10 +916,7 @@ rl.on("line", (line) => {
 
   test.serial("passes danger-full-access sandbox when the session is in yolo mode", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -941,10 +943,7 @@ rl.on("line", (line) => {
 
   test.serial("preserves no-network danger-full-access for Codex turns", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-no-net-full-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -966,10 +965,7 @@ rl.on("line", (line) => {
 
   test.serial("keeps a scoped child within targetPaths even under yolo", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-scoped-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -1000,10 +996,7 @@ rl.on("line", (line) => {
 
   test.serial("does not widen an explicit read-only sandbox under yolo", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-yolo-ro-"));
-    const script = await writeMockAppServer(dir);
     const capturePath = path.join(dir, "requests.jsonl");
-    process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
     process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
     const runtime = createRuntime(makeConfig(dir));
@@ -1032,10 +1025,7 @@ rl.on("line", (line) => {
       const dir = await fs.mkdtemp(
         path.join(process.cwd(), ".tmp-cowork-codex-app-server-scratch-"),
       );
-      const script = await writeMockAppServer(dir);
       const capturePath = path.join(dir, "requests.jsonl");
-      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
-      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
       process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
 
       try {

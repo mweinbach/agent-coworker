@@ -2,9 +2,17 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
+import {
+  clearJsonRpcSocketOverride,
+  NoopJsonRpcSocket,
+  setJsonRpcSocketOverride,
+} from "./helpers/jsonRpcSocketMock";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
+
+installDesktopCommandsBridge();
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -28,48 +36,42 @@ const MOCK_UPDATE_STATE = {
   progress: null,
 };
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => null,
-    readTranscript: async () => [],
-    saveState: async () => {},
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
-    stopWorkspaceServer: async () => {},
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
-
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
+const desktopApiMock = createDesktopApiMock({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {},
+  listDirectory: async () => [],
+  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
+  readTranscript: async () => [],
+  saveState: async () => {},
+  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+  stopWorkspaceServer: async () => {},
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => MOCK_UPDATE_STATE,
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+});
 
 class MockResizeObserver {
   observe() {}
@@ -111,11 +113,15 @@ const defaultStoreActions = {
 
 describe("DeveloperPage rerun onboarding button", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    setJsonRpcSocketOverride(NoopJsonRpcSocket);
     useAppStore.setState(defaultStoreActions);
   });
 
   afterEach(() => {
     useAppStore.setState(defaultStoreActions);
+    clearJsonRpcSocketOverride();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("renders the 'Run onboarding again' button", async () => {

@@ -120,8 +120,11 @@ function firstEventText(batch: { items: WebTranscriptBatchInput[] }): unknown {
 }
 
 async function settle(): Promise<void> {
+  // Drain fake-indexeddb's macrotask queue without waiting on real timers:
+  // setImmediate fires ahead of timer resolution, so 20 turns of the event
+  // loop settle the same work the old 20x Bun.sleep(1) did in ~0ms.
   for (let index = 0; index < 20; index += 1) {
-    await Bun.sleep(1);
+    await new Promise((resolve) => setImmediate(resolve));
   }
 }
 

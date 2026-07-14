@@ -39,6 +39,22 @@ const TERMINAL_TASK_STATUSES = [
   "failed",
 ] as const satisfies readonly TaskStatus[];
 
+/**
+ * Waits until a just-started (un-awaited) turn is actually in flight: the
+ * busy flag is up and the mocked runTurn has been invoked, so hooks the mock
+ * captures (prepareStep, resolveRunTurn) and session.activeTurnId are set.
+ * Replaces fixed setTimeout(10) sleeps that raced turn startup.
+ */
+async function waitForTurnStart(session: { isBusy: boolean }, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(session.isBusy && mockRunTurn.mock.calls.length > 0)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Turn did not start within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 function terminalTaskSessionDb(status: (typeof TERMINAL_TASK_STATUSES)[number]) {
   return {
     getActiveTaskForSourceSession: () => null,
@@ -522,7 +538,7 @@ describe("AgentSession", () => {
       );
 
       const first = session.sendUserMessage("first");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendUserMessage("second");
 
@@ -575,7 +591,7 @@ describe("AgentSession", () => {
       );
 
       const p = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       const busyTrueIdx = events.findIndex(
         (e) => e.type === "session_busy" && (e as any).busy === true,
@@ -742,7 +758,7 @@ describe("AgentSession", () => {
       );
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.refreshSkillStateFromExternalMutation("skills.shared_refresh");
       expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
@@ -778,7 +794,7 @@ describe("AgentSession", () => {
       );
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       const busyTrue = events.find(
         (e) => e.type === "session_busy" && (e as any).busy === true,
@@ -821,7 +837,7 @@ describe("AgentSession", () => {
       );
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage("continue", "wrong-turn", "steer-wrong");
 
@@ -855,7 +871,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       const activeTurnId = session.activeTurnId;
       expect(activeTurnId).toBeTruthy();
@@ -923,7 +939,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage("", session.activeTurnId!, "steer-attachment", [
         {
@@ -967,7 +983,7 @@ describe("AgentSession", () => {
       );
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       const activeTurnId = session.activeTurnId;
       expect(activeTurnId).toBeTruthy();
@@ -1050,7 +1066,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage("mention tests", session.activeTurnId!, "steer-step");
       allowSecondStep();
@@ -1106,7 +1122,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage(
         "use the referenced skill",
@@ -1228,7 +1244,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage(
         "first queued steer",
@@ -1349,7 +1365,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage(
         "use batched skill",
@@ -1457,7 +1473,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage(
         "use the referenced plugin",
@@ -1515,7 +1531,7 @@ describe("AgentSession", () => {
       });
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       await session.sendSteerMessage(
         "use the live referenced skill",
@@ -1707,7 +1723,7 @@ describe("AgentSession", () => {
       });
 
       const sendPromise = session.sendUserMessage("go");
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitForTurnStart(session);
 
       session.cancel();
       await sendPromise;
@@ -1732,7 +1748,7 @@ describe("AgentSession", () => {
       });
 
       const sendPromise = session.sendUserMessage("go");
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitForTurnStart(session);
 
       session.cancel({ includeSubagents: true });
       await sendPromise;
@@ -1882,7 +1898,7 @@ describe("AgentSession", () => {
       );
 
       const turnPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       const activeTurnId = session.activeTurnId;
       expect(activeTurnId).toBeTruthy();
@@ -1926,7 +1942,7 @@ describe("AgentSession", () => {
       );
 
       const sendPromise = session.sendUserMessage("go");
-      await new Promise((r) => setTimeout(r, 10));
+      await waitForTurnStart(session);
 
       expect(
         events.some(
@@ -2151,10 +2167,13 @@ describe("AgentSession", () => {
 
       const { session, events } = makeSession({ sessionBackupFactory });
 
+      // If turn completion ever awaited the hanging auto-checkpoint, the send
+      // would never resolve — so a generous bound proves non-blocking without
+      // racing normal turn latency on a slow machine.
       const firstTurnResult = await Promise.race([
         session.sendUserMessage("first").then(() => "resolved" as const),
         new Promise<"timeout">((resolve) => {
-          setTimeout(() => resolve("timeout"), 50);
+          setTimeout(() => resolve("timeout"), 5_000);
         }),
       ]);
       expect(firstTurnResult).toBe("resolved");

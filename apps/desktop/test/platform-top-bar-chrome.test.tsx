@@ -1,11 +1,23 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
+installDesktopCommandsBridge();
+
+const desktopApiMock = createDesktopApiMock();
+
+beforeEach(() => {
+  (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+});
+
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
+});
 
 const { PlatformTopBarChrome } = await import("../src/ui/layout/PlatformTopBarChrome");
 

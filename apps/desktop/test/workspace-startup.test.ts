@@ -1,12 +1,16 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   composerDraftKeyForNewChatTarget,
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
 import type { SessionSnapshot } from "../src/app/types";
 import type { WorkspaceServerStatus } from "../src/lib/desktopApi";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
+
+installDesktopCommandsBridge();
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -116,80 +120,74 @@ class MockJsonRpcSocket {
   }
 }
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    appendTranscriptBatch: async () => {},
-    appendTranscriptEvent: async () => {},
-    deleteTranscript: async () => {},
-    listDirectory: async () => [],
-    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-    pickWorkspaceDirectory: async () => pickedWorkspaceDirectory,
-    readTranscript: async () => [],
-    saveState: async (state: any) => {
-      savedStates.push(state);
-    },
-    startWorkspaceServer: async (opts: {
-      workspaceId: string;
-      workspacePath: string;
-      yolo: boolean;
-      forceRestart?: boolean;
-      preserveMobileRelay?: boolean;
-      featureFlags?: Record<string, boolean>;
-      privacyTelemetrySettings?: Record<string, boolean>;
-    }) => {
-      startCalls.push(opts);
-      const deferred = createDeferred<{ url: string }>();
-      startDeferreds.push(deferred);
-      return await deferred.promise;
-    },
-    getWorkspaceServerStatus: async ({ workspaceId }: { workspaceId: string }) => {
-      statusCalls.push(workspaceId);
-      return (
-        workspaceServerStatusById.get(workspaceId) ?? {
-          workspaceId,
-          running: true,
-          url: "ws://mock",
-          reason: "running",
-        }
-      );
-    },
-    stopWorkspaceServer: async ({ workspaceId }: { workspaceId: string }) => {
-      stopCalls.push(workspaceId);
-    },
-    showContextMenu: async () => null,
-    windowMinimize: async () => {},
-    windowMaximize: async () => {},
-    windowClose: async () => {},
-    getPlatform: async () => "linux",
-    readFile: async () => "",
-    previewOSFile: async () => {},
-    openPath: async () => {},
-    openExternalUrl: async () => {},
-    revealPath: async () => {},
-    copyPath: async () => {},
-    createDirectory: async () => {},
-    renamePath: async () => {},
-    trashPath: async () => {},
-    confirmAction: async () => true,
-    showNotification: async () => true,
-    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-    getUpdateState: async () => MOCK_UPDATE_STATE,
-    checkForUpdates: async () => {},
-    quitAndInstallUpdate: async () => {},
-    onSystemAppearanceChanged: () => () => {},
-    onMenuCommand: () => () => {},
-    onUpdateStateChanged: () => () => {},
-  }),
-);
-
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: MockJsonRpcSocket,
-}));
+const desktopApiMock = createDesktopApiMock({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {},
+  listDirectory: async () => [],
+  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => pickedWorkspaceDirectory,
+  readTranscript: async () => [],
+  saveState: async (state: any) => {
+    savedStates.push(state);
+  },
+  startWorkspaceServer: async (opts: {
+    workspaceId: string;
+    workspacePath: string;
+    yolo: boolean;
+    forceRestart?: boolean;
+    preserveMobileRelay?: boolean;
+    featureFlags?: Record<string, boolean>;
+    privacyTelemetrySettings?: Record<string, boolean>;
+  }) => {
+    startCalls.push(opts);
+    const deferred = createDeferred<{ url: string }>();
+    startDeferreds.push(deferred);
+    return await deferred.promise;
+  },
+  getWorkspaceServerStatus: async ({ workspaceId }: { workspaceId: string }) => {
+    statusCalls.push(workspaceId);
+    return (
+      workspaceServerStatusById.get(workspaceId) ?? {
+        workspaceId,
+        running: true,
+        url: "ws://mock",
+        reason: "running",
+      }
+    );
+  },
+  stopWorkspaceServer: async ({ workspaceId }: { workspaceId: string }) => {
+    stopCalls.push(workspaceId);
+  },
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => MOCK_UPDATE_STATE,
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+});
 
 const { useAppStore } = await import("../src/app/store");
 const { isInteractionThreadVisible } = await import("../src/app/interactionVisibility");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { persistNow, RUNTIME } = await import("../src/app/store.helpers");
 const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 const { __internalOperationIntent } = await import("../src/app/store.helpers/operationIntent");
 
@@ -273,6 +271,7 @@ function projectWorkspace(id: string) {
 
 describe("workspace startup flow", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     startDeferreds.length = 0;
     startCalls.length = 0;
@@ -360,13 +359,17 @@ describe("workspace startup flow", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const timer of RUNTIME.workspaceServerRestartStabilityTimers.values()) {
       clearTimeout(timer);
     }
     RUNTIME.workspaceServerRestartStabilityTimers.clear();
     RUNTIME.workspaceServerRestartAttempts.clear();
+    // Flush any debounced persist scheduled by store actions while the mock
+    // desktop API is still installed, so no timer fires into a later file.
+    await persistNow(useAppStore.getState);
     clearJsonRpcSocketOverride();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("addWorkspace persists once before starting the new workspace server", async () => {

@@ -63,6 +63,8 @@ type ControlSocketDeps = {
 
 type ControlSocketHelperOptions = {
   requestTimeoutMs?: number;
+  /** MCP OAuth refresh poll cadence. Defaults to 1s; injectable for tests. */
+  pollIntervalMs?: number;
 };
 
 type RequestJsonRpcControlEventOptions = {
@@ -104,6 +106,7 @@ export function createControlSocketHelpers(
   options: ControlSocketHelperOptions = {},
 ) {
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? MCP_OAUTH_REFRESH_POLL_INTERVAL_MS;
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcRouterCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcBootstrapPromises = new Map<string, Promise<void>>();
@@ -975,12 +978,12 @@ export function createControlSocketHelpers(
 
       setTimeout(() => {
         void poll();
-      }, MCP_OAUTH_REFRESH_POLL_INTERVAL_MS);
+      }, pollIntervalMs);
     };
 
     setTimeout(() => {
       void poll();
-    }, MCP_OAUTH_REFRESH_POLL_INTERVAL_MS);
+    }, pollIntervalMs);
   }
 
   function applyJsonRpcControlEvent(

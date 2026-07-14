@@ -116,6 +116,22 @@ describe("AgentSession", () => {
   // =========================================================================
 
   describe("MAX_MESSAGE_HISTORY truncation", () => {
+    // Seeds prior-turn history through the session's own HistoryManager so
+    // allMessages and the runtime window stay consistent, without paying for
+    // hundreds of real (mocked) turns per test. The truncation window is a
+    // pure function of the accumulated history, so a seeded history exercises
+    // the same contract as sequential sends.
+    function seedSessionHistory(
+      session: InstanceType<typeof AgentSession>,
+      messages: Array<{ role: string; content: string }>,
+    ): void {
+      (session as any).historyManager.appendMessagesToHistory(messages);
+    }
+
+    function userMessages(count: number): Array<{ role: string; content: string }> {
+      return Array.from({ length: count }, (_, i) => ({ role: "user", content: `msg-${i}` }));
+    }
+
     test("runtime messages are capped at 200 while allMessages grows unbounded", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "",
@@ -125,10 +141,9 @@ describe("AgentSession", () => {
 
       const { session } = makeSession();
 
-      // Send 205 messages (each adds 1 user message to history)
-      for (let i = 0; i < 205; i++) {
-        await session.sendUserMessage(`msg-${i}`);
-      }
+      // Build a 205-message history (204 seeded + 1 real send)
+      seedSessionHistory(session, userMessages(204));
+      await session.sendUserMessage("msg-204");
 
       // allMessages should hold all 205 user messages
       expect(session.messageCount).toBe(205);
@@ -147,9 +162,8 @@ describe("AgentSession", () => {
 
       const { session } = makeSession();
 
-      for (let i = 0; i < 205; i++) {
-        await session.sendUserMessage(`msg-${i}`);
-      }
+      seedSessionHistory(session, userMessages(204));
+      await session.sendUserMessage("msg-204");
 
       const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
 
@@ -173,9 +187,8 @@ describe("AgentSession", () => {
 
       const { session } = makeSession();
 
-      for (let i = 0; i < 200; i++) {
-        await session.sendUserMessage(`msg-${i}`);
-      }
+      seedSessionHistory(session, userMessages(199));
+      await session.sendUserMessage("msg-199");
 
       const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(lastCall.messages.length).toBe(200);
@@ -192,9 +205,8 @@ describe("AgentSession", () => {
 
       const { session } = makeSession();
 
-      for (let i = 0; i < 205; i++) {
-        await session.sendUserMessage(`msg-${i}`);
-      }
+      seedSessionHistory(session, userMessages(204));
+      await session.sendUserMessage("msg-204");
       await flushAsyncWork();
 
       expect(session.messageCount).toBe(205);
@@ -203,12 +215,10 @@ describe("AgentSession", () => {
     });
 
     test("truncation with response messages counts both user and assistant messages", async () => {
-      let callNum = 0;
       let capturedMessagesLength = 0;
       let capturedFirstMessage: any = null;
       let capturedLastMessage: any = null;
       mockRunTurn.mockImplementation(async (params: any) => {
-        callNum++;
         // Capture length at call time (before response messages mutate the array)
         capturedMessagesLength = params.messages.length;
         capturedFirstMessage = params.messages[0];
@@ -216,17 +226,23 @@ describe("AgentSession", () => {
         return {
           text: "",
           reasoningText: undefined,
-          responseMessages: [{ role: "assistant", content: `reply-${callNum}` }],
+          responseMessages: [{ role: "assistant", content: "reply-110" }],
         };
       });
 
       const { session } = makeSession();
 
-      // Each sendUserMessage adds 1 user msg + 1 assistant msg = 2 per call
-      // After 110 calls: 220 messages total (exceeds 200)
-      for (let i = 0; i < 110; i++) {
-        await session.sendUserMessage(`msg-${i}`);
-      }
+      // Alternating user/assistant history: 109 exchanges = 218 messages, the
+      // final real send + its assistant reply brings the total to 220.
+      seedSessionHistory(
+        session,
+        Array.from({ length: 218 }, (_, i) =>
+          i % 2 === 0
+            ? { role: "user", content: `msg-${i / 2}` }
+            : { role: "assistant", content: `reply-${(i + 1) / 2}` },
+        ),
+      );
+      await session.sendUserMessage("msg-109");
 
       // Total messages: 220 (110 user + 110 assistant)
       expect(session.messageCount).toBe(220);

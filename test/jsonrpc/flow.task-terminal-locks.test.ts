@@ -1,8 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createRunTurn, type RunTurnParams } from "../../src/agent";
+import type { emitObservabilityEvent } from "../../src/observability/otel";
 import { JSONRPC_ERROR_CODES } from "../../src/server/jsonrpc/protocol";
 import { getPendingTerminalTaskLock } from "../../src/server/session/taskLocks";
 import { __internal as runUserMessageTurnInternal } from "../../src/server/session/turnExecution/runUserMessageTurn";
@@ -30,22 +31,21 @@ const observabilityEvents: Array<{
   attributes?: Record<string, string | number | boolean>;
 }> = [];
 
-mock.module("../../src/observability/otel", () => ({
-  emitObservabilityEvent: mock(
-    async (_config: unknown, event: (typeof observabilityEvents)[number]) => {
-      observabilityEvents.push(event);
-      return {
-        emitted: true,
-        healthChanged: false,
-        health: {
-          status: "ready",
-          reason: "test",
-          updatedAt: new Date().toISOString(),
-        },
-      };
+// Injected through the emitObservabilityEventImpl server option (DI seam)
+// instead of mock.module-ing src/observability/otel, which Bun cannot restore
+// and would leak the mock into every later test file in the process.
+const captureObservabilityEvent: typeof emitObservabilityEvent = async (_config, event) => {
+  observabilityEvents.push(event);
+  return {
+    emitted: true,
+    healthChanged: false,
+    health: {
+      status: "ready",
+      reason: "test",
+      updatedAt: new Date().toISOString(),
     },
-  ),
-}));
+  };
+};
 
 async function makeCanonicalTmpProject(): Promise<string> {
   return await fs.realpath(await makeTmpProject());
@@ -659,6 +659,7 @@ describe("server JSON-RPC task terminal turn locks", () => {
     const releaseManual = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
+        emitObservabilityEventImpl: captureObservabilityEvent,
         runTurnImpl: (async (params: {
           abortSignal?: AbortSignal;
           onModelRawEvent?: (rawEvent: unknown) => Promise<void> | void;

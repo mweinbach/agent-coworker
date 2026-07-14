@@ -17,7 +17,9 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-  test("thread/start applies explicit provider and model to the live session config", async () => {
+  test("thread/start applies explicit provider and model to the live session config", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const capturedConfigs: Array<{
       provider: RunTurnParams["config"]["provider"];
@@ -76,7 +78,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("one connection can start, list, and read multiple threads", async () => {
+  test("one connection can start, list, and read multiple threads", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -105,7 +109,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/list defaults omitted cwd to the server working directory", async () => {
+  test("thread/list defaults omitted cwd to the server working directory", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const realTmpDir = await fs.realpath(tmpDir);
     const otherTmpDir = await makeTmpProject("agent-harness-other-");
@@ -134,7 +140,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("workspace spreadsheet workbook returns snapshot data and rejects path escapes", async () => {
+  test("workspace spreadsheet workbook returns snapshot data and rejects path escapes", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const csvPath = path.join(tmpDir, "large.csv");
     const lines = ["name,value"];
@@ -183,7 +191,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/list includes wire counts for live and persisted threads", async () => {
+  test("thread/list includes wire counts for live and persisted threads", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let threadId = "";
     const liveServer = await startAgentServer(

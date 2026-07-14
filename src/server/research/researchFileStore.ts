@@ -14,8 +14,20 @@ import {
   researchInputFileSchema,
 } from "./types";
 
+/**
+ * Google file-search calls the store makes. Injectable so tests can capture
+ * them through DI instead of registering an unrestorable mock.module on
+ * researchRuntime. Defaults to the real implementations.
+ */
+export type ResearchFileStoreRuntime = {
+  createResearchFileSearchStore: typeof createResearchFileSearchStore;
+  uploadFileToResearchFileSearchStore: typeof uploadFileToResearchFileSearchStore;
+  deleteResearchFileSearchStore: typeof deleteResearchFileSearchStore;
+};
+
 type ResearchFileStoreOptions = {
   rootDir: string;
+  runtime?: Partial<ResearchFileStoreRuntime>;
 };
 
 const metadataVersion = 1;
@@ -45,9 +57,18 @@ function isPathInside(parentDir: string, candidate: string): boolean {
 
 export class ResearchFileStore {
   private readonly rootDir: string;
+  private readonly runtime: ResearchFileStoreRuntime;
 
   constructor(opts: ResearchFileStoreOptions) {
     this.rootDir = path.join(opts.rootDir, "research");
+    this.runtime = {
+      createResearchFileSearchStore:
+        opts.runtime?.createResearchFileSearchStore ?? createResearchFileSearchStore,
+      uploadFileToResearchFileSearchStore:
+        opts.runtime?.uploadFileToResearchFileSearchStore ?? uploadFileToResearchFileSearchStore,
+      deleteResearchFileSearchStore:
+        opts.runtime?.deleteResearchFileSearchStore ?? deleteResearchFileSearchStore,
+    };
   }
 
   uploadsDir(): string {
@@ -178,7 +199,7 @@ export class ResearchFileStore {
     let createdStoreName: string | null = null;
     try {
       if (!fileSearchStoreName) {
-        fileSearchStoreName = await createResearchFileSearchStore({
+        fileSearchStoreName = await this.runtime.createResearchFileSearchStore({
           apiKey: opts.apiKey,
           displayName: `Research ${opts.researchId}`,
           signal: opts.signal,
@@ -193,7 +214,7 @@ export class ResearchFileStore {
           continue;
         }
 
-        const uploaded = await uploadFileToResearchFileSearchStore({
+        const uploaded = await this.runtime.uploadFileToResearchFileSearchStore({
           apiKey: opts.apiKey,
           fileSearchStoreName,
           filePath: file.path,
@@ -216,7 +237,7 @@ export class ResearchFileStore {
     } catch (error) {
       if (createdStoreName) {
         try {
-          await deleteResearchFileSearchStore({
+          await this.runtime.deleteResearchFileSearchStore({
             apiKey: opts.apiKey,
             fileSearchStoreName: createdStoreName,
           });
@@ -229,7 +250,7 @@ export class ResearchFileStore {
   }
 
   async deleteResearchStore(apiKey: string, fileSearchStoreName: string): Promise<void> {
-    await deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
+    await this.runtime.deleteResearchFileSearchStore({ apiKey, fileSearchStoreName });
   }
 
   async deletePendingUploads(files: ResearchInputFile[]): Promise<void> {

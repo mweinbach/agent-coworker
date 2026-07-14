@@ -46,6 +46,7 @@ export async function stopTestServer(server: {
 type JsonRpcConnection = {
   sendRequest: (method: string, params?: unknown) => Promise<any>;
   sendResponse: (id: string | number, result: unknown) => void;
+  pendingRequestMethods: () => string[];
   close: () => void;
 };
 
@@ -56,9 +57,23 @@ async function connectJsonRpc(
   const ws = new WebSocket(url, "cowork.jsonrpc.v1");
   const pending = new Map<
     number,
-    { resolve: (value: any) => void; reject: (error: Error) => void }
+    { method: string; resolve: (value: any) => void; reject: (error: Error) => void }
   >();
   let nextId = 0;
+  let closed = false;
+  let closedByTest = false;
+
+  // Reject every in-flight request as soon as the socket drops so failures are
+  // immediate and self-describing instead of stalling to the generic timeout.
+  const failPendingRequests = (reason: string) => {
+    const waiters = [...pending.entries()];
+    pending.clear();
+    for (const [id, waiter] of waiters) {
+      waiter.reject(
+        new Error(`${reason} while awaiting response to "${waiter.method}" (id ${id})`),
+      );
+    }
+  };
 
   ws.onmessage = (event) => {
     const message = JSON.parse(typeof event.data === "string" ? event.data : "");
@@ -71,6 +86,16 @@ async function connectJsonRpc(
     onMessage(message);
   };
 
+  ws.onclose = (event) => {
+    closed = true;
+    if (closedByTest) {
+      failPendingRequests("WebSocket closed by test harness");
+      return;
+    }
+    const reason = event.reason ? `, reason: ${event.reason}` : "";
+    failPendingRequests(`WebSocket closed unexpectedly (code ${event.code}${reason})`);
+  };
+
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Timed out waiting for websocket open")),
@@ -78,6 +103,10 @@ async function connectJsonRpc(
     );
     ws.onopen = () => {
       clearTimeout(timer);
+      // After open, surface socket errors through the pending-request waiters.
+      ws.onerror = () => {
+        failPendingRequests("WebSocket errored");
+      };
       resolve();
     };
     ws.onerror = (event) => {
@@ -87,10 +116,13 @@ async function connectJsonRpc(
   });
 
   const sendRequest = async (method: string, params?: unknown) => {
+    if (closed) {
+      throw new Error(`WebSocket already closed; cannot send "${method}"`);
+    }
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
     return await new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { method, resolve, reject });
     });
   };
 
@@ -112,7 +144,11 @@ async function connectJsonRpc(
     sendResponse: (id, result) => {
       ws.send(JSON.stringify({ id, result }));
     },
-    close: () => ws.close(),
+    pendingRequestMethods: () => [...pending.values()].map((waiter) => waiter.method),
+    close: () => {
+      closedByTest = true;
+      ws.close();
+    },
   };
 }
 
@@ -139,8 +175,11 @@ export function withSession<T>(
     const timeout = setTimeout(() => {
       if (settled.value) return;
       settled.value = true;
+      const pendingMethods = rpc?.pendingRequestMethods() ?? [];
       rpc?.close();
-      reject(new Error("Timed out waiting for websocket flow"));
+      const pendingSuffix =
+        pendingMethods.length > 0 ? ` (pending requests: ${pendingMethods.join(", ")})` : "";
+      reject(new Error(`Timed out waiting for websocket flow${pendingSuffix}`));
     }, options?.timeoutMs ?? 10_000);
 
     const finishResolve = (value: T) => {

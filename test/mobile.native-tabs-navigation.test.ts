@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox";
 
 type Platform = "ios" | "android";
 
@@ -9,7 +9,9 @@ async function runPlatformContract(platform: Platform): Promise<string> {
   const fixturePath = path.join(import.meta.dir, "fixtures", "mobile-platform-contract.tsx");
   // Assert against the child's JUnit report, not reporter text: the default
   // reporter's per-test output changes across Bun versions.
-  const junitDir = mkdtempSync(path.join(tmpdir(), `mobile-tabs-junit-${platform}-`));
+  const junitDir = mkdtempSync(
+    path.join(scratchRoots()[0] ?? "/tmp", `mobile-tabs-junit-${platform}-`),
+  );
   const junitPath = path.join(junitDir, "results.xml");
   try {
     const child = Bun.spawn({

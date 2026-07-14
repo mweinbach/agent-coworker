@@ -30,7 +30,9 @@ async function expectStillPending(promise: Promise<unknown>, label: string): Pro
 }
 
 describe("server JSON-RPC flows", () => {
-  test("turn/start rejects at the request layer when the thread is already running", async () => {
+  test("turn/start rejects at the request layer when the thread is already running", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -71,7 +73,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer returns the accepted turn id once steering is actually accepted", async () => {
+  test("turn/steer returns the accepted turn id once steering is actually accepted", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -119,7 +123,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer replays one accepted steer after the original response is lost", async () => {
+  test("turn/steer replays one accepted steer after the original response is lost", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     let runTurnCalls = 0;
@@ -200,7 +206,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer correlates concurrent live ACKs to the originating request", async () => {
+  test("turn/steer correlates concurrent live ACKs to the originating request", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const handlerReady = Promise.withResolvers<void>();
     const releaseTurn = Promise.withResolvers<void>();
@@ -273,7 +281,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer correlates omitted-clientMessageId errors without rejecting sibling requests", async () => {
+  test("turn/steer correlates omitted-clientMessageId errors without rejecting sibling requests", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const handlerReady = Promise.withResolvers<void>();
     const releaseTurn = Promise.withResolvers<void>();
@@ -344,7 +354,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer accepts legacy inputText parts", async () => {
+  test("turn/steer accepts legacy inputText parts", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -392,7 +404,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer falls back to the active turn when turnId is omitted", async () => {
+  test("turn/steer falls back to the active turn when turnId is omitted", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -439,7 +453,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start preserves ordered mixed text and file input parts", async () => {
+  test("turn/start preserves ordered mixed text and file input parts", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const realTmpDir = await fs.realpath(tmpDir);
     let capturedMessages: any[] = [];
@@ -493,7 +509,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer rejects at the request layer when the requested turn is no longer active", async () => {
+  test("turn/steer rejects at the request layer when the requested turn is no longer active", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -534,7 +552,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer rejects too many attachment parts at the request layer", async () => {
+  test("turn/steer rejects too many attachment parts at the request layer", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(
@@ -584,7 +604,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/steer rejects invalid uploaded file paths without aborting the active turn", async () => {
+  test("turn/steer rejects invalid uploaded file paths without aborting the active turn", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
     const { server, url } = await startAgentServer(

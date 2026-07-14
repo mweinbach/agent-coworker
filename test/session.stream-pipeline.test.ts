@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import * as REAL_AGENT from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type { SessionEvent } from "../src/server/protocol";
+import { AgentSession } from "../src/server/session/AgentSession";
 import type { PersistedModelStreamChunk, SessionDb } from "../src/server/sessionDb";
 import type { AgentConfig } from "../src/types";
 
@@ -12,11 +12,6 @@ const mockRunTurn = mock(async () => ({
   responseMessages: [] as any[],
 }));
 
-mock.module("../src/agent", () => ({
-  ...REAL_AGENT,
-  runTurn: mockRunTurn,
-}));
-
 const mockGenerateSessionTitle = mock(async () => ({
   title: "Mock title",
   source: "heuristic" as const,
@@ -24,8 +19,6 @@ const mockGenerateSessionTitle = mock(async () => ({
 }));
 
 const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock.json");
-
-const { AgentSession } = await import("../src/server/session/AgentSession");
 
 function makeConfig(dir: string): AgentConfig {
   return {
@@ -74,6 +67,7 @@ function makeSession(overrides?: {
     emit,
     generateSessionTitleImpl: mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,
+    runTurnImpl: mockRunTurn,
     sessionDb: overrides?.sessionDb as SessionDb | undefined,
   });
   return { session, events };

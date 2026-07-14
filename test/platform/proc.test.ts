@@ -102,13 +102,27 @@ function termIgnoringHeartbeatTreeScript(heartbeatPath: string): string {
   `;
 }
 
-/** Asserts the heartbeat file stops growing (the whole tree is dead). */
-async function expectHeartbeatStopped(heartbeatPath: string): Promise<void> {
-  // Settle: let any already-issued kill finish and in-flight writes land.
-  await sleep(600);
-  const size1 = fileSize(heartbeatPath);
-  await sleep(500);
-  const size2 = fileSize(heartbeatPath);
+/**
+ * Asserts the heartbeat file stops growing (the whole tree is dead).
+ *
+ * Polls for a quiet window instead of sleeping a fixed settle so instant
+ * kills (win32 taskkill /T /F) return after one window while slow kills
+ * (the posix 3s SIGTERM→SIGKILL escalation) keep observing growth until
+ * the kill lands, under a generous deadline.
+ */
+async function expectHeartbeatStopped(heartbeatPath: string, deadlineMs = 10_000): Promise<void> {
+  // The grandchild appends every 40ms; a windowful of missed writes means
+  // the writer is dead.
+  const quietWindowMs = 300;
+  const deadline = Date.now() + deadlineMs;
+  let size1: number;
+  let size2: number;
+  do {
+    size1 = fileSize(heartbeatPath);
+    await sleep(quietWindowMs);
+    size2 = fileSize(heartbeatPath);
+    if (size2 === size1) break;
+  } while (Date.now() < deadline);
   expect(size2).toBe(size1);
 }
 
@@ -234,7 +248,8 @@ describe("proc.run — tree kill (row-14 proof)", () => {
     });
     expect(result.errorCode).toBe("TIMEOUT");
     expect(await waitFor(() => fileSize(heartbeat) > 0, 2000)).toBe(true);
-    await sleep(3500);
+    // The posix branch only reaps the TERM-ignoring grandchild after the 3s
+    // SIGKILL escalation; the poll waits it out without a fixed dead sleep.
     await expectHeartbeatStopped(heartbeat);
   }, 20000);
 });

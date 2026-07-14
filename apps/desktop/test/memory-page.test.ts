@@ -144,9 +144,15 @@ describe("desktop memory page", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
+      const stallMs = 30;
       await act(async () => {
-        root.render(createElement(MemoryPage));
+        root.render(createElement(MemoryPage, { loadingStallMs: stallMs }));
       });
+
+      // Assert the pre-stall loading state right after mount, before the
+      // injected stall window can elapse.
+      expect(container.textContent).toContain("Loading...");
+      expect(container.textContent).not.toContain("No remembered facts yet");
 
       const skillMaintenanceTitle = Array.from(container.querySelectorAll("div")).find(
         (element) => element.textContent === "Advanced skill maintenance",
@@ -164,12 +170,12 @@ describe("desktop memory page", () => {
       });
       expect(container.querySelector('[aria-label="Skill improvement"]')).not.toBeNull();
 
-      expect(container.textContent).toContain("Loading...");
-      expect(container.textContent).not.toContain("No remembered facts yet");
-
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, MEMORY_LOADING_STALL_MS + 100));
-      });
+      const deadline = Date.now() + 5_000;
+      while (!container.textContent?.includes("Still loading…") && Date.now() < deadline) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, stallMs));
+        });
+      }
 
       expect(container.textContent).toContain("Still loading…");
       expect(container.textContent).not.toContain("No remembered facts yet");

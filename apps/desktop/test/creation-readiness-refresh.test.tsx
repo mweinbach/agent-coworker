@@ -89,11 +89,14 @@ describe("useCreationReadiness", () => {
     useAppStore.setState({ preflightCreation });
 
     function ReadinessProbe() {
-      const readiness = useCreationReadiness({
-        kind: "chat",
-        provider: "codex-cli",
-        model: "gpt-5.5",
-      });
+      const readiness = useCreationReadiness(
+        {
+          kind: "chat",
+          provider: "codex-cli",
+          model: "gpt-5.5",
+        },
+        { runtimeRecheckDelayMs: 10 },
+      );
       return createElement(
         "div",
         null,
@@ -108,9 +111,13 @@ describe("useCreationReadiness", () => {
     expect(container.textContent).toBe("blocked");
     expect(preflightCreation).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      await Bun.sleep(1_100);
-    });
+    // Poll the DOM until the injected recheck delay fires and re-renders.
+    const deadline = Date.now() + 5_000;
+    while (container.textContent !== "ready" && Date.now() < deadline) {
+      await act(async () => {
+        await Bun.sleep(10);
+      });
+    }
 
     expect(container.textContent).toBe("ready");
     expect(preflightCreation).toHaveBeenCalledTimes(2);

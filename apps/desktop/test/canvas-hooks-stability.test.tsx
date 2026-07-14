@@ -449,9 +449,14 @@ describe("Canvas hooks stability across file-type switches", () => {
         await act(async () => {
           textarea.value = "# Mutated truncated content";
           textarea.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 650));
+          await flushUi();
         });
       }
+      // The truncated-preview guard must ignore the edit outright: a (buggy)
+      // scheduled autosave would synchronously flip the save badge to
+      // "Unsaved" before its debounce timer ever fired, so no fixed sleep
+      // sized to the 500ms debounce is needed to detect it.
+      expect(harness.dom.window.document.body.textContent).not.toContain("Unsaved");
       expect(writeFileMock).not.toHaveBeenCalled();
     } finally {
       if (root) {

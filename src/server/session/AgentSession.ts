@@ -193,6 +193,7 @@ export class AgentSession {
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
+    emitObservabilityEventImpl?: SessionDependencies["emitObservabilityEventImpl"];
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
     generateSessionTitleImpl?: typeof generateSessionTitle;
@@ -370,6 +371,7 @@ export class AgentSession {
           await SessionBackupManager.create(factoryOpts)),
       harnessContextStore: opts.harnessContextStore ?? new HarnessContextStore(),
       runTurnImpl: opts.runTurnImpl ?? lazyRunTurn,
+      emitObservabilityEventImpl: opts.emitObservabilityEventImpl,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? lazyGenerateSessionTitle,

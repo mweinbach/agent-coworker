@@ -10,7 +10,14 @@ type CreationReadinessRequest = CreationPreflightParams & {
   workspaceId?: string;
 };
 
-export function useCreationReadiness(request: CreationReadinessRequest) {
+export function useCreationReadiness(
+  request: CreationReadinessRequest,
+  options?: {
+    /** Delay before rechecking while the runtime is starting. Injectable for tests. */
+    runtimeRecheckDelayMs?: number;
+  },
+) {
+  const runtimeRecheckDelayMs = options?.runtimeRecheckDelayMs ?? 1_000;
   const preflightCreation = useAppStore((state) => state.preflightCreation);
   const providerStatusLastUpdatedAt = useAppStore((state) => state.providerStatusLastUpdatedAt);
   const [result, setResult] = useState<CreationPreflightResult | null>(null);
@@ -41,9 +48,9 @@ export function useCreationReadiness(request: CreationReadinessRequest) {
 
   useEffect(() => {
     if (!runtimeStarting) return;
-    const timeout = setTimeout(refresh, 1_000);
+    const timeout = setTimeout(refresh, runtimeRecheckDelayMs);
     return () => clearTimeout(timeout);
-  }, [refresh, runtimeStarting]);
+  }, [refresh, runtimeStarting, runtimeRecheckDelayMs]);
 
   useEffect(() => {
     const controller = new AbortController();

@@ -67,6 +67,7 @@ export type SessionRegistryOptions = {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  emitObservabilityEventImpl?: SessionDependencies["emitObservabilityEventImpl"];
   sessionDb: SessionDb;
   threadJournal: ThreadJournal;
   taskCoordinator: TaskCoordinator;
@@ -535,6 +536,7 @@ export class SessionRegistry {
       connectProviderImpl: this.options.connectProviderImpl,
       getAiCoworkerPathsImpl: this.options.getAiCoworkerPathsImpl,
       runTurnImpl: this.options.runTurnImpl,
+      emitObservabilityEventImpl: this.options.emitObservabilityEventImpl,
       persistModelSelectionImpl:
         sessionKind === "root"
           ? async (selection) => {

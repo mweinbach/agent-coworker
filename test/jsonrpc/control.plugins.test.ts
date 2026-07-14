@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { MemoryStore } from "../../src/memoryStore";
 import { AgentControl } from "../../src/server/agents/AgentControl";
+import { PLUGIN_INSTALL_EVENTS_TIMEOUT_MS } from "../../src/server/jsonrpc/routes/plugins";
 import { AgentSession } from "../../src/server/session/AgentSession";
 import { startAgentServer } from "../../src/server/startServer";
 import { WorkspaceBackupService } from "../../src/server/workspaceBackups";
@@ -426,45 +427,81 @@ describe("server JSON-RPC control methods", () => {
       )}\n`,
     );
 
+    // The production install window must stay well above the default 5s
+    // control-event capture timeout so slower mutation streams can finish.
+    expect(PLUGIN_INSTALL_EVENTS_TIMEOUT_MS).toBe(60_000);
+
+    const installDelayMs = 250;
     const originalInstallPlugins = AgentSession.prototype.installPlugins;
     AgentSession.prototype.installPlugins = async function (
       sourceInput: string,
       targetScope: "workspace" | "user",
     ) {
-      await new Promise((resolve) => setTimeout(resolve, 5_250));
+      await new Promise((resolve) => setTimeout(resolve, installDelayMs));
       await originalInstallPlugins.call(this, sourceInput, targetScope);
     };
 
-    const { server, url } = await startAgentServer(serverOpts(tmpDir));
-
     try {
-      const rpc = await connectJsonRpc(url);
-      const installResponse = await rpc.request(
-        "cowork/plugins/install",
-        {
-          cwd: tmpDir,
-          sourceInput: sourceRoot,
-          targetScope: "workspace",
-        },
-        15_000,
+      // A slow install completes when the configured window allows it.
+      const generous = await startAgentServer(
+        serverOpts(tmpDir, { pluginInstallEventsTimeoutMs: 10_000 }),
       );
+      try {
+        const rpc = await connectJsonRpc(generous.url);
+        const installResponse = await rpc.request(
+          "cowork/plugins/install",
+          {
+            cwd: tmpDir,
+            sourceInput: sourceRoot,
+            targetScope: "workspace",
+          },
+          15_000,
+        );
 
-      expect(Array.isArray(installResponse.result.events)).toBe(true);
-      expect(installResponse.result.events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "plugin_install_preview",
-          }),
-          expect.objectContaining({
-            type: "plugins_catalog",
-          }),
-        ]),
+        expect(Array.isArray(installResponse.result.events)).toBe(true);
+        expect(installResponse.result.events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "plugin_install_preview",
+            }),
+            expect.objectContaining({
+              type: "plugins_catalog",
+            }),
+          ]),
+        );
+
+        rpc.close();
+      } finally {
+        await stopTestServer(generous.server);
+      }
+
+      // The same slow install times out when the configured window is smaller,
+      // proving the route passes the install window into the event capture
+      // instead of relying on the default capture timeout.
+      const tight = await startAgentServer(
+        serverOpts(tmpDir, { pluginInstallEventsTimeoutMs: 50 }),
       );
+      try {
+        const rpc = await connectJsonRpc(tight.url);
+        const installResponse = await rpc.request(
+          "cowork/plugins/install",
+          {
+            cwd: tmpDir,
+            sourceInput: sourceRoot,
+            targetScope: "workspace",
+          },
+          15_000,
+        );
 
-      rpc.close();
+        expect(installResponse.result).toBeUndefined();
+        expect(installResponse.error?.message).toContain("Timed out waiting for control event");
+
+        rpc.close();
+      } finally {
+        await stopTestServer(tight.server);
+      }
     } finally {
       AgentSession.prototype.installPlugins = originalInstallPlugins;
-      await stopTestServer(server);
     }
   }, 15_000);
 

@@ -66,6 +66,11 @@ export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
   canvasDocuments?: CanvasDocumentPersistenceService;
   homedir?: string;
+  /**
+   * Overrides the event-collection window for slow plugin install/update
+   * mutation streams. Defaults to PLUGIN_INSTALL_EVENTS_TIMEOUT_MS (60s).
+   */
+  pluginInstallEventsTimeoutMs?: number;
   research: ResearchService;
   skillImprovement: SkillImprovementService;
   tasks: TaskCoordinator;

@@ -372,9 +372,28 @@ describe("desktop sidebar", () => {
           );
         });
 
+        // Finish the collapse animation deterministically: the component
+        // unmounts the region on transitionend for grid-template-rows (jsdom
+        // never fires real transitions). The poll below also covers the
+        // component's fallback unmount timer without a fixed oversized sleep.
         await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 300));
+          const region = container.querySelector(".sidebar-thread-region");
+          if (region) {
+            const transitionEnd = new harness.dom.window.Event("transitionend", {
+              bubbles: true,
+            });
+            Object.defineProperty(transitionEnd, "propertyName", {
+              value: "grid-template-rows",
+            });
+            region.dispatchEvent(transitionEnd);
+          }
         });
+        const collapseDeadline = Date.now() + 5_000;
+        while (container.textContent?.includes("Thread 12") && Date.now() < collapseDeadline) {
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          });
+        }
 
         expect(container.textContent).not.toContain("Thread 12");
         expect(container.querySelector('[aria-label="Expand Agent Coworker"]')).not.toBeNull();

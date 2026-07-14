@@ -101,7 +101,7 @@ describe("control socket MCP OAuth refresh", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    const helpers = createControlSocketHelpers(deps);
+    const helpers = createControlSocketHelpers(deps, { pollIntervalMs: 20 });
     const ok = await helpers.requestJsonRpcControlEvent(
       get as any,
       set as any,
@@ -119,10 +119,16 @@ describe("control socket MCP OAuth refresh", () => {
       "mcp_server_auth_challenge",
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    await flushAsyncWork();
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    await flushAsyncWork();
+    // Poll until the OAuth refresh loop has read twice and shut itself down.
+    const pollKey = `${workspaceId}:DS Dev MCP`;
+    const deadline = Date.now() + 5_000;
+    while (
+      (readCalls < 2 || RUNTIME.mcpOAuthRefreshPollGenerations.has(pollKey)) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await flushAsyncWork();
+    }
 
     expect(readCalls).toBeGreaterThanOrEqual(2);
     expect(

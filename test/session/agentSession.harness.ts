@@ -40,15 +40,14 @@ export {
   SessionCostTracker,
 };
 
+// The mocked model turn is injected through the AgentSession `runTurnImpl` DI
+// seam in makeSession below. Do NOT register a mock.module for ../../src/agent
+// here: Bun's mock.module has no restore and would leak the mocked runTurn into
+// every test file loaded later in the same process.
 const mockRunTurn = mock(async () => ({
   text: "",
   reasoningText: undefined as string | undefined,
   responseMessages: [] as any[],
-}));
-
-mock.module("../../src/agent", () => ({
-  ...REAL_AGENT,
-  runTurn: mockRunTurn,
 }));
 
 export { mockRunTurn };

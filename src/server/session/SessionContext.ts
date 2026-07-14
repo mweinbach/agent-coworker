@@ -6,6 +6,7 @@ import type {
 } from "../../connect";
 import type { getOrLoadMCPToolsCached } from "../../mcp";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
+import type { emitObservabilityEvent } from "../../observability/otel";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { logoutProviderAuth } from "../../providers/authRegistry";
@@ -209,6 +210,12 @@ export type SessionDependencies = {
   sessionBackupFactory: SessionBackupFactory;
   harnessContextStore: HarnessContextStore;
   runTurnImpl: typeof runTurn;
+  /**
+   * Optional observability sink. When omitted, telemetry lazily imports the
+   * real `emitObservabilityEvent` from src/observability/otel. Tests inject a
+   * capture function here instead of registering a leaky mock.module.
+   */
+  emitObservabilityEventImpl?: typeof emitObservabilityEvent;
   persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
   persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   generateSessionTitleImpl: typeof generateSessionTitle;

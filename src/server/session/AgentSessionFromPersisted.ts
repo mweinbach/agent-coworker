@@ -36,6 +36,7 @@ export type AgentSessionFromPersistedOptions = {
   sessionBackupFactory?: SessionBackupFactory;
   harnessContextStore?: HarnessContextStore;
   runTurnImpl?: typeof runTurn;
+  emitObservabilityEventImpl?: SessionDependencies["emitObservabilityEventImpl"];
   persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
   persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   generateSessionTitleImpl?: typeof generateSessionTitle;
@@ -165,6 +166,7 @@ export function createAgentSessionFromPersisted(
     sessionBackupFactory: opts.sessionBackupFactory,
     harnessContextStore: opts.harnessContextStore,
     runTurnImpl: opts.runTurnImpl,
+    emitObservabilityEventImpl: opts.emitObservabilityEventImpl,
     persistModelSelectionImpl: opts.persistModelSelectionImpl,
     persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
     generateSessionTitleImpl: opts.generateSessionTitleImpl,

@@ -7,7 +7,7 @@ import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
 import { exportResearch } from "./export";
 import { resolveGoogleResearchApiKey } from "./googleApiKey";
-import { ResearchFileStore } from "./researchFileStore";
+import { ResearchFileStore, type ResearchFileStoreRuntime } from "./researchFileStore";
 import {
   cancelResearchInteraction,
   createResearchInteractionStream,
@@ -43,7 +43,18 @@ type ResearchRuntimeState = {
   planExecutionMode: boolean;
 };
 
-type ResearchServiceOptions = {
+/**
+ * Google research runtime calls the service makes. Injectable so tests can
+ * capture them through DI instead of registering an unrestorable mock.module
+ * on researchRuntime. Defaults to the real implementations.
+ */
+export type ResearchServiceRuntime = ResearchFileStoreRuntime & {
+  createResearchInteractionStream: typeof createResearchInteractionStream;
+  resumeResearchInteractionStream: typeof resumeResearchInteractionStream;
+  cancelResearchInteraction: typeof cancelResearchInteraction;
+};
+
+export type ResearchServiceOptions = {
   rootDir: string;
   workspacePath?: string | null;
   sessionDb: SessionDb;
@@ -51,6 +62,7 @@ type ResearchServiceOptions = {
   sendJsonRpc: (ws: StartServerSocket, payload: unknown) => void;
   maxBufferedEvents?: number;
   deleteStreamSettleTimeoutMs?: number;
+  runtime?: Partial<ResearchServiceRuntime>;
 };
 
 type StartResearchParams = {
@@ -260,6 +272,12 @@ export class ResearchService {
   private readonly pendingClientCancellations = new Set<string>();
   private readonly deletingIds = new Set<string>();
   private readonly deletedIds = new Set<string>();
+  private readonly runtime: Pick<
+    ResearchServiceRuntime,
+    | "createResearchInteractionStream"
+    | "resumeResearchInteractionStream"
+    | "cancelResearchInteraction"
+  >;
   private initPromise: Promise<void> | null = null;
 
   constructor(opts: ResearchServiceOptions) {
@@ -267,7 +285,15 @@ export class ResearchService {
     this.workspacePath = opts.workspacePath ? canonicalWorkspacePath(opts.workspacePath) : null;
     this.getConfigImpl = opts.getConfig;
     this.sendJsonRpc = opts.sendJsonRpc;
-    this.fileStore = new ResearchFileStore({ rootDir: opts.rootDir });
+    this.runtime = {
+      createResearchInteractionStream:
+        opts.runtime?.createResearchInteractionStream ?? createResearchInteractionStream,
+      resumeResearchInteractionStream:
+        opts.runtime?.resumeResearchInteractionStream ?? resumeResearchInteractionStream,
+      cancelResearchInteraction:
+        opts.runtime?.cancelResearchInteraction ?? cancelResearchInteraction,
+    };
+    this.fileStore = new ResearchFileStore({ rootDir: opts.rootDir, runtime: opts.runtime });
     this.maxBufferedEvents = opts.maxBufferedEvents ?? 500;
     this.deleteStreamSettleTimeoutMs = Math.max(0, opts.deleteStreamSettleTimeoutMs ?? 5_000);
   }
@@ -520,7 +546,7 @@ export class ResearchService {
 
       if (state.record.interactionId) {
         try {
-          await cancelResearchInteraction({
+          await this.runtime.cancelResearchInteraction({
             apiKey: this.resolveGoogleApiKey(),
             interactionId: state.record.interactionId,
           });
@@ -597,7 +623,7 @@ export class ResearchService {
     if (state.record.interactionId) {
       try {
         const apiKey = this.resolveGoogleApiKey();
-        await cancelResearchInteraction({
+        await this.runtime.cancelResearchInteraction({
           apiKey,
           interactionId: state.record.interactionId,
         });
@@ -857,7 +883,7 @@ export class ResearchService {
       );
 
       const tools = buildInteractionTools(state.record.inputs.fileSearchStoreName);
-      const stream = await createResearchInteractionStream({
+      const stream = await this.runtime.createResearchInteractionStream({
         apiKey,
         input: opts.prompt,
         ...(opts.previousInteractionId
@@ -1680,7 +1706,7 @@ export class ResearchService {
           return;
         }
         try {
-          const stream = await resumeResearchInteractionStream({
+          const stream = await this.runtime.resumeResearchInteractionStream({
             apiKey: this.resolveGoogleApiKey(),
             interactionId: record.interactionId,
             lastEventId: record.lastEventId,

@@ -63,7 +63,9 @@ export class SessionRuntimeSupport {
     durationMs?: number,
   ) {
     void (async () => {
-      const { emitObservabilityEvent } = await import("../../observability/otel");
+      const emitObservabilityEvent =
+        this.opts.deps.emitObservabilityEventImpl ??
+        (await import("../../observability/otel")).emitObservabilityEvent;
       const result = await emitObservabilityEvent(this.opts.state.config, {
         name,
         at: new Date().toISOString(),

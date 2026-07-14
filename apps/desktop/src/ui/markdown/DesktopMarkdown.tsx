@@ -398,6 +398,10 @@ function DesktopCitationChip({
         onMouseLeave={handleHoverLeave}
         onKeyDown={(event) => {
           if (!open || sources.length <= 1) return;
+          // The portaled PopoverContent re-bubbles through the React tree; an
+          // arrow key it already handled (and preventDefault-ed) must not step
+          // the index a second time here.
+          if (event.defaultPrevented) return;
           if (event.key === "ArrowLeft") {
             event.preventDefault();
             setActiveIndex((index) => (index - 1 + sources.length) % sources.length);

@@ -32,7 +32,7 @@ jobs:
         run: bun run docs:check
 
       - name: Unit tests
-        run: bun test --max-concurrency 1
+        run: bun test
 
       - name: Typecheck
         run: bun run typecheck

@@ -142,7 +142,17 @@ Optional follow-ups: async-ify `src/workspace/map.ts` (sync readdir/stat on ever
 
 ## Phased plan
 
-Each phase is one or more PR-sized slices. Every slice: full `bun test --max-concurrency 1`, `bun run typecheck`, `bun run check`, `bun run docs:check`; behavior-parity tests land **with** the migration, not after.
+Each phase is one or more PR-sized slices. Every slice: full `bun test`, `bun run typecheck`, `bun run check`, `bun run docs:check`; behavior-parity tests land **with** the migration, not after.
+
+### Test lane: why `bun test` stays single-process serial
+
+The lane was `bun test --max-concurrency 1` until July 2026, but that flag is a no-op: it only gates `test.concurrent` tests, which this repo never uses, so files always ran serially in one process. Bun 1.3.13+ parallel mechanisms were evaluated empirically (2026-07-13, Bun 1.4.0-canary on Windows, 658 files / ~7.5k tests, 325s serial) and both rejected:
+
+- **`--parallel` (worker processes, implies `--isolate`)**: per-file isolation resets the module cache, so every file re-imports the whole `src/` graph plus the jsdom preload — measured **+2.2s/file** (`test/jsonrpc/`: 96s shared-process vs 156s isolated), inflating total CPU work ~4-5x. Best local result was 245s at 16 workers with 40 nondeterministic 5s-timeout failures; 4 workers ran **slower than serial** (513s). On a <=4-vCPU ubuntu CI runner the inflated total work makes `--parallel` strictly slower than serial. Contention also cascades: a timed-out test that leaked `process.chdir` crashed its worker's next preload resolution (`preload not found "./test/bun-test-setup.ts"`).
+- **`--shard=i/N` run as N concurrent plain processes**: no isolation tax, but 61 tests failed instantly (sub-millisecond) across `JsonRpcSocket runtime`, `H3 mobile server pairing`, `mcp oauth provider`, and `webAdapter` suites — cross-file `mock.module`/state coupling that only the full fixed file order masks (the same hazard the verification rules warn about).
+
+Revisit when (a) Bun ships isolation that preserves the module cache across files, or (b) the cross-file mock coupling is eliminated (see the DI-override conversion work), whichever unblocks first. Re-run the experiment before switching: a green `--parallel` run must be cheaper than serial on the CI runner class and 3/3 green locally.
+
 
 ### Phase 0 — Guardrail (small, do first)
 

@@ -69,7 +69,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Unit tests
-        run: bun test --max-concurrency 1
+        run: bun test
 
   electron-quality:
     name: Electron UI quality gates
@@ -218,7 +218,6 @@ jobs:
           apps/desktop/test/bootstrap-cache.test.ts
           apps/desktop/test/jsonrpc-single-connection.test.ts
           apps/desktop/test/task-actions.test.ts
-          --max-concurrency 1
 
   macos-smoke:
     name: macOS ARM64 smoke
@@ -257,7 +256,6 @@ jobs:
           apps/desktop/test/bootstrap-cache.test.ts
           apps/desktop/test/jsonrpc-single-connection.test.ts
           apps/desktop/test/task-actions.test.ts
-          --max-concurrency 1
 
   remote-mcp-smoke:
     name: Remote MCP smoke

@@ -1084,7 +1084,7 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     const response = await pending;
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "H3 JSON-RPC connection closed.",
+      error: "HTTP JSON-RPC connection closed.",
     });
   });
 

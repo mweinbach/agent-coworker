@@ -1,19 +1,21 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { StoreGet, StoreSet } from "../src/app/store.helpers";
 import type { WorkspaceJsonRpcSocket } from "../src/app/store.helpers/jsonRpcSocket";
-import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
-import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
+import {
+  clearJsonRpcSocketOverride,
+  NoopJsonRpcSocket,
+  setJsonRpcSocketOverride,
+} from "./helpers/jsonRpcSocketMock";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 
-mock.module("../src/lib/desktopCommands", () =>
-  createDesktopCommandsMock({
-    startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  }),
-);
+installDesktopCommandsBridge();
 
-mock.module("../src/lib/agentSocket", () => ({
-  JsonRpcSocket: NoopJsonRpcSocket,
-}));
+const desktopApiMock = createDesktopApiMock({
+  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+});
 
 const { useAppStore } = await import("../src/app/store");
 const { __controlSocketInternal, defaultWorkspaceRuntime, RUNTIME } = await import(
@@ -84,6 +86,8 @@ function resetConnectorState() {
 
 describe("OpenAI native connector actions", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    setJsonRpcSocketOverride(NoopJsonRpcSocket);
     resetConnectorState();
   });
 
@@ -91,6 +95,8 @@ describe("OpenAI native connector actions", () => {
     __controlSocketInternal.reset();
     disposeAllJsonRpcSocketState();
     RUNTIME.jsonRpcSockets.clear();
+    clearJsonRpcSocketOverride();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("requestOpenAiNativeConnectors sends workspace cwd and applies connector events", async () => {

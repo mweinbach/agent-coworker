@@ -1,7 +1,7 @@
 import { isTerminalToolState } from "../../app/toolFeedState";
 import type { FeedItem, ToolFeedState } from "../../app/types";
 
-import { buildMarkdownPreviewText } from "./markdownPreview";
+import { buildMarkdownPreviewText, normalizeReasoningMarkdown } from "./markdownPreview";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 export type ActivityFeedItem = Extract<FeedItem, { kind: "reasoning" | "tool" }>;
@@ -34,7 +34,7 @@ export type ActivityGroupSummary = {
 };
 
 function normalizedReasoningText(text: string): string {
-  return text.trim();
+  return normalizeReasoningMarkdown(text);
 }
 
 function hasRenderableReasoningText(item: Extract<FeedItem, { kind: "reasoning" }>): boolean {
@@ -284,7 +284,7 @@ export function summarizeActivityGroup(
   const preview = hasPendingReasoning
     ? "Thinking..."
     : primaryReasoning?.text
-      ? buildMarkdownPreviewText(primaryReasoning.text, 2)
+      ? buildMarkdownPreviewText(normalizedReasoningText(primaryReasoning.text), 2)
       : latestTool
         ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state)
             .subtitle

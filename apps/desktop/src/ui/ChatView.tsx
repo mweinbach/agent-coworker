@@ -252,10 +252,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   >(() => new Map());
 
   const pendingTurnStart = rt?.pendingTurnStart ?? null;
-  const isUploading =
-    composerSubmission?.phase === "preparing" ||
-    composerSubmission?.phase === "sending" ||
-    pendingTurnStart?.status === "sending";
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const updateComposerText = useCallback(
@@ -917,7 +913,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             inputDisabled={inputDisabled}
             transcriptOnly={transcriptOnly}
             ingestAttachmentFiles={ingestAttachmentFiles}
-            isUploading={isUploading}
             pendingAttachments={pendingAttachments}
             removeAttachment={removeAttachment}
             submitComposer={submitComposer}

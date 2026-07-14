@@ -36,6 +36,7 @@ import {
   formatActivityElapsedMs,
   summarizeActivityGroup,
 } from "./activityGroups";
+import { normalizeReasoningMarkdown } from "./markdownPreview";
 import {
   captureScrollAnchor,
   countNewIds,
@@ -114,7 +115,7 @@ type ReasoningSection = {
 };
 
 function parseReasoningSections(text: string): ReasoningSection[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const normalized = normalizeReasoningMarkdown(text);
   if (!normalized) return [];
 
   // Match bold headings like **Heading** or markdown headings like ### Heading

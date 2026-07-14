@@ -207,11 +207,9 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
               ? cancelling
                 ? "Cancelling research…"
                 : researchPhaseLabel(creationPhase)
-              : readiness.result?.ready
-                ? "Ready"
-                : readiness.checking
-                  ? "Validating readiness…"
-                  : "Setup required"}
+              : readiness.checking
+                ? "Validating readiness…"
+                : "Setup required"}
           </MessageComposerStatus>
           <MessageComposerBody>
             {creationError ? (

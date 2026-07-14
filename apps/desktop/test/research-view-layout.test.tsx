@@ -267,6 +267,7 @@ describe("research view layout", () => {
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.getAttribute("aria-live"),
       ).toBe("polite");
+      expect(container.textContent).not.toContain("Ready");
       expect(container.textContent).not.toContain(
         "Deep Research runs in the background and streams cited markdown as it arrives.",
       );

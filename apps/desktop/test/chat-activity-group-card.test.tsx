@@ -357,6 +357,33 @@ describe("desktop activity group card", () => {
     expect(reasoningRows[0]?.textContent).toContain("Searching for crash details");
   });
 
+  test("repairs concatenated Markdown boundaries in streamed reasoning", () => {
+    const malformedReasoning =
+      "**Filtering upcoming data center projects in NYISO queue****Identifying specific data center projects in New York Listing known data center locations Refining data center capacity thresholds Planning top tables for project impact****Listing potential data center projects**";
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        items: [
+          {
+            id: "r-malformed-markdown",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2024-01-01T00:00:02.000Z",
+            text: malformedReasoning,
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const reasoningRow = doc.querySelector('[data-activity-entry-kind="reasoning"]');
+
+    expect(html).not.toContain("****");
+    expect(reasoningRow?.textContent).toContain("Filtering upcoming data center projects");
+    expect(reasoningRow?.textContent).toContain("Identifying specific data center projects");
+    expect(reasoningRow?.textContent).toContain("Listing potential data center projects");
+    expect(reasoningRow?.querySelectorAll("p").length).toBeGreaterThan(1);
+  });
+
   test("renders only an unrecovered failure as a collapsed compact trace", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

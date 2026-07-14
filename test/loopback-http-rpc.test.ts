@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { startAgentServer } from "../src/server/startServer";
-import { LOOPBACK_CLIENT_ID_HEADER } from "../src/server/transport/loopbackHttpRpc";
+import {
+  assertLoopbackRpcRemote,
+  LOOPBACK_CLIENT_ID_HEADER,
+} from "../src/server/transport/loopbackHttpRpc";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 async function postRpc(
@@ -24,6 +27,24 @@ async function postRpc(
 }
 
 describe("loopback desktop HTTP JSON-RPC", () => {
+  test("rejects a non-loopback remote address before RPC dispatch", async () => {
+    const request = new Request("http://127.0.0.1:7337/rpc", { method: "POST" });
+
+    const denied = assertLoopbackRpcRemote(request, {
+      requestIP: () => ({ address: "192.168.1.50" }),
+    });
+
+    expect(denied?.status).toBe(403);
+    await expect(denied?.json()).resolves.toEqual({
+      error: "Loopback HTTP RPC is restricted to local clients.",
+    });
+    expect(
+      assertLoopbackRpcRemote(request, {
+        requestIP: () => ({ address: "::ffff:127.0.0.1" }),
+      }),
+    ).toBeNull();
+  });
+
   test("initialize → initialized → thread/list over POST /rpc", async () => {
     const tmpDir = await makeTmpProject("agent-loopback-rpc-");
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

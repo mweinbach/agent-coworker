@@ -35,11 +35,17 @@ describe("WorkspaceFileChangeMonitor", () => {
     });
 
     try {
+      // Bun's Windows recursive watcher needs a brief turn to arm before the
+      // first mutation; otherwise the test can race the native subscription.
+      await Bun.sleep(100);
       await fs.writeFile(filePath, "replacement", "utf8");
       const canonicalFilePath = canonicalizeSync(filePath);
       const event = await waitForEvent(
         events,
-        (candidate) => candidate.kind === "changed" && candidate.path === canonicalFilePath,
+        (candidate) =>
+          candidate.kind === "changed" &&
+          candidate.path === canonicalFilePath &&
+          candidate.version.size === "replacement".length,
       );
 
       expect(event.kind).toBe("changed");

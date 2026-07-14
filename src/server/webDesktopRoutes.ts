@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { canonicalizeSync } from "../platform/paths";
 import type { WorkspaceFileChangeEvent } from "../shared/fileVersion";
 import { TRANSCRIPT_REQUEST_BODY_MAX_BYTES } from "../shared/transcriptBatchProtocol";
 import { readCappedFilePreview, readFileChangeVersion } from "../utils/filePreviewRead";
@@ -38,17 +38,7 @@ const ACTIVE_FILE_PREVIEW_MIME_TYPES = new Set([
 ]);
 
 function normalizeBoundaryPath(targetPath: string): string {
-  const resolved = path.resolve(targetPath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    try {
-      const parent = path.dirname(resolved);
-      return path.join(fs.realpathSync(parent), path.basename(resolved));
-    } catch {
-      return resolved;
-    }
-  }
+  return canonicalizeSync(path.resolve(targetPath));
 }
 
 function assertPathWithinRoots(roots: string[], targetPath: string, label: string): string {

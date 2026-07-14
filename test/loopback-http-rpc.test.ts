@@ -113,7 +113,11 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       const response = await fetch(`${httpBase}/rpc`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: 1, method: "initialize", params: { clientInfo: { name: "x" } } }),
+        body: JSON.stringify({
+          id: 1,
+          method: "initialize",
+          params: { clientInfo: { name: "x" } },
+        }),
       });
       expect(response.status).toBe(400);
       const body = (await response.json()) as { error: string };
@@ -144,7 +148,10 @@ describe("loopback desktop HTTP JSON-RPC", () => {
         params: {},
       });
       expect(listResponse.status).toBe(200);
-      const listBody = (await listResponse.json()) as { result?: { total: number }; error?: unknown };
+      const listBody = (await listResponse.json()) as {
+        result?: { total: number };
+        error?: unknown;
+      };
       expect(listBody.error).toBeUndefined();
       expect(typeof listBody.result?.total).toBe("number");
     } finally {

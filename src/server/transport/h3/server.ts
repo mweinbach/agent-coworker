@@ -14,10 +14,10 @@ import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../../startServer/types";
 import {
   createHttpJsonRpcConnection,
-  jsonResponse as sharedJsonResponse,
+  type HttpJsonRpcConnection,
   parseJsonRpcPayload,
   SSE_KEEPALIVE_INTERVAL_MS,
-  type HttpJsonRpcConnection,
+  jsonResponse as sharedJsonResponse,
 } from "../httpJsonRpcConnection";
 import {
   createH3PairingSession,

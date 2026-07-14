@@ -160,6 +160,15 @@ bun run serve -- --dir /path/to/project
 bun run serve -- --json
 ```
 
+Loopback JSON-RPC for native clients (`POST /rpc`):
+
+```bash
+bun run dev:rpc
+bun run dev:rpc -- --dir /path/to/project
+```
+
+Then point the native app at the printed `COWORK_RPC_URL` (default `http://127.0.0.1:7337/rpc`).
+
 ## Everyday Features
 
 ### Workspace-Aware Chat

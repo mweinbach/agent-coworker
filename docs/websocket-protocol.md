@@ -13,9 +13,25 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
 connect without an access token. Non-loopback listeners, including `0.0.0.0`, `::`, or a LAN
-address, require the startup `browserAccessToken` for `/ws` and `/cowork/*` even when the client
-does not send an `Origin` header. Send the token to `/ws` as `?coworkBrowserToken=<token>`; send it
-to `/cowork/*` HTTP routes as `X-Cowork-Browser-Token`.
+address, require the startup `browserAccessToken` for `/ws`, `/rpc`, and `/cowork/*` even when the
+client does not send an `Origin` header. Send the token to `/ws` as `?coworkBrowserToken=<token>`;
+send it to `/rpc` and `/cowork/*` HTTP routes as `X-Cowork-Browser-Token`.
+
+### Desktop loopback HTTP JSON-RPC (`POST /rpc`)
+
+Native desktop clients that cannot speak WebSocket (for example the Native SDK TypeScript core,
+which only has buffered HTTP effects) use the same JSON-RPC-lite schema over the main sidecar:
+
+- `POST /rpc` accepts one JSON-RPC-lite request, notification, or client response per body.
+- Sticky connection state is keyed by the required `X-Cowork-Client-Id` header (handshake and
+  pending requests survive across POSTs for that id).
+- Notifications return HTTP `202` with an empty body; requests return the JSON-RPC response as
+  the HTTP body.
+- `/rpc` rejects non-loopback remotes even when a browser token is present.
+- `initialize.result.transport` reports `{ "type": "http", "protocolMode": "jsonrpc" }`.
+
+`GET /events` SSE for this loopback path is not implemented yet; live notifications and
+server-initiated requests still require WebSocket `/ws` or the mobile H3 `/events` stream.
 
 ### Web transcript batch delivery
 

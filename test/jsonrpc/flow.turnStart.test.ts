@@ -16,7 +16,9 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
-  test("turn/start waits for background startup readiness before starting a turn", async () => {
+  test("turn/start waits for background startup readiness before starting a turn", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let releaseRuntimeSetup: () => void = () => undefined;
     const runtimeSetupGate = new Promise<void>((resolve) => {
@@ -74,7 +76,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start streams turn and item notifications", async () => {
+  test("turn/start streams turn and item notifications", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
@@ -126,7 +130,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start deduplicates retries by clientMessageId across reconnects", async () => {
+  test("turn/start deduplicates retries by clientMessageId across reconnects", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let runCount = 0;
     const { server, url } = await startAgentServer(
@@ -167,7 +173,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start retains payload fingerprints across a server restart", async () => {
+  test("turn/start retains payload fingerprints across a server restart", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let runCount = 0;
     const options = serverOpts(tmpDir, {
@@ -221,7 +229,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start deduplicates a retry while the original turn is active", async () => {
+  test("turn/start deduplicates a retry while the original turn is active", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let releaseTurn: () => void = () => undefined;
     const turnGate = new Promise<void>((resolve) => {
@@ -267,7 +277,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects reusing a clientMessageId for different input", async () => {
+  test("turn/start rejects reusing a clientMessageId for different input", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let runCount = 0;
     const { server, url } = await startAgentServer(
@@ -308,7 +320,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start mirrors live stream notifications to every subscribed connection", async () => {
+  test("turn/start mirrors live stream notifications to every subscribed connection", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
@@ -381,7 +395,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start still loads a real system prompt when preloadSystemPrompt is disabled", async () => {
+  test("turn/start still loads a real system prompt when preloadSystemPrompt is disabled", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let capturedSystem = "";
     const { server, url } = await startAgentServer(
@@ -416,7 +432,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start accepts legacy string input payloads", async () => {
+  test("turn/start accepts legacy string input payloads", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {
@@ -503,7 +521,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start accepts uploaded file path parts after workspace upload", async () => {
+  test("turn/start accepts uploaded file path parts after workspace upload", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let lastMessages: any[] = [];
     const { server, url } = await startAgentServer(
@@ -557,7 +577,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects uploaded file paths outside the uploads directory before starting the turn", async () => {
+  test("turn/start rejects uploaded file paths outside the uploads directory before starting the turn", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let runTurnCalled = false;
     const { server, url } = await startAgentServer(
@@ -600,7 +622,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects uploaded file paths that escape the uploads directory via symlinks", async () => {
+  test("turn/start rejects uploaded file paths that escape the uploads directory via symlinks", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let runTurnCalled = false;
     const { server, url } = await startAgentServer(
@@ -654,7 +678,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects inline uploads when the uploads root resolves outside the workspace", async () => {
+  test("turn/start rejects inline uploads when the uploads root resolves outside the workspace", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const outsideDir = await fs.mkdtemp(path.join(path.dirname(tmpDir), "turn-upload-escape-"));
     const uploadsDir = path.join(tmpDir, "User Uploads");
@@ -699,7 +725,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects uploaded file paths when the uploads root resolves outside the workspace", async () => {
+  test("turn/start rejects uploaded file paths when the uploads root resolves outside the workspace", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const outsideDir = await fs.mkdtemp(path.join(path.dirname(tmpDir), "turn-upload-path-"));
     const outsideFile = path.join(outsideDir, "secret.txt");
@@ -746,7 +774,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start streams reasoning notifications before assistant output", async () => {
+  test("turn/start streams reasoning notifications before assistant output", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
       serverOpts(tmpDir, {

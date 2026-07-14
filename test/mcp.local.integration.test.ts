@@ -34,37 +34,57 @@ async function runScenario<T>(scenario: "load-tools" | "run-turn"): Promise<T> {
       cwd: path.resolve(import.meta.dir, ".."),
       stdout: "ignore",
       stderr: "pipe",
+      // Reap the runner (and its nested node MCP server) even if this test is
+      // torn down abnormally (Bun's orphan reaper does not run on Windows).
+      timeout: 55_000,
     });
 
-    const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+    try {
+      const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
-    if (exitCode !== 0) {
-      throw new Error(stderr.trim() || `Runner exited with status ${exitCode}`);
+      if (exitCode !== 0) {
+        throw new Error(stderr.trim() || `Runner exited with status ${exitCode}`);
+      }
+
+      return JSON.parse(await fs.readFile(outputPath, "utf-8")) as T;
+    } finally {
+      proc.kill();
     }
-
-    return JSON.parse(await fs.readFile(outputPath, "utf-8")) as T;
   } finally {
     await fs.rm(outputDir, { recursive: true, force: true });
   }
 }
 
-describe("local MCP integration", () => {
-  test("loadMCPTools connects to a local stdio server and executes a real tool", async () => {
-    await withGlobalTestLock("subprocess-env", async () => {
-      const result = await runScenario<LoadToolsResult>("load-tools");
-      expect(result.toolNames).toContain("mcp__local__echo");
-      expect(result.resultText).toBe("echo:hello");
-      expect(result.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
-      expect(result.logs.some((line) => line.includes("Connected to local"))).toBe(true);
-    });
-  });
+// The runner spawns a full Bun subprocess that re-transpiles src/agent and
+// src/mcp plus a nested node MCP-server child; the 5s default per-test budget
+// is too tight on slow Windows.
+const LOCAL_MCP_TEST_TIMEOUT_MS = 60_000;
 
-  test("runTurnWithDeps exposes local MCP tools to streamText", async () => {
-    await withGlobalTestLock("subprocess-env", async () => {
-      const result = await runScenario<RunTurnResult>("run-turn");
-      expect(result.responseText).toBe("echo:turn");
-      expect(result.responseMessagesLength).toBe(0);
-      expect(result.streamTextCalls).toBe(1);
-    });
-  });
+describe("local MCP integration", () => {
+  test(
+    "loadMCPTools connects to a local stdio server and executes a real tool",
+    async () => {
+      await withGlobalTestLock("subprocess-env", async () => {
+        const result = await runScenario<LoadToolsResult>("load-tools");
+        expect(result.toolNames).toContain("mcp__local__echo");
+        expect(result.resultText).toBe("echo:hello");
+        expect(result.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
+        expect(result.logs.some((line) => line.includes("Connected to local"))).toBe(true);
+      });
+    },
+    LOCAL_MCP_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "runTurnWithDeps exposes local MCP tools to streamText",
+    async () => {
+      await withGlobalTestLock("subprocess-env", async () => {
+        const result = await runScenario<RunTurnResult>("run-turn");
+        expect(result.responseText).toBe("echo:turn");
+        expect(result.responseMessagesLength).toBe(0);
+        expect(result.streamTextCalls).toBe(1);
+      });
+    },
+    LOCAL_MCP_TEST_TIMEOUT_MS,
+  );
 });

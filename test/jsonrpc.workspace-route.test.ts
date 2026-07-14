@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
 import type {
@@ -345,7 +346,7 @@ describe("workspace JSON-RPC route", () => {
           params: {
             cwd: dir,
             kind: "changed",
-            path: filePath,
+            path: canonicalizeSync(filePath),
             version: savedChangeVersion,
           },
         },
@@ -466,7 +467,7 @@ describe("workspace JSON-RPC route", () => {
         params: {
           cwd: dir,
           kind: "changed",
-          path: filePath,
+          path: canonicalizeSync(filePath),
           version: { size: 13 },
         },
       });

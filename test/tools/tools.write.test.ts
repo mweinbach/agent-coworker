@@ -1,3 +1,4 @@
+import { canonicalizeSync } from "../../src/platform/paths";
 import { WorkspaceFileChangeMonitor } from "../../src/server/runtime/WorkspaceFileChangeMonitor";
 import type { WorkspaceFileChangeEvent } from "../../src/shared/fileVersion";
 import {
@@ -55,9 +56,10 @@ describe("write tool", () => {
 
     try {
       await tool.execute({ filePath, content: "agent content" });
+      const canonicalFilePath = canonicalizeSync(filePath);
       const startedAt = Date.now();
       while (
-        !events.some((event) => event.kind === "changed" && event.path === filePath) &&
+        !events.some((event) => event.kind === "changed" && event.path === canonicalFilePath) &&
         Date.now() - startedAt < 2_000
       ) {
         await Bun.sleep(10);
@@ -65,7 +67,7 @@ describe("write tool", () => {
 
       expect(events).toContainEqual({
         kind: "changed",
-        path: filePath,
+        path: canonicalFilePath,
         version: expect.objectContaining({ size: "agent content".length }),
       });
     } finally {

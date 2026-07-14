@@ -6,6 +6,7 @@ import { scratchRoots } from "../src/platform/sandbox";
 type Platform = "ios" | "android";
 
 async function runPlatformContract(platform: Platform): Promise<string> {
+  const repoRoot = path.resolve(import.meta.dir, "..");
   const fixturePath = path.join(import.meta.dir, "fixtures", "mobile-platform-contract.tsx");
   // Assert against the child's JUnit report, not reporter text: the default
   // reporter's per-test output changes across Bun versions.
@@ -17,12 +18,12 @@ async function runPlatformContract(platform: Platform): Promise<string> {
     const child = Bun.spawn({
       cmd: [
         process.execPath,
-        "test",
+        path.join(repoRoot, "scripts", "run_tests.ts"),
         "--reporter=junit",
         `--reporter-outfile=${junitPath}`,
         fixturePath,
       ],
-      cwd: path.resolve(import.meta.dir, ".."),
+      cwd: repoRoot,
       env: {
         ...process.env,
         EXPO_OS: platform,

@@ -1,8 +1,7 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { getOneOffChatsRoot } from "../../../../src/utils/oneOffChats";
+import { coworkPaths } from "../../../../src/platform/paths";
 import { isPathEqualOrInside } from "./pathBoundary";
 import { resolveDesktopRendererUrl } from "./rendererUrl";
 import { assertPathWithinRoots } from "./validation";
@@ -67,7 +66,7 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
  * chat cwd throws "path is outside allowed workspace roots".
  */
 function getFilePanelRoots(workspaceRoots: string[]): string[] {
-  return [...workspaceRoots, getOneOffChatsRoot()];
+  return [...workspaceRoots, coworkPaths().chatsDir];
 }
 
 export function resolveAllowedDirectoryPath(
@@ -82,8 +81,7 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
 }
 
 function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {
-  const home = os.homedir();
-  return [...workspaceRoots, path.join(home, ".cowork", "research")];
+  return [...workspaceRoots, path.join(coworkPaths().root, "research")];
 }
 
 export function resolveAllowedSaveExportSourcePath(
@@ -103,8 +101,7 @@ export function resolveAllowedSaveExportSourcePath(
  * per invocation so env / packaged paths stay accurate.
  */
 function getRevealPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
-  const home = os.homedir();
-  const extra: string[] = [path.join(home, ".cowork")];
+  const extra: string[] = [coworkPaths().root];
   for (const root of builtinSkillRoots) {
     const trimmed = root.trim();
     if (trimmed.length > 0) {

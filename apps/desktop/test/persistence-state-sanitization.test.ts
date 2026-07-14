@@ -4,10 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { pinHome } from "../../../test/helpers/platform";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 let userDataDir = "";
 let appDataDir = "";
+let restoreHome: (() => void) | null = null;
 const oneOffTestDirs: string[] = [];
 
 const electronMockOverrides = {
@@ -43,6 +45,7 @@ describe("desktop persistence state validation", () => {
 
   beforeEach(async () => {
     appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-appdata-"));
+    restoreHome = pinHome(appDataDir);
     userDataDir = path.join(appDataDir, "Cowork");
     await fs.mkdir(userDataDir, { recursive: true });
   });
@@ -54,6 +57,8 @@ describe("desktop persistence state validation", () => {
     await fs.rm(appDataDir, { recursive: true, force: true });
     await Promise.all(oneOffTestDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     oneOffTestDirs.length = 0;
+    restoreHome?.();
+    restoreHome = null;
     userDataDir = "";
     appDataDir = "";
   });
@@ -327,7 +332,7 @@ describe("desktop persistence state validation", () => {
     const persistence = new PersistenceService();
     const missingProject = path.join(userDataDir, "workspace-missing-project");
     const oneOffChat = path.join(
-      os.homedir(),
+      appDataDir,
       ".cowork",
       "chats",
       `persistence-test-${crypto.randomUUID()}`,
@@ -392,7 +397,7 @@ describe("desktop persistence state validation", () => {
   test("preserves an explicitly promoted project inside the chat workspace root", async () => {
     const persistence = new PersistenceService();
     const oneOffChat = path.join(
-      os.homedir(),
+      appDataDir,
       ".cowork",
       "chats",
       `persistence-kind-test-${crypto.randomUUID()}`,

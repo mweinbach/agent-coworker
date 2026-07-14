@@ -32,7 +32,7 @@ When you run into an issue, create tests to target the error. Then work on that 
 - `bun run cli`: run the plain CLI REPL.
 - `bun run serve`: run the server only.
 - `bun run dev`: watch mode for CLI entry (`src/index.ts`).
-- `bun test`: run the full test suite.
+- `bun run test`: run the full test suite through the cross-platform project runner.
 
 Example (CLI with initial workspace): `bun run cli -- --dir /path/to/project`. Desktop `bun run start` does not forward `--dir` (use in-app workspace selection).
 
@@ -54,7 +54,7 @@ While debugging an issue, make sure to recreate the issue, figure out why it's h
 ## Commit & Pull Request Guidelines
 
 - Commit messages must use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix: …`, `feat: …`, `refactor: …`, `chore: …`, `test: …`, `docs: …`). Keep subjects short and imperative.
-- PRs should include: what/why, how to test (`bun test`), and screenshots or a short recording for desktop app changes. Keep changes focused and add tests for fixes/features.
+- PRs should include: what/why, how to test (`bun run test`), and screenshots or a short recording for desktop app changes. Keep changes focused and add tests for fixes/features.
 
 ## WebSocket-First Development
 
@@ -126,7 +126,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 ### Testing
 
-- `bun test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~~156 files) and `apps/desktop/test/` (~~66 files).
+- `bun run test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~~156 files) and `apps/desktop/test/` (~~66 files).
 - A small number of tests are skipped by default (remote MCP integration tests requiring network).
 - Biome is configured for linting and formatting (`bun lint`, `bun format:write`, `bun check:write`). `bun run typecheck` is the primary code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`).
 - **Lint philosophy**: `biome.json` is tuned to catch LLM-generated code failure modes. Type-safety erosion (`noExplicitAny`, `noNonNullAssertion`, `noBannedTypes`), React lifecycle bugs (`useExhaustiveDependencies`, `noAssignInExpressions`, `noArrayIndexKey`), and error-handling camouflage (`noUselessCatch`, `noEmptyBlock`) are all surfaced. New code should not introduce new violations.
@@ -215,7 +215,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Verification Before Done
 
-- Run the same lane CI runs (`bun test` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite. Always run full bun test, not just specific tests. 
+- Run the same lane CI runs (`bun run test` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite. Always run the full project test command, not just specific tests.
+- When a platform-specific fix claims cross-platform support, run the relevant suite in the available native guest environments before declaring it verified: use Parallels CLI for Windows and Apple Containers for Linux. Structural mocks or host-only platform overrides do not substitute for native guest execution.
 - For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
 - For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
 - For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.
@@ -230,9 +231,15 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Platform boundary ratchet**: new code and tests must not introduce raw
   `process.platform`, `os.homedir()`, `os.tmpdir()`, `Bun.which`, or equivalent
   platform branching outside `src/platform/` and its sanctioned test helpers.
-  Use the helpers in `src/platform/`, run `bun test test/platform-boundary.test.ts`,
+  Use the helpers in `src/platform/`, run `bun run test -- test/platform-boundary.test.ts`,
   and only regenerate `test/platform-boundary.baseline.json` when counts shrink;
   never expand the baseline to admit a new offender.
+- **Bun channel and macOS test bootstrap**: `.bun-version` tracks Bun's rolling
+  `canary` channel. Run tests through `bun run test` (or `bun run test -- <paths>`)
+  so complete macOS runs execute each test file in a fresh process, isolating
+  module mocks and native-addon lifetimes that Bun canary otherwise retains.
+  Keep Windows and Linux on the direct `bun test` invocation inside the wrapper,
+  and route CI/release lanes through the project command.
 - **Thread-tool and H3 permissions**: enforce H3 permissions before dispatch and
   keep the permission table plus `test/h3.mobile-http-jsonrpc.test.ts` aligned.
   Thread-management tools are root-session capabilities by default; do not

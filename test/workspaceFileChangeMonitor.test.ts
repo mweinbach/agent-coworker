@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
 import { WorkspaceFileChangeMonitor } from "../src/server/runtime/WorkspaceFileChangeMonitor";
 import type { WorkspaceFileChangeEvent } from "../src/shared/fileVersion";
@@ -35,9 +36,10 @@ describe("WorkspaceFileChangeMonitor", () => {
 
     try {
       await fs.writeFile(filePath, "replacement", "utf8");
+      const canonicalFilePath = canonicalizeSync(filePath);
       const event = await waitForEvent(
         events,
-        (candidate) => candidate.kind === "changed" && candidate.path === filePath,
+        (candidate) => candidate.kind === "changed" && candidate.path === canonicalFilePath,
       );
 
       expect(event.kind).toBe("changed");

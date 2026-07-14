@@ -5,6 +5,7 @@
  * test process.
  */
 import { describe, expect, mock, test } from "bun:test";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -12,6 +13,12 @@ import { createRoot } from "react-dom/client";
 import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
 
 type HostProps = Record<string, unknown> & { children?: ReactNode };
+const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
+
+function mockMobileModule(alias: string, factory: () => unknown): void {
+  mock.module(alias, factory);
+  mock.module(mobileRequire.resolve(alias), factory);
+}
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => unknown): void {
   mock.module(alias, factory);
@@ -67,7 +74,7 @@ const NativePressable = ({
     children,
   );
 
-mock.module("react-native", () => ({
+const reactNativeMockFactory = () => ({
   AccessibilityInfo: {
     addEventListener: () => ({ remove: () => undefined }),
     announceForAccessibilityWithOptions: () => undefined,
@@ -112,11 +119,14 @@ mock.module("react-native", () => ({
   Text: NativeText,
   View: NativeView,
   findNodeHandle: () => 1,
-}));
+});
+mockMobileModule("react-native", reactNativeMockFactory);
+mock.module(path.resolve("apps/mobile/node_modules/react-native"), reactNativeMockFactory);
 
-mock.module("react-native-gesture-handler/Swipeable", () => ({
+const swipeableMockFactory = () => ({
   default: NativeView,
-}));
+});
+mockMobileModule("react-native-gesture-handler/Swipeable", swipeableMockFactory);
 
 type CapturedScreen = {
   kind: "screen" | "stack";
@@ -151,13 +161,13 @@ const Stack = Object.assign(
   },
 );
 
-mock.module("expo-router", () => ({
+mockMobileModule("expo-router", () => ({
   Link: ({ children, href }: HostProps) =>
     createElement("a", { "data-href": String(href) }, children),
   Stack,
   useRouter: () => ({ back: () => undefined, replace: () => undefined }),
 }));
-mock.module("expo-router/stack", () => ({ Stack }));
+mockMobileModule("expo-router/stack", () => ({ Stack }));
 
 mockLocalModule("@/components/ui/sf-symbol", "apps/mobile/src/components/ui/sf-symbol", () => ({
   SFSymbol: ({ name }: { name: string }) =>

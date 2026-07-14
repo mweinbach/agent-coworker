@@ -4,6 +4,7 @@ import path from "node:path";
 import { scratchRoots } from "../src/platform/sandbox";
 
 test("renders Android and iOS composer policies in an isolated component harness", async () => {
+  const repoRoot = path.resolve(import.meta.dir, "..");
   const fixturePath = path.join(import.meta.dir, "fixtures", "mobile-composer-components.tsx");
   // Assert against the child's JUnit report, not reporter text: the default
   // reporter's per-test output changes across Bun versions.
@@ -13,12 +14,12 @@ test("renders Android and iOS composer policies in an isolated component harness
     const child = Bun.spawn({
       cmd: [
         process.execPath,
-        "test",
+        path.join(repoRoot, "scripts", "run_tests.ts"),
         "--reporter=junit",
         `--reporter-outfile=${junitPath}`,
         fixturePath,
       ],
-      cwd: path.resolve(import.meta.dir, ".."),
+      cwd: repoRoot,
       env: process.env,
       stdout: "pipe",
       stderr: "pipe",

@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/ci.yml", import.meta.url);
 const rootPackagePath = new URL("../package.json", import.meta.url);
+const bunVersionPath = new URL("../.bun-version", import.meta.url);
 const setupBunActionPath = new URL("../.github/actions/setup-bun/action.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
 const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as {
   scripts?: Record<string, string>;
 };
 const setupBunAction = readFileSync(setupBunActionPath, "utf8");
+const bunVersion = readFileSync(bunVersionPath, "utf8").trim();
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
@@ -19,6 +21,7 @@ describe("main CI workflow", () => {
     expect(setupBunAction).toMatch(/uses: oven-sh\/setup-bun@[0-9a-f]{40}\b/);
     expect(setupBunAction).not.toMatch(/uses: oven-sh\/setup-bun@v\d/);
     expect(setupBunAction).toContain('bun-version-file: ".bun-version"');
+    expect(bunVersion).toBe("canary");
   });
 
   test("caches dependencies", () => {
@@ -37,19 +40,19 @@ describe("main CI workflow", () => {
   });
 
   test("keeps the core reliability guardrails", () => {
-    expect(rootPackage.scripts?.test).toBe("bun test");
+    expect(rootPackage.scripts?.test).toBe("bun scripts/run_tests.ts");
     expect(rootPackage.scripts?.["test:stable"]).toBeUndefined();
     expect(workflow).toContain("- name: Docs consistency check");
     expect(workflow).toContain("run: bun run docs:check");
     expect(workflow).toContain("- name: Typecheck");
     expect(workflow).toContain("run: bun run typecheck");
     expect(workflow).toContain("- name: Unit tests");
-    // Single-process serial run. Do not reintroduce `--max-concurrency 1` (a
-    // no-op: it only gates test.concurrent, which this repo never uses) and do
-    // not adopt `--parallel`/`--shard` without re-validating: per-file isolation
-    // re-imports the module graph (measured ~+2.2s/file, slower than serial on
-    // <=4-vCPU CI runners) and sharding breaks cross-file mock.module coupling.
-    expect(workflow).toMatch(/- name: Unit tests\s*\n\s*run: bun test\n/);
+    // Keep the workflow on the project runner. Windows/Linux retain the direct
+    // single-process serial run; the runner adds per-file isolation on Darwin
+    // because Bun canary otherwise leaks mock.module registrations between
+    // unrelated desktop files. Do not add parallelism or sharding without
+    // re-validating the complete suite.
+    expect(workflow).toMatch(/- name: Unit tests\s*\n\s*run: bun run test\n/);
     expect(workflow).not.toContain("--max-concurrency");
     expect(workflow).not.toContain("run: bun run test:stable");
   });
@@ -154,7 +157,7 @@ describe("main CI workflow", () => {
   test("keeps remote MCP smoke opt-in via secrets-backed environment", () => {
     expect(workflow).toContain('RUN_REMOTE_MCP_TESTS: "1"');
     expect(workflow).toContain("OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}");
-    expect(workflow).toContain("run: bun test test/mcp.remote.grep.test.ts");
+    expect(workflow).toContain("run: bun run test -- test/mcp.remote.grep.test.ts");
   });
 
   test("skips remote MCP smoke on fork pull requests", () => {

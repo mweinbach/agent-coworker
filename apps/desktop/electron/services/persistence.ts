@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
 import { z } from "zod";
+import { home } from "../../../../src/platform/paths";
 import { normalizeDesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import {
   ensureOneOffChatWorkspacePath,
@@ -244,11 +244,12 @@ async function resolveWorkspacePath(
 
   const resolved = path.resolve(candidate);
   if (workspaceKind === "oneOffChat") {
-    if (!isPathInsideOneOffChatsRoot(resolved, os.homedir())) {
+    const canonicalHome = home();
+    if (!isPathInsideOneOffChatsRoot(resolved, canonicalHome)) {
       return null;
     }
     try {
-      return await ensureOneOffChatWorkspacePath(resolved, { homedir: os.homedir() });
+      return await ensureOneOffChatWorkspacePath(resolved, { homedir: canonicalHome });
     } catch {
       return null;
     }

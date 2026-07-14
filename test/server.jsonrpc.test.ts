@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
+import { canonicalizeSync } from "../src/platform/paths";
 import { startAgentServer } from "../src/server/startServer";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
@@ -179,6 +180,8 @@ describe("server JSON-RPC websocket mode", () => {
     const sourcePath = path.join(tmpDir, "external.md");
     const renamedPath = path.join(tmpDir, "renamed.md");
     await fs.writeFile(sourcePath, "old", "utf8");
+    const canonicalSourcePath = canonicalizeSync(sourcePath);
+    const canonicalRenamedPath = canonicalizeSync(renamedPath);
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     const ws = new WebSocket(url, "cowork.jsonrpc.v1");
 
@@ -195,13 +198,13 @@ describe("server JSON-RPC websocket mode", () => {
         return (
           message.method === "cowork/workspace/fileChanged" &&
           params?.kind === "changed" &&
-          params.path === sourcePath
+          params.path === canonicalSourcePath
         );
       });
       expect(external.params).toMatchObject({
         cwd: tmpDir,
         kind: "changed",
-        path: sourcePath,
+        path: canonicalSourcePath,
         version: { size: "external update".length },
       });
 
@@ -217,7 +220,7 @@ describe("server JSON-RPC websocket mode", () => {
         return (
           message.method === "cowork/workspace/fileChanged" &&
           params?.kind === "deleted" &&
-          params.path === sourcePath
+          params.path === canonicalSourcePath
         );
       });
       await collector.waitFor((message) => {
@@ -225,7 +228,7 @@ describe("server JSON-RPC websocket mode", () => {
         return (
           message.method === "cowork/workspace/fileChanged" &&
           params?.kind === "changed" &&
-          params.path === renamedPath
+          params.path === canonicalRenamedPath
         );
       });
 
@@ -240,7 +243,7 @@ describe("server JSON-RPC websocket mode", () => {
         return (
           message.method === "cowork/workspace/fileChanged" &&
           params?.kind === "deleted" &&
-          params.path === renamedPath
+          params.path === canonicalRenamedPath
         );
       });
     } finally {

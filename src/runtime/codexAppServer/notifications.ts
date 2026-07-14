@@ -374,7 +374,12 @@ export function createCodexTurnNotificationRouter(
       if (expectedTurnId) {
         if (completedTurnId !== expectedTurnId) return;
         if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
-      } else if (expectedThreadId && payloadThreadId !== expectedThreadId) {
+      } else if (expectedThreadId && payloadThreadId && payloadThreadId !== expectedThreadId) {
+        // Pre-ack, only a positively mismatched threadId marks a foreign turn:
+        // the start response and the completion can coalesce into one stdout
+        // chunk, routing the completion before the turn id is recorded, and a
+        // payload without threadId must not strand the turn until the
+        // 30-minute completion timeout.
         return;
       }
       flushPendingUsage(expectedTurnId ?? completedTurnId);

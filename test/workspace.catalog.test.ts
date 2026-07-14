@@ -42,7 +42,7 @@ describe("workspace catalog and path rules", () => {
       await fs.mkdir(outsideRoot, { recursive: true });
       const projectDir = await fs.realpath(projectRoot);
       const outsideDir = await fs.realpath(outsideRoot);
-      await fs.symlink(projectDir, aliasDir, "dir");
+      await fs.symlink(projectDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
 
       expect(requireWorkspacePath({}, "task/list", projectDir, homedir)).toBe(
         await fs.realpath(projectDir),

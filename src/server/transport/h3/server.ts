@@ -11,6 +11,7 @@ import type {
 } from "../../jsonrpc/protocol";
 import { getTaskRpcRequiredPermissions } from "../../jsonrpc/taskPermissions";
 import type { AgentServerRuntime } from "../../runtime/ServerRuntime";
+import type { StartServerSocketData } from "../../startServer/types";
 import {
   createHttpJsonRpcConnection,
   jsonResponse as sharedJsonResponse,

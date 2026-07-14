@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-
+import { scratchRoots } from "../../../src/platform/sandbox";
 import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
@@ -835,10 +835,75 @@ describe("codex app-server turn lifecycle", () => {
     );
   }
 
+  test.serial("ignores wrong-thread terminal notifications before turn/start ack", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-preack-thread-match-"));
+    const controlled = createControlledCodexTurnClient();
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Wait" }],
+        tools: {},
+        maxSteps: 1,
+      });
+
+      await controlled.turnStartEntered;
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_other",
+          turn: {
+            id: "turn_wrong",
+            threadId: "thread_other",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "wrong", text: "wrong thread" }],
+            error: null,
+          },
+        },
+      });
+
+      const ignoredOutcome = await Promise.race([
+        turnPromise.then(
+          () => "resolved",
+          (error) => (error instanceof Error ? error.message : String(error)),
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
+      ]);
+      expect(ignoredOutcome).toBe("pending");
+
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_matched",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "matched", text: "matched before ack" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "matched before ack" });
+    } finally {
+      controlled.rejectTurnStart(new Error("late ignored start rejection"));
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test.serial(
-    "ignores wrong-thread and threadless terminal notifications before turn/start ack",
+    "settles a threadId-less turn/completed routed before the turn/start ack",
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-preack-thread-match-"));
+      const dir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-preack-threadless-"),
+      );
       const controlled = createControlledCodexTurnClient();
       let turnPromise: Promise<unknown> | undefined;
 
@@ -854,58 +919,27 @@ describe("codex app-server turn lifecycle", () => {
           maxSteps: 1,
         });
 
+        // The turn/start response and turn/completed notification can coalesce
+        // into one stdout chunk, so the completion routes while the turn id is
+        // still unknown. A payload that omits threadId must settle the turn
+        // rather than being dropped and stranding it until the completion
+        // timeout.
         await controlled.turnStartEntered;
-        controlled.emitNotification({
-          method: "turn/completed",
-          params: {
-            threadId: "thread_other",
-            turn: {
-              id: "turn_wrong",
-              threadId: "thread_other",
-              status: "completed",
-              items: [{ type: "agentMessage", id: "wrong", text: "wrong thread" }],
-              error: null,
-            },
-          },
-        });
         controlled.emitNotification({
           method: "turn/completed",
           params: {
             turn: {
               id: "turn_threadless",
               status: "completed",
-              items: [{ type: "agentMessage", id: "threadless", text: "threadless" }],
+              items: [{ type: "agentMessage", id: "threadless", text: "threadless before ack" }],
               error: null,
             },
           },
         });
 
-        const ignoredOutcome = await Promise.race([
-          turnPromise.then(
-            () => "resolved",
-            (error) => (error instanceof Error ? error.message : String(error)),
-          ),
-          new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 50)),
-        ]);
-        expect(ignoredOutcome).toBe("pending");
-
-        controlled.emitNotification({
-          method: "turn/completed",
-          params: {
-            threadId: "thread_1",
-            turn: {
-              id: "turn_matched",
-              threadId: "thread_1",
-              status: "completed",
-              items: [{ type: "agentMessage", id: "matched", text: "matched before ack" }],
-              error: null,
-            },
-          },
-        });
-
-        await expect(turnPromise).resolves.toMatchObject({ text: "matched before ack" });
+        await expect(turnPromise).resolves.toMatchObject({ text: "threadless before ack" });
       } finally {
-        controlled.rejectTurnStart(new Error("late ignored start rejection"));
+        controlled.resolveTurnStart();
         await turnPromise?.catch(() => {});
         await fs.rm(dir, { recursive: true, force: true });
       }

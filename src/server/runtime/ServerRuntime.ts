@@ -938,7 +938,12 @@ export async function createAgentServerRuntime(
       jsonRpcConnections.add(connection);
       jsonRpcTransport.openConnection(connection);
       connection.data.selectedSubprotocol ??= "cowork.jsonrpc.v1";
-      connection.data.protocolMode ??= "h3";
+      if (connection.data.transportType === "http") {
+        connection.data.protocolMode ??= "jsonrpc";
+      } else {
+        connection.data.protocolMode ??= "h3";
+        connection.data.transportType ??= "h3";
+      }
     },
     handleDecodedMessage: (ws, message) => {
       jsonRpcTransport.handleMessage(ws, message, routeJsonRpcRequest);

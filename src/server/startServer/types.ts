@@ -27,6 +27,7 @@ type ServerTransportData = {
   session?: AgentSession;
   resumeSessionId?: string;
   protocolMode?: "jsonrpc" | "h3";
+  transportType?: "websocket" | "h3" | "http";
   selectedSubprotocol?: string | null;
   connectionId?: string;
   workspaceControlEventsAllowed?: boolean;

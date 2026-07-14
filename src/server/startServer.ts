@@ -1,6 +1,11 @@
 import { createAgentServerRuntime, type StartAgentServerOptions } from "./runtime/ServerRuntime";
 import type { StartServerSocketData } from "./startServer/types";
 import type { startH3MobileServer as startH3MobileServerType } from "./transport/h3/server";
+import {
+  assertLoopbackRpcRemote,
+  createLoopbackHttpRpcSession,
+  handleLoopbackHttpRpc,
+} from "./transport/loopbackHttpRpc";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
 import { WebDesktopService } from "./webDesktopService";
 import { resolveWsProtocol, splitWebSocketSubprotocolHeader } from "./wsProtocol/negotiation";
@@ -56,7 +61,7 @@ function readBrowserAccessToken(url: URL, req: Request): string | null {
 }
 
 function isProtectedServerPath(pathname: string): boolean {
-  return pathname === "/ws" || pathname.startsWith("/cowork");
+  return pathname === "/ws" || pathname === "/rpc" || pathname.startsWith("/cowork");
 }
 
 function parseBearerToken(header: string | null): string | null {
@@ -98,6 +103,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     runtime.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
     (webDesktopService || networkExposedListener ? createBrowserAccessToken() : "");
   let mobileServer: H3MobileServer | undefined;
+  const loopbackRpc = createLoopbackHttpRpcSession(runtime);
   // Flipped true once startAgentServer finishes its full boot (mobile server +
   // idle eviction). The health endpoint reports it as `startup.ready`, so a
   // supervisor can tell "listening but not fully wired" from "ready".
@@ -127,7 +133,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
               ...corsHeaders,
               "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
               "Access-Control-Allow-Headers":
-                "Authorization, Content-Type, Idempotency-Key, Sec-WebSocket-Protocol, X-Cowork-Browser-Token",
+                "Authorization, Content-Type, Idempotency-Key, Sec-WebSocket-Protocol, X-Cowork-Browser-Token, X-Cowork-Client-Id",
               "Access-Control-Max-Age": "86400",
             },
           });
@@ -161,6 +167,21 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
             },
             { headers: corsHeaders },
           );
+        }
+        if (url.pathname === "/rpc") {
+          const remoteDenied = assertLoopbackRpcRemote(req, srv);
+          if (remoteDenied) {
+            const headers = new Headers(remoteDenied.headers);
+            for (const [key, value] of Object.entries(corsHeaders)) {
+              headers.set(key, value);
+            }
+            return new Response(remoteDenied.body, {
+              status: remoteDenied.status,
+              statusText: remoteDenied.statusText,
+              headers,
+            });
+          }
+          return await handleLoopbackHttpRpc(req, loopbackRpc, { corsHeaders });
         }
         if (url.pathname === "/ws") {
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
@@ -350,6 +371,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
     if (stopped) return;
     stopped = true;
     clearInterval(evictionTimer);
+    loopbackRpc.closeAll();
     await runtime.stop();
     await mobileServer?.stop().catch(() => {
       // ignore

@@ -321,10 +321,13 @@ async function main() {
 
   if (json) {
     const hostHints = resolveListeningHints(host);
+    const rpcHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+    const rpcUrl = `http://${rpcHost}:${server.port}/rpc`;
     console.log(
       JSON.stringify({
         type: "server_listening",
         url,
+        rpcUrl,
         host,
         hostHints,
         port: server.port,
@@ -352,7 +355,11 @@ async function main() {
   }
 
   const hostHints = resolveListeningHints(host);
+  const rpcHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const rpcUrl = `http://${rpcHost}:${server.port}/rpc`;
   console.log(`[cowork-server] listening on ${url} (cwd=${config.workingDirectory})`);
+  console.log(`[cowork-server] loopback RPC: ${rpcUrl}`);
+  console.log(`[cowork-server] native client: COWORK_RPC_URL=${rpcUrl}`);
   if (host === "0.0.0.0") {
     console.log(
       `[cowork-server] reachable on: ${hostHints.map((ip) => `ws://${ip}:${server.port}/ws`).join(", ")}`,
@@ -362,9 +369,10 @@ async function main() {
     const hasExplicitBrowserAccessToken = Boolean(process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim());
     console.log(
       hasExplicitBrowserAccessToken
-        ? "[cowork-server] access token required for /ws and /cowork/* (using COWORK_BROWSER_ACCESS_TOKEN)"
-        : `[cowork-server] generated access token for /ws and /cowork/*: ${browserAccessToken}`,
+        ? "[cowork-server] access token required for /ws, /rpc, and /cowork/* (using COWORK_BROWSER_ACCESS_TOKEN)"
+        : `[cowork-server] generated access token for /ws, /rpc, and /cowork/*: ${browserAccessToken}`,
     );
+    console.log(`[cowork-server] native client: COWORK_BROWSER_TOKEN=${browserAccessToken}`);
   }
 }
 

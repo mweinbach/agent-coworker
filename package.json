@@ -43,6 +43,7 @@
     "cli": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
+    "dev:rpc": "bun --watch src/server/index.ts --host 127.0.0.1 --port 7337",
     "desktop:demo": "COWORK_DEMO_MODE=1 bun run start",
     "setup:runtime": "bun scripts/setup_cowork_runtime.ts",
     "build:server-binary": "bun scripts/build_cowork_server_binary.ts",

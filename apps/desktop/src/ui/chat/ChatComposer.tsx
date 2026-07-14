@@ -1,4 +1,4 @@
-import { AlertTriangleIcon, LoaderCircleIcon, PaperclipIcon } from "lucide-react";
+import { AlertTriangleIcon, PaperclipIcon } from "lucide-react";
 import type {
   ChangeEvent,
   CSSProperties,
@@ -42,7 +42,6 @@ export function ChatComposer(props: {
   inputDisabled: boolean;
   transcriptOnly: boolean;
   ingestAttachmentFiles: (files: File[]) => Promise<boolean>;
-  isUploading: boolean;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
   submitComposer: () => void;
@@ -83,7 +82,6 @@ export function ChatComposer(props: {
     inputDisabled,
     transcriptOnly,
     ingestAttachmentFiles,
-    isUploading,
     pendingAttachments,
     removeAttachment,
     submitComposer,
@@ -132,20 +130,16 @@ export function ChatComposer(props: {
             inputDisabled || transcriptOnly ? undefined : { onFiles: ingestAttachmentFiles }
           }
         >
-          {isUploading && !attachmentPickerError && (
+          {preparingAttachments && !attachmentPickerError && (
             <div
-              className="w-full mb-3 px-3 pt-2.5"
+              data-slot="composer-preparing"
+              className="w-full px-3 pt-2.5"
               role="status"
               aria-busy="true"
               aria-live="polite"
             >
-              <Progress indeterminate className="h-1 bg-primary/10 rounded-full" />
-              <div className="flex items-center gap-2 mt-1.5 px-0.5 text-xs text-muted-foreground select-none font-medium">
-                <LoaderCircleIcon className="size-3.5 animate-spin text-primary shrink-0" />
-                <span>
-                  {preparingAttachments ? "Uploading and preparing message…" : "Sending message…"}
-                </span>
-              </div>
+              <Progress indeterminate className="h-0.5 rounded-full bg-primary/10" />
+              <span className="sr-only">Uploading and preparing message…</span>
             </div>
           )}
           <MessageComposerAttachments

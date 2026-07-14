@@ -489,13 +489,11 @@ export function NewChatLanding() {
             <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
               {submitting
                 ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
-                : readiness.result?.ready
-                  ? "Ready"
-                  : readiness.checking
-                    ? "Validating readiness…"
-                    : readinessBlocked
-                      ? "Setup required"
-                      : null}
+                : readiness.checking
+                  ? "Validating readiness…"
+                  : readinessBlocked
+                    ? "Setup required"
+                    : null}
             </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (

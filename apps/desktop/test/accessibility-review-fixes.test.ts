@@ -130,6 +130,23 @@ describe("accessibility review fixes", () => {
         });
         expect(popup?.textContent).toContain("1/2");
         expect(popup?.textContent).toContain("Safety Memo");
+
+        // A bubbling arrow keydown from inside the portaled content re-enters
+        // the React tree through the cite wrapper; it must advance exactly one
+        // source, not two (the double-step regression).
+        const focusedInsidePopover = harness.dom.window.document.activeElement;
+        expect(popup?.contains(focusedInsidePopover)).toBe(true);
+        await act(async () => {
+          focusedInsidePopover?.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "ArrowRight",
+            }),
+          );
+        });
+        expect(popup?.textContent).toContain("2/2");
+        expect(popup?.textContent).toContain("Hospital Update");
       } finally {
         if (root) {
           await act(async () => {

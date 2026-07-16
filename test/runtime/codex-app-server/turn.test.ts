@@ -1029,6 +1029,127 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
+  test.serial(
+    "projects provider custom tool envelopes with compact citation metadata",
+    async () => {
+      const dir = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-custom-tool-output-"),
+      );
+      const controlled = createControlledCodexTurnClient();
+      const streamParts: unknown[] = [];
+      let turnPromise: Promise<unknown> | undefined;
+
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+      try {
+        const runtime = createRuntime(makeConfig(dir));
+        turnPromise = runtime.runTurn({
+          config: makeConfig(dir),
+          system: "You are Codex.",
+          messages: [{ role: "user", content: "Search" }],
+          tools: {},
+          maxSteps: 1,
+          onModelStreamPart: (part) => streamParts.push(part),
+        });
+
+        await controlled.turnStartEntered;
+        controlled.resolveTurnStart({
+          turn: { id: "turn_1", status: "inProgress", items: [] },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        controlled.emitNotification({
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread_1",
+            turnId: "turn_1",
+            item: {
+              type: "custom_tool_call",
+              id: "custom-1",
+              call_id: "call-1",
+              name: "exec",
+              input: "const result = await tools.some_nested_tool(); text(result)",
+            },
+          },
+        });
+        controlled.emitNotification({
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread_1",
+            turnId: "turn_1",
+            item: {
+              type: "custom_tool_call_output",
+              call_id: "call-1",
+              output: [
+                {
+                  type: "input_text",
+                  text: [
+                    "First source (https://example.com/one)",
+                    "citeturn0search0 First result.",
+                    "Second source (https://example.com/two)",
+                    "citeturn0search10 Second result.",
+                  ].join("\n"),
+                },
+              ],
+            },
+          },
+        });
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId: "thread_1",
+            turn: {
+              id: "turn_1",
+              threadId: "thread_1",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+              error: null,
+            },
+          },
+        });
+
+        await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+        expect(streamParts).toContainEqual({
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "exec",
+          input: "const result = await tools.some_nested_tool(); text(result)",
+          providerExecuted: true,
+        });
+        expect(streamParts).toContainEqual({
+          type: "tool-result",
+          toolCallId: "call-1",
+          toolName: "exec",
+          output: {
+            contentItems: [
+              {
+                type: "input_text",
+                text: expect.stringContaining("citeturn0search10"),
+              },
+            ],
+            citationSources: [
+              {
+                referenceId: "turn0search0",
+                title: "First source",
+                url: "https://example.com/one",
+              },
+              {
+                referenceId: "turn0search10",
+                title: "Second source",
+                url: "https://example.com/two",
+              },
+            ],
+          },
+          providerExecuted: true,
+        });
+      } finally {
+        controlled.resolveTurnStart();
+        await turnPromise?.catch(() => {});
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "eventful";

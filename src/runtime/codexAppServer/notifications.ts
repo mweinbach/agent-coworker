@@ -3,6 +3,7 @@ import type {
   CodexAppServerCloseInfo,
   CodexAppServerJsonRpcNotification,
 } from "../../providers/codexAppServerClient";
+import { extractReferencedCitationSourcesFromToolResult } from "../../shared/providerCitationSources";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
 import { parseUsage } from "./config";
@@ -60,6 +61,10 @@ function dynamicToolErrorText(item: Record<string, unknown>): string {
 function assistantPhase(record: Record<string, unknown> | null | undefined): string | undefined {
   const phase = asString(record?.phase)?.trim();
   return phase ? phase : undefined;
+}
+
+function isExecCustomToolName(name: string): boolean {
+  return name === "exec" || name === "functions.exec";
 }
 
 async function routeStreamingNotification(
@@ -244,6 +249,7 @@ export function createCodexTurnNotificationRouter(
   const textByItemId = new Map<string, string>();
   const phaseByItemId = new Map<string, string>();
   const itemOrder: string[] = [];
+  const customToolNameByCallId = new Map<string, string>();
 
   const ensureAssistantItem = (id: string | undefined, initialText = ""): string | null => {
     if (!id) return null;
@@ -394,6 +400,46 @@ export function createCodexTurnNotificationRouter(
 
     if (!targetsActiveCodexTurn(payload, target)) return;
     if (completion.abortSignal?.aborted) return;
+
+    if (notification.method === "rawResponseItem/completed") {
+      const itemType = asString(item?.type);
+      const callId = asString(item?.call_id) ?? asString(item?.callId) ?? asString(item?.id);
+      if ((itemType === "custom_tool_call" || itemType === "customToolCall") && callId) {
+        const toolName = asString(item?.name) ?? asString(item?.tool) ?? "customTool";
+        if (isExecCustomToolName(toolName)) {
+          customToolNameByCallId.set(callId, toolName);
+          void params.onModelStreamPart?.({
+            type: "tool-call",
+            toolCallId: callId,
+            toolName,
+            input: item?.input ?? item?.arguments ?? {},
+            providerExecuted: true,
+          });
+          return;
+        }
+      }
+
+      if (
+        (itemType === "custom_tool_call_output" || itemType === "customToolCallOutput") &&
+        callId &&
+        customToolNameByCallId.has(callId)
+      ) {
+        const toolName = customToolNameByCallId.get(callId) ?? "exec";
+        const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
+        const citationSources = extractReferencedCitationSourcesFromToolResult(output);
+        const projectedOutput =
+          citationSources.length > 0 ? { contentItems: output, citationSources } : output;
+        customToolNameByCallId.delete(callId);
+        void params.onModelStreamPart?.({
+          type: "tool-result",
+          toolCallId: callId,
+          toolName,
+          output: projectedOutput,
+          providerExecuted: true,
+        });
+        return;
+      }
+    }
 
     let routePayload = payload;
 

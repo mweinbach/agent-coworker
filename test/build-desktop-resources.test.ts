@@ -21,6 +21,59 @@ import {
 } from "../src/platform/sandbox/windows";
 
 describe("desktop resource build helpers", () => {
+  test("sidecar cleanup preserves independently managed native resources", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+
+    try {
+      await fs.mkdir(path.join(binariesDir, "server"), { recursive: true });
+      await fs.mkdir(path.join(binariesDir, "windows-ai-electron"), { recursive: true });
+      await fs.writeFile(path.join(binariesDir, "cowork-server-manifest.json"), "{}");
+      await fs.writeFile(path.join(binariesDir, "cowork-server-x86_64-pc-windows-msvc.exe"), "");
+      await fs.writeFile(path.join(binariesDir, "cowork-server-aarch64-apple-darwin"), "");
+      await fs.writeFile(path.join(binariesDir, "bun.exe"), "");
+      await fs.writeFile(path.join(binariesDir, "server", "index.js"), "");
+      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HELPER_NAME), "sandbox");
+      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "setup");
+      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME), "runner");
+      await fs.writeFile(path.join(binariesDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME), "{}");
+      await fs.writeFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "native");
+
+      await __internal.clearDesktopSidecarArtifacts(binariesDir);
+
+      await expect(
+        fs.stat(path.join(binariesDir, "cowork-server-manifest.json")),
+      ).rejects.toThrow();
+      await expect(
+        fs.stat(path.join(binariesDir, "cowork-server-x86_64-pc-windows-msvc.exe")),
+      ).rejects.toThrow();
+      await expect(
+        fs.stat(path.join(binariesDir, "cowork-server-aarch64-apple-darwin")),
+      ).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "bun.exe"))).rejects.toThrow();
+      await expect(fs.stat(path.join(binariesDir, "server"))).rejects.toThrow();
+      await expect(
+        fs.readFile(path.join(binariesDir, WINDOWS_SANDBOX_SETUP_NAME), "utf8"),
+      ).resolves.toBe("setup");
+      await expect(
+        fs.readFile(path.join(binariesDir, "windows-ai-electron", "index.js"), "utf8"),
+      ).resolves.toBe("native");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("desktop dev does not force-rebuild a potentially running sandbox helper", async () => {
+    const desktopPackage = JSON.parse(
+      await fs.readFile(
+        path.resolve(import.meta.dir, "..", "apps", "desktop", "package.json"),
+        "utf8",
+      ),
+    ) as { scripts?: { dev?: string } };
+
+    expect(desktopPackage.scripts?.dev).not.toContain("--force-windows-sandbox-build");
+  });
+
   test("refreshes cached Foundation Models SDK bundles missing Koffi runtime files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
     const dest = path.join(root, "apps", "desktop", "resources", "binaries", "tsfm-sdk");

@@ -8,6 +8,12 @@ export type BuildTarget = {
 };
 
 const WINDOWS_ARM64_BUNDLED_BUN_RUNTIME_VERSION = "1.3.13";
+const RM_MAX_RETRIES = 10;
+const RM_RETRY_DELAY_MS = 100;
+
+export interface RmrfDeps {
+  rmImpl?: (target: string, options: Parameters<typeof fs.rm>[1]) => Promise<void>;
+}
 
 function parseFlagValue(argv: string[], ...flagNames: string[]): string | null {
   for (let index = 0; index < argv.length; index += 1) {
@@ -77,8 +83,13 @@ export function resolveBuildTarget(
   };
 }
 
-export async function rmrf(target: string): Promise<void> {
-  await fs.rm(target, { recursive: true, force: true });
+export async function rmrf(target: string, deps: RmrfDeps = {}): Promise<void> {
+  await (deps.rmImpl ?? fs.rm)(target, {
+    recursive: true,
+    force: true,
+    maxRetries: RM_MAX_RETRIES,
+    retryDelay: RM_RETRY_DELAY_MS,
+  });
 }
 
 export async function pathExists(target: string): Promise<boolean> {

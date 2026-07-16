@@ -10,6 +10,7 @@ import {
   resolveWindowsAiElectronPrebuildTriplet,
   SIDECAR_BUN_ENTRYPOINT_PATH,
   SIDECAR_BUN_EXECUTABLE_NAME,
+  SIDECAR_MANIFEST_NAME,
   shouldBundleFoundationModelsSdk,
   shouldBundleWindowsAiElectronPackage,
   shouldUseBundledBunRuntime,
@@ -174,6 +175,26 @@ async function syncCopiedDir(opts: {
   await rmrf(opts.dest);
   await copyDir(opts.src, opts.dest);
   console.log(`[resources] ${opts.label}: updated`);
+}
+
+async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise<void> {
+  if (!(await pathExists(desktopBinariesDir))) {
+    return;
+  }
+
+  const bundledEntrypointDir = path.dirname(SIDECAR_BUN_ENTRYPOINT_PATH);
+  const entries = await fs.readdir(desktopBinariesDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const isSidecarArtifact =
+      (entry.isFile() &&
+        (entry.name.startsWith("cowork-server-") ||
+          entry.name === SIDECAR_MANIFEST_NAME ||
+          entry.name === SIDECAR_BUN_EXECUTABLE_NAME)) ||
+      (entry.isDirectory() && entry.name === bundledEntrypointDir);
+    if (isSidecarArtifact) {
+      await rmrf(path.join(desktopBinariesDir, entry.name));
+    }
+  }
 }
 
 async function syncWindowsSandboxHelper(opts: {
@@ -599,7 +620,7 @@ async function main() {
     desktopBinariesDir,
     resolvePackagedSidecarFilename(platform, arch),
   );
-  const sidecarManifestPath = path.join(desktopBinariesDir, "cowork-server-manifest.json");
+  const sidecarManifestPath = path.join(desktopBinariesDir, SIDECAR_MANIFEST_NAME);
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
@@ -622,7 +643,7 @@ async function main() {
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
-    await rmrf(desktopBinariesDir);
+    await clearDesktopSidecarArtifacts(desktopBinariesDir);
     await fs.mkdir(desktopBinariesDir, { recursive: true });
 
     const manifest = buildSidecarManifest(platform, arch);
@@ -829,6 +850,7 @@ if (import.meta.main) {
 }
 
 export const __internal = {
+  clearDesktopSidecarArtifacts,
   ensureFoundationModelsSdkInputs,
   syncFoundationModelsSdk,
   ensureWindowsAiElectronInputs,

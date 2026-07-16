@@ -1048,30 +1048,110 @@ describe("symlink", () => {
 });
 
 describe("hardenPrivateDir / hardenPrivateFile", () => {
-  test("win32: documented no-op — chmod never called, gap surfaced via debugLog", async () => {
+  test("win32: removes inherited ACLs and grants the current user", async () => {
     const dir = path.join(tmpDir, "private-dir");
     fs.mkdirSync(dir);
     const chmodCalls: string[] = [];
     const chmod = (async (p: string) => {
       chmodCalls.push(String(p));
     }) as FsLike["chmod"];
-    const logs: string[] = [];
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const currentUserSid = "S-1-5-21-1000";
     await hardenPrivateDir(dir, {
       fsImpl: fsWith({ chmod }),
       platform: "win32",
-      debugLog: (message) => logs.push(message),
+      currentUserSid,
+      runCommand,
     });
-    await hardenPrivateFile(path.join(dir, "f"), {
+    const file = path.join(dir, "f");
+    await hardenPrivateFile(file, {
       fsImpl: fsWith({ chmod }),
       platform: "win32",
-      debugLog: (message) => logs.push(message),
+      currentUserSid,
+      runCommand,
     });
     expect(chmodCalls).toEqual([]);
-    expect(logs).toHaveLength(2);
-    expect(logs[0]).toContain("no-op");
-    expect(logs[0]).toContain(dir);
-    expect(logs[1]).toContain("hardenPrivateFile");
+    expect(commands).toEqual([
+      {
+        file: "icacls.exe",
+        args: [dir, "/inheritancelevel:r", "/grant:r", `*${currentUserSid}:(OI)(CI)F`, "/Q"],
+      },
+      {
+        file: "icacls.exe",
+        args: [file, "/inheritancelevel:r", "/grant:r", `*${currentUserSid}:F`, "/Q"],
+      },
+    ]);
   });
+
+  test("win32: resolves the current user SID and surfaces icacls failures", async () => {
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const currentUserSid = "S-1-5-21-2000";
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      if (file === "whoami.exe") {
+        return {
+          exitCode: 0,
+          stdout: `"MACHINE\\user","${currentUserSid}"\r\n`,
+          stderr: "",
+        };
+      }
+      return { exitCode: 5, stdout: "", stderr: "Access is denied." };
+    };
+
+    await expect(
+      hardenPrivateDir("C:\\private", { platform: "win32", runCommand }),
+    ).rejects.toThrow(
+      "platform.fs: harden private directory C:\\private: icacls.exe failed with exit code 5: Access is denied.",
+    );
+    expect(commands).toEqual([
+      {
+        file: "whoami.exe",
+        args: ["/user", "/fo", "csv", "/nh"],
+      },
+      {
+        file: "icacls.exe",
+        args: [
+          "C:\\private",
+          "/inheritancelevel:r",
+          "/grant:r",
+          `*${currentUserSid}:(OI)(CI)F`,
+          "/Q",
+        ],
+      },
+    ]);
+  });
+
+  test.skipIf(!isWindowsHost)(
+    "win32 host: real hardening removes inherited ACEs from directories and files",
+    async () => {
+      const dir = path.join(tmpDir, "real-private");
+      fs.mkdirSync(dir);
+      const file = path.join(dir, "auth.json");
+      fs.writeFileSync(file, "{}");
+
+      hardenPrivateDirSync(dir);
+      await hardenPrivateFile(file);
+
+      const dirAcl = spawnSync("icacls.exe", [dir], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      const fileAcl = spawnSync("icacls.exe", [file], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(dirAcl.status).toBe(0);
+      expect(fileAcl.status).toBe(0);
+      expect(dirAcl.stdout).not.toContain("(I)");
+      expect(fileAcl.stdout).not.toContain("(I)");
+      expect(dirAcl.stdout).toContain("(OI)(CI)(F)");
+      expect(fileAcl.stdout).toContain("(F)");
+    },
+  );
 
   test("posix: chmods 0o700 for dirs and 0o600 for files", async () => {
     const calls: Array<{ path: string; mode: unknown }> = [];
@@ -1101,19 +1181,47 @@ describe("hardenPrivateDir / hardenPrivateFile", () => {
       { path: "/secrets/auth.json", mode: 0o600 },
     ]);
 
-    const logs: string[] = [];
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommandSync = (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const currentUserSid = "S-1-5-21-1000";
     hardenPrivateDirSync("C:\\secrets", {
       chmodSync,
       platform: "win32",
-      debugLog: (message) => logs.push(message),
+      currentUserSid,
+      runCommandSync,
     });
     hardenPrivateFileSync("C:\\secrets\\auth.json", {
       chmodSync,
       platform: "win32",
-      debugLog: (message) => logs.push(message),
+      currentUserSid,
+      runCommandSync,
     });
     expect(calls).toHaveLength(2);
-    expect(logs).toHaveLength(2);
+    expect(commands).toEqual([
+      {
+        file: "icacls.exe",
+        args: [
+          "C:\\secrets",
+          "/inheritancelevel:r",
+          "/grant:r",
+          `*${currentUserSid}:(OI)(CI)F`,
+          "/Q",
+        ],
+      },
+      {
+        file: "icacls.exe",
+        args: [
+          "C:\\secrets\\auth.json",
+          "/inheritancelevel:r",
+          "/grant:r",
+          `*${currentUserSid}:F`,
+          "/Q",
+        ],
+      },
+    ]);
   });
 
   test.skipIf(isWindowsHost)("posix hosts: real modes end up 0o700 / 0o600", async () => {

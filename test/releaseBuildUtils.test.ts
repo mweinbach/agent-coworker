@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildBunBundle, resolveBundledBunRuntimeVersion } from "../scripts/releaseBuildUtils";
+import {
+  buildBunBundle,
+  resolveBundledBunRuntimeVersion,
+  rmrf,
+} from "../scripts/releaseBuildUtils";
 
 const tempDirs: string[] = [];
 
@@ -18,6 +22,32 @@ afterEach(async () => {
 });
 
 describe("release build utils", () => {
+  test("rmrf enables bounded retries for transient Windows file locks", async () => {
+    const calls: Array<{
+      target: string;
+      options: Parameters<typeof fs.rm>[1];
+    }> = [];
+    const target = "C:\\workspace\\apps\\desktop\\resources\\binaries";
+
+    await rmrf(target, {
+      rmImpl: async (receivedTarget, options) => {
+        calls.push({ target: receivedTarget, options });
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        target,
+        options: {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        },
+      },
+    ]);
+  });
+
   test("pins the Windows ARM64 bundled Bun runtime to the release-smoked version", () => {
     expect(resolveBundledBunRuntimeVersion({ platform: "win32", arch: "arm64" }, {})).toBe(
       "1.3.13",

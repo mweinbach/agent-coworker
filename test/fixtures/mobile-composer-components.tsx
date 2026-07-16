@@ -183,82 +183,83 @@ const platformComponents = [
 ] as const satisfies ReadonlyArray<readonly [string, ComponentType<ComposerProps>]>;
 
 describe("mobile composer platform components", () => {
-  test.each(
-    platformComponents,
-  )("%s renders editable first-character policy and a locked Stop action", async (_platform, ComposerBar) => {
-    const harness = setupJsdom();
-    const container = harness.dom.window.document.getElementById("root");
-    if (!container) throw new Error("missing root container");
-    const root = createRoot(container);
-    let submitCount = 0;
-    let stopCount = 0;
-    const baseProps: ComposerProps = {
-      value: "",
-      onChangeText: () => undefined,
-      onSubmit: () => {
-        submitCount += 1;
-      },
-      onStop: () => {
-        stopCount += 1;
-      },
-      canEdit: true,
-      canSubmit: false,
-      isSubmitting: false,
-      isBusy: false,
-      isStopping: false,
-    };
+  test.each(platformComponents)(
+    "%s renders editable first-character policy and a locked Stop action",
+    async (_platform, ComposerBar) => {
+      const harness = setupJsdom();
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      const root = createRoot(container);
+      let submitCount = 0;
+      let stopCount = 0;
+      const baseProps: ComposerProps = {
+        value: "",
+        onChangeText: () => undefined,
+        onSubmit: () => {
+          submitCount += 1;
+        },
+        onStop: () => {
+          stopCount += 1;
+        },
+        canEdit: true,
+        canSubmit: false,
+        isSubmitting: false,
+        isBusy: false,
+        isStopping: false,
+      };
 
-    try {
-      await act(async () => {
-        root.render(createElement(ComposerBar, baseProps));
-      });
-      expect(container.querySelector("textarea")?.getAttribute("data-editable")).toBe("true");
-      expect(container.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+      try {
+        await act(async () => {
+          root.render(createElement(ComposerBar, baseProps));
+        });
+        expect(container.querySelector("textarea")?.getAttribute("data-editable")).toBe("true");
+        expect(container.querySelector("button")?.hasAttribute("disabled")).toBe(true);
 
-      await act(async () => {
-        root.render(
-          createElement(ComposerBar, {
-            ...baseProps,
-            value: "h",
-            canSubmit: true,
-          }),
-        );
-      });
-      const send = container.querySelector('button[aria-label="Send"]');
-      expect(send?.hasAttribute("disabled")).toBe(false);
-      send?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      expect(submitCount).toBe(1);
+        await act(async () => {
+          root.render(
+            createElement(ComposerBar, {
+              ...baseProps,
+              value: "h",
+              canSubmit: true,
+            }),
+          );
+        });
+        const send = container.querySelector('button[aria-label="Send"]');
+        expect(send?.hasAttribute("disabled")).toBe(false);
+        send?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        expect(submitCount).toBe(1);
 
-      await act(async () => {
-        root.render(
-          createElement(ComposerBar, {
-            ...baseProps,
-            isBusy: true,
-          }),
-        );
-      });
-      const stop = container.querySelector('button[aria-label="Stop turn"]');
-      expect(stop?.hasAttribute("disabled")).toBe(false);
-      stop?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      expect(stopCount).toBe(1);
+        await act(async () => {
+          root.render(
+            createElement(ComposerBar, {
+              ...baseProps,
+              isBusy: true,
+            }),
+          );
+        });
+        const stop = container.querySelector('button[aria-label="Stop turn"]');
+        expect(stop?.hasAttribute("disabled")).toBe(false);
+        stop?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        expect(stopCount).toBe(1);
 
-      await act(async () => {
-        root.render(
-          createElement(ComposerBar, {
-            ...baseProps,
-            isBusy: true,
-            isStopping: true,
-          }),
-        );
-      });
-      expect(
-        container.querySelector('button[aria-label="Stopping turn"]')?.hasAttribute("disabled"),
-      ).toBe(true);
-    } finally {
-      await act(async () => {
-        root.unmount();
-      });
-      harness.restore();
-    }
-  });
+        await act(async () => {
+          root.render(
+            createElement(ComposerBar, {
+              ...baseProps,
+              isBusy: true,
+              isStopping: true,
+            }),
+          );
+        });
+        expect(
+          container.querySelector('button[aria-label="Stopping turn"]')?.hasAttribute("disabled"),
+        ).toBe(true);
+      } finally {
+        await act(async () => {
+          root.unmount();
+        });
+        harness.restore();
+      }
+    },
+  );
 });

@@ -1,6 +1,6 @@
 appId: com.cowork.desktop
 productName: Cowork
-electronVersion: 43.1.0
+electronVersion: 43.1.1
 asar: true
 compression: maximum
 directories:

@@ -668,26 +668,26 @@ describe("acquireLockDir", () => {
     expect(fs.existsSync(path.join(lockPath, "owner.json"))).toBe(true);
   });
 
-  test.each([
-    "corrupt",
-    "missing",
-  ] as const)("ownerless lock (%s owner.json): refused while fresh, broken once older than staleMs", async (kind) => {
-    const lockPath = path.join(tmpDir, `ownerless-${kind}.lock`);
-    plantLock(lockPath, kind);
-    // Fresh dir: an acquirer may be mid-write — refuse within staleMs.
-    await expect(
-      acquireLockDir(
-        lockPath,
-        { staleMs: 60_000, signal: AbortSignal.timeout(200) },
-        { pollIntervalMs: 20 },
-      ),
-    ).rejects.toThrow();
-    // Once the dir is older than staleMs, the break goes through.
-    await Bun.sleep(60);
-    const handle = await acquireLockDir(lockPath, { staleMs: 20 }, { pollIntervalMs: 10 });
-    expect(readOwner(lockPath).pid).toBe(process.pid);
-    await handle.release();
-  });
+  test.each(["corrupt", "missing"] as const)(
+    "ownerless lock (%s owner.json): refused while fresh, broken once older than staleMs",
+    async (kind) => {
+      const lockPath = path.join(tmpDir, `ownerless-${kind}.lock`);
+      plantLock(lockPath, kind);
+      // Fresh dir: an acquirer may be mid-write — refuse within staleMs.
+      await expect(
+        acquireLockDir(
+          lockPath,
+          { staleMs: 60_000, signal: AbortSignal.timeout(200) },
+          { pollIntervalMs: 20 },
+        ),
+      ).rejects.toThrow();
+      // Once the dir is older than staleMs, the break goes through.
+      await Bun.sleep(60);
+      const handle = await acquireLockDir(lockPath, { staleMs: 20 }, { pollIntervalMs: 10 });
+      expect(readOwner(lockPath).pid).toBe(process.pid);
+      await handle.release();
+    },
+  );
 
   test("a delayed owner writer cannot overwrite a replacement acquirer's owner.json", async () => {
     const lockPath = path.join(tmpDir, "mid-acquire-replacement.lock");

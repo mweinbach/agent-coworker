@@ -61,17 +61,17 @@ function makeHomeThread(index: number): MobileThreadSummary {
 }
 
 describe("mobile long-list performance contracts", () => {
-  test.each([
-    "ios",
-    "android",
-  ] as const)("%s keeps deterministic thread and home render windows within budget", (platform) => {
-    for (const surface of ["thread", "home"] as const) {
-      const contract = MOBILE_LIST_PERFORMANCE_CONTRACTS[platform][surface];
-      expect(contract.initialNumToRender).toBeLessThanOrEqual(12);
-      expect(contract.maxToRenderPerBatch).toBeLessThanOrEqual(8);
-      expect(contract.windowSize).toBeLessThanOrEqual(7);
-    }
-  });
+  test.each(["ios", "android"] as const)(
+    "%s keeps deterministic thread and home render windows within budget",
+    (platform) => {
+      for (const surface of ["thread", "home"] as const) {
+        const contract = MOBILE_LIST_PERFORMANCE_CONTRACTS[platform][surface];
+        expect(contract.initialNumToRender).toBeLessThanOrEqual(12);
+        expect(contract.maxToRenderPerBatch).toBeLessThanOrEqual(8);
+        expect(contract.windowSize).toBeLessThanOrEqual(7);
+      }
+    },
+  );
 
   test("1,000 raw deltas stay one-to-one without coalescing, requests, or feed growth", async () => {
     const threadId = "performance-stream";

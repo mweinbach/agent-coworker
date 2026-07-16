@@ -3,8 +3,8 @@ import path from "node:path";
 
 import {
   buildTestInvocation,
-  formatFailureSummary,
   FULL_RUN_TEST_BATCH_SIZE,
+  formatFailureSummary,
   parseJUnitFailures,
   partitionTestFiles,
 } from "../scripts/run_tests";
@@ -72,40 +72,38 @@ describe("project test runner", () => {
     ).toEqual([1, 1, 1]);
   });
 
-  test.each([
-    "win32",
-    "linux",
-    "darwin",
-  ] as const)("serializes tests within each isolated full-suite file on %s", (platform) => {
-    const invocation = buildTestInvocation({
-      platform,
-      repoRoot,
-      bunPath,
-      args: [path.join(repoRoot, "test", "example.test.ts")],
-      fullRunFile: true,
-    });
+  test.each(["win32", "linux", "darwin"] as const)(
+    "serializes tests within each isolated full-suite file on %s",
+    (platform) => {
+      const invocation = buildTestInvocation({
+        platform,
+        repoRoot,
+        bunPath,
+        args: [path.join(repoRoot, "test", "example.test.ts")],
+        fullRunFile: true,
+      });
 
-    expect(invocation.command).toContain("--max-concurrency=1");
-  });
+      expect(invocation.command).toContain("--max-concurrency=1");
+    },
+  );
 
-  test.each([
-    "win32",
-    "linux",
-    "darwin",
-  ] as const)("writes a junit report for each full-suite file on %s", (platform) => {
-    const junitOutfile = path.join(repoRoot, "report.junit.xml");
-    const invocation = buildTestInvocation({
-      platform,
-      repoRoot,
-      bunPath,
-      args: [path.join(repoRoot, "test", "example.test.ts")],
-      fullRunFile: true,
-      junitOutfile,
-    });
+  test.each(["win32", "linux", "darwin"] as const)(
+    "writes a junit report for each full-suite file on %s",
+    (platform) => {
+      const junitOutfile = path.join(repoRoot, "report.junit.xml");
+      const invocation = buildTestInvocation({
+        platform,
+        repoRoot,
+        bunPath,
+        args: [path.join(repoRoot, "test", "example.test.ts")],
+        fullRunFile: true,
+        junitOutfile,
+      });
 
-    expect(invocation.command).toContain("--reporter=junit");
-    expect(invocation.command).toContain(`--reporter-outfile=${junitOutfile}`);
-  });
+      expect(invocation.command).toContain("--reporter=junit");
+      expect(invocation.command).toContain(`--reporter-outfile=${junitOutfile}`);
+    },
+  );
 
   test("collects failing tests from a Bun junit report", () => {
     const report = `<?xml version="1.0" encoding="UTF-8"?>

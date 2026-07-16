@@ -13,6 +13,7 @@ import {
   WIN_SANDBOX_PREBUILT_LOCK_NAME,
   type WinSandboxPrebuiltLock,
 } from "../scripts/winSandboxPrebuilt";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
   WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
@@ -22,7 +23,7 @@ import {
 
 describe("desktop resource build helpers", () => {
   test("sidecar cleanup preserves independently managed native resources", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-resources-"));
+    const root = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-desktop-resources-"));
     const binariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
 
     try {

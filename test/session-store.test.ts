@@ -277,21 +277,24 @@ describe("sessionStore", () => {
     [3, "general", "worker"],
     [4, "explore", "explorer"],
     [5, "research", "research"],
-  ] as const)("parsePersistedSessionSnapshot normalizes legacy v%d subagent and agent type values", (version, agentType, expectedRole) => {
-    const raw = makeRawSnapshot(version);
-    raw.session.sessionKind = "subagent";
-    raw.session.agentType = agentType;
+  ] as const)(
+    "parsePersistedSessionSnapshot normalizes legacy v%d subagent and agent type values",
+    (version, agentType, expectedRole) => {
+      const raw = makeRawSnapshot(version);
+      raw.session.sessionKind = "subagent";
+      raw.session.agentType = agentType;
 
-    const parsed = parsePersistedSessionSnapshot(raw);
+      const parsed = parsePersistedSessionSnapshot(raw);
 
-    expect(parsed).toMatchObject({
-      version,
-      session: {
-        sessionKind: "agent",
-        role: expectedRole,
-      },
-    });
-  });
+      expect(parsed).toMatchObject({
+        version,
+        session: {
+          sessionKind: "agent",
+          role: expectedRole,
+        },
+      });
+    },
+  );
 
   test("parsePersistedSessionSnapshot keeps canonical legacy roles ahead of agentType", () => {
     const raw = makeRawSnapshot(5);

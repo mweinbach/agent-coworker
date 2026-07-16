@@ -21,7 +21,7 @@ describe("mobile native module autolinking", () => {
   test("pins Expo CLI websocket resolution to a WebSocketServer-compatible major", () => {
     const packageConfig = JSON.parse(readFileSync(mobilePackageJsonPath, "utf8"));
 
-    expect(packageConfig.dependencies.ws).toBe("^8.20.0");
+    expect(packageConfig.dependencies.ws).toBe("^8.21.1");
   });
 
   test("exposes the local pinned HTTPS module to Expo Apple autolinking", () => {

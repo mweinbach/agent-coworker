@@ -7,29 +7,29 @@ import {
 } from "../apps/mobile/src/features/cowork/composer-policy";
 
 describe("mobile composer policy", () => {
-  test.each([
-    "android",
-    "ios",
-  ] as const)("%s keeps an empty connected composer editable for its first character", (platform) => {
-    const empty = getComposerPolicy({
-      connected: true,
-      draftThread: false,
-      hasContent: false,
-      isBusy: false,
-      isSubmitting: false,
-    });
-    const firstCharacter = getComposerPolicy({
-      connected: true,
-      draftThread: false,
-      hasContent: true,
-      isBusy: false,
-      isSubmitting: false,
-    });
+  test.each(["android", "ios"] as const)(
+    "%s keeps an empty connected composer editable for its first character",
+    (platform) => {
+      const empty = getComposerPolicy({
+        connected: true,
+        draftThread: false,
+        hasContent: false,
+        isBusy: false,
+        isSubmitting: false,
+      });
+      const firstCharacter = getComposerPolicy({
+        connected: true,
+        draftThread: false,
+        hasContent: true,
+        isBusy: false,
+        isSubmitting: false,
+      });
 
-    expect(platform).toBeTruthy();
-    expect(empty).toEqual({ canEdit: true, canSubmit: false });
-    expect(firstCharacter).toEqual({ canEdit: true, canSubmit: true });
-  });
+      expect(platform).toBeTruthy();
+      expect(empty).toEqual({ canEdit: true, canSubmit: false });
+      expect(firstCharacter).toEqual({ canEdit: true, canSubmit: true });
+    },
+  );
 
   test.each([
     {

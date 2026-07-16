@@ -236,35 +236,35 @@ describe("plugin GitHub source materialization", () => {
     expect(requests).toContain(buildContentsUrl(repo, "main", ""));
   });
 
-  test.each([
-    ".codex-plugin",
-    ".cowork-plugin",
-  ])("steps GitHub tree URLs that target %s back to the plugin bundle root", async (manifestDir) => {
-    const repo = "owner/repo";
-    const { fetchImpl, requests } = createGitHubPluginFetch({
-      repo,
-      defaultBranch: "main",
-      files: {
-        [`packages/demo-plugin/${manifestDir}/plugin.json`]: pluginManifest("demo-plugin"),
-        "packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Example skill."),
-      },
-    });
+  test.each([".codex-plugin", ".cowork-plugin"])(
+    "steps GitHub tree URLs that target %s back to the plugin bundle root",
+    async (manifestDir) => {
+      const repo = "owner/repo";
+      const { fetchImpl, requests } = createGitHubPluginFetch({
+        repo,
+        defaultBranch: "main",
+        files: {
+          [`packages/demo-plugin/${manifestDir}/plugin.json`]: pluginManifest("demo-plugin"),
+          "packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Example skill."),
+        },
+      });
 
-    const preview = await buildPluginInstallPreview({
-      input: `https://github.com/owner/repo/tree/main/packages/demo-plugin/${manifestDir}`,
-      targetScope: "workspace",
-      catalog: emptyCatalog,
-      fetchImpl,
-    });
+      const preview = await buildPluginInstallPreview({
+        input: `https://github.com/owner/repo/tree/main/packages/demo-plugin/${manifestDir}`,
+        targetScope: "workspace",
+        catalog: emptyCatalog,
+        fetchImpl,
+      });
 
-    expect(preview.source.kind).toBe("github_tree");
-    expect(preview.source.ref).toBe("main");
-    expect(preview.source.subdir).toBe("packages/demo-plugin");
-    expect(preview.candidates).toHaveLength(1);
-    expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
-    expect(preview.candidates[0]?.diagnostics).toEqual([]);
-    expect(requests).toContain(buildContentsUrl(repo, "main", "packages/demo-plugin"));
-  });
+      expect(preview.source.kind).toBe("github_tree");
+      expect(preview.source.ref).toBe("main");
+      expect(preview.source.subdir).toBe("packages/demo-plugin");
+      expect(preview.candidates).toHaveLength(1);
+      expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
+      expect(preview.candidates[0]?.diagnostics).toEqual([]);
+      expect(requests).toContain(buildContentsUrl(repo, "main", "packages/demo-plugin"));
+    },
+  );
 
   test("prefers the longest matching GitHub ref before materializing the plugin path", async () => {
     const repo = "owner/repo";
@@ -339,42 +339,42 @@ describe("plugin GitHub source materialization", () => {
 });
 
 describe("plugin local source materialization", () => {
-  test.each([
-    ".codex-plugin",
-    ".cowork-plugin",
-  ])("steps local %s/plugin.json inputs back to the plugin bundle root", async (manifestDir) => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-manifest-source-"));
+  test.each([".codex-plugin", ".cowork-plugin"])(
+    "steps local %s/plugin.json inputs back to the plugin bundle root",
+    async (manifestDir) => {
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-manifest-source-"));
 
-    try {
-      const pluginRoot = path.join(workspace, "demo-plugin");
-      await fs.mkdir(path.join(pluginRoot, manifestDir), { recursive: true });
-      await fs.mkdir(path.join(pluginRoot, "skills", "example"), { recursive: true });
-      await fs.writeFile(
-        path.join(pluginRoot, manifestDir, "plugin.json"),
-        pluginManifest(),
-        "utf-8",
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, "skills", "example", "SKILL.md"),
-        skillDoc("example", "Example skill."),
-        "utf-8",
-      );
+      try {
+        const pluginRoot = path.join(workspace, "demo-plugin");
+        await fs.mkdir(path.join(pluginRoot, manifestDir), { recursive: true });
+        await fs.mkdir(path.join(pluginRoot, "skills", "example"), { recursive: true });
+        await fs.writeFile(
+          path.join(pluginRoot, manifestDir, "plugin.json"),
+          pluginManifest(),
+          "utf-8",
+        );
+        await fs.writeFile(
+          path.join(pluginRoot, "skills", "example", "SKILL.md"),
+          skillDoc("example", "Example skill."),
+          "utf-8",
+        );
 
-      const preview = await buildPluginInstallPreview({
-        input: path.join(pluginRoot, manifestDir, "plugin.json"),
-        targetScope: "workspace",
-        catalog: emptyCatalog,
-        cwd: workspace,
-      });
+        const preview = await buildPluginInstallPreview({
+          input: path.join(pluginRoot, manifestDir, "plugin.json"),
+          targetScope: "workspace",
+          catalog: emptyCatalog,
+          cwd: workspace,
+        });
 
-      expect(preview.warnings).toEqual([]);
-      expect(preview.candidates).toHaveLength(1);
-      expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
-      expect(preview.candidates[0]?.diagnostics).toEqual([]);
-    } finally {
-      await fs.rm(workspace, { recursive: true, force: true });
-    }
-  });
+        expect(preview.warnings).toEqual([]);
+        expect(preview.candidates).toHaveLength(1);
+        expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
+        expect(preview.candidates[0]?.diagnostics).toEqual([]);
+      } finally {
+        await fs.rm(workspace, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("surfaces nested plugin bundles from the same local source", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-nested-source-"));

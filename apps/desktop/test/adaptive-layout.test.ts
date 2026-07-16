@@ -24,14 +24,17 @@ describe("adaptive desktop layout", () => {
     [800, "compact", false, true],
     [1_024, "compact", false, true],
     [1_240, "full", false, false],
-  ] as const)("maps %ipx to the %s tier with the expected overlay rails", (viewportWidth, tier, leftOverlay, rightOverlay) => {
-    const layout = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth });
+  ] as const)(
+    "maps %ipx to the %s tier with the expected overlay rails",
+    (viewportWidth, tier, leftOverlay, rightOverlay) => {
+      const layout = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth });
 
-    expect(layout.tier).toBe(tier);
-    expect(layout.leftOverlay).toBe(leftOverlay);
-    expect(layout.rightOverlay).toBe(rightOverlay);
-    expect(layout.primaryWidth).toBeGreaterThanOrEqual(MIN_PRIMARY_WORKSPACE_WIDTH);
-  });
+      expect(layout.tier).toBe(tier);
+      expect(layout.leftOverlay).toBe(leftOverlay);
+      expect(layout.rightOverlay).toBe(rightOverlay);
+      expect(layout.primaryWidth).toBeGreaterThanOrEqual(MIN_PRIMARY_WORKSPACE_WIDTH);
+    },
+  );
 
   test("keeps automatic overlay behavior separate from saved collapse preferences", () => {
     const compact = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth: 800 });

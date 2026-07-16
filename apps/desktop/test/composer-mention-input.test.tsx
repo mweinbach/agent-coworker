@@ -124,36 +124,37 @@ async function dispatchKeyboard(
 }
 
 describe("composer mention input", () => {
-  test.each([
-    1, 1.25, 2,
-  ])("pixel-aligns caret placement and flips inside the viewport at %px scale", (devicePixelRatio) => {
-    const above = placeComposerMentionMenu({
-      anchor: { bottom: 704.4, left: 920.3, lineHeight: 24, right: 920.3, top: 680.4 },
-      devicePixelRatio,
-      menuHeight: 256,
-      menuWidth: 384,
-      viewportHeight: 720,
-      viewportWidth: 1_024,
-    });
-    expect(above.placement).toBe("above");
-    expect(above.left).toBeLessThanOrEqual(632);
-    expect(above.top).toBeGreaterThanOrEqual(8);
-    expect(Number.isInteger(above.left * devicePixelRatio)).toBe(true);
-    expect(Number.isInteger(above.top * devicePixelRatio)).toBe(true);
+  test.each([1, 1.25, 2])(
+    "pixel-aligns caret placement and flips inside the viewport at %px scale",
+    (devicePixelRatio) => {
+      const above = placeComposerMentionMenu({
+        anchor: { bottom: 704.4, left: 920.3, lineHeight: 24, right: 920.3, top: 680.4 },
+        devicePixelRatio,
+        menuHeight: 256,
+        menuWidth: 384,
+        viewportHeight: 720,
+        viewportWidth: 1_024,
+      });
+      expect(above.placement).toBe("above");
+      expect(above.left).toBeLessThanOrEqual(632);
+      expect(above.top).toBeGreaterThanOrEqual(8);
+      expect(Number.isInteger(above.left * devicePixelRatio)).toBe(true);
+      expect(Number.isInteger(above.top * devicePixelRatio)).toBe(true);
 
-    const below = placeComposerMentionMenu({
-      anchor: { bottom: 48.2, left: -20, lineHeight: 24, right: -20, top: 24.2 },
-      devicePixelRatio,
-      menuHeight: 256,
-      menuWidth: 384,
-      viewportHeight: 720,
-      viewportWidth: 1_024,
-    });
-    expect(below.placement).toBe("below");
-    expect(below.left).toBe(8);
-    expect(below.top).toBeGreaterThanOrEqual(48.2);
-    expect(below.top + Math.min(256, below.maxHeight)).toBeLessThanOrEqual(712);
-  });
+      const below = placeComposerMentionMenu({
+        anchor: { bottom: 48.2, left: -20, lineHeight: 24, right: -20, top: 24.2 },
+        devicePixelRatio,
+        menuHeight: 256,
+        menuWidth: 384,
+        viewportHeight: 720,
+        viewportWidth: 1_024,
+      });
+      expect(below.placement).toBe("below");
+      expect(below.left).toBe(8);
+      expect(below.top).toBeGreaterThanOrEqual(48.2);
+      expect(below.top + Math.min(256, below.maxHeight)).toBeLessThanOrEqual(712);
+    },
+  );
 
   test("connects the combobox and listbox with a stable active descendant", async () => {
     const harness = setupJsdom();

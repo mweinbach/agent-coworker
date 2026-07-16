@@ -1,3 +1,4 @@
+import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -56,10 +57,23 @@ export interface FsDeps extends RetryTuning {
   sleepImpl?: (ms: number) => Promise<void>;
 }
 
+export type PrivatePathCommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  errorCode?: string;
+};
+
+export interface PrivatePathDeps extends FsDeps {
+  currentUserSid?: string;
+  runCommand?: (file: string, args: string[]) => Promise<PrivatePathCommandResult>;
+}
+
 export interface PrivatePathSyncDeps {
   chmodSync?: typeof fsSync.chmodSync;
-  debugLog?: (message: string) => void;
+  currentUserSid?: string;
   platform?: NodeJS.Platform;
+  runCommandSync?: (file: string, args: string[]) => PrivatePathCommandResult;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 8;
@@ -760,56 +774,155 @@ export async function symlink(
   }
 }
 
-let win32HardenGapLogged = false;
+const WIN32_USER_SID_PATTERN = /^S-\d+(?:-\d+)+$/i;
+const WIN32_USER_SID_SEARCH_PATTERN = /\bS-\d+(?:-\d+)+\b/i;
 
-function logWin32HardenGap(
-  fnName: string,
-  p: string,
-  debugLog: ((message: string) => void) | undefined,
-): void {
-  const message =
-    `platform.fs.${fnName}: win32 owner-only ACL hardening is a documented Phase-1 no-op ` +
-    `(icacls DACL support is a follow-up); left ${p} with inherited ACLs`;
-  if (debugLog !== undefined) {
-    debugLog(message);
-    return;
+let cachedWin32UserSid: string | undefined;
+let pendingWin32UserSid: Promise<string> | undefined;
+
+function normalizeWin32UserSid(sid: string): string {
+  const trimmed = sid.trim();
+  if (!WIN32_USER_SID_PATTERN.test(trimmed)) {
+    throw new Error(`platform.fs: invalid Windows user SID: ${JSON.stringify(sid)}`);
   }
-  if (!win32HardenGapLogged) {
-    win32HardenGapLogged = true;
-    // Deliberate once-per-process console.debug so the documented win32 gap stays visible.
-    console.debug(message);
+  return `S${trimmed.slice(1)}`;
+}
+
+function commandFailure(operation: string, file: string, result: PrivatePathCommandResult): Error {
+  const detail = result.stderr.trim() || result.stdout.trim() || result.errorCode || "no details";
+  return new Error(
+    `platform.fs: ${operation}: ${file} failed with exit code ${result.exitCode}: ${detail}`,
+  );
+}
+
+function parseWin32UserSid(result: PrivatePathCommandResult): string {
+  if (result.exitCode !== 0) {
+    throw commandFailure("resolve current Windows user SID", "whoami.exe", result);
+  }
+  const match = result.stdout.match(WIN32_USER_SID_SEARCH_PATTERN);
+  if (!match) {
+    throw new Error(
+      `platform.fs: resolve current Windows user SID: whoami.exe returned no SID: ${JSON.stringify(result.stdout.trim())}`,
+    );
+  }
+  return normalizeWin32UserSid(match[0]);
+}
+
+async function defaultPrivatePathCommand(
+  file: string,
+  args: string[],
+): Promise<PrivatePathCommandResult> {
+  return await new Promise((resolve) => {
+    execFile(file, args, { encoding: "utf8", windowsHide: true }, (error, stdout, stderr) => {
+      resolve({
+        exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
+        stdout,
+        stderr,
+        ...(typeof error?.code === "string" ? { errorCode: error.code } : {}),
+      });
+    });
+  });
+}
+
+function defaultPrivatePathCommandSync(file: string, args: string[]): PrivatePathCommandResult {
+  const result = spawnSync(file, args, { encoding: "utf8", windowsHide: true });
+  return {
+    exitCode: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    ...(result.error
+      ? { errorCode: (result.error as NodeJS.ErrnoException).code ?? result.error.message }
+      : {}),
+  };
+}
+
+async function resolveWin32UserSid(deps: PrivatePathDeps): Promise<string> {
+  if (deps.currentUserSid !== undefined) {
+    return normalizeWin32UserSid(deps.currentUserSid);
+  }
+  if (deps.runCommand !== undefined) {
+    return parseWin32UserSid(await deps.runCommand("whoami.exe", ["/user", "/fo", "csv", "/nh"]));
+  }
+  if (cachedWin32UserSid !== undefined) return cachedWin32UserSid;
+  pendingWin32UserSid ??= defaultPrivatePathCommand("whoami.exe", ["/user", "/fo", "csv", "/nh"])
+    .then(parseWin32UserSid)
+    .then((sid) => {
+      cachedWin32UserSid = sid;
+      return sid;
+    })
+    .finally(() => {
+      pendingWin32UserSid = undefined;
+    });
+  return await pendingWin32UserSid;
+}
+
+function resolveWin32UserSidSync(deps: PrivatePathSyncDeps): string {
+  if (deps.currentUserSid !== undefined) {
+    return normalizeWin32UserSid(deps.currentUserSid);
+  }
+  if (cachedWin32UserSid !== undefined) return cachedWin32UserSid;
+  const runCommandSync = deps.runCommandSync ?? defaultPrivatePathCommandSync;
+  const sid = parseWin32UserSid(runCommandSync("whoami.exe", ["/user", "/fo", "csv", "/nh"]));
+  if (deps.runCommandSync === undefined) cachedWin32UserSid = sid;
+  return sid;
+}
+
+function win32PrivatePathArgs(p: string, sid: string, kind: "directory" | "file"): string[] {
+  const permission = kind === "directory" ? "(OI)(CI)F" : "F";
+  return [p, "/inheritancelevel:r", "/grant:r", `*${sid}:${permission}`, "/Q"];
+}
+
+async function hardenPrivatePathWin32(
+  p: string,
+  kind: "directory" | "file",
+  deps: PrivatePathDeps,
+): Promise<void> {
+  const sid = await resolveWin32UserSid(deps);
+  const result = await (deps.runCommand ?? defaultPrivatePathCommand)(
+    "icacls.exe",
+    win32PrivatePathArgs(p, sid, kind),
+  );
+  if (result.exitCode !== 0) {
+    throw commandFailure(`harden private ${kind} ${p}`, "icacls.exe", result);
+  }
+}
+
+function hardenPrivatePathWin32Sync(
+  p: string,
+  kind: "directory" | "file",
+  deps: PrivatePathSyncDeps,
+): void {
+  const sid = resolveWin32UserSidSync(deps);
+  const result = (deps.runCommandSync ?? defaultPrivatePathCommandSync)(
+    "icacls.exe",
+    win32PrivatePathArgs(p, sid, kind),
+  );
+  if (result.exitCode !== 0) {
+    throw commandFailure(`harden private ${kind} ${p}`, "icacls.exe", result);
   }
 }
 
 /**
- * Restricts a directory to the current user. POSIX: `chmod 0o700`. win32: a
- * DOCUMENTED Phase-1 NO-OP with a debug log (once per process, or every call via
- * the injectable `debugLog`) — NTFS ACL hardening via icacls is a follow-up; the
- * log keeps the gap visible instead of silently pretending.
+ * Restricts a directory to the current user. POSIX: `chmod 0o700`. win32:
+ * removes inherited ACEs and grants the current user inheritable full control.
  */
-export async function hardenPrivateDir(
-  p: string,
-  deps: FsDeps & { debugLog?: (message: string) => void } = {},
-): Promise<void> {
+export async function hardenPrivateDir(p: string, deps: PrivatePathDeps = {}): Promise<void> {
   const ctx = resolveDeps(deps);
   if (ctx.platform === "win32") {
-    logWin32HardenGap("hardenPrivateDir", p, deps.debugLog);
+    await hardenPrivatePathWin32(p, "directory", deps);
     return;
   }
   await ctx.fsImpl.chmod(p, 0o700);
 }
 
 /**
- * Restricts a file to the current user. POSIX: `chmod 0o600`. win32: the same
- * documented Phase-1 no-op + debug log as {@link hardenPrivateDir}.
+ * Restricts a file to the current user. POSIX: `chmod 0o600`. win32: removes
+ * inherited ACEs and grants the current user full control.
  */
-export async function hardenPrivateFile(
-  p: string,
-  deps: FsDeps & { debugLog?: (message: string) => void } = {},
-): Promise<void> {
+export async function hardenPrivateFile(p: string, deps: PrivatePathDeps = {}): Promise<void> {
   const ctx = resolveDeps(deps);
   if (ctx.platform === "win32") {
-    logWin32HardenGap("hardenPrivateFile", p, deps.debugLog);
+    await hardenPrivatePathWin32(p, "file", deps);
     return;
   }
   await ctx.fsImpl.chmod(p, 0o600);
@@ -819,7 +932,7 @@ export async function hardenPrivateFile(
 export function hardenPrivateDirSync(p: string, deps: PrivatePathSyncDeps = {}): void {
   const platform = deps.platform ?? hostPlatform();
   if (platform === "win32") {
-    logWin32HardenGap("hardenPrivateDirSync", p, deps.debugLog);
+    hardenPrivatePathWin32Sync(p, "directory", deps);
     return;
   }
   (deps.chmodSync ?? fsSync.chmodSync)(p, 0o700);
@@ -829,7 +942,7 @@ export function hardenPrivateDirSync(p: string, deps: PrivatePathSyncDeps = {}):
 export function hardenPrivateFileSync(p: string, deps: PrivatePathSyncDeps = {}): void {
   const platform = deps.platform ?? hostPlatform();
   if (platform === "win32") {
-    logWin32HardenGap("hardenPrivateFileSync", p, deps.debugLog);
+    hardenPrivatePathWin32Sync(p, "file", deps);
     return;
   }
   (deps.chmodSync ?? fsSync.chmodSync)(p, 0o600);

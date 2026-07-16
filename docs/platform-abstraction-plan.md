@@ -500,8 +500,8 @@ export function openNoFollow(p: string): Promise<number>;
 
 export function hardenPrivateDir(p: string): Promise<void>;
 export function hardenPrivateFile(p: string): Promise<void>;
-// posix: 0o700 / 0o600. win32: owner-only DACL via icacls (Phase 1 ships an explicit documented
-// no-op + debug log so the gap is visible, real DACL in a follow-up).
+// posix: 0o700 / 0o600. win32: resolve the current user SID, remove inherited ACEs, and grant
+// full control via icacls (OI/CI inheritance for directories).
 
 export function fingerprintTree(root: string, opts?: { normalizeEol?: boolean;
   ignore?: string[]; onCaseCollision?: "error" | "ignore" }): Promise<{ hash: string; fileCount: number }>;

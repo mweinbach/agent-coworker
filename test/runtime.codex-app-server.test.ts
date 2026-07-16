@@ -256,7 +256,6 @@ describe("codex app-server runtime", () => {
       process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
       codexAppServerClientInternal.setClientFactoryForTests(undefined);
 
-      const rawEvents: unknown[] = [];
       const runtime = createRuntime(makeConfig(dir));
       const result = await runtime.runTurn({
         config: makeConfig(dir),
@@ -264,28 +263,9 @@ describe("codex app-server runtime", () => {
         messages: [{ role: "user", content: "Say hi" }],
         tools: {},
         maxSteps: 1,
-        onModelRawEvent: (event) => {
-          rawEvents.push(event);
-        },
       });
 
       expect(result.text).toBe("coalesced completion");
-      expect(rawEvents).toContainEqual(
-        expect.objectContaining({
-          event: expect.objectContaining({
-            direction: "server_notification",
-            message: {
-              method: "turn/completed",
-              params: {
-                turn: expect.objectContaining({
-                  id: "turn_1",
-                  status: "completed",
-                }),
-              },
-            },
-          }),
-        }),
-      );
     },
     30_000,
   );

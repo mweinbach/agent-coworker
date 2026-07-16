@@ -1,5 +1,17 @@
+import {
+  type CitationSource,
+  extractReferencedCitationSourcesFromToolResult,
+} from "./providerCitationSources";
+
+export {
+  type CitationSource,
+  extractReferencedCitationSourcesFromToolResult,
+} from "./providerCitationSources";
+
 const citationClusterPattern = /(?:[ \t]*[【[]\d+(?::\d+)?†[^\]】]+[】\]])+/g;
 const citationMarkerPattern = /[【[](\d+)(?::\d+)?†[^\]】]+[】\]]/g;
+const providerCitationClusterPattern = /(?:[ \t]*cite(?:turn\d+[a-z]+\d+)+)+/gi;
+const providerCitationReferencePattern = /(turn\d+[a-z]+\d+)/gi;
 const citationSpacingExemptPrefix = /[\s([{'"“‘-]/;
 const citationChipTitlePrefix = "__cowork_citation_sources__:";
 
@@ -27,7 +39,7 @@ function breaksContiguousAssistantStretch(itemKind: string): boolean {
 }
 
 function assistantMessageNeedsToolCitationContext(item: CitationFeedItem): boolean {
-  return typeof item.text !== "string" || item.text.includes("†");
+  return typeof item.text !== "string" || item.text.includes("†") || item.text.includes("cite");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,6 +76,14 @@ function extractToolResultText(value: unknown): string | null {
 
   if ("result" in value) {
     return extractToolResultText(value.result);
+  }
+
+  if ("content" in value) {
+    return extractToolResultText(value.content);
+  }
+
+  if ("contentItems" in value) {
+    return extractToolResultText(value.contentItems);
   }
 
   return null;
@@ -714,11 +734,6 @@ export function extractCitationUrlsFromAnnotations(annotations: unknown): Map<nu
   return out;
 }
 
-export type CitationSource = {
-  url: string;
-  title?: string;
-};
-
 export type CitationSourceDisplayInfo = {
   displayUrl: string | null;
   faviconHostname: string | null;
@@ -1258,6 +1273,16 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(
       continue;
     }
 
+    if (itemKind === "tool") {
+      const referencedSources = extractReferencedCitationSourcesFromToolResult(item.result);
+      if (referencedSources.length > 0) {
+        currentCitationUrls = new Map(
+          referencedSources.map((source, index) => [index + 1, source.url] as const),
+        );
+        continue;
+      }
+    }
+
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextCitationUrls = extractCitationUrlsFromWebSearchResult(item.result);
       currentCitationUrls = nextCitationUrls;
@@ -1313,6 +1338,15 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(
       continue;
     }
 
+    if (itemKind === "tool") {
+      const referencedSources = extractReferencedCitationSourcesFromToolResult(item.result);
+      if (referencedSources.length > 0) {
+        currentSources = referencedSources;
+        latestAssistantId = null;
+        continue;
+      }
+    }
+
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
       currentSources = [...nextSources.values()];
@@ -1352,13 +1386,59 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(
   return sourcesByMessageId;
 }
 
+function normalizeProviderCitationMarkers(text: string, options: CitationDisplayOptions): string {
+  const citationSourcesByIndex = buildCitationSourcesByIndex(options);
+  const citationIndexByReference = new Map<string, number>();
+  for (const [index, source] of citationSourcesByIndex) {
+    if (source.referenceId) {
+      citationIndexByReference.set(source.referenceId, index);
+    }
+  }
+
+  return text.replace(providerCitationClusterPattern, (match, offset, input) => {
+    const ids: string[] = [];
+    const seen = new Set<number>();
+    for (const citationMatch of match.matchAll(providerCitationReferencePattern)) {
+      const referenceId = citationMatch[1];
+      const citationIndex = referenceId ? citationIndexByReference.get(referenceId) : undefined;
+      if (!citationIndex || seen.has(citationIndex)) {
+        continue;
+      }
+      seen.add(citationIndex);
+      ids.push(String(citationIndex));
+    }
+
+    if (ids.length === 0) {
+      return "";
+    }
+
+    const leadingWhitespace = match.match(/^\s*/)?.[0] ?? "";
+    const rendered =
+      options.citationMode === "html"
+        ? renderCitationChip(ids, options)
+        : renderCitationIds(ids, options, offset > 0 ? (input[offset - 1] ?? "") : "");
+    if (!rendered) {
+      return "";
+    }
+    return leadingWhitespace ? `${leadingWhitespace}${rendered.trimStart()}` : rendered;
+  });
+}
+
 export function normalizeDisplayCitationMarkers(
   text: string,
   options: CitationDisplayOptions = {},
 ): string {
-  if (!text.includes("†")) {
+  const hasProviderCitationMarkers = text.includes("cite");
+  const normalizedText = hasProviderCitationMarkers
+    ? normalizeProviderCitationMarkers(text, options)
+    : text;
+
+  if (!normalizedText.includes("†")) {
+    if (hasProviderCitationMarkers) {
+      return normalizedText;
+    }
     if (options.annotations) {
-      return insertNativeCitationMarkers(text, options);
+      return insertNativeCitationMarkers(normalizedText, options);
     }
     if (
       options.fallbackToSourcesFooter &&
@@ -1366,12 +1446,12 @@ export function normalizeDisplayCitationMarkers(
       !/\bSources:\b/i.test(text)
     ) {
       const footer = renderSourcesFooter(options);
-      return footer ? `${text}\n\n${footer}` : text;
+      return footer ? `${normalizedText}\n\n${footer}` : normalizedText;
     }
-    return text;
+    return normalizedText;
   }
 
-  return text.replace(citationClusterPattern, (match, offset, input) => {
+  return normalizedText.replace(citationClusterPattern, (match, offset, input) => {
     const ids: string[] = [];
     const seen = new Set<string>();
 

@@ -696,6 +696,39 @@ describe("normalizeModelStreamPart branches", () => {
         preview: "preview",
       });
     });
+
+    test("preserves compact citation metadata when nested tool text is truncated", () => {
+      const result = normalizeModelStreamPart(
+        {
+          type: "tool-result",
+          toolCallId: "tr-citations",
+          toolName: "exec",
+          output: {
+            contentItems: [{ type: "input_text", text: "x".repeat(10_000) }],
+            citationSources: [
+              {
+                referenceId: "turn0search10",
+                title: "Late source",
+                url: "https://example.com/late",
+              },
+            ],
+          },
+        },
+        { provider: "codex-cli" },
+      );
+
+      expect(result.part.output).toEqual(
+        expect.objectContaining({
+          citationSources: [
+            {
+              referenceId: "turn0search10",
+              title: "Late source",
+              url: "https://example.com/late",
+            },
+          ],
+        }),
+      );
+    });
   });
 
   // 16. tool-error

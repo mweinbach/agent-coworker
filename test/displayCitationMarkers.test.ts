@@ -128,6 +128,130 @@ describe("display citation markers", () => {
     ]);
   });
 
+  test("resolves ChatGPT citation references from nested web tool output", () => {
+    const result = [
+      { type: "input_text", text: "Script completed\nOutput:\n" },
+      {
+        type: "input_text",
+        text: [
+          "Source One (https://example.com/one)",
+          "citeturn0search0 [wordlim: 200] First result.",
+          "---",
+          "Source Two (https://example.com/two)",
+          "citeturn0search7 [wordlim: 200] Second result.",
+        ].join("\n"),
+      },
+    ];
+    const assistantText =
+      "First claim. citeturn0search0turn0search7\n\nSecond claim. citeturn0search7";
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      { id: "tool-1", kind: "tool" as const, name: "exec", result },
+      {
+        id: "assistant-1",
+        kind: "message" as const,
+        role: "assistant" as const,
+        text: assistantText,
+      },
+    ];
+
+    const urlsByMessageId = buildCitationUrlsByMessageId(feed);
+    const sourcesByMessageId = buildCitationSourcesByMessageId(feed);
+
+    expect(urlsByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          new Map([
+            [1, "https://example.com/one"],
+            [2, "https://example.com/two"],
+          ]),
+        ],
+      ]),
+    );
+    expect(sourcesByMessageId).toEqual(
+      new Map([
+        [
+          "assistant-1",
+          [
+            {
+              referenceId: "turn0search0",
+              title: "Source One",
+              url: "https://example.com/one",
+            },
+            {
+              referenceId: "turn0search7",
+              title: "Source Two",
+              url: "https://example.com/two",
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const sources = sourcesByMessageId.get("assistant-1") ?? [];
+    const rendered = normalizeDisplayCitationMarkers(assistantText, {
+      citationMode: "html",
+      citationUrlsByIndex: urlsByMessageId.get("assistant-1"),
+      citationSourcesByIndex: new Map(sources.map((source, index) => [index + 1, source] as const)),
+    });
+
+    expect(rendered).not.toContain("turn0search");
+    expect(rendered).not.toContain("cite");
+    expect(rendered).toContain("<cite");
+    expect(rendered).toContain("Source One +1");
+    expect(rendered).toContain("Source Two");
+  });
+
+  test("drops unresolved ChatGPT citation references instead of leaking provider markup", () => {
+    expect(
+      normalizeDisplayCitationMarkers("Claim. citeturn3search4", {
+        citationMode: "html",
+      }),
+    ).toBe("Claim.");
+  });
+
+  test("extracts citation context through every supported exec result envelope", () => {
+    const citationOutput = [
+      "Nested source (https://example.com/nested)",
+      "citeturn2search4 Nested result.",
+    ].join("\n");
+    const results: unknown[] = [
+      citationOutput,
+      { text: citationOutput },
+      { value: citationOutput },
+      { output: citationOutput },
+      { result: citationOutput },
+      { content: [{ type: "input_text", text: citationOutput }] },
+      { contentItems: [{ type: "inputText", text: citationOutput }] },
+      { output: { result: { contentItems: [{ type: "inputText", text: citationOutput }] } } },
+    ];
+
+    for (const [index, result] of results.entries()) {
+      const messageId = `assistant-${index}`;
+      const feed = [
+        { id: `tool-${index}`, kind: "tool" as const, name: "exec", result },
+        {
+          id: messageId,
+          kind: "message" as const,
+          role: "assistant" as const,
+          text: "Nested claim. citeturn2search4",
+        },
+      ];
+
+      expect(buildCitationUrlsByMessageId(feed).get(messageId)).toEqual(
+        new Map([[1, "https://example.com/nested"]]),
+      );
+      expect(buildCitationSourcesByMessageId(feed).get(messageId)).toEqual([
+        {
+          referenceId: "turn2search4",
+          title: "Nested source",
+          url: "https://example.com/nested",
+        },
+      ]);
+    }
+  });
+
   test("treats Google grounding redirects as opaque display URLs", () => {
     const source = {
       title: "cbsnews.com",

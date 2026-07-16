@@ -1811,7 +1811,7 @@ async function handleIpc(
       persistedState = structuredClone(input as PersistedState);
       return undefined;
     case DESKTOP_IPC_CHANNELS.getUpdateState:
-      return createDefaultUpdaterState("1.2.21", false);
+      return createDefaultUpdaterState("1.2.22", false);
     case DESKTOP_IPC_CHANNELS.getSystemAppearance:
       await delay(appearanceDelayMs);
       return createAppearance();

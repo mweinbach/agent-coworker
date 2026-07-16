@@ -1,8 +1,8 @@
 import { readFileSync, rmSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 export type TestInvocation = {
   command: string[];
@@ -154,7 +154,10 @@ if (import.meta.main) {
     await discoverProjectTestFiles(repoRoot),
     FULL_RUN_TEST_BATCH_SIZE,
   );
-  const junitOutfile = path.join(os.tmpdir(), `agent-coworker-tests-${process.pid}.junit.xml`);
+  const junitOutfile = path.join(
+    scratchRoots()[0],
+    `agent-coworker-tests-${process.pid}.junit.xml`,
+  );
   const failedFiles: FailedTestFile[] = [];
 
   for (const batch of batches) {

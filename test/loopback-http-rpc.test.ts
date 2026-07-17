@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { startAgentServer } from "../src/server/startServer";
-import { LOOPBACK_CLIENT_ID_HEADER } from "../src/server/transport/loopbackHttpRpc";
+import {
+  assertLoopbackRpcRemote,
+  LOOPBACK_CLIENT_ID_HEADER,
+} from "../src/server/transport/loopbackHttpRpc";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 async function postRpc(
@@ -24,6 +27,38 @@ async function postRpc(
 }
 
 describe("loopback desktop HTTP JSON-RPC", () => {
+  test("rejects requests from a reported non-loopback remote", async () => {
+    const request = new Request("http://127.0.0.1:7337/rpc", { method: "POST" });
+    const response = assertLoopbackRpcRemote(request, {
+      requestIP: () => ({ address: "192.168.1.50" }),
+    });
+
+    expect(response?.status).toBe(403);
+    await expect(response?.json()).resolves.toEqual({
+      error: "Loopback HTTP RPC is restricted to local clients.",
+    });
+  });
+
+  test.each(["127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"])(
+    "allows the loopback remote address %s",
+    (address) => {
+      const request = new Request("http://127.0.0.1:7337/rpc", { method: "POST" });
+
+      expect(
+        assertLoopbackRpcRemote(request, {
+          requestIP: () => ({ address }),
+        }),
+      ).toBeNull();
+    },
+  );
+
+  test("allows requests when the runtime cannot report a remote address", () => {
+    const request = new Request("http://127.0.0.1:7337/rpc", { method: "POST" });
+
+    expect(assertLoopbackRpcRemote(request, {})).toBeNull();
+    expect(assertLoopbackRpcRemote(request, { requestIP: () => null })).toBeNull();
+  });
+
   test("initialize → initialized → thread/list over POST /rpc", async () => {
     const tmpDir = await makeTmpProject("agent-loopback-rpc-");
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -154,6 +189,97 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       };
       expect(listBody.error).toBeUndefined();
       expect(typeof listBody.result?.total).toBe("number");
+    } finally {
+      await stopTestServer(server);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates handshake state between client ids", async () => {
+    const tmpDir = await makeTmpProject("agent-loopback-rpc-isolated-");
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const httpBase = url.replace(/^ws:/, "http:").replace(/\/ws$/, "");
+
+    try {
+      const initializeResponse = await postRpc(httpBase, "initialized-client", {
+        id: 1,
+        method: "initialize",
+        params: { clientInfo: { name: "agent-coworker-native" } },
+      });
+      expect(initializeResponse.status).toBe(200);
+      const initializedResponse = await postRpc(httpBase, "initialized-client", {
+        method: "initialized",
+      });
+      expect(initializedResponse.status).toBe(202);
+
+      const uninitializedClientResponse = await postRpc(httpBase, "fresh-client", {
+        id: 2,
+        method: "thread/list",
+        params: {},
+      });
+      const uninitializedClientBody = (await uninitializedClientResponse.json()) as {
+        error: { code: number; message: string };
+      };
+      expect(uninitializedClientBody.error).toEqual({
+        code: -32002,
+        message: "Not initialized",
+      });
+
+      const initializedClientResponse = await postRpc(httpBase, "initialized-client", {
+        id: 3,
+        method: "thread/list",
+        params: {},
+      });
+      const initializedClientBody = (await initializedClientResponse.json()) as {
+        result?: { total: number };
+        error?: unknown;
+      };
+      expect(initializedClientBody.error).toBeUndefined();
+      expect(typeof initializedClientBody.result?.total).toBe("number");
+    } finally {
+      await stopTestServer(server);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("requires the browser access token for origin-bearing RPC requests", async () => {
+    const tmpDir = await makeTmpProject("agent-loopback-rpc-browser-token-");
+    const { server, url, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          COWORK_WEB_DESKTOP_SERVICE: "1",
+        },
+      }),
+    );
+    const httpBase = url.replace(/^ws:/, "http:").replace(/\/ws$/, "");
+    const body = {
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "browser-client" } },
+    };
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await postRpc(httpBase, "browser-client", body, {
+        Origin: "http://localhost:5173",
+      });
+      expect(unauthorized.status).toBe(401);
+      expect(await unauthorized.text()).toBe("Unauthorized browser access");
+
+      const authorized = await postRpc(httpBase, "browser-client", body, {
+        Origin: "http://localhost:5173",
+        "X-Cowork-Browser-Token": browserAccessToken ?? "",
+      });
+      expect(authorized.status).toBe(200);
+      const authorizedBody = (await authorized.json()) as {
+        result?: { transport: { type: string; protocolMode: string } };
+        error?: unknown;
+      };
+      expect(authorizedBody.error).toBeUndefined();
+      expect(authorizedBody.result?.transport).toEqual({
+        type: "http",
+        protocolMode: "jsonrpc",
+      });
     } finally {
       await stopTestServer(server);
       await fs.rm(tmpDir, { recursive: true, force: true });

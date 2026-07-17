@@ -34,7 +34,7 @@ const TAB_SEARCH_PLACEHOLDER: Record<ToolAccessTabId, string | null> = {
 
 function MutationErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3">
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-destructive/5 px-4 py-3">
       <SettingsStatusPill tone="danger">Install failed</SettingsStatusPill>
       <span className="min-w-0 flex-1 truncate text-xs text-destructive">{message}</span>
       <Button size="sm" variant="outline" onClick={onDismiss}>

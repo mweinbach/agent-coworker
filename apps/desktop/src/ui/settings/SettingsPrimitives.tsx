@@ -50,7 +50,7 @@ export function SettingsSection({
           ) : null}
         </div>
       ) : null}
-      <div className="app-shadow-surface divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+      <div className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card">
         {children}
       </div>
     </section>
@@ -122,11 +122,11 @@ export function SettingsEmptyState({
   return (
     <div
       className={cn(
-        "settings-empty-state flex min-h-44 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border/65 bg-background/45 px-6 py-10 text-center",
+        "settings-empty-state flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-10 text-center",
         className,
       )}
     >
-      {icon ? <div className="text-muted-foreground/48 [&_svg]:size-10">{icon}</div> : null}
+      {icon ? <div className="text-muted-foreground/60 [&_svg]:size-8">{icon}</div> : null}
       <div className="space-y-1">
         <div className="text-sm font-medium text-foreground">{title}</div>
         {description ? (
@@ -153,10 +153,7 @@ export function SettingsStatTile({
 }) {
   return (
     <div
-      className={cn(
-        "settings-stat-tile min-w-0 rounded-lg border border-border/60 bg-card/80 px-4 py-3",
-        className,
-      )}
+      className={cn("settings-stat-tile min-w-0 rounded-lg bg-foreground/[0.045] px-4 py-3", className)}
     >
       <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         {label}
@@ -170,11 +167,11 @@ export function SettingsStatTile({
 }
 
 const ENTITY_ICON_PALETTE = [
-  "bg-accent/12 text-accent",
-  "bg-success/12 text-success",
-  "bg-warning/15 text-warning-foreground",
-  "bg-foreground/[0.07] text-foreground/75",
-  "bg-accent/20 text-accent",
+  "bg-primary/10 text-primary",
+  "bg-success/10 text-success",
+  "bg-warning/12 text-warning-foreground",
+  "bg-foreground/[0.05] text-foreground/70",
+  "bg-primary/15 text-primary",
 ] as const;
 
 function entityIconPaletteClass(seed: string): string {

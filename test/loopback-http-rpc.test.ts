@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { startAgentServer } from "../src/server/startServer";
-import { LOOPBACK_CLIENT_ID_HEADER } from "../src/server/transport/loopbackHttpRpc";
+import {
+  assertLoopbackRpcRemote,
+  LOOPBACK_CLIENT_ID_HEADER,
+} from "../src/server/transport/loopbackHttpRpc";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 async function postRpc(
@@ -24,6 +27,93 @@ async function postRpc(
 }
 
 describe("loopback desktop HTTP JSON-RPC", () => {
+  test("rejects explicit non-loopback request IP metadata", async () => {
+    const request = new Request("http://127.0.0.1/rpc", { method: "POST" });
+    const response = assertLoopbackRpcRemote(request, {
+      requestIP: () => ({ address: "192.168.1.25" }),
+    });
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({
+      error: "Loopback HTTP RPC is restricted to local clients.",
+    });
+  });
+
+  test("allows loopback or unavailable request IP metadata", () => {
+    const request = new Request("http://127.0.0.1/rpc", { method: "POST" });
+
+    for (const address of ["127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"]) {
+      expect(
+        assertLoopbackRpcRemote(request, {
+          requestIP: () => ({ address }),
+        }),
+      ).toBeNull();
+    }
+    expect(assertLoopbackRpcRemote(request, {})).toBeNull();
+  });
+
+  test("requires browser access token for browser-origin POST /rpc", async () => {
+    const tmpDir = await makeTmpProject("agent-loopback-rpc-browser-token-");
+    const desktopUserDataDir = path.join(tmpDir, ".cowork", "web-desktop-test-data");
+    const { server, url, browserAccessToken } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          COWORK_WEB_DESKTOP_SERVICE: "1",
+          COWORK_DESKTOP_USER_DATA_DIR: desktopUserDataDir,
+        },
+      }),
+    );
+    const httpBase = url.replace(/^ws:/, "http:").replace(/\/ws$/, "");
+    const origin = "http://localhost:5173";
+
+    try {
+      expect(typeof browserAccessToken).toBe("string");
+      const unauthorized = await postRpc(
+        httpBase,
+        "browser-client-unauthorized",
+        {
+          id: 1,
+          method: "initialize",
+          params: { clientInfo: { name: "agent-coworker-native" } },
+        },
+        { Origin: origin },
+      );
+      expect(unauthorized.status).toBe(401);
+      expect(await unauthorized.text()).toBe("Unauthorized browser access");
+
+      const authorized = await postRpc(
+        httpBase,
+        "browser-client-authorized",
+        {
+          id: 2,
+          method: "initialize",
+          params: { clientInfo: { name: "agent-coworker-native" } },
+        },
+        {
+          Origin: origin,
+          "X-Cowork-Browser-Token": browserAccessToken ?? "",
+        },
+      );
+      expect(authorized.status).toBe(200);
+      const body = (await authorized.json()) as {
+        id: number;
+        result: { transport: { type: string; protocolMode: string } };
+      };
+      expect(body).toMatchObject({
+        id: 2,
+        result: {
+          transport: {
+            type: "http",
+            protocolMode: "jsonrpc",
+          },
+        },
+      });
+    } finally {
+      await stopTestServer(server);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("initialize → initialized → thread/list over POST /rpc", async () => {
     const tmpDir = await makeTmpProject("agent-loopback-rpc-");
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

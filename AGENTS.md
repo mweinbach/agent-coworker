@@ -200,6 +200,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Scope & Plan Discipline
 
+- For screenshot-driven visual bugs, identify the exact affected control before changing adjacent app chrome or behavior.
 - Keep Task mode explicit and separate from standard chat: never auto-promote chats into tasks, auto-wrap chats in task state, or expose task-owned sessions in ordinary chat listings.
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
 - When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.

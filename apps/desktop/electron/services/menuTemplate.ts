@@ -1,4 +1,4 @@
-import type { MenuItemConstructorOptions } from "electron";
+import type { MenuItemConstructorOptions, NativeImage } from "electron";
 
 import type { DesktopMenuCommand } from "../../src/lib/desktopApi";
 
@@ -9,7 +9,16 @@ export type InstallDesktopMenuOptions = {
   sendCommand: (command: DesktopMenuCommand) => void;
 };
 
-function sfSymbol(name: string): Electron.NativeImage | undefined {
+const MACOS_MENU_ICON_SIZE = 16;
+
+export function resizeMacosMenuIcon(image: NativeImage): NativeImage | undefined {
+  if (image.isEmpty()) {
+    return undefined;
+  }
+  return image.resize({ width: MACOS_MENU_ICON_SIZE, height: MACOS_MENU_ICON_SIZE });
+}
+
+function sfSymbol(name: string): NativeImage | undefined {
   if (process.platform !== "darwin") {
     return undefined;
   }
@@ -18,7 +27,7 @@ function sfSymbol(name: string): Electron.NativeImage | undefined {
     // are unavailable.
     const { nativeImage } = require("electron") as typeof import("electron");
     const img = nativeImage.createFromNamedImage(name);
-    return img.isEmpty() ? undefined : img;
+    return resizeMacosMenuIcon(img);
   } catch {
     return undefined;
   }
@@ -29,7 +38,7 @@ function commandItem(
   command: DesktopMenuCommand,
   sendCommand: (command: DesktopMenuCommand) => void,
   accelerator?: string,
-  icon?: Electron.NativeImage,
+  icon?: NativeImage,
 ): MenuItemConstructorOptions {
   return {
     label,

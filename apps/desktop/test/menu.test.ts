@@ -1,8 +1,24 @@
 import { describe, expect, test } from "bun:test";
+import type { NativeImage } from "electron";
 
-import { buildDesktopMenuTemplate } from "../electron/services/menuTemplate";
+import { buildDesktopMenuTemplate, resizeMacosMenuIcon } from "../electron/services/menuTemplate";
 
 describe("desktop application menu", () => {
+  test("scales macOS menu symbols to a native menu-row size", () => {
+    let resizeOptions: { width: number; height: number } | undefined;
+    const resizedImage = {} as NativeImage;
+    const sourceImage = {
+      isEmpty: () => false,
+      resize: (options: { width: number; height: number }) => {
+        resizeOptions = options;
+        return resizedImage;
+      },
+    } as unknown as NativeImage;
+
+    expect(resizeMacosMenuIcon(sourceImage)).toBe(resizedImage);
+    expect(resizeOptions).toEqual({ width: 16, height: 16 });
+  });
+
   test("includes app menu role on macOS", () => {
     const commands: string[] = [];
     const template = buildDesktopMenuTemplate(

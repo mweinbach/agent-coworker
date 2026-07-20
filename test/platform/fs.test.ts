@@ -1087,6 +1087,51 @@ describe("hardenPrivateDir / hardenPrivateFile", () => {
     ]);
   });
 
+  test("win32: rejects malformed injected SIDs before invoking icacls", async () => {
+    const commands: string[] = [];
+
+    await expect(
+      hardenPrivateDir("C:\\private", {
+        platform: "win32",
+        currentUserSid: "not-a-sid",
+        runCommand: async (file) => {
+          commands.push(file);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      }),
+    ).rejects.toThrow('platform.fs: invalid Windows user SID: "not-a-sid"');
+
+    expect(commands).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "command failure",
+      result: { exitCode: 1, stdout: "", stderr: "Access is denied." },
+      message:
+        "platform.fs: resolve current Windows user SID: whoami.exe failed with exit code 1: Access is denied.",
+    },
+    {
+      name: "missing SID",
+      result: { exitCode: 0, stdout: '"MACHINE\\\\user","unknown"\r\n', stderr: "" },
+      message: "platform.fs: resolve current Windows user SID: whoami.exe returned no SID",
+    },
+  ])("win32: rejects $name from whoami before invoking icacls", async ({ result, message }) => {
+    const commands: string[] = [];
+
+    await expect(
+      hardenPrivateDir("C:\\private", {
+        platform: "win32",
+        runCommand: async (file) => {
+          commands.push(file);
+          return result;
+        },
+      }),
+    ).rejects.toThrow(message);
+
+    expect(commands).toEqual(["whoami.exe"]);
+  });
+
   test("win32: resolves the current user SID and surfaces icacls failures", async () => {
     const commands: Array<{ file: string; args: string[] }> = [];
     const currentUserSid = "S-1-5-21-2000";

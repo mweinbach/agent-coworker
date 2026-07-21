@@ -15,6 +15,7 @@ import {
   installFetchStub,
   makeResearchRecord,
   makeTmpCoworkHome,
+  removeTmpCoworkHome,
   ResearchService,
   registerResearchServiceHooks,
   researchRuntimeImpls,
@@ -51,7 +52,7 @@ describe("research service", () => {
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -87,7 +88,7 @@ describe("research service", () => {
       await Bun.sleep(50);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -114,7 +115,7 @@ describe("research service", () => {
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -211,7 +212,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -251,7 +252,7 @@ describe("research service", () => {
       expect(completed?.interactionId).toBe("interaction-from-status");
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -287,7 +288,7 @@ describe("research service", () => {
       });
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -339,7 +340,7 @@ describe("research service", () => {
       expect(completed?.outputsMarkdown).toBe("Hello world\n\n");
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -415,7 +416,7 @@ describe("research service", () => {
       ]);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -490,7 +491,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -522,7 +523,7 @@ describe("research service", () => {
       expect(resumeResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -554,7 +555,7 @@ describe("research service", () => {
       expect(cancelResearchInteractionMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -585,7 +586,7 @@ describe("research service", () => {
       expect(sessionDb.getResearch("research-terminal-attach")?.inputs.files).toEqual([]);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -612,7 +613,7 @@ describe("research service", () => {
       expect(sessionDb.listRunningResearch({ workspacePath: paths.rootDir })).toEqual([]);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -648,7 +649,7 @@ describe("research service", () => {
       expect(sessionDb.listRunningResearch({ workspacePath: paths.rootDir })).toEqual([]);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -697,7 +698,7 @@ describe("research service", () => {
       expect(cancelled?.error).toBe("cancelled");
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -764,7 +765,7 @@ describe("research service", () => {
     } finally {
       completeChild.resolve();
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -828,7 +829,7 @@ describe("research service", () => {
     } finally {
       releaseCreate.resolve();
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -904,7 +905,7 @@ describe("research service", () => {
     } finally {
       releaseStream.resolve();
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 });

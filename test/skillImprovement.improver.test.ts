@@ -7,6 +7,7 @@ import { __internalSkillImprover } from "../src/skillImprovement/SkillImprover";
 import type { SkillImproverRunInput } from "../src/skillImprovement/types";
 import type { AgentConfig } from "../src/types";
 import { makeConfig } from "./session/agentSession.harness";
+import { symlinkOrJunction } from "./helpers/platform";
 
 const { resolveInsideRoot } = __internalSkillImprover;
 
@@ -70,7 +71,8 @@ describe("SkillImprover sandbox", () => {
     const { root, skillRoot } = await makeSkillDir();
     const outsideDir = path.join(root, "outside");
     await fs.mkdir(outsideDir, { recursive: true });
-    await fs.symlink(outsideDir, path.join(skillRoot, "sneaky"));
+    const link = await symlinkOrJunction(outsideDir, path.join(skillRoot, "sneaky"));
+    if (!link.created) return;
     await expect(resolveInsideRoot(skillRoot, "sneaky/file.txt")).rejects.toThrow(/escapes/);
   });
 
@@ -78,7 +80,8 @@ describe("SkillImprover sandbox", () => {
     const { root, skillRoot } = await makeSkillDir();
     const outsideFile = path.join(root, "outside.txt");
     await fs.writeFile(outsideFile, "secret", "utf-8");
-    await fs.symlink(outsideFile, path.join(skillRoot, "evil.txt"));
+    const link = await symlinkOrJunction(outsideFile, path.join(skillRoot, "evil.txt"), { type: "file" });
+    if (!link.created) return;
     await expect(resolveInsideRoot(skillRoot, "evil.txt")).rejects.toThrow(/escapes/);
   });
 });

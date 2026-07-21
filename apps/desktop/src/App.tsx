@@ -736,11 +736,11 @@ function AppContent() {
   }, [canvasSurfaceKind, windowMode]);
 
   useEffect(() => {
-    if (bootstrapPhase !== "idle") return;
+    if (useAppStore.getState().bootstrapPhase !== "idle") return;
     void init().catch((err) => {
       console.error(err);
     });
-  }, [bootstrapPhase, init]);
+  }, [init]);
 
   useEffect(() => {
     let disposed = false;

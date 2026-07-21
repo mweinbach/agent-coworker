@@ -783,7 +783,7 @@ describe("acquireLockDir", () => {
       mkdir: async (target, options) => {
         if (String(target) === lockPath && options?.recursive === true) {
           ownerParentMkdirCalls += 1;
-          if (ownerParentMkdirCalls === 2) {
+          if (ownerParentMkdirCalls === 1) {
             startHeartbeatMkdir();
             await heartbeatMkdirGate;
           }
@@ -792,18 +792,19 @@ describe("acquireLockDir", () => {
       },
       rename: async (from, to) => {
         await fsp.rename(from, to);
-        if (String(to) === ownerPath && ownerParentMkdirCalls >= 2) {
+        if (String(to) === ownerPath && ownerParentMkdirCalls >= 1) {
           finishHeartbeat();
         }
       },
     });
 
-    const handle = await acquireLockDir(lockPath, { heartbeatMs: 1 }, { fsImpl });
+    const handle = await acquireLockDir(lockPath, { heartbeatMs: 60_000 }, { fsImpl });
+    const heartbeatPromise = handle.heartbeat();
     await heartbeatMkdirStarted;
     const releasePromise = handle.release();
     await Bun.sleep(10);
     allowHeartbeatMkdir();
-    await Promise.all([releasePromise, heartbeatFinished]);
+    await Promise.all([releasePromise, heartbeatPromise, heartbeatFinished]);
 
     expect(fs.existsSync(lockPath)).toBe(false);
   });

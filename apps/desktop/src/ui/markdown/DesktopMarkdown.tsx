@@ -1357,6 +1357,13 @@ function PreWithCopy({
   );
 }
 
+const DEFAULT_DESKTOP_MARKDOWN_COMPONENTS = {
+  a: DesktopMessageLink,
+  cite: DesktopCitationChip,
+  img: DesktopMarkdownImage,
+  pre: PreWithCopy,
+};
+
 function normalizeDesktopMarkdownChildren(
   children: StreamdownProps["children"],
   normalizeDisplayCitations: boolean,
@@ -1369,29 +1376,25 @@ function normalizeDesktopMarkdownChildren(
     return children;
   }
 
+  const citationSourcesByIndex = citationSources
+    ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
+    : undefined;
+
+  const options = {
+    citationUrlsByIndex,
+    citationSourcesByIndex,
+    citationMode: "html" as const,
+    annotations: citationAnnotations,
+    fallbackToSourcesFooter,
+  };
+
   if (typeof children === "string") {
-    return normalizeDisplayCitationMarkers(children, {
-      citationUrlsByIndex,
-      citationSourcesByIndex: citationSources
-        ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
-        : undefined,
-      citationMode: "html",
-      annotations: citationAnnotations,
-      fallbackToSourcesFooter,
-    });
+    return normalizeDisplayCitationMarkers(children, options);
   }
 
   return Children.map(children, (child) =>
     typeof child === "string"
-      ? normalizeDisplayCitationMarkers(child, {
-          citationUrlsByIndex,
-          citationSourcesByIndex: citationSources
-            ? new Map(citationSources.map((source, index) => [index + 1, source] as const))
-            : undefined,
-          citationMode: "html",
-          annotations: citationAnnotations,
-          fallbackToSourcesFooter,
-        })
+      ? normalizeDisplayCitationMarkers(child, options)
       : child,
   );
 }
@@ -1450,20 +1453,59 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
     [isDark, mermaidOptions],
   );
 
+  const normalizedChildren = useMemo(
+    () =>
+      normalizeDesktopMarkdownChildren(
+        children,
+        normalizeDisplayCitations,
+        citationUrlsByIndex,
+        citationSources,
+        citationAnnotations,
+        fallbackToSourcesFooter,
+      ),
+    [
+      children,
+      normalizeDisplayCitations,
+      citationUrlsByIndex,
+      citationSources,
+      citationAnnotations,
+      fallbackToSourcesFooter,
+    ],
+  );
+
+  const resolvedComponents = useMemo(() => {
+    if (!components) return DEFAULT_DESKTOP_MARKDOWN_COMPONENTS;
+    return {
+      ...components,
+      a: DesktopMessageLink,
+      cite: DesktopCitationChip,
+      img: DesktopMarkdownImage,
+      pre: PreWithCopy,
+    };
+  }, [components]);
+
+  const resolvedPlugins = useMemo(() => {
+    if (!plugins) return streamdownPlugins;
+    return {
+      ...streamdownPlugins,
+      ...plugins,
+    };
+  }, [plugins]);
+
+  const resolvedRemarkPlugins = useMemo(() => {
+    if (remarkPlugins) {
+      return [...remarkPlugins, desktopFileLinksPlugin];
+    }
+    return [defaultRemarkPlugins.gfm, desktopFileLinksPlugin];
+  }, [remarkPlugins, desktopFileLinksPlugin]);
+
   return (
     <DesktopMarkdownBasePathContext.Provider value={desktopBasePath}>
       <Streamdown
         {...restProps}
         controls={resolvedControls}
         mermaid={resolvedMermaid}
-        children={normalizeDesktopMarkdownChildren(
-          children,
-          normalizeDisplayCitations,
-          citationUrlsByIndex,
-          citationSources,
-          citationAnnotations,
-          fallbackToSourcesFooter,
-        )}
+        children={normalizedChildren}
         className={cn(
           "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
           // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
@@ -1476,22 +1518,9 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
           "[&_[data-streamdown=table-cell]]:min-w-[5rem] [&_[data-streamdown=table-cell]]:max-w-[13rem] [&_[data-streamdown=table-cell]]:px-2 [&_[data-streamdown=table-cell]]:py-1 [&_[data-streamdown=table-cell]]:align-top [&_[data-streamdown=table-cell]]:whitespace-normal [&_[data-streamdown=table-cell]]:break-words [&_[data-streamdown=table-cell]]:leading-snug [&_[data-streamdown=table-cell]]:[overflow-wrap:anywhere]",
           className,
         )}
-        components={{
-          ...components,
-          a: DesktopMessageLink,
-          cite: DesktopCitationChip,
-          img: DesktopMarkdownImage,
-          pre: PreWithCopy,
-        }}
-        plugins={{
-          ...streamdownPlugins,
-          ...plugins,
-        }}
-        remarkPlugins={
-          remarkPlugins
-            ? [...remarkPlugins, desktopFileLinksPlugin]
-            : [defaultRemarkPlugins.gfm, desktopFileLinksPlugin]
-        }
+        components={resolvedComponents}
+        plugins={resolvedPlugins}
+        remarkPlugins={resolvedRemarkPlugins}
         rehypePlugins={desktopRehypePlugins}
       />
     </DesktopMarkdownBasePathContext.Provider>

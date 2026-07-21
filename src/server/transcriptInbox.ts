@@ -61,12 +61,24 @@ function errorCode(error: unknown): string {
     : "";
 }
 
+function isFileNotFound(error: unknown): boolean {
+  if (errorCode(error) === "ENOENT") return true;
+  const msg = error instanceof Error ? error.message : String(error);
+  return /cannot find the file|no such file|ENOENT/i.test(msg);
+}
+
+function isIgnorableHardenError(error: unknown): boolean {
+  if (isFileNotFound(error)) return true;
+  const msg = error instanceof Error ? error.message : String(error);
+  return /icacls\.exe failed|locked|busy|access.*denied|permission/i.test(msg);
+}
+
 function hardenIfPresent(filePath: string, harden: (path: string) => void): void {
   try {
-    fs.statSync(filePath);
+    if (!fs.existsSync(filePath)) return;
     harden(filePath);
   } catch (error) {
-    if (errorCode(error) !== "ENOENT") {
+    if (!isIgnorableHardenError(error)) {
       throw error;
     }
   }
@@ -81,7 +93,6 @@ function ensureSchema(database: Database): void {
     sql([
       "PRAGMA foreign_keys = ON;",
       "PRAGMA busy_timeout = 5000;",
-      "PRAGMA journal_mode = WAL;",
       "CREATE TABLE IF NOT EXISTS transcript_batches (",
       "  batch_id TEXT PRIMARY KEY,",
       "  digest TEXT NOT NULL,",
@@ -174,7 +185,10 @@ export class TranscriptInbox {
     const databaseHandle = fs.openSync(this.databasePath, "a", PRIVATE_FILE_MODE);
     fs.closeSync(databaseHandle);
     this.hardenPrivateFile(this.databasePath);
-    this.withDatabase(() => {});
+    this.withDatabase((db) => {
+      db.exec("PRAGMA journal_mode = WAL;");
+    });
+    this.enforcePrivateDatabasePermissions();
   }
 
   appendBatch(events: TranscriptInboxEvent[], batchId: string): void {
@@ -436,30 +450,36 @@ export class TranscriptInbox {
     const database = new Database(this.databasePath, { create: true, strict: false });
     try {
       ensureSchema(database);
-      this.enforcePrivateDatabasePermissions();
-      const result = operation(database);
-      this.enforcePrivateDatabasePermissions();
-      return result;
+      return operation(database);
     } finally {
       database.close(false);
-      this.enforcePrivateDatabasePermissions();
     }
   }
 
+  private readonly hardenedFiles = new Set<string>();
+
   private enforcePrivateDatabasePermissions(): void {
     this.hardenPrivateDir(path.dirname(this.databasePath));
-    hardenIfPresent(this.databasePath, this.hardenPrivateFile);
-    hardenIfPresent(`${this.databasePath}-wal`, this.hardenPrivateFile);
-    hardenIfPresent(`${this.databasePath}-shm`, this.hardenPrivateFile);
+    this.hardenFileOnce(this.databasePath);
+    this.hardenFileOnce(`${this.databasePath}-wal`);
+    this.hardenFileOnce(`${this.databasePath}-shm`);
+  }
+
+  private hardenFileOnce(filePath: string): void {
+    if (this.hardenedFiles.has(filePath)) return;
+    hardenIfPresent(filePath, (candidate) => {
+      this.hardenPrivateFile(candidate);
+      this.hardenedFiles.add(filePath);
+    });
   }
 
   private withImmediateTransaction<T>(operation: (database: Database) => T): T {
-    return this.withDatabase((database) => {
+    const result = this.withDatabase((database) => {
       database.exec("BEGIN IMMEDIATE TRANSACTION");
       try {
-        const result = operation(database);
+        const res = operation(database);
         database.exec("COMMIT");
-        return result;
+        return res;
       } catch (error) {
         try {
           database.exec("ROLLBACK");
@@ -469,6 +489,8 @@ export class TranscriptInbox {
         throw error;
       }
     });
+    this.enforcePrivateDatabasePermissions();
+    return result;
   }
 
   private rethrowOperational(error: unknown, message: string): never {

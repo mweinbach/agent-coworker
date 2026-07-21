@@ -1,3 +1,4 @@
+import { RAW_REPLAY_PART_TYPES } from "../../../shared/modelStreamReplay";
 import { isFailedToolOutcome, type ToolRetryIntent } from "../../../shared/toolRetry";
 import {
   createToolRetryAttemptTracker,
@@ -419,18 +420,20 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
             );
           }
         }
-        context.emit({
-          type: "model_stream_chunk",
-          sessionId: context.id,
-          turnId,
-          index: partIndex,
-          provider: context.state.config.provider,
-          model: context.state.config.model,
-          normalizerVersion: normalized.normalizerVersion,
-          partType: normalized.partType,
-          part: normalized.part,
-          ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-        });
+        if (tracker.rawStreamEventIndex === 0 || !RAW_REPLAY_PART_TYPES.has(normalized.partType)) {
+          context.emit({
+            type: "model_stream_chunk",
+            sessionId: context.id,
+            turnId,
+            index: partIndex,
+            provider: context.state.config.provider,
+            model: context.state.config.model,
+            normalizerVersion: normalized.normalizerVersion,
+            partType: normalized.partType,
+            part: normalized.part,
+            ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
+          });
+        }
       },
     });
   };

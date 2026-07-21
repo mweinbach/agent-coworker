@@ -144,7 +144,7 @@ describe("desktop memory page", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      const stallMs = 30;
+      const stallMs = 1_000;
       await act(async () => {
         root.render(createElement(MemoryPage, { loadingStallMs: stallMs }));
       });

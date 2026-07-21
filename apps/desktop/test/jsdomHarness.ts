@@ -64,6 +64,20 @@ function restoreGlobalProperty({ key, descriptor }: SavedGlobalDescriptor) {
     Object.defineProperty(globalThis, key, descriptor);
     return;
   }
+  if (key === "window") {
+    delete (globalThis as any).window;
+    return;
+  }
+  if (key === "requestAnimationFrame") {
+    (globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) =>
+      globalThis.setTimeout(() => cb(Date.now()), 0) as any;
+    return;
+  }
+  if (key === "cancelAnimationFrame") {
+    (globalThis as any).cancelAnimationFrame = (handle: number) =>
+      globalThis.clearTimeout(handle as any);
+    return;
+  }
   delete (globalThis as Record<string, unknown>)[key];
 }
 
@@ -196,6 +210,9 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
   const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
   const activeTimeouts = new Set<ReturnType<typeof globalThis.setTimeout>>();
+  const activeAnimationFrames = new Map<number, ReturnType<typeof globalThis.setTimeout>>();
+  let nextAnimationFrameId = 1;
+
   const runWithCurrentDomGlobals = (callback: () => void) => {
     const previous = {
       window: Object.getOwnPropertyDescriptor(globalThis, "window"),
@@ -216,7 +233,8 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
       restoreGlobalProperty({ key: "CustomEvent", descriptor: previous.CustomEvent });
     }
   };
-  setGlobalProperty("setTimeout", (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+
+  const customSetTimeout = (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
     const timeoutId = nativeSetTimeout(() => {
       activeTimeouts.delete(timeoutId);
       if (typeof handler === "function") {
@@ -227,24 +245,43 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     }, timeout);
     activeTimeouts.add(timeoutId);
     return timeoutId;
-  });
-  setGlobalProperty("clearTimeout", (timeoutId: ReturnType<typeof globalThis.setTimeout>) => {
+  };
+  const customClearTimeout = (timeoutId: ReturnType<typeof globalThis.setTimeout>) => {
     activeTimeouts.delete(timeoutId);
     nativeClearTimeout(timeoutId);
-  });
+  };
+
+  setGlobalProperty("setTimeout", customSetTimeout);
+  setGlobalProperty("clearTimeout", customClearTimeout);
+  dom.window.setTimeout = customSetTimeout as any;
+  dom.window.clearTimeout = customClearTimeout as any;
 
   const requestAnimationFrame =
     typeof options.includeAnimationFrame === "object" &&
     options.includeAnimationFrame.requestAnimationFrame
       ? options.includeAnimationFrame.requestAnimationFrame
       : (dom.window.requestAnimationFrame?.bind(dom.window) ??
-        ((callback: FrameRequestCallback) => dom.window.setTimeout(() => callback(Date.now()), 0)));
+        ((callback: FrameRequestCallback) => {
+          const id = nextAnimationFrameId++;
+          const timer = nativeSetTimeout(() => {
+            activeAnimationFrames.delete(id);
+            runWithCurrentDomGlobals(() => callback(Date.now()));
+          }, 0);
+          activeAnimationFrames.set(id, timer);
+          return id;
+        }));
   const cancelAnimationFrame =
     typeof options.includeAnimationFrame === "object" &&
     options.includeAnimationFrame.cancelAnimationFrame
       ? options.includeAnimationFrame.cancelAnimationFrame
       : (dom.window.cancelAnimationFrame?.bind(dom.window) ??
-        ((handle: number) => dom.window.clearTimeout(handle)));
+        ((handle: number) => {
+          const timer = activeAnimationFrames.get(handle);
+          if (timer !== undefined) {
+            activeAnimationFrames.delete(handle);
+            nativeClearTimeout(timer);
+          }
+        }));
 
   saved.push(
     {
@@ -282,6 +319,10 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
         nativeClearTimeout(timeoutId);
       }
       activeTimeouts.clear();
+      for (const timer of activeAnimationFrames.values()) {
+        nativeClearTimeout(timer);
+      }
+      activeAnimationFrames.clear();
       for (const entry of saved.reverse()) {
         restoreGlobalProperty(entry);
       }

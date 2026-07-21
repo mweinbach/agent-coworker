@@ -39,6 +39,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import { OperationFeedback } from "../../OperationFeedback";
+import { SettingsEmptyState } from "../SettingsPrimitives";
 
 export type DraftAdvancedMemory = {
   slug: string;
@@ -309,16 +310,14 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
       </div>
 
       {memories.length === 0 ? (
-        <div className="rounded-xl border border-border/70 bg-background/50 py-12 flex flex-col items-center justify-center gap-3">
-          <BrainIcon className="w-10 h-10 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">
-            {loading
-              ? "Loading..."
-              : "No memories yet. They are written automatically as you work."}
-          </p>
-        </div>
+        <SettingsEmptyState
+          icon={<BrainIcon />}
+          title={
+            loading ? "Loading..." : "No memories yet. They are written automatically as you work."
+          }
+        />
       ) : (
-        <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
+        <div className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card">
           {memories.map((entry) => {
             const isExpanded = expandedSlugs[entry.slug] ?? false;
             const deleteOperation =
@@ -332,13 +331,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
                 )
               ];
             return (
-              <div
-                key={entry.slug}
-                className={cn(
-                  "border-b border-border/70 last:border-b-0",
-                  isExpanded && "bg-card/40",
-                )}
-              >
+              <div key={entry.slug} className={cn(isExpanded && "bg-card/40")}>
                 <button
                   type="button"
                   className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"

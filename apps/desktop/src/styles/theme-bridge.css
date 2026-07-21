@@ -78,15 +78,13 @@
     /* Match context rail cards so usage popover reads as part of the workspace, not the sidebar tint */
     --surface-topbar-popover: var(--surface-context-panel);
     --surface-settings-main: color-mix(in srgb, var(--panel-bg) 88%, var(--surface-window) 12%);
-    --surface-settings-card: color-mix(in srgb, var(--panel-bg) 97%, white 3%);
-    --surface-settings-card-elevated: color-mix(in srgb, var(--panel-bg) 94%, white 6%);
     --surface-settings-back-button: color-mix(in srgb, var(--panel-bg) 76%, transparent);
     --surface-settings-back-button-hover: color-mix(
       in srgb,
       var(--accent-base) 7%,
       var(--panel-bg)
     );
-    --surface-settings-nav-active: color-mix(in srgb, var(--foreground) 8%, transparent);
+    --surface-settings-nav-active: color-mix(in srgb, var(--accent-base) 12%, transparent);
     --surface-settings-nav-hover: color-mix(in srgb, var(--foreground) 5%, transparent);
     --surface-settings-row-hover: color-mix(in srgb, var(--foreground) 4%, transparent);
     --surface-selection: color-mix(in srgb, var(--accent-base) 35%, transparent);
@@ -191,7 +189,6 @@
     /* Inset hairline between settings nav and main pane (wide layout) */
     --shadow-settings-pane-divider: inset 1px 0 0 var(--border-subtle);
     --shadow-surface-elevated: 0 1px 0 color-mix(in srgb, var(--text-base) 6%, transparent);
-    --shadow-settings-section: 0 1px 0 color-mix(in srgb, var(--text-base) 5%, transparent);
     --shadow-overlay: var(--shadow-overlay-base);
     --shadow-popover:
       0 14px 30px color-mix(in srgb, var(--panel-bg) 24%, transparent),

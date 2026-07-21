@@ -473,18 +473,34 @@ samp {
   min-height: 100%;
 }
 
-.settings-page {
-  animation: settingsPageIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+.settings-section {
+  animation: settingsSectionIn 220ms var(--ease-out-strong) both;
 }
 
-.settings-section {
-  box-shadow: var(--shadow-settings-section);
+.settings-page > .settings-section:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+.settings-page > .settings-section:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+.settings-page > .settings-section:nth-child(4) {
+  animation-delay: 110ms;
+}
+
+.settings-page > .settings-section:nth-child(5) {
+  animation-delay: 140ms;
+}
+
+.settings-page > .settings-section:nth-child(n + 6) {
+  animation-delay: 170ms;
 }
 
 .settings-row {
   transition:
-    background-color 160ms ease,
-    color 160ms ease;
+    background-color 140ms var(--ease-out-strong),
+    color 140ms var(--ease-out-strong);
 }
 
 .settings-row:hover {
@@ -492,19 +508,14 @@ samp {
 }
 
 .settings-shell__main [data-slot="card"] {
-  border-color: var(--border-glass);
-  background: var(--surface-settings-card);
-  box-shadow: var(--shadow-surface-elevated);
-  backdrop-filter: blur(calc(var(--titlebar-blur) - 1px));
+  border-color: var(--border-subtle);
+  background: var(--surface-card);
+  box-shadow: none;
 }
 
-.settings-shell__main [data-slot="card"]:has([data-provider-card]) {
-  background: var(--surface-settings-card-elevated);
-}
-
-@keyframes settingsPageIn {
+@keyframes settingsSectionIn {
   from {
-    opacity: 0.72;
+    opacity: 0;
     transform: translateY(4px);
   }
 
@@ -571,7 +582,7 @@ samp {
     transition: none;
   }
 
-  .settings-page {
+  .settings-section {
     animation: none;
   }
 
@@ -591,11 +602,9 @@ samp {
   background-image: linear-gradient(
     100deg,
     var(--text-muted) 0%,
-    var(--text-muted) 28%,
-    var(--accent) 46%,
+    var(--text-muted) 30%,
     var(--text-emphasis) 50%,
-    var(--accent) 54%,
-    var(--text-muted) 72%,
+    var(--text-muted) 70%,
     var(--text-muted) 100%
   );
   background-position: 160% 50%;
@@ -614,6 +623,29 @@ samp {
   to {
     background-position: -160% 50%;
   }
+}
+
+/* Soft "live" pulse for in-progress activity — gentler than animate-pulse. */
+.activity-live-dot {
+  animation: activityLiveDot 2s var(--ease-standard) infinite;
+}
+
+@keyframes activityLiveDot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+/* Reasoning section disclosure entrance (mount-only, no Radix height var). */
+.reasoning-section-in {
+  animation: chatRowIn 150ms var(--ease-out-strong);
 }
 
 @keyframes activityTraceExpand {
@@ -659,6 +691,57 @@ samp {
 
 @media (prefers-reduced-motion: reduce) {
   .activity-trace-content[data-state] {
+    animation: none;
+  }
+}
+
+/* Mount-only row entrances for the transcript. Never animates deltas — only the
+   initial mount of a row (user message, completed assistant row, cards). */
+.chat-feed-content > * {
+  animation: chatRowIn 180ms var(--ease-out-strong);
+}
+
+@keyframes chatRowIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-jump-in {
+  animation: chatJumpIn 160ms var(--ease-out-strong);
+}
+
+@keyframes chatJumpIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-feed-content > *,
+  .chat-jump-in {
+    animation: none;
+  }
+
+  .activity-live-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .reasoning-section-in {
     animation: none;
   }
 }

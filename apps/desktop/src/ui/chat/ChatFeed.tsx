@@ -577,6 +577,8 @@ function TranscriptScroller(props: {
   );
 }
 
+const NOOP = () => {};
+
 export const ChatFeed = memo(function ChatFeed(props: {
   busy: boolean;
   transcriptOnly: boolean;
@@ -633,8 +635,8 @@ export const ChatFeed = memo(function ChatFeed(props: {
     retryFailedTurnDisabled,
     retryUnavailableReason,
     hiddenFeedItemCount = 0,
-    onExpandOlderFeed = () => {},
-    onShowAllOlderFeed = () => {},
+    onExpandOlderFeed = NOOP,
+    onShowAllOlderFeed = NOOP,
   } = props;
   recordDesktopRenderMetric("chat-feed", selectedThreadId ?? undefined);
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);

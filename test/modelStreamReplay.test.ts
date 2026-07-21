@@ -607,7 +607,6 @@ describe("modelStreamReplay", () => {
         turnId,
         key: "todo-final",
         name: "todoWrite",
-        args: { id: "todo-final", toolName: "todoWrite" },
       },
       {
         kind: "tool_input_delta",

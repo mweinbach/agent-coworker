@@ -17,7 +17,7 @@ import {
 import { Skeleton } from "../../../components/ui/skeleton";
 import { confirmAction, openExternalUrl } from "../../../lib/desktopCommands";
 import { OperationFeedback } from "../../OperationFeedback";
-import { EntityIcon } from "../SettingsPrimitives";
+import { EntityIcon, SettingsSection } from "../SettingsPrimitives";
 
 type MarketplaceDetailPlugin = MarketplaceDetail["plugins"][number];
 type MarketplaceDetailSkill = MarketplaceDetail["skills"][number];
@@ -206,108 +206,97 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
           ) : detail !== null ? (
             <>
               {detail.plugins.length > 0 ? (
-                <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Plugins</h3>
-                  <div className="divide-y divide-border/30 overflow-hidden rounded-lg border border-border/60 bg-card/85">
-                    {detail.plugins.map((plugin) => (
-                      <div key={plugin.name} className="flex items-center gap-3 px-4 py-3">
-                        <EntityIcon src={plugin.icon} name={plugin.displayName} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">
-                            {plugin.displayName}
-                          </div>
-                          {plugin.category ? (
-                            <div className="truncate text-xs text-muted-foreground">
-                              {plugin.category}
-                            </div>
-                          ) : null}
+                <SettingsSection title="Plugins">
+                  {detail.plugins.map((plugin) => (
+                    <div key={plugin.name} className="flex items-center gap-3 px-4 py-3">
+                      <EntityIcon src={plugin.icon} name={plugin.displayName} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {plugin.displayName}
                         </div>
-                        {plugin.installed ? (
-                          <InstalledState enabled={plugin.enabled} />
-                        ) : plugin.installSource ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            className="shrink-0"
-                            disabled={installPending}
-                            onClick={() => void handleInstallPlugin(plugin)}
-                          >
-                            {installingKey === `plugin:${plugin.name}`
-                              ? "Installing..."
-                              : "Install"}
-                          </Button>
+                        {plugin.category ? (
+                          <div className="truncate text-xs text-muted-foreground">
+                            {plugin.category}
+                          </div>
                         ) : null}
                       </div>
-                    ))}
-                  </div>
-                </section>
+                      {plugin.installed ? (
+                        <InstalledState enabled={plugin.enabled} />
+                      ) : plugin.installSource ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="shrink-0"
+                          disabled={installPending}
+                          onClick={() => void handleInstallPlugin(plugin)}
+                        >
+                          {installingKey === `plugin:${plugin.name}` ? "Installing..." : "Install"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))}
+                </SettingsSection>
               ) : null}
 
               {detail.skills.length > 0 ? (
-                <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Skills</h3>
-                  <div className="divide-y divide-border/30 overflow-hidden rounded-lg border border-border/60 bg-card/85">
-                    {detail.skills.map((skill) => (
-                      <div key={skill.name} className="flex items-center gap-3 px-4 py-3">
-                        <EntityIcon src={skill.icon} name={skill.displayName} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">
-                            {skill.displayName}
-                          </div>
-                          {skill.category ? (
-                            <div className="truncate text-xs text-muted-foreground">
-                              {skill.category}
-                            </div>
-                          ) : null}
+                <SettingsSection title="Skills">
+                  {detail.skills.map((skill) => (
+                    <div key={skill.name} className="flex items-center gap-3 px-4 py-3">
+                      <EntityIcon src={skill.icon} name={skill.displayName} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {skill.displayName}
                         </div>
-                        {skill.installed ? (
-                          <InstalledState enabled={skill.enabled} />
-                        ) : skill.installSource ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            className="shrink-0"
-                            disabled={installPending}
-                            onClick={() => void handleInstallSkill(skill)}
-                          >
-                            {installingKey === `skill:${skill.name}` ? "Installing..." : "Install"}
-                          </Button>
+                        {skill.category ? (
+                          <div className="truncate text-xs text-muted-foreground">
+                            {skill.category}
+                          </div>
                         ) : null}
                       </div>
-                    ))}
-                  </div>
-                </section>
+                      {skill.installed ? (
+                        <InstalledState enabled={skill.enabled} />
+                      ) : skill.installSource ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="shrink-0"
+                          disabled={installPending}
+                          onClick={() => void handleInstallSkill(skill)}
+                        >
+                          {installingKey === `skill:${skill.name}` ? "Installing..." : "Install"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))}
+                </SettingsSection>
               ) : null}
 
-              <section className="space-y-3">
-                <h3 className="text-sm font-semibold">Connectors</h3>
-                <div className="divide-y divide-border/30 overflow-hidden rounded-lg border border-border/60 bg-card/85">
-                  {detail.connectors.length === 0 ? (
-                    <div className="px-4 py-3 text-xs text-muted-foreground">
-                      Connectors appear here once a plugin that provides them is installed.
-                    </div>
-                  ) : (
-                    detail.connectors.map((connector) => (
-                      <div
-                        key={`${connector.pluginName}:${connector.name}`}
-                        className="flex items-center gap-3 px-4 py-3"
-                      >
-                        <EntityIcon name={connector.name} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">
-                            {connector.name}
-                          </div>
-                          <div className="truncate text-xs text-muted-foreground">
-                            via {connector.pluginDisplayName}
-                          </div>
+              <SettingsSection title="Connectors">
+                {detail.connectors.length === 0 ? (
+                  <div className="px-4 py-3 text-xs text-muted-foreground">
+                    Connectors appear here once a plugin that provides them is installed.
+                  </div>
+                ) : (
+                  detail.connectors.map((connector) => (
+                    <div
+                      key={`${connector.pluginName}:${connector.name}`}
+                      className="flex items-center gap-3 px-4 py-3"
+                    >
+                      <EntityIcon name={connector.name} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {connector.name}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          via {connector.pluginDisplayName}
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              </section>
+                    </div>
+                  ))
+                )}
+              </SettingsSection>
             </>
           ) : null}
         </div>

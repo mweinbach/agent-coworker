@@ -294,7 +294,7 @@ function SettingsNavigation({
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
             <button
-              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-foreground/72 transition-all duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
+              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-foreground/72 transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
               type="button"
               onClick={onBack}
             >
@@ -320,7 +320,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/72">
+              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
@@ -330,7 +330,7 @@ function SettingsNavigation({
                     <button
                       key={page.id}
                       className={cn(
-                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-all duration-150",
+                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors duration-150",
                         activePage === page.id
                           ? "settings-shell__nav-button--active font-semibold text-foreground"
                           : "font-medium text-foreground/72 hover:bg-foreground/[0.045] hover:text-foreground",
@@ -341,7 +341,7 @@ function SettingsNavigation({
                       <Icon
                         className={cn(
                           "size-4 shrink-0",
-                          activePage === page.id ? "text-foreground" : "text-muted-foreground",
+                          activePage === page.id ? "text-primary" : "text-muted-foreground",
                         )}
                       />
                       <span className="min-w-0 truncate">{page.label}</span>
@@ -558,10 +558,7 @@ export function SettingsShell() {
               >
                 <div
                   data-settings-page={activePage.id}
-                  className={cn(
-                    "animate-in fade-in duration-150",
-                    isBackupPage ? "flex min-h-0 flex-1 flex-col" : "",
-                  )}
+                  className={cn(isBackupPage ? "flex min-h-0 flex-1 flex-col" : "")}
                 >
                   <InlineErrorBoundary label="This settings page couldn't be rendered.">
                     {activePage.render()}

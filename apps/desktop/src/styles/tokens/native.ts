@@ -10,19 +10,19 @@ export type CaptionSymbolTone = "dark" | "light";
 export const NATIVE_THEME_TOKENS = {
   transparentSurface: "#00000000",
   shellSurface: {
-    light: "#dde1ca",
-    dark: "#171d13",
+    light: "#e8e8e5",
+    dark: "#141415",
   },
   canvasDocument: {
     light: {
-      background: "#f8f9f2",
-      foreground: "#232a18",
-      mutedForeground: "#556041",
+      background: "#fafaf8",
+      foreground: "#1f1f1c",
+      mutedForeground: "#61615b",
     },
     dark: {
-      background: "#2a3120",
-      foreground: "#eef0dc",
-      mutedForeground: "#c7ceaf",
+      background: "#232325",
+      foreground: "#e9e9e7",
+      mutedForeground: "#a3a39c",
     },
   },
   canvasSpreadsheet: {
@@ -30,8 +30,8 @@ export const NATIVE_THEME_TOKENS = {
     foreground: "#24292f",
   },
   captionSymbol: {
-    dark: "#556041",
-    light: "#eef0dc",
+    dark: "#61615b",
+    light: "#e9e9e7",
   },
 } as const;
 

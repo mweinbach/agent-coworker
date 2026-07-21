@@ -25,6 +25,7 @@ import { pickDirectory } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
 import type { ImportableItem, ImportableKind, ImportSource } from "../../../lib/wsProtocol";
 import { OperationFeedback } from "../../OperationFeedback";
+import { SettingsEmptyState } from "../SettingsPrimitives";
 
 type ImportTab = ImportSource | "folder";
 
@@ -102,7 +103,7 @@ function ImportItemCard({
   const installedEverywhere = item.alreadyInstalledGlobal && item.alreadyInstalledWorkspace;
 
   return (
-    <div className="rounded-lg border border-border/55 bg-card/40 p-3.5 transition-colors hover:border-border/80 hover:bg-card/65">
+    <div className="py-3.5">
       <div className="flex items-start gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/40 text-muted-foreground">
           {kind === "plugin" ? (
@@ -244,7 +245,7 @@ function FolderImportPanel({
       </Button>
 
       {folderPath ? (
-        <div className="rounded-lg border border-border/55 bg-card/40 p-3.5">
+        <div className="py-3.5">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/40 text-muted-foreground">
               <FolderInputIcon className="h-4 w-4" />
@@ -286,13 +287,15 @@ function FolderImportPanel({
           </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-12 text-center">
-          <FolderInputIcon className="h-6 w-6 text-muted-foreground/60" />
-          <div className="text-xs text-muted-foreground">
-            Select a folder that contains a{" "}
-            {kind === "plugin" ? "plugin bundle" : <code>SKILL.md</code>}.
-          </div>
-        </div>
+        <SettingsEmptyState
+          icon={<FolderInputIcon />}
+          title={
+            <>
+              Select a folder that contains a{" "}
+              {kind === "plugin" ? "plugin bundle" : <code>SKILL.md</code>}.
+            </>
+          }
+        />
       )}
 
       {error ? (
@@ -404,31 +407,23 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
                 {state.error}
               </div>
             ) : !state?.homeExists ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-16 text-center">
-                <PackageIcon className="h-6 w-6 text-muted-foreground/60" />
-                <div className="text-sm font-medium text-foreground">
-                  No {SOURCE_LABELS[tab]} installation found
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Expected it at <code>~/.{tab}</code>.
-                </div>
-              </div>
+              <SettingsEmptyState
+                icon={<PackageIcon />}
+                title={`No ${SOURCE_LABELS[tab]} installation found`}
+                description={
+                  <>
+                    Expected it at <code>~/.{tab}</code>.
+                  </>
+                }
+              />
             ) : items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-16 text-center">
-                {kind === "plugin" ? (
-                  <PackageIcon className="h-6 w-6 text-muted-foreground/60" />
-                ) : (
-                  <SparklesIcon className="h-6 w-6 text-muted-foreground/60" />
-                )}
-                <div className="text-sm font-medium text-foreground">
-                  No importable {noun}s found
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Nothing to import from {SOURCE_LABELS[tab]}.
-                </div>
-              </div>
+              <SettingsEmptyState
+                icon={kind === "plugin" ? <PackageIcon /> : <SparklesIcon />}
+                title={`No importable ${noun}s found`}
+                description={`Nothing to import from ${SOURCE_LABELS[tab]}.`}
+              />
             ) : (
-              <div className="space-y-2.5">
+              <div className="flex flex-col divide-y divide-border/40">
                 {items.map((item) => {
                   const globalOperation =
                     operationsByKey[

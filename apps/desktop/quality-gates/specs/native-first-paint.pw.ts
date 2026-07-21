@@ -20,7 +20,7 @@ for (const mode of ["light", "dark", "system"] as const) {
     test(`keeps the ${mode} native window and renderer surfaces aligned`, async ({ quality }) => {
       const { electronApp, page } = quality;
       const resolvedTheme = mode === "light" ? "light" : "dark";
-      const expectedBackground = mode === "light" ? "dde1ca" : "171d13";
+      const expectedBackground = mode === "light" ? "e8e8e5" : "141415";
 
       await expect(page.locator("html")).toHaveAttribute("data-platform", hostPlatform());
       await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);

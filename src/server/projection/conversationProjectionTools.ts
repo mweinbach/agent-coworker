@@ -10,7 +10,7 @@ import {
   toolTurnNameKey,
 } from "./conversationProjectionToolKeys";
 import type { BufferedToolState } from "./conversationProjectionTypes";
-import { makeItemId, occurrenceItemId } from "./shared";
+import { makeItemId, normalizeToolArgsFromInput, occurrenceItemId } from "./shared";
 
 export function createToolProjection(state: ConversationProjectionState) {
   const rememberLatestToolKey = (turnId: string, name: string, fullKey: string) => {
@@ -110,6 +110,10 @@ export function createToolProjection(state: ConversationProjectionState) {
     for (const [fullKey, toolState] of [...state.toolByKey.entries()]) {
       if (!fullKey.startsWith(`${turnId}:`)) continue;
       if (isTerminalProjectedToolState(toolState.state)) continue;
+      const input = state.toolInputByKey.get(fullKey) ?? toolState.inputText;
+      if (input && toolState.args === undefined) {
+        toolState.args = normalizeToolArgsFromInput(input);
+      }
       toolState.state = "output-error";
       toolState.result = incompleteToolStreamError(error);
       publishToolCompleted(turnId, toolState);

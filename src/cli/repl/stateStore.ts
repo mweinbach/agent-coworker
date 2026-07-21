@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../../connect";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import { writeTextFileAtomic } from "../../utils/atomicFile";
 
 type CliState = {
   version: 1;
@@ -58,12 +58,8 @@ async function readCliState(): Promise<CliState> {
 
 async function persistCliState(state: CliState): Promise<void> {
   const filePath = getCliStateFilePath();
-  const dirPath = path.dirname(filePath);
-  await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
   const payload = `${JSON.stringify(state, null, 2)}\n`;
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, payload, { encoding: "utf-8", mode: 0o600 });
-  await fs.rename(tempPath, filePath);
+  await writeTextFileAtomic(filePath, payload, { mode: 0o600 });
 }
 
 export async function getStoredSessionForCwd(cwd: string): Promise<string | null> {

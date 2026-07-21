@@ -13,26 +13,23 @@ export type SocketSendQueueStats = {
   queueDepthByConnection: Record<string, number>;
 };
 
-function evictLeastCriticalSend(queue: string[]): "delta" | "important" | "none" {
+export type QueuedSendItem = {
+  payload: string;
+  isDelta: boolean;
+};
+
+function evictLeastCriticalSend(queue: QueuedSendItem[]): "delta" | "important" | "none" {
   for (let i = 0; i < queue.length; i++) {
-    try {
-      const parsed = JSON.parse(queue[i]) as {
-        method?: string;
-        params?: { type?: string };
-      };
-      if (parsed.method === "model_stream_chunk" || parsed.params?.type === "agentMessage/delta") {
-        queue.splice(i, 1);
-        return "delta";
-      }
-    } catch {
-      // ignore malformed JSON
+    if (queue[i].isDelta) {
+      queue.splice(i, 1);
+      return "delta";
     }
   }
   return queue.shift() === undefined ? "none" : "important";
 }
 
 export class SocketSendQueue {
-  private readonly pendingSends = new Map<string, string[]>();
+  private readonly pendingSends = new Map<string, QueuedSendItem[]>();
   private readonly externalSinks = new Map<string, (serialized: string) => boolean>();
   private readonly stats: Omit<SocketSendQueueStats, "queueDepthByConnection"> = {
     queuedSends: 0,
@@ -47,6 +44,12 @@ export class SocketSendQueue {
   constructor(private readonly maxQueuedSends = DEFAULT_SEND_QUEUE_MAX) {}
 
   send(ws: StartServerSocket, payload: unknown): void {
+    const isDelta =
+      typeof payload === "object" &&
+      payload !== null &&
+      ((payload as { method?: string }).method === "model_stream_chunk" ||
+        (payload as { params?: { type?: string } }).params?.type === "agentMessage/delta");
+
     let serialized: string;
     try {
       serialized = JSON.stringify(payload);
@@ -81,7 +84,7 @@ export class SocketSendQueue {
             this.stats.droppedImportant += 1;
           }
         }
-        queue.push(serialized);
+        queue.push({ payload: serialized, isDelta });
         this.stats.queuedSends += 1;
         this.stats.maxQueueDepth = Math.max(this.stats.maxQueueDepth, queue.length);
         this.pendingSends.set(connectionId, queue);
@@ -99,8 +102,8 @@ export class SocketSendQueue {
     if (!queue) return;
     while (queue.length > 0) {
       try {
-        const status = ws.send(queue[0]);
-        if (status === -1) {
+        const status = ws.send(queue[0].payload);
+        if (status <= 0) {
           break;
         }
         queue.shift();

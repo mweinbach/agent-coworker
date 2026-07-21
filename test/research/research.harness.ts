@@ -10,6 +10,7 @@ import {
   type ResearchServiceRuntime,
 } from "../../src/server/research/ResearchService";
 import { type ResearchRecord, researchRecordSchema } from "../../src/server/research/types";
+import { removeWithRetry } from "../../src/platform/fs";
 import { SessionDb } from "../../src/server/sessionDb";
 
 type RuntimeEvent = Record<string, unknown>;
@@ -174,6 +175,10 @@ export function registerResearchServiceHooks() {
     citationMetadataInternal.clearCitationResolutionCache();
     restoreFetchStub();
   });
+}
+
+export async function removeTmpCoworkHome(home: string): Promise<void> {
+  await removeWithRetry(home, { recursive: true, bestEffort: true });
 }
 
 export {

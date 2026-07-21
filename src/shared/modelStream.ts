@@ -482,7 +482,11 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         turnId: evt.turnId,
         key: toolKey(evt),
         name: toolName(evt),
-        args: part,
+        ...(part.input !== undefined
+          ? { args: part.input }
+          : part.args !== undefined
+            ? { args: part.args }
+            : {}),
       };
     case "tool_input_delta": {
       const delta = asLooseText(part.delta);

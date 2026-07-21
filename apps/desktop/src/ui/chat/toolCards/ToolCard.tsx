@@ -55,11 +55,7 @@ function ToolStatusIcon({ state }: { state: ToolFeedState }) {
   if (state === "approval-requested") {
     return <CircleIcon className="size-3.5 text-primary" />;
   }
-  return (
-    <ClockIcon
-      className={cn("size-3.5 text-primary", state === "input-streaming" && "animate-pulse")}
-    />
-  );
+  return <ClockIcon className="size-3.5 text-primary" />;
 }
 
 function Tool({
@@ -71,8 +67,8 @@ function Tool({
     <Collapsible
       className={cn(
         variant === "trace"
-          ? "app-shadow-surface w-full overflow-hidden rounded-xl border border-border/50 bg-background/50"
-          : "app-shadow-surface w-full max-w-3xl overflow-hidden rounded-lg border border-border/60 bg-background/55 transition-colors hover:bg-muted/15",
+          ? "w-full overflow-hidden rounded-xl border border-border/45 bg-foreground/[0.02]"
+          : "w-full max-w-3xl overflow-hidden rounded-lg border border-border/45 bg-foreground/[0.02] transition-colors hover:bg-foreground/[0.04]",
         className,
       )}
       {...props}
@@ -136,7 +132,7 @@ function ToolHeader({
         {...props}
       >
         <div className="flex min-w-0 items-start gap-2.5">
-          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/30 ring-1 ring-border/40 transition-colors group-hover:bg-muted/45">
+          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] transition-colors group-hover:bg-foreground/[0.08]">
             <ToolIcon title={title} className="size-3 text-muted-foreground/80" />
           </div>
           <div className="min-w-0">
@@ -179,7 +175,7 @@ function ToolHeader({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-muted/30 ring-1 ring-border/40 transition-colors group-hover:bg-muted/50">
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05] transition-colors group-hover:bg-foreground/[0.08]">
           <ToolIcon title={title} className="size-3.5 text-muted-foreground/80" />
         </div>
         <div className="min-w-0">
@@ -221,6 +217,7 @@ function ToolContent({
   return (
     <CollapsibleContent
       className={cn(
+        "activity-trace-content",
         variant === "trace"
           ? "flex flex-col gap-2 border-t border-border/50 px-3 pb-3 pt-2 select-text"
           : "flex flex-col gap-3 px-2.5 pb-2.5 pt-1 select-text",
@@ -288,10 +285,10 @@ function ToolCodeBlock({
       </div>
       <pre
         className={cn(
-          "app-shadow-surface overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
+          "overflow-auto rounded-lg bg-foreground/[0.04] p-3 text-[11px] leading-relaxed",
           expanded ? "max-h-none" : "max-h-72",
           tone === "error"
-            ? "bg-destructive/5 text-destructive ring-destructive/20"
+            ? "bg-destructive/[0.06] text-destructive"
             : "text-foreground/80",
         )}
       >
@@ -366,7 +363,7 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
               {detailRows.map((row) => (
                 <div
                   key={`${props.name}-${row.label}`}
-                  className="rounded-lg border border-border/50 bg-muted/15 px-2.5 py-2"
+                  className="rounded-lg bg-foreground/[0.04] px-2.5 py-2"
                 >
                   <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     {row.label}

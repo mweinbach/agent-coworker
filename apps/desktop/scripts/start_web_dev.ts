@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "bun";
 
@@ -156,11 +157,18 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const webDevPort = process.env.COWORK_WEB_DEV_PORT?.trim() || "8281";
 
-  const viteArgs = [
+  // Vite may be hoisted to the repo root under Bun workspaces.
+  const viteBinCandidates = [
     path.join(desktopDir, "node_modules", "vite", "bin", "vite.js"),
-    "--config",
-    path.join(desktopDir, "vite.config.web.ts"),
+    path.join(repoRoot, "node_modules", "vite", "bin", "vite.js"),
   ];
+  const viteBin = viteBinCandidates.find((candidate) => existsSync(candidate));
+  if (!viteBin) {
+    console.error(`Could not find vite bin; tried:\n${viteBinCandidates.join("\n")}`);
+    process.exit(1);
+  }
+
+  const viteArgs = [viteBin, "--config", path.join(desktopDir, "vite.config.web.ts")];
 
   const viteProc = spawn({
     cmd: ["bun", ...viteArgs],

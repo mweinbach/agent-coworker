@@ -3,7 +3,7 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
-import { canonicalKey, canonicalPathsEqual, coworkPaths } from "../platform/paths";
+import { canonicalKey, coworkPaths, isInside, samePath } from "../platform/paths";
 import {
   CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
   CANVAS_DOCUMENT_MAX_BYTES,
@@ -89,7 +89,9 @@ function revisionMetadataMatches(
   right: { size: number; mtimeMs: number; ctimeMs: number },
 ): boolean {
   return (
-    left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+    left.size === right.size &&
+    Math.abs(left.mtimeMs - right.mtimeMs) < 1000 &&
+    Math.abs(left.ctimeMs - right.ctimeMs) < 1000
   );
 }
 
@@ -97,17 +99,12 @@ function fileIdentityMatches(
   left: Pick<Stats, "dev" | "ino">,
   right: Pick<Stats, "dev" | "ino">,
 ): boolean {
-  const leftHasStableIdentity = left.dev !== 0 || left.ino !== 0;
-  const rightHasStableIdentity = right.dev !== 0 || right.ino !== 0;
-  if (!leftHasStableIdentity && !rightHasStableIdentity) {
+  const leftHasStableIdentity = left.ino !== 0;
+  const rightHasStableIdentity = right.ino !== 0;
+  if (!leftHasStableIdentity || !rightHasStableIdentity) {
     return true;
   }
-  return (
-    leftHasStableIdentity &&
-    rightHasStableIdentity &&
-    left.dev === right.dev &&
-    left.ino === right.ino
-  );
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function revisionFromStatAndDigest(
@@ -178,12 +175,11 @@ async function resolveWorkspaceRoot(cwd: string): Promise<string> {
 }
 
 function sameCanonicalPath(left: string, right: string): boolean {
-  return canonicalPathsEqual(left, right);
+  return samePath(left, right);
 }
 
 function assertInsideWorkspace(workspaceRoot: string, candidate: string): void {
-  const relative = path.relative(workspaceRoot, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isInside(workspaceRoot, candidate)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
 }

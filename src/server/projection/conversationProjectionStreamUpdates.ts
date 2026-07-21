@@ -6,13 +6,48 @@ import type { ConversationProjectionState } from "./conversationProjectionState"
 import type { ToolProjection } from "./conversationProjectionTools";
 import { normalizeToolArgsFromInput } from "./shared";
 
+type PendingBatch = {
+  turnId: string;
+  itemId: string;
+  chunks: string[];
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
 export function createStreamUpdateHandler(
   state: ConversationProjectionState,
   assistant: AssistantProjection,
   reasoning: ReasoningProjection,
   tools: ToolProjection,
 ) {
-  return (update: ModelStreamUpdate) => {
+  const pendingBatches = new Map<string, PendingBatch>();
+
+  const flushBatch = (key: string) => {
+    const batch = pendingBatches.get(key);
+    if (!batch) return;
+    if (batch.timer) {
+      clearTimeout(batch.timer);
+      batch.timer = null;
+    }
+    pendingBatches.delete(key);
+    const combined = batch.chunks.join("");
+    if (combined) {
+      state.opts.sink.emitAgentMessageDelta(batch.turnId, batch.itemId, combined);
+    }
+  };
+
+  const flushAllBatches = (turnId?: string) => {
+    for (const [key, batch] of [...pendingBatches.entries()]) {
+      if (!turnId || batch.turnId === turnId) {
+        flushBatch(key);
+      }
+    }
+  };
+
+  const handler = (update: ModelStreamUpdate) => {
+    if (update.kind !== "assistant_delta") {
+      flushAllBatches(update.turnId);
+    }
+
     if (reasoning.shouldCompleteReasoningBeforeStreamUpdate(update)) {
       reasoning.completeReasoningStateForTurn(update.turnId);
     }
@@ -20,9 +55,24 @@ export function createStreamUpdateHandler(
     if (update.kind === "assistant_delta") {
       if (!update.text) return;
       const assistantState = assistant.ensureActiveAssistantState(update.turnId);
-      assistantState.text = `${assistantState.text}${update.text}`;
+      if (!assistantState.textChunks) {
+        assistantState.textChunks = assistantState.text ? [assistantState.text] : [];
+      }
+      assistantState.textChunks.push(update.text);
       assistant.startAssistantState(update.turnId, assistantState);
-      state.opts.sink.emitAgentMessageDelta(update.turnId, assistantState.itemId, update.text);
+
+      const batchKey = `${update.turnId}:${assistantState.itemId}`;
+      let batch = pendingBatches.get(batchKey);
+      if (!batch) {
+        batch = {
+          turnId: update.turnId,
+          itemId: assistantState.itemId,
+          chunks: [],
+          timer: setTimeout(() => flushBatch(batchKey), 16),
+        };
+        pendingBatches.set(batchKey, batch);
+      }
+      batch.chunks.push(update.text);
       return;
     }
 
@@ -48,7 +98,10 @@ export function createStreamUpdateHandler(
         mode: update.mode,
       });
       reasoning.startBufferedReasoning(update.turnId, reasoningState);
-      reasoningState.text = `${reasoningState.text}${update.text}`;
+      if (!reasoningState.textChunks) {
+        reasoningState.textChunks = reasoningState.text ? [reasoningState.text] : [];
+      }
+      reasoningState.textChunks.push(update.text);
       if (update.text) {
         state.opts.sink.emitReasoningDelta(
           update.turnId,
@@ -88,7 +141,6 @@ export function createStreamUpdateHandler(
       state.toolInputByKey.set(fullKey, nextInput);
       if (existingState) {
         existingState.inputText = nextInput;
-        existingState.args = normalizeToolArgsFromInput(nextInput, existingState.args);
       }
       return;
     }
@@ -122,6 +174,8 @@ export function createStreamUpdateHandler(
       const { state: toolState } = tools.resolveToolState(update.turnId, update.key, update.name);
       if (update.args !== undefined) {
         toolState.args = update.args;
+      } else if (toolState.args === undefined && toolState.inputText) {
+        toolState.args = normalizeToolArgsFromInput(toolState.inputText);
       }
       if (update.retryOf !== undefined) {
         toolState.retryOf = update.retryOf;
@@ -174,6 +228,9 @@ export function createStreamUpdateHandler(
         approvalId: update.approvalId,
         toolCall: update.toolCall,
       };
+      if (toolState.args === undefined && toolState.inputText) {
+        toolState.args = normalizeToolArgsFromInput(toolState.inputText);
+      }
       toolState.args = toolState.args ?? tools.toolArgsFromApproval(update.toolCall);
       tools.publishToolStartedOrCompleted(update.turnId, toolState);
       return;
@@ -188,4 +245,8 @@ export function createStreamUpdateHandler(
       tools.failActiveToolStreamsForTurn(update.turnId, update.reason);
     }
   };
+
+  handler.flush = (turnId?: string) => flushAllBatches(turnId);
+
+  return handler;
 }

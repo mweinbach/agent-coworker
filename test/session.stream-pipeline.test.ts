@@ -120,7 +120,7 @@ describe("AgentSession stream pipeline", () => {
     await observabilityRuntimeInternal.resetForTests();
   });
 
-  test("provider raw stream events are emitted before derived normalized chunks", async () => {
+  test("provider raw stream events are emitted and redundant normalized chunks are suppressed for raw-backed replay", async () => {
     const { session, events } = makeSession();
     mockRunTurn.mockImplementationOnce(async (params: any) => {
       await params.onModelRawEvent?.({
@@ -152,7 +152,8 @@ describe("AgentSession stream pipeline", () => {
     const rawIndex = events.findIndex((evt) => evt.type === "model_stream_raw");
     const chunkIndex = events.findIndex((evt) => evt.type === "model_stream_chunk");
     expect(rawIndex).toBeGreaterThanOrEqual(0);
-    expect(chunkIndex).toBeGreaterThan(rawIndex);
+    // Redundant normalized stream chunk is suppressed for raw-backed replay
+    expect(chunkIndex).toBe(-1);
   });
 
   test("codex app-server raw JSON-RPC requests persist through the SQLite raw stream path", async () => {

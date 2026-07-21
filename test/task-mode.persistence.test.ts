@@ -8,6 +8,7 @@ import { getPendingTerminalTaskLock, getSessionTaskLock } from "../src/server/se
 import { SessionDb } from "../src/server/sessionDb";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
 import type { TaskCheckpoint, TaskRecord, TaskStatus, WorkItem } from "../src/shared/tasks";
+import { symlinkOrJunction } from "./helpers/platform";
 
 async function createHarness(
   options: {
@@ -4074,7 +4075,10 @@ describe("task mode persistence", () => {
       name: "path-swap",
       mutate: async ({ artifactPath, siblingPath }) => {
         await fs.rm(artifactPath);
-        await fs.symlink(siblingPath, artifactPath);
+        const link = await symlinkOrJunction(siblingPath, artifactPath, { type: "file" });
+        if (!link.created) {
+          await fs.copyFile(siblingPath, artifactPath);
+        }
       },
     },
   ];
@@ -4332,18 +4336,23 @@ describe("task mode persistence", () => {
         }),
       ).rejects.toThrow("Artifact does not exist");
 
-      await fs.symlink(outsidePath, artifactPath);
-      await expect(
-        harness.coordinator.proposeCompletion({
-          taskId: task.id,
-          workspacePath: harness.workspacePath,
-          expectedRevision: task.revision,
-          summary: "Ready after artifact symlink escape",
-        }),
-      ).rejects.toThrow("outside");
-      await fs.rm(artifactPath);
+      const linkEscape = await symlinkOrJunction(outsidePath, artifactPath, { type: "file" });
+      if (linkEscape.created) {
+        await expect(
+          harness.coordinator.proposeCompletion({
+            taskId: task.id,
+            workspacePath: harness.workspacePath,
+            expectedRevision: task.revision,
+            summary: "Ready after artifact symlink escape",
+          }),
+        ).rejects.toThrow("outside");
+        await fs.rm(artifactPath);
+      }
 
-      await fs.symlink(siblingPath, artifactPath);
+      const linkSwap = await symlinkOrJunction(siblingPath, artifactPath, { type: "file" });
+      if (!linkSwap.created) {
+        await fs.copyFile(siblingPath, artifactPath);
+      }
       await expect(
         harness.coordinator.proposeCompletion({
           taskId: task.id,
@@ -4564,7 +4573,10 @@ describe("task mode persistence", () => {
       });
 
       await fs.rm(artifactPath);
-      await fs.symlink(siblingPath, artifactPath);
+      const acceptSwapLink = await symlinkOrJunction(siblingPath, artifactPath, { type: "file" });
+      if (!acceptSwapLink.created) {
+        await fs.copyFile(siblingPath, artifactPath);
+      }
       await expect(
         harness.coordinator.acceptTask({
           taskId: task.id,

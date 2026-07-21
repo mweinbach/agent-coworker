@@ -447,7 +447,7 @@ export function NewChatLanding() {
               variant="outline"
               size="sm"
               disabled={composerLocked}
-              className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground"
+              className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:border-border hover:bg-background hover:text-foreground"
               onClick={() => {
                 updateComposerText(starter.prompt);
                 requestAnimationFrame(() => textareaRef.current?.focus());
@@ -468,7 +468,7 @@ export function NewChatLanding() {
           />
         </div>
         <MessageComposerRoot
-          className="w-full max-w-[42rem] rounded-[28px] border-border/55 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
+          className="w-full max-w-[42rem] rounded-[28px] border-border/45 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments

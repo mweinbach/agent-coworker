@@ -447,8 +447,8 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         key={option.value}
                         htmlFor={`mcp-connection-${option.value}`}
                         className={cn(
-                          "flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/40",
-                          connectionKind === option.value && "border-primary/55 bg-primary/5",
+                          "flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-muted/40",
+                          connectionKind === option.value && "bg-primary/10",
                         )}
                       >
                         <RadioGroupItem
@@ -547,8 +547,8 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                           key={option.value}
                           htmlFor={`mcp-location-${option.value}`}
                           className={cn(
-                            "flex cursor-pointer items-start gap-3 rounded-lg border border-border/70 p-3 transition-colors hover:bg-muted/40",
-                            createLocation === option.value && "border-primary/55 bg-primary/5",
+                            "flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-muted/40",
+                            createLocation === option.value && "bg-primary/10",
                           )}
                         >
                           <RadioGroupItem
@@ -1199,10 +1199,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         <CollapsibleContent>
           <div className="flex flex-col gap-2 px-4 pb-4 text-xs">
             {files.map((file) => (
-              <div
-                key={file.path}
-                className="rounded-md border border-border/70 bg-muted/20 px-3 py-2"
-              >
+              <div key={file.path} className="rounded-lg bg-foreground/[0.04] px-3 py-2">
                 <div className="font-medium text-foreground">
                   {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
                 </div>

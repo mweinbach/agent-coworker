@@ -36,6 +36,7 @@ import type {
   ConversationSourceRequest,
   ConversationWorkspaceMappingInput,
 } from "../../../lib/wsProtocol";
+import { SettingsEmptyState } from "../SettingsPrimitives";
 
 const SOURCE_OPTIONS: Array<{ source: ConversationImportSource; label: string; hint: string }> = [
   { source: "codex", label: "Codex", hint: "~/.codex/state_5.sqlite and sessions" },
@@ -255,8 +256,8 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                       key={option.source}
                       htmlFor={`conversation-import-source-${option.source}`}
                       className={cn(
-                        "flex cursor-pointer items-start gap-2 rounded-lg border border-border/60 bg-card/60 p-3",
-                        checked && "border-primary/45 bg-primary/5",
+                        "flex cursor-pointer items-start gap-2 p-3 transition-colors hover:bg-muted/40",
+                        checked && "bg-primary/10",
                       )}
                     >
                       <Checkbox
@@ -329,18 +330,16 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
             ) : null}
 
             {busy ? (
-              <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-12 text-sm text-muted-foreground">
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
                 <Spinner />
                 {busy === "import" ? "Importing conversations…" : "Scanning conversations…"}
               </div>
             ) : conversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/10 py-12 text-center">
-                <DatabaseIcon className="size-7 text-muted-foreground/60" />
-                <div className="text-sm font-medium text-foreground">No conversations found</div>
-                <div className="text-xs text-muted-foreground">
-                  Choose sources and refresh to preview importable chats.
-                </div>
-              </div>
+              <SettingsEmptyState
+                icon={<DatabaseIcon />}
+                title="No conversations found"
+                description="Choose sources and refresh to preview importable chats."
+              />
             ) : (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-3">
@@ -352,7 +351,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                     {formatCount(selectedConversations.length, "selected")}
                   </div>
                 </div>
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col divide-y divide-border/40">
                   {conversations.map((conversation) => {
                     const checked = selectedFingerprints.has(conversation.fingerprint);
                     const needsMapping = conversation.mapping.status === "missing";
@@ -362,10 +361,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                     return (
                       <div
                         key={`${conversation.source}:${conversation.fingerprint}`}
-                        className={cn(
-                          "rounded-lg border border-border/60 bg-card/70 p-3",
-                          blocked && "border-warning/45 bg-warning/10",
-                        )}
+                        className={cn("py-3", blocked && "bg-warning/10")}
                       >
                         <div className="flex items-start gap-3">
                           <Checkbox

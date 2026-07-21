@@ -113,7 +113,7 @@ function StatItem({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/45 bg-background/50 text-muted-foreground">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.045] text-muted-foreground">
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
@@ -189,7 +189,7 @@ function BackupSidebar({
                 size="sm"
                 onClick={() => onSelectEntry(entry.targetSessionId)}
                 className={cn(
-                  "h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm shadow-none transition-all",
+                  "h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm shadow-none",
                   isBackupSelected
                     ? "border border-border/65 bg-background/72 font-medium text-foreground"
                     : "border border-transparent text-foreground hover:bg-background/35",
@@ -234,7 +234,7 @@ function BackupSidebar({
                         size="sm"
                         onClick={() => onSelectCheckpoint(entry.targetSessionId, cp.id)}
                         className={cn(
-                          "h-auto w-full justify-between rounded-md px-2.5 py-1.5 text-left text-xs shadow-none transition-all",
+                          "h-auto w-full justify-between rounded-md px-2.5 py-1.5 text-left text-xs shadow-none",
                           isCpSelected
                             ? "border border-border/55 bg-background/60 font-medium text-foreground"
                             : "border border-transparent text-muted-foreground hover:bg-background/28",
@@ -278,7 +278,7 @@ function BackupDetailView({
     <div className="flex min-h-[360px] flex-col overflow-hidden">
       <div className="border-b border-border/55 px-5 py-4">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border/45 bg-background/55 text-muted-foreground">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.045] text-muted-foreground">
             <FolderOpenIcon className="h-5 w-5" />
           </div>
           <div className="flex-1 min-w-0">
@@ -309,7 +309,7 @@ function BackupDetailView({
         </div>
       </div>
 
-      <div className="border-b border-border/45 bg-background/35 px-5 py-4">
+      <div className="border-b border-border/45 px-5 py-4">
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
           <StatItem label="Created" value={formatTimestamp(entry.createdAt)} icon={ClockIcon} />
           <StatItem
@@ -440,7 +440,7 @@ function CheckpointDeltaView({
     <div className="flex min-h-[360px] flex-col overflow-hidden">
       <div className="flex shrink-0 items-center justify-between border-b border-border/55 px-5 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/45 bg-background/55 text-muted-foreground">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground/[0.045] text-muted-foreground">
             <FileTextIcon className="h-4 w-4" />
           </div>
           <div>
@@ -516,7 +516,7 @@ function CheckpointDeltaView({
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex shrink-0 items-center justify-between border-b border-border/40 bg-background/35 px-5 py-3 text-xs">
+        <div className="flex shrink-0 items-center justify-between border-b border-border/40 px-5 py-3 text-xs">
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
             <Badge variant="secondary" className="font-mono text-[10px]">
@@ -1087,7 +1087,7 @@ export function BackupPage(props: BackupPageProps = {}) {
 
       {showInspector ? (
         <div
-          className="grid min-h-0 overflow-hidden rounded-lg border border-border/60 bg-background/40 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]"
+          className="grid min-h-0 overflow-hidden rounded-xl border border-border/50 bg-card lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]"
           data-backup-split="true"
         >
           <BackupSidebar
@@ -1110,7 +1110,7 @@ export function BackupPage(props: BackupPageProps = {}) {
           <div className="min-w-0" data-backup-detail="true">
             {!selectedEntry ? (
               <SettingsEmptyState
-                className="min-h-44 border-0 bg-transparent shadow-none"
+                className="min-h-44"
                 icon={<ArchiveIcon />}
                 title="Select a backup to inspect"
                 description="Choose a session or checkpoint to inspect restore actions and changed files."

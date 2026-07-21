@@ -117,7 +117,7 @@ describe("desktop token consumers", () => {
     }
   });
 
-  test("app-owned tool cards use token-backed shadows and status colors", () => {
+  test("app-owned tool cards use token-backed flat surfaces and status colors", () => {
     const html = renderToStaticMarkup(
       createElement(ToolCard, {
         name: "read",
@@ -126,7 +126,7 @@ describe("desktop token consumers", () => {
       }),
     );
 
-    expect(html).toContain("app-shadow-surface");
+    expect(html).toContain("bg-foreground/[0.02]");
     expect(html).toContain("text-success/90");
   });
 

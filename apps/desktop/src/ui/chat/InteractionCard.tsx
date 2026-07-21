@@ -87,7 +87,7 @@ export function InteractionCard(props: {
   ) : null;
 
   const retryFooter = failed ? (
-    <CardFooter className="flex items-center justify-between gap-3 border-t border-border/60 px-4 py-3">
+    <CardFooter className="flex items-center justify-between gap-3 border-t border-border/40 px-4 py-3">
       <p className="text-xs text-destructive" role="alert">
         {interaction.error ?? "The response could not be sent."}
       </p>
@@ -114,10 +114,10 @@ export function InteractionCard(props: {
     return (
       <Card
         aria-label="Agent question"
-        className="gap-0 border-primary/30 bg-primary/[0.035] py-0"
+        className="gap-0 border-primary/25 bg-primary/[0.04] py-0"
         data-interaction-id={interaction.requestId}
       >
-        <CardHeader className="gap-2 border-b border-border/60 px-4 py-3">
+        <CardHeader className="gap-2 border-b border-border/40 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <Badge variant="secondary">
               <MessageSquareIcon data-icon="inline-start" />
@@ -206,12 +206,12 @@ export function InteractionCard(props: {
       aria-label={sandbox ? "Sandbox approval" : "Command approval"}
       className={
         sandbox
-          ? "gap-0 border-destructive/40 bg-destructive/5 py-0"
-          : "gap-0 border-warning/40 bg-warning/5 py-0"
+          ? "gap-0 border-destructive/30 bg-destructive/[0.04] py-0"
+          : "gap-0 border-warning/30 bg-warning/[0.05] py-0"
       }
       data-interaction-id={interaction.requestId}
     >
-      <CardHeader className="gap-2 border-b border-border/60 px-4 py-3">
+      <CardHeader className="gap-2 border-b border-border/40 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <Badge variant={sandbox ? "destructive" : "secondary"}>
             <Icon data-icon="inline-start" />
@@ -228,14 +228,14 @@ export function InteractionCard(props: {
         {sandbox ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
       </CardHeader>
       <CardContent className="px-4 py-3">
-        <code className="block max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 px-2.5 py-2 text-xs">
+        <code className="block max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-foreground/[0.05] px-2.5 py-2 text-xs">
           {interaction.command}
         </code>
       </CardContent>
       {failed ? (
         retryFooter
       ) : (
-        <CardFooter className="justify-end gap-2 border-t border-border/60 px-4 py-3">
+        <CardFooter className="justify-end gap-2 border-t border-border/40 px-4 py-3">
           <Button
             type="button"
             size="sm"

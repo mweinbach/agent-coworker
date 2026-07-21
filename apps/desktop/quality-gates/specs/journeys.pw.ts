@@ -99,7 +99,7 @@ for (const mode of ["light", "dark", "system"] as const) {
       const nativeBackground = await electronApp.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows()[0]?.getBackgroundColor().toLowerCase(),
       );
-      expect(nativeBackground).toContain(mode === "light" ? "dde1ca" : "171d13");
+      expect(nativeBackground).toContain(mode === "light" ? "e8e8e5" : "141415");
       const lifecycle = await quality.getLifecycle();
       expect(lifecycle.networkGuardInstalled).toBeLessThan(lifecycle.captureReady);
       expect(lifecycle.captureReady).toBeLessThan(lifecycle.firstWindowCreated);

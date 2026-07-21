@@ -16,7 +16,7 @@ import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers";
 import { Badge } from "../../../components/ui/badge";
 import { Button, buttonVariants } from "../../../components/ui/button";
-import { Card, CardContent } from "../../../components/ui/card";
+import { CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Collapsible,
@@ -50,6 +50,7 @@ import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
+import { SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
 import { ManageModelsDialog } from "./ManageModelsDialog";
 import {
   describeLmStudioCard,
@@ -827,7 +828,7 @@ export function ProvidersPage({
                   </div>
 
                   {lmStudioModels.length > 0 ? (
-                    <div className="space-y-1">
+                    <div className="divide-y divide-border/40">
                       {lmStudioModels.map((model) => {
                         const isHidden = hiddenModels.has(model.id);
                         const checked = !isHidden;
@@ -839,7 +840,7 @@ export function ProvidersPage({
                         return (
                           <div
                             key={model.id}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-border/40 px-2 py-1.5 hover:bg-muted/15"
+                            className="flex items-center justify-between gap-3 px-2 py-1.5 hover:bg-muted/15"
                           >
                             <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
                               <div className="truncate text-xs font-medium text-foreground">
@@ -863,7 +864,7 @@ export function ProvidersPage({
                       })}
                     </div>
                   ) : (
-                    <div className="rounded-sm border border-dashed border-border/60 px-3 py-2 text-sm text-muted-foreground">
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
                       {lmStudioCard.emptyStateMessage}
                     </div>
                   )}
@@ -987,7 +988,7 @@ export function ProvidersPage({
                       <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                         Rate limits
                       </div>
-                      <div className="divide-y divide-border/50 rounded-sm border border-border/50 bg-muted/5">
+                      <div className="divide-y divide-border/40">
                         {visibleRateLimits.map((entry: any) => {
                           const creditsSummary = formatCreditsSummary(entry);
                           const primaryUsedPercent = usedPercentFromWindow(entry?.primaryWindow);
@@ -1326,15 +1327,15 @@ export function ProvidersPage({
   return (
     <div className="space-y-5">
       {!canConnectProvider ? (
-        <Card className="border-border/80 bg-card/85">
-          <CardContent className="p-6 text-center text-sm text-muted-foreground">
+        <SettingsSection>
+          <div className="p-6 text-center text-sm text-muted-foreground">
             Add a workspace first to connect providers.
-          </CardContent>
-        </Card>
+          </div>
+        </SettingsSection>
       ) : null}
 
       {surface === "all" ? (
-        <div className="app-shadow-surface relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
+        <div className="relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5">
           {(["models", "tools"] as const).map((tab) => (
             <Button
               key={tab}
@@ -1354,7 +1355,7 @@ export function ProvidersPage({
               {activeTab === tab && (
                 <motion.div
                   layoutId="providers-active-tab"
-                  className="app-shadow-surface absolute inset-0 -z-10 rounded-lg border border-border/55 bg-panel/85 backdrop-blur-sm"
+                  className="absolute inset-0 -z-10 rounded-lg border border-border/55 bg-card"
                   transition={{ type: "spring", stiffness: 500, damping: 30 }}
                 />
               )}
@@ -1366,43 +1367,38 @@ export function ProvidersPage({
 
       {surface === "models" ? (
         <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-foreground">Providers</div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                Accounts and API keys Cowork can use to run models.
-              </div>
-            </div>
-            {disconnectedModelProviders.length > 0 ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setNewProviderOpen(true)}
-              >
-                <PlusIcon data-icon="inline-start" />
-                New Provider
-              </Button>
-            ) : null}
-          </div>
-          {connectedModelProviders.length > 0 ? (
-            <div className="divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface">
-              {connectedModelProviders.map(renderProviderCard)}
-            </div>
-          ) : (
-            <Card className="border-dashed border-border/75 bg-card/60 shadow-none">
-              <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
-                <div className="text-sm text-muted-foreground">
-                  No providers connected yet. Connect one to start chatting.
-                </div>
-                <Button type="button" size="sm" onClick={() => setNewProviderOpen(true)}>
+          <SettingsSection
+            title="Providers"
+            description="Accounts and API keys Cowork can use to run models."
+            action={
+              disconnectedModelProviders.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => setNewProviderOpen(true)}
+                >
                   <PlusIcon data-icon="inline-start" />
                   New Provider
                 </Button>
-              </CardContent>
-            </Card>
-          )}
+              ) : null
+            }
+          >
+            {connectedModelProviders.length > 0 ? (
+              connectedModelProviders.map(renderProviderCard)
+            ) : (
+              <SettingsEmptyState
+                title="No providers connected yet. Connect one to start chatting."
+                action={
+                  <Button type="button" size="sm" onClick={() => setNewProviderOpen(true)}>
+                    <PlusIcon data-icon="inline-start" />
+                    New Provider
+                  </Button>
+                }
+              />
+            )}
+          </SettingsSection>
           <Dialog open={newProviderOpen} onOpenChange={setNewProviderOpen}>
             <DialogContent className="gap-0 p-0 sm:max-w-2xl">
               <DialogHeader className="border-b border-border/70 px-5 py-4">
@@ -1426,7 +1422,7 @@ export function ProvidersPage({
       ) : surface === "tools" ? null : (
         <div
           className={cn(
-            "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
+            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
             effectiveTab !== "models" && "hidden",
           )}
         >
@@ -1434,21 +1430,23 @@ export function ProvidersPage({
         </div>
       )}
       {surface === "tools" ? (
-        <div>
-          <div className="text-sm font-semibold text-foreground">Search &amp; tool keys</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
-            Accounts and API keys for search and other external tools.
-          </div>
+        <SettingsSection
+          title="Search & tool keys"
+          description="Accounts and API keys for search and other external tools."
+          className="animate-in fade-in slide-in-from-bottom-2 duration-300"
+        >
+          {allToolElements}
+        </SettingsSection>
+      ) : (
+        <div
+          className={cn(
+            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
+            effectiveTab !== "tools" && "hidden",
+          )}
+        >
+          {allToolElements}
         </div>
-      ) : null}
-      <div
-        className={cn(
-          "divide-y divide-border/30 overflow-hidden rounded-xl border border-border/75 bg-card/85 app-shadow-surface animate-in fade-in slide-in-from-bottom-2 duration-300",
-          effectiveTab !== "tools" && "hidden",
-        )}
-      >
-        {allToolElements}
-      </div>
+      )}
       <ManageModelsDialog
         provider={manageModelsProvider}
         onOpenChange={(open) => {

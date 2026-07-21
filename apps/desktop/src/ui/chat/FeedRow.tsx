@@ -321,7 +321,7 @@ export const FeedRow = memo(function FeedRow(props: {
         <MessageContent className="relative">
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
-              <BubbleContent>
+              <BubbleContent className="text-[15px] leading-[1.65]">
                 <div data-slot={isStreamingAssistant ? "streaming-markdown" : "markdown"}>
                   <DesktopMarkdown
                     citationAnnotations={item.annotations}
@@ -344,9 +344,9 @@ export const FeedRow = memo(function FeedRow(props: {
             <Bubble
               variant="tinted"
               align="end"
-              className="*:data-[slot=bubble-content]:border-primary/20 *:data-[slot=bubble-content]:bg-primary/[0.08] dark:*:data-[slot=bubble-content]:border-primary/25 dark:*:data-[slot=bubble-content]:bg-primary/[0.12]"
+              className="*:data-[slot=bubble-content]:border-primary/15 *:data-[slot=bubble-content]:bg-primary/[0.07] dark:*:data-[slot=bubble-content]:border-primary/20 dark:*:data-[slot=bubble-content]:bg-primary/[0.10]"
             >
-              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 shadow-[var(--shadow-surface-base)] whitespace-pre-wrap selection:bg-primary/20">
+              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap selection:bg-primary/20">
                 <div className="flex flex-col gap-2">
                   {canvasRequest ? (
                     <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />

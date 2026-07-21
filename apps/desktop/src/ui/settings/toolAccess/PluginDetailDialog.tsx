@@ -19,7 +19,7 @@ import {
   type SkillInstallationEntry,
 } from "../../../lib/wsProtocol";
 import { OperationFeedback } from "../../OperationFeedback";
-import { EntityIcon, SettingsStatTile } from "../SettingsPrimitives";
+import { EntityIcon, SettingsSection, SettingsStatTile } from "../SettingsPrimitives";
 import { pluginIcon, pluginSkillDisplayName, skillIcon } from "./catalogShared";
 import { actionPending } from "./skillUtils";
 
@@ -237,7 +237,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               </div>
 
               {installedPlugin?.updateCheckReason ? (
-                <div className="rounded-lg border border-border/60 bg-muted/15 px-3 py-2 text-sm text-muted-foreground">
+                <div className="text-sm text-muted-foreground">
                   {installedPlugin.updateCheckReason}
                 </div>
               ) : null}
@@ -251,67 +251,63 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
 
               {installedPlugin && installedPlugin.skills.length > 0 ? (
-                <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Bundled Skills</h3>
-                  <div className="divide-y divide-border/30 overflow-hidden rounded-lg border border-border/60 bg-card/85">
-                    {installedPlugin.skills.map((skill) => {
-                      const displayName = pluginSkillDisplayName(installedPlugin.id, skill);
-                      const installation = skillInstallationsByName.get(skill.name) ?? null;
-                      const operation = installation
-                        ? ["enable", "disable"]
-                            .map(
-                              (action) =>
-                                operationsByKey[
-                                  operationKey("skill", action, installation.installationId)
-                                ],
-                            )
-                            .find(
-                              (candidate) =>
-                                candidate?.status === "pending" || candidate?.status === "error",
-                            )
-                        : undefined;
-                      const togglePending = installation
-                        ? skillTogglePending(installation.installationId) ||
-                          operation?.status === "pending"
-                        : false;
-                      return (
-                        <div
-                          key={skill.name}
-                          className="flex flex-wrap items-center gap-3 px-4 py-3"
-                        >
-                          <EntityIcon src={skillIcon(skill)} name={displayName} />
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {displayName}
-                            </div>
-                            <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                              {skill.interface?.shortDescription || skill.description}
-                            </div>
+                <SettingsSection title="Bundled Skills">
+                  {installedPlugin.skills.map((skill) => {
+                    const displayName = pluginSkillDisplayName(installedPlugin.id, skill);
+                    const installation = skillInstallationsByName.get(skill.name) ?? null;
+                    const operation = installation
+                      ? ["enable", "disable"]
+                          .map(
+                            (action) =>
+                              operationsByKey[
+                                operationKey("skill", action, installation.installationId)
+                              ],
+                          )
+                          .find(
+                            (candidate) =>
+                              candidate?.status === "pending" || candidate?.status === "error",
+                          )
+                      : undefined;
+                    const togglePending = installation
+                      ? skillTogglePending(installation.installationId) ||
+                        operation?.status === "pending"
+                      : false;
+                    return (
+                      <div key={skill.name} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                        <EntityIcon src={skillIcon(skill)} name={displayName} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {displayName}
                           </div>
-                          <Switch
-                            checked={installation?.enabled ?? skill.enabled}
-                            disabled={installation === null || togglePending}
-                            aria-label={`Enable ${displayName}`}
-                            onCheckedChange={(enabled) => {
-                              if (!installation) return;
-                              if (enabled) {
-                                void enableSkillInstallation(installation.installationId);
-                              } else {
-                                void disableSkillInstallation(installation.installationId);
-                              }
-                            }}
-                          />
-                          <OperationFeedback operation={operation} className="basis-full" />
+                          <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                            {skill.interface?.shortDescription || skill.description}
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
+                        <Switch
+                          checked={installation?.enabled ?? skill.enabled}
+                          disabled={installation === null || togglePending}
+                          aria-label={`Enable ${displayName}`}
+                          onCheckedChange={(enabled) => {
+                            if (!installation) return;
+                            if (enabled) {
+                              void enableSkillInstallation(installation.installationId);
+                            } else {
+                              void disableSkillInstallation(installation.installationId);
+                            }
+                          }}
+                        />
+                        <OperationFeedback operation={operation} className="basis-full" />
+                      </div>
+                    );
+                  })}
+                </SettingsSection>
               ) : null}
 
               {installedPlugin && installedPlugin.mcpServers.length > 0 ? (
                 <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Bundled MCP Servers</h3>
+                  <h3 className="text-sm font-semibold leading-tight text-foreground">
+                    Bundled MCP Servers
+                  </h3>
                   <div className="flex flex-wrap gap-2">
                     {installedPlugin.mcpServers.map((serverName) => (
                       <Badge key={serverName} variant="outline">
@@ -323,28 +319,22 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
 
               {installedPlugin && installedPlugin.apps.length > 0 ? (
-                <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Bundled Apps</h3>
-                  <div className="space-y-2">
-                    {installedPlugin.apps.map((app) => (
-                      <div
-                        key={app.id}
-                        className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2"
-                      >
-                        <div className="text-sm font-medium">{app.displayName}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {app.description ?? app.id}
-                          {app.authType ? ` / auth: ${app.authType}` : ""}
-                        </div>
+                <SettingsSection title="Bundled Apps">
+                  {installedPlugin.apps.map((app) => (
+                    <div key={app.id} className="px-4 py-3">
+                      <div className="text-sm font-medium">{app.displayName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {app.description ?? app.id}
+                        {app.authType ? ` / auth: ${app.authType}` : ""}
                       </div>
-                    ))}
-                  </div>
-                </section>
+                    </div>
+                  ))}
+                </SettingsSection>
               ) : null}
 
               {plugin.warnings.length > 0 ? (
                 <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Warnings</h3>
+                  <h3 className="text-sm font-semibold leading-tight text-foreground">Warnings</h3>
                   <div className="rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-3 text-sm text-destructive">
                     {plugin.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>

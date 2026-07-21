@@ -37,7 +37,7 @@ describe("getPlatformBrowserWindowOptions", () => {
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: "#00000000",
-        symbolColor: "#556041",
+        symbolColor: getNativeCaptionSymbolColor("dark"),
         height: 48,
       },
     });
@@ -48,7 +48,7 @@ describe("getPlatformBrowserWindowOptions", () => {
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: "#00000000",
-        symbolColor: "#eef0dc",
+        symbolColor: getNativeCaptionSymbolColor("light"),
         height: 48,
       },
     });
@@ -59,7 +59,7 @@ describe("getPlatformBrowserWindowOptions", () => {
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: NATIVE_THEME_TOKENS.shellSurface.light,
-        symbolColor: "#556041",
+        symbolColor: getNativeCaptionSymbolColor("dark"),
         height: 48,
       },
     });
@@ -70,7 +70,7 @@ describe("getPlatformBrowserWindowOptions", () => {
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: NATIVE_THEME_TOKENS.shellSurface.dark,
-        symbolColor: "#eef0dc",
+        symbolColor: getNativeCaptionSymbolColor("light"),
         height: 48,
       },
     });
@@ -166,8 +166,8 @@ describe("syncWindowChromeAppearance", () => {
     });
     expect(win.setTitleBarOverlayCalls).toEqual([
       {
-        color: "#171d13",
-        symbolColor: "#eef0dc",
+        color: NATIVE_THEME_TOKENS.shellSurface.dark,
+        symbolColor: getNativeCaptionSymbolColor("light"),
         height: 48,
       },
     ]);
@@ -182,7 +182,7 @@ describe("syncWindowChromeAppearance", () => {
     expect(win.setTitleBarOverlayCalls).toEqual([
       {
         color: "#00000000",
-        symbolColor: "#eef0dc",
+        symbolColor: getNativeCaptionSymbolColor("light"),
         height: 48,
       },
     ]);

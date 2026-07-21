@@ -11,13 +11,17 @@ Short reference for the Electron desktop UI. Source of truth lives in code under
 
 ## Tokens overview
 
+Palette philosophy: **neutral canvas, olive signature**. Surfaces/borders/text are warm-neutral grays; the olive `--accent-base` (`#6f8042` light / `#a8b963` dark) is reserved for primary actions, active nav, focus rings, and live status — never as a wash over whole surfaces.
+
 | Layer | Path | Role |
 |-------|------|------|
-| Palette / bases | `styles/tokens/base.css` | Light/dark app colors, radius base, surface shadows |
+| Palette / bases | `styles/tokens/base.css` | Light/dark app colors, radius base, surface shadows, motion easings |
 | Platform overrides | `styles/tokens/platform.css` | Glass, blur, high-contrast |
 | Semantic bridge | `styles/theme-bridge.css` | Maps bases → shadcn/Tailwind (`--color-*`, surfaces, focus) |
 | Utilities | `styles/token-utilities.css` | Shared helpers (e.g. focus utility) |
 | Platform chrome | `styles/platform/{darwin,win32,linux}.css` | Titlebar z-index, drag regions, caption buttons |
+
+**Pitfall:** in this theme `text-accent` / `bg-accent` refer to the neutral *surface* accent (hover fill), not the brand olive. For olive text/fills use `text-primary` / `bg-primary/10`-style classes.
 
 ### Surfaces (semantic)
 
@@ -78,16 +82,21 @@ Prefer `focus-visible` and, for hover-only row actions, **`group-focus-within:`*
 
 ## Motion
 
-- Prefer short transitions (`150–200ms`, ease-out) on opacity/color/transform
-- Respect `prefers-reduced-motion`: global kill-switch in `styles.css` zeros animation/transition duration; also disable AutoAnimate/enter classes with `motion-reduce:*`
-- Sidebar collapse and file-explorer row enter animations are reduced-motion aware
+- Motion tokens in `tokens/base.css`: durations `--motion-fast/base/slow` (120/200/320ms) and easings `--ease-standard`, `--ease-out-strong` (entering elements), `--ease-in-out-strong` (on-screen movement), `--ease-drawer`. Keep UI animation under 300ms; never use `ease-in`.
+- Press feedback: `Button` scales to `0.97` on `:active` (150ms ease-out); hover transforms belong behind `@media (hover: hover) and (pointer: fine)`.
+- Overlays (popover/dropdown/select/tooltip) scale from their trigger via Radix `--radix-*-transform-origin` (already wired in the shadcn primitives); dialogs stay centered.
+- Chat/activity utilities in `styles.css`: `activity-trace-content` (Radix-height expand/collapse for every collapsible in the activity system — nothing snaps open), `activity-live-dot` (soft 2s pulse for in-progress state — use instead of `animate-pulse`), `reasoning-section-in`, `chat-feed-content > *` (mount-only row entrances; never animate streaming deltas), `chat-jump-in`.
+- Respect `prefers-reduced-motion`: global kill-switch in `styles.css` zeros animation/transition duration; each chat/activity utility also has an explicit off-rule. Reduced motion means fades only, no movement.
+- Sidebar collapse and file-explorer row enter animations are reduced-motion aware.
 
 ## Density & type
 
 - Chat reading column: ~`max-w-3xl` for feed rows
+- Message body text: `text-[15px] leading-[1.65]` (assistant and user bubbles); activity/tool rows stay compact at `text-[13px]` / `text-[11px]`
 - Compact chrome: `text-xs` / `text-[11px]` for labels; avoid sub-10px for primary copy
 - Hit targets: icon buttons typically `size-6`–`size-7` (aim ≥ 28px for primary chrome)
 - Binary settings: shared `Switch`; multi-select checklists: `Checkbox`
+- Settings sections are flat: one `rounded-xl border border-border/50 bg-card` container with `divide-y` hairlines per section — compact rows and separators, **no nested rounded subcards**. Inner wells for raw code/JSON: `rounded-lg bg-foreground/[0.04]`, no border.
 
 ## Layout owners
 

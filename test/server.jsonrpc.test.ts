@@ -192,6 +192,9 @@ describe("server JSON-RPC websocket mode", () => {
       await response;
       const collector = collectMessages(ws);
 
+      // Wait for workspace file watcher setup on Windows
+      await Bun.sleep(100);
+
       await fs.writeFile(sourcePath, "external update", "utf8");
       const external = await collector.waitFor((message) => {
         const params = message.params as Record<string, unknown> | undefined;

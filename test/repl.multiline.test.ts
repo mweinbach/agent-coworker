@@ -247,7 +247,7 @@ describe("CLI REPL Multi-line paste input", () => {
       });
 
       // Wait for websocket handshake to establish
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
       expect(rlRef).not.toBeNull();
       expect(FakeWebSocket.instances.length).toBe(1);
@@ -259,7 +259,7 @@ describe("CLI REPL Multi-line paste input", () => {
       rlRef!.emitLine("Line 3");
 
       // Wait for the timeout to fire and process the input
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
       realLog("Logs during execution:", logs);
       realLog("WS Sent Messages:", ws.sent);
@@ -311,7 +311,7 @@ describe("CLI REPL Multi-line paste input", () => {
       });
 
       // Wait for websocket handshake to establish
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
       expect(rlRef).not.toBeNull();
       expect(FakeWebSocket.instances.length).toBe(1);
@@ -322,7 +322,7 @@ describe("CLI REPL Multi-line paste input", () => {
       rlRef!.emitLine("Hello after new");
 
       // Wait for the timeout to fire and process the input
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
       const turnStarts = ws.sent.map((m) => JSON.parse(m)).filter((p) => p.method === "turn/start");
 

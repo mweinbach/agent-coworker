@@ -14,6 +14,7 @@ import {
   installFetchStub,
   makeResearchRecord,
   makeTmpCoworkHome,
+  removeTmpCoworkHome,
   ResearchService,
   registerResearchServiceHooks,
   researchRuntimeImpls,
@@ -76,7 +77,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -123,7 +124,7 @@ describe("research service", () => {
       await expect(fs.stat(metadataPath)).resolves.toBeDefined();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -171,7 +172,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -232,7 +233,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -297,7 +298,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -329,7 +330,7 @@ describe("research service", () => {
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -362,7 +363,7 @@ describe("research service", () => {
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -409,7 +410,7 @@ describe("research service", () => {
       expect(await service.rename("missing-id", "x")).toBeNull();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 });

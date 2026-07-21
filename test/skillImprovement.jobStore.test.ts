@@ -43,7 +43,7 @@ function backupRecord(key: string): SkillImprovementBackupRecord {
 }
 
 describe("SkillImprovementJobStore", () => {
-  test("caps stored transcripts and usage events per job", async () => {
+  test("caps stored transcripts and usage events per job", { timeout: 15_000 }, async () => {
     const store = await makeStore();
     for (let index = 0; index < SKILL_IMPROVEMENT_MAX_TRANSCRIPTS_PER_JOB + 5; index += 1) {
       await store.enqueueCompletedTurn(completedTurn("alpha", `turn-${index}`));

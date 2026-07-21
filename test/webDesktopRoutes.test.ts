@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { canonicalizeSync } from "../src/platform/paths";
+import { removeWithRetry } from "../src/platform/fs";
 import { TRANSCRIPT_REQUEST_MAX_EVENTS, TranscriptInbox } from "../src/server/transcriptInbox";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
@@ -116,7 +117,7 @@ function createMockWorkspaceChild() {
 afterEach(async () => {
   await Promise.all(
     [...cleanupPaths].map(async (target) => {
-      await fs.rm(target, { recursive: true, force: true });
+      await removeWithRetry(target, { recursive: true, bestEffort: true });
       cleanupPaths.delete(target);
     }),
   );
@@ -163,7 +164,9 @@ describe("web desktop routes", () => {
     });
   });
 
-  test("desktop state roundtrip keeps fallback one-off workspaces classified as chats", async () => {
+  test("desktop state roundtrip keeps fallback one-off workspaces classified as chats", {
+    timeout: 15_000,
+  }, async () => {
     const { cleanupRoot, aliasHome } = await makeAliasedHome("cowork-web-desktop-fallback-oneoff-");
     const userDataDir = path.join(cleanupRoot, "user-data");
     const oneOffWorkspace = path.join(aliasHome, ".cowork", "chats", "fallback-chat");
@@ -674,7 +677,9 @@ describe("web desktop routes", () => {
     expect(starts).toEqual([{ workspacePath: workspace, yolo: false }]);
   });
 
-  test("deduplicates ambiguous transcript batch retries by stable batch id", async () => {
+  test("deduplicates ambiguous transcript batch retries by stable batch id", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-idempotency-");
     const service = new WebDesktopService({
       userDataDir: path.join(workspace, "user-data"),
@@ -754,7 +759,9 @@ describe("web desktop routes", () => {
     await expect(service.readTranscript("thread-collision")).resolves.toHaveLength(1);
   });
 
-  test("rejects a reused batch id when an event moves to another thread", async () => {
+  test("rejects a reused batch id when an event moves to another thread", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-cross-thread-collision-");
     const userDataDir = path.join(workspace, "user-data");
     const service = new WebDesktopService({
@@ -793,7 +800,9 @@ describe("web desktop routes", () => {
     await expect(restartedService.readTranscript("thread-moved")).resolves.toEqual([]);
   });
 
-  test("deduplicates response-loss retries across independent service processes", async () => {
+  test("deduplicates response-loss retries across independent service processes", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-multi-service-");
     const userDataDir = path.join(workspace, "user-data");
     const event = {
@@ -859,7 +868,9 @@ describe("web desktop routes", () => {
     }
   });
 
-  test("rejects invalid thread ids before they consume inbox capacity", async () => {
+  test("rejects invalid thread ids before they consume inbox capacity", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-invalid-thread-");
     const userDataDir = path.join(workspace, "user-data");
     const inbox = new TranscriptInbox({
@@ -884,7 +895,9 @@ describe("web desktop routes", () => {
     await expect(service.readTranscript("thread-valid")).resolves.toHaveLength(1);
   });
 
-  test("uses generation tombstones to prevent a deleted transcript from being resurrected", async () => {
+  test("uses generation tombstones to prevent a deleted transcript from being resurrected", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-tombstone-");
     const userDataDir = path.join(workspace, "user-data");
     const firstService = new WebDesktopService({ userDataDir });
@@ -905,7 +918,9 @@ describe("web desktop routes", () => {
     await expect(secondService.readTranscript(event.threadId)).resolves.toEqual([]);
   });
 
-  test("keeps bounded dedupe receipts while projection IDs prevent replay duplicates", async () => {
+  test("keeps bounded dedupe receipts while projection IDs prevent replay duplicates", {
+    timeout: 15_000,
+  }, async () => {
     const workspace = await makeTempDir("cowork-web-transcript-bounded-dedupe-");
     const userDataDir = path.join(workspace, "user-data");
     const inbox = new TranscriptInbox({

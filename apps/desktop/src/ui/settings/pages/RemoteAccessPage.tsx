@@ -43,7 +43,7 @@ import {
 } from "../../../lib/desktopCommands";
 import { OperationFeedback } from "../../OperationFeedback";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
-import { SettingsSection } from "../SettingsPrimitives";
+import { SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
 
 const TRUSTED_DEVICE_PERMISSION_CONTROLS: Array<{
   key: MobileRelayTrustedDevicePermissionKey;
@@ -312,50 +312,48 @@ export function RemoteAccessPage() {
         title="Workspace bridge"
         description="Expose a single workspace while the desktop app remains running."
       >
-        <div className="space-y-4 px-4 py-4">
-          <div className="space-y-1">
-            <div className="text-sm font-medium text-foreground">
-              {selectedWorkspace?.name ?? "No workspace selected"}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
-            </div>
+        <div className="space-y-1 px-4 py-3.5">
+          <div className="text-sm font-medium text-foreground">
+            {selectedWorkspace?.name ?? "No workspace selected"}
           </div>
+          <div className="text-xs text-muted-foreground">
+            {selectedWorkspace?.path ?? "Select a workspace before enabling remote access."}
+          </div>
+        </div>
 
-          <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-sm">
-            <div className="font-medium text-foreground">Status</div>
-            <div className="mt-1 text-muted-foreground">
-              {loading ? "Loading…" : (state?.status ?? "idle")}
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground">
-              Transport: {describeRelaySource(state?.relaySource ?? "direct")} HTTP/3
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
-            </div>
-            {state?.directUrl ? (
-              <div className="mt-1 text-xs text-muted-foreground">Endpoint: {state.directUrl}</div>
-            ) : null}
-            {state?.hostHints?.length ? (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Reachable hosts: {state.hostHints.join(", ")}
-              </div>
-            ) : null}
-            {state?.relayServiceUpdatedAt ? (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Service heartbeat: {state.relayServiceUpdatedAt}
-              </div>
-            ) : null}
-            {state?.relaySourceMessage ? (
-              <div className="mt-2 text-xs text-muted-foreground">{state.relaySourceMessage}</div>
-            ) : null}
-            {state?.relayServiceMessage ? (
-              <div className="mt-1 text-xs text-muted-foreground">{state.relayServiceMessage}</div>
-            ) : null}
-            {state?.lastError ? (
-              <div className="mt-2 text-xs text-destructive">{state.lastError}</div>
-            ) : null}
+        <div className="px-4 py-3.5 text-sm">
+          <div className="font-medium text-foreground">Status</div>
+          <div className="mt-1 text-muted-foreground">
+            {loading ? "Loading…" : (state?.status ?? "idle")}
           </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Transport: {describeRelaySource(state?.relaySource ?? "direct")} HTTP/3
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
+          </div>
+          {state?.directUrl ? (
+            <div className="mt-1 text-xs text-muted-foreground">Endpoint: {state.directUrl}</div>
+          ) : null}
+          {state?.hostHints?.length ? (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Reachable hosts: {state.hostHints.join(", ")}
+            </div>
+          ) : null}
+          {state?.relayServiceUpdatedAt ? (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Service heartbeat: {state.relayServiceUpdatedAt}
+            </div>
+          ) : null}
+          {state?.relaySourceMessage ? (
+            <div className="mt-2 text-xs text-muted-foreground">{state.relaySourceMessage}</div>
+          ) : null}
+          {state?.relayServiceMessage ? (
+            <div className="mt-1 text-xs text-muted-foreground">{state.relayServiceMessage}</div>
+          ) : null}
+          {state?.lastError ? (
+            <div className="mt-2 text-xs text-destructive">{state.lastError}</div>
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -366,7 +364,7 @@ export function RemoteAccessPage() {
         >
           <div className="space-y-4 px-4 py-4">
             {qrValue ? (
-              <div className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border/60 bg-background/50 p-6">
+              <div className="flex flex-col items-center gap-4 p-6">
                 <QRCodeSVG value={qrValue} size={220} includeMargin />
                 <div className="space-y-1 text-center text-xs text-muted-foreground">
                   <div>Certificate: {state?.certSha256?.slice(0, 16) ?? "—"}…</div>
@@ -379,7 +377,7 @@ export function RemoteAccessPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border/60 bg-background/35 text-center text-sm text-muted-foreground">
+              <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
                 <QrCodeIcon className="size-8" />
                 <div>Enable remote access to generate a pairing QR.</div>
               </div>
@@ -426,116 +424,110 @@ export function RemoteAccessPage() {
           title="Trusted devices"
           description="Trust is scoped to the workspace named in each confirmation. Revoked phones lose remote access immediately and must scan a new QR code to reconnect."
         >
-          <div className="space-y-4 px-4 py-4">
-            {state?.workspaceId && !relayMatchesSelectedWorkspace ? (
-              <div
-                role="status"
-                className="rounded-lg border border-dashed border-border/60 bg-background/35 p-4 text-sm text-muted-foreground"
-              >
-                The running bridge belongs to another workspace. Select that workspace or restart
-                the bridge here before changing trusted devices.
-              </div>
-            ) : trustedDevices.length > 0 ? (
-              <div className="space-y-3">
-                {trustedDevices.map((device, index) => (
-                  <div
-                    key={device.deviceId}
-                    className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
-                          <SmartphoneIcon className="size-4 shrink-0" />
-                          <span className="truncate">{describeTrustedDevice(device)}</span>
-                          {index === 0 ? (
-                            <Badge variant="outline" className="rounded-sm">
-                              Current
-                            </Badge>
-                          ) : null}
-                        </div>
-                        <div className="space-y-0.5 text-xs text-muted-foreground">
-                          <div className="break-all">Device ID: {device.deviceId}</div>
-                          <div className="break-all">Fingerprint: {device.fingerprint}</div>
-                          <div>Last paired: {formatDeviceTimestamp(device.lastPairedAt)}</div>
-                          <div>Last seen: {formatDeviceTimestamp(device.lastConnectedAt)}</div>
-                        </div>
+          {state?.workspaceId && !relayMatchesSelectedWorkspace ? (
+            <div role="status" className="px-4 py-3.5 text-sm text-muted-foreground">
+              The running bridge belongs to another workspace. Select that workspace or restart the
+              bridge here before changing trusted devices.
+            </div>
+          ) : trustedDevices.length > 0 ? (
+            <>
+              {trustedDevices.map((device, index) => (
+                <div key={device.deviceId} className="space-y-3 px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
+                        <SmartphoneIcon className="size-4 shrink-0" />
+                        <span className="truncate">{describeTrustedDevice(device)}</span>
+                        {index === 0 ? (
+                          <Badge variant="outline" className="rounded-sm">
+                            Current
+                          </Badge>
+                        ) : null}
                       </div>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            aria-label={`Forget ${describeTrustedDevice(device)}`}
-                            disabled={busyAction !== null || trustedDeviceMutationPending}
-                          >
-                            <Trash2Icon data-icon />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent size="sm">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>
-                              Forget {describeTrustedDevice(device)}?
-                            </AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This revokes this phone&apos;s access to{" "}
-                              <strong>{selectedWorkspace?.name}</strong>. It will need to scan a new
-                              QR code before it can reconnect. Other trusted devices are unchanged.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Keep device</AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={() => {
-                                void forgetTrustedDevice(device);
-                              }}
-                            >
-                              Forget device
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                      <div className="space-y-0.5 text-xs text-muted-foreground">
+                        <div className="break-all">Device ID: {device.deviceId}</div>
+                        <div className="break-all">Fingerprint: {device.fingerprint}</div>
+                        <div>Last paired: {formatDeviceTimestamp(device.lastPairedAt)}</div>
+                        <div>Last seen: {formatDeviceTimestamp(device.lastConnectedAt)}</div>
+                      </div>
                     </div>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          aria-label={`Forget ${describeTrustedDevice(device)}`}
+                          disabled={busyAction !== null || trustedDeviceMutationPending}
+                        >
+                          <Trash2Icon data-icon />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent size="sm">
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            Forget {describeTrustedDevice(device)}?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This revokes this phone&apos;s access to{" "}
+                            <strong>{selectedWorkspace?.name}</strong>. It will need to scan a new
+                            QR code before it can reconnect. Other trusted devices are unchanged.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep device</AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => {
+                              void forgetTrustedDevice(device);
+                            }}
+                          >
+                            Forget device
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
 
-                    <Separator />
+                  <Separator />
 
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                        <KeyRoundIcon className="size-3.5" />
-                        Permissions
-                      </div>
-                      <div className="grid gap-2">
-                        {TRUSTED_DEVICE_PERMISSION_CONTROLS.map((permission) => {
-                          const permissionLabelId = `mobile-permission-${device.deviceId}-${permission.key}`;
-                          return (
-                            <div
-                              key={permission.key}
-                              className="flex items-center justify-between gap-3 text-xs"
-                            >
-                              <span id={permissionLabelId} className="text-muted-foreground">
-                                {permission.label}
-                              </span>
-                              <Switch
-                                size="sm"
-                                checked={device.permissions[permission.key]}
-                                disabled={busyAction !== null || trustedDeviceMutationPending}
-                                aria-labelledby={permissionLabelId}
-                                onCheckedChange={(checked) => {
-                                  void updateTrustedDevicePermission(
-                                    device.deviceId,
-                                    permission.key,
-                                    checked === true,
-                                  );
-                                }}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <KeyRoundIcon className="size-3.5" />
+                      Permissions
+                    </div>
+                    <div className="grid gap-2">
+                      {TRUSTED_DEVICE_PERMISSION_CONTROLS.map((permission) => {
+                        const permissionLabelId = `mobile-permission-${device.deviceId}-${permission.key}`;
+                        return (
+                          <div
+                            key={permission.key}
+                            className="flex items-center justify-between gap-3 text-xs"
+                          >
+                            <span id={permissionLabelId} className="text-muted-foreground">
+                              {permission.label}
+                            </span>
+                            <Switch
+                              size="sm"
+                              checked={device.permissions[permission.key]}
+                              disabled={busyAction !== null || trustedDeviceMutationPending}
+                              aria-labelledby={permissionLabelId}
+                              onCheckedChange={(checked) => {
+                                void updateTrustedDevicePermission(
+                                  device.deviceId,
+                                  permission.key,
+                                  checked === true,
+                                );
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                ))}
+                </div>
+              ))}
+              <div className="space-y-2 px-4 py-3.5">
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
@@ -576,12 +568,13 @@ export function RemoteAccessPage() {
                 <OperationFeedback operation={forgetAllOperation} />
                 <OperationFeedback operation={permissionsOperation} />
               </div>
-            ) : (
-              <div className="rounded-lg border border-dashed border-border/60 bg-background/35 p-4 text-sm text-muted-foreground">
-                No trusted device yet. Scan the QR to pair the first device.
-              </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <SettingsEmptyState
+              title="No trusted device yet"
+              description="Scan the QR to pair the first device."
+            />
+          )}
         </SettingsSection>
       </div>
     </div>

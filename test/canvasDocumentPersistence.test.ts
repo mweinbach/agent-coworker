@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { removeWithRetry } from "../src/platform/fs";
 import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
 import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
@@ -48,7 +49,7 @@ afterEach(async () => {
   await Promise.all(
     temporaryDirectories
       .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+      .map((directory) => removeWithRetry(directory, { recursive: true, bestEffort: true })),
   );
 });
 

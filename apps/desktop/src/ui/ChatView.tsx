@@ -440,6 +440,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const citationOverflowEntriesRef = useRef(citationOverflowEntries);
   citationOverflowEntriesRef.current = citationOverflowEntries;
   const citationUrlsByMessageId = useMemo(() => {
+    if (overflowCitationUrlsByMessageId.size === 0) {
+      return inlineCitationUrlsByMessageId;
+    }
     const merged = new Map(inlineCitationUrlsByMessageId);
     for (const [messageId, urls] of overflowCitationUrlsByMessageId) {
       if (urls.size > 0) {
@@ -453,6 +456,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [visibleFeed],
   );
   const citationSourcesByMessageId = useMemo(() => {
+    if (overflowCitationSourcesByMessageId.size === 0) {
+      return inlineCitationSourcesByMessageId;
+    }
     const merged = new Map(inlineCitationSourcesByMessageId);
     for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
       if (sources.length > 0) {

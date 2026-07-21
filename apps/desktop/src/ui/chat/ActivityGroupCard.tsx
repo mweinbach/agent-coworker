@@ -604,6 +604,62 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   );
 }
 
+const LiveTimerLabel = memo(function LiveTimerLabel(props: {
+  items: ActivityFeedItem[];
+  live?: boolean;
+  liveNowMs?: number;
+  liveStartedAt?: string | null;
+  summaryElapsedLabel: string | null;
+  hasUnrecoveredIssue?: boolean;
+}) {
+  const {
+    items,
+    live,
+    liveNowMs,
+    liveStartedAt,
+    summaryElapsedLabel,
+    hasUnrecoveredIssue,
+  } = props;
+
+  const [nowMs, setNowMs] = useState(() => liveNowMs ?? Date.now());
+
+  useEffect(() => {
+    if (!live || liveNowMs !== undefined) {
+      return;
+    }
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [live, liveNowMs]);
+
+  const liveStartedAtMs =
+    liveStartedAt !== null && liveStartedAt !== undefined
+      ? activityTimestampMs(liveStartedAt)
+      : null;
+
+  const currentNowMs = liveNowMs ?? nowMs;
+  const liveElapsedLabel =
+    live === true
+      ? formatActivityElapsedMs(
+          currentNowMs - (liveStartedAtMs ?? firstActivityTimestampMs(items) ?? currentNowMs),
+        )
+      : null;
+
+  const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
+
+  if (hasUnrecoveredIssue) {
+    return displayElapsedLabel
+      ? `Couldn't finish after ${displayElapsedLabel}`
+      : "Couldn't finish";
+  }
+
+  if (live) {
+    return displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
+  }
+
+  return displayElapsedLabel ? `Worked for ${displayElapsedLabel}` : "Worked";
+});
+
 /* ── Main card ──────────────────────────────────────────────────────────────── */
 
 export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
@@ -616,18 +672,6 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   retryDisabled?: boolean;
   retryUnavailableReason?: string;
 }) {
-  const liveNowMsProp = props.liveNowMs;
-  const [nowMs, setNowMs] = useState(() => liveNowMsProp ?? Date.now());
-
-  useEffect(() => {
-    if (!props.live || liveNowMsProp !== undefined) {
-      return;
-    }
-    setNowMs(Date.now());
-    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [props.live, liveNowMsProp]);
-
   const summary = useMemo(
     () => summarizeActivityGroup(props.items, props.recoveredToolIds),
     [props.items, props.recoveredToolIds],
@@ -635,17 +679,6 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
   const isComplete = displayStatus === "done";
   const hasUnrecoveredIssue = displayStatus === "issue";
-  const liveStartedAtMs =
-    props.liveStartedAt !== null && props.liveStartedAt !== undefined
-      ? activityTimestampMs(props.liveStartedAt)
-      : null;
-  const liveElapsedLabel =
-    props.live === true
-      ? formatActivityElapsedMs(
-          nowMs - (liveStartedAtMs ?? firstActivityTimestampMs(props.items) ?? nowMs),
-        )
-      : null;
-  const displayElapsedLabel = liveElapsedLabel ?? summary.elapsedLabel;
   // Live issue groups stay expanded so unrecovered tool errors remain visible
   // in the audit trail while the turn is still running.
   const shouldAutoExpand =
@@ -713,17 +746,14 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                         : "text-muted-foreground",
                   )}
                 >
-                  {hasUnrecoveredIssue
-                    ? displayElapsedLabel
-                      ? `Couldn't finish after ${displayElapsedLabel}`
-                      : "Couldn't finish"
-                    : props.live
-                      ? displayElapsedLabel
-                        ? `Working for ${displayElapsedLabel}`
-                        : "Working"
-                      : displayElapsedLabel
-                        ? `Worked for ${displayElapsedLabel}`
-                        : "Worked"}
+                  <LiveTimerLabel
+                    items={props.items}
+                    live={props.live}
+                    liveNowMs={props.liveNowMs}
+                    liveStartedAt={props.liveStartedAt}
+                    summaryElapsedLabel={summary.elapsedLabel}
+                    hasUnrecoveredIssue={hasUnrecoveredIssue}
+                  />
                 </MarkerContent>
                 <ChevronRightIcon
                   className={cn(

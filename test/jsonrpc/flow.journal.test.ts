@@ -536,13 +536,20 @@ describe("server JSON-RPC flows", () => {
     const finalText = Array.from({ length: deltaCount }, (_, index) => `chunk-${index}`).join("");
     const runTurnImpl = async (params: any) => {
       await params.onModelStreamPart?.({ type: "start" });
+      await params.onModelStreamPart?.({ type: "reasoning-start", id: "rs_1", mode: "reasoning" });
       for (let index = 0; index < deltaCount; index += 1) {
         await params.onModelStreamPart?.({
-          type: "text-delta",
-          id: `txt_${index}`,
+          type: "reasoning-delta",
+          id: "rs_1",
           text: `chunk-${index}`,
         });
       }
+      await params.onModelStreamPart?.({ type: "reasoning-end", id: "rs_1", mode: "reasoning" });
+      await params.onModelStreamPart?.({
+        type: "text-delta",
+        id: "txt_1",
+        text: finalText,
+      });
       await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
       return {
         text: finalText,
@@ -586,7 +593,7 @@ describe("server JSON-RPC flows", () => {
       await replayRpc.waitFor((message) => message.method === "thread/started");
       const replayedLastDelta = await replayRpc.waitFor(
         (message) =>
-          message.method === "item/agentMessage/delta" && message.params.delta === "chunk-1004",
+          message.method === "item/reasoning/delta" && message.params.delta === "chunk-1004",
         JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
       );
       const resumed = await resumeResponse;

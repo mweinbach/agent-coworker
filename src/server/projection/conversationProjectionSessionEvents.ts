@@ -10,7 +10,7 @@ import {
 } from "../../shared/modelStreamReplay";
 import type { ToolInputDigest } from "../../shared/toolInputDigest";
 import type { SessionEvent } from "../protocol";
-import type { AssistantProjection } from "./conversationProjectionAssistant";
+import { type AssistantProjection, resolveAssistantText } from "./conversationProjectionAssistant";
 import {
   developerDiagnosticSystemLineFromSessionEvent,
   formatApprovalSystemLine,
@@ -100,6 +100,7 @@ export function createSessionEventHandler(
         }
 
         if (event.turnId) {
+          (handleModelStreamUpdate as { flush?: (turnId?: string) => void }).flush?.(event.turnId);
           assistant.completeAssistantStateBeforeStep(event.turnId);
           reasoning.completeReasoningStateForTurn(event.turnId);
           if (event.outcome === "error" || event.outcome === "cancelled") {
@@ -149,11 +150,17 @@ export function createSessionEventHandler(
       case "assistant_message":
         if (!state.activeTurnId) return;
         {
+          (handleModelStreamUpdate as { flush?: (turnId?: string) => void }).flush?.(
+            state.activeTurnId,
+          );
           reasoning.completeReasoningStateForTurn(state.activeTurnId);
           const remainder = assistant.assistantRemainderForTurn(state.activeTurnId, event.text);
           const activeAssistant = state.activeAssistantByTurn.get(state.activeTurnId);
           if (activeAssistant) {
-            assistant.completeAssistantState(state.activeTurnId, remainder || activeAssistant.text);
+            assistant.completeAssistantState(
+              state.activeTurnId,
+              remainder || resolveAssistantText(activeAssistant),
+            );
           } else if (remainder) {
             const assistantState = assistant.ensureActiveAssistantState(state.activeTurnId);
             assistantState.text = remainder;

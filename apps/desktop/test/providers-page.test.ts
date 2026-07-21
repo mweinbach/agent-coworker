@@ -84,7 +84,7 @@ const defaultProviderActions = {
 
 describe("desktop providers page", () => {
   beforeEach(() => {
-    (useAppStore as any).getInitialState = useAppStore.getState;
+    (useAppStore as any).getInitialState = () => useAppStore.getState();
     useAppStore.setState({
       workspaces: [
         {

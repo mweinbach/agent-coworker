@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { removeWithRetry } from "../platform/fs";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import {
   type ClaimedSkillImprovementJob,
@@ -489,19 +490,28 @@ export class SkillImprovementJobStore {
           .catch(() => {});
         return async () => {
           await handle.close().catch(() => {});
-          await fs.rm(lockPath, { force: true }).catch(() => {});
+          await removeWithRetry(lockPath, { bestEffort: true });
         };
       } catch (error) {
         if ((error as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") {
           throw error;
         }
       }
-      const lockAge = await fs
-        .stat(lockPath)
-        .then((stat) => Date.now() - stat.mtimeMs)
-        .catch(() => null);
-      if (lockAge === null || lockAge >= STATE_LOCK_STALE_MS || Date.now() >= deadline) {
-        await fs.rm(lockPath, { force: true }).catch(() => {});
+      let lockAge: number | null = null;
+      let isEnoent = false;
+      try {
+        const stat = await fs.stat(lockPath);
+        lockAge = Date.now() - stat.mtimeMs;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+          isEnoent = true;
+        }
+      }
+      if (isEnoent) {
+        continue;
+      }
+      if ((lockAge !== null && lockAge >= STATE_LOCK_STALE_MS) || Date.now() >= deadline) {
+        await removeWithRetry(lockPath, { bestEffort: true });
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, STATE_LOCK_RETRY_MS));

@@ -14,6 +14,7 @@ import {
   installFetchStub,
   makeResearchRecord,
   makeTmpCoworkHome,
+  removeTmpCoworkHome,
   ResearchService,
   registerResearchServiceHooks,
   researchRuntimeImpls,
@@ -61,7 +62,7 @@ describe("research service", () => {
       expect(await service.get("research-workspace-b")).toBeNull();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -92,7 +93,7 @@ describe("research service", () => {
       expect(await service.get("research-workspace-canonical")).not.toBeNull();
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -184,7 +185,7 @@ describe("research service", () => {
       ]);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -256,7 +257,7 @@ describe("research service", () => {
       expect(sessionDb.getResearch("research-existing")?.sources).toEqual(research?.sources);
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 
@@ -331,7 +332,7 @@ describe("research service", () => {
       );
     } finally {
       sessionDb.close();
-      await fs.rm(paths.home, { recursive: true, force: true });
+      await removeTmpCoworkHome(paths.home);
     }
   });
 });

@@ -45,7 +45,6 @@ import {
 import { resolveWorkspaceDisplayTargets } from "../../../app/workspaceDisplayTargets";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
   Collapsible,
@@ -79,7 +78,7 @@ import { cn } from "../../../lib/utils";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { OperationFeedback } from "../../OperationFeedback";
-import { SettingsSection } from "../SettingsPrimitives";
+import { SettingsEmptyState, SettingsSection } from "../SettingsPrimitives";
 
 function ToggleChip({
   pressed,
@@ -248,7 +247,6 @@ type OpenAiCompatibleModelSettingsCardProps = {
   providerStatusByName: Record<string, PersistedProviderStatus | undefined>;
 };
 const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
-const MODEL_CARD_PANEL_CLASS = "rounded-lg border border-border/60 bg-background/35 p-3";
 const MODEL_CARD_SELECT_CLASS =
   "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none";
 
@@ -318,12 +316,9 @@ export function OpenAiCompatibleModelSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-4 px-4 pb-5">
+        <div className="divide-y divide-border/40 border-t border-border/40 px-4 pb-5">
           {sections.map((section) => (
-            <div
-              key={section.key}
-              className="space-y-4 rounded-lg border border-border/60 px-4 py-4"
-            >
+            <div key={section.key} className="space-y-4 py-4">
               <Badge variant="outline" className="rounded-sm text-xs font-medium">
                 {section.label}
               </Badge>
@@ -684,8 +679,8 @@ export function GeminiApiSettingsCard({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="space-y-4 px-4 pb-5">
-          <div className="rounded-lg border border-border/60 px-4 py-4">
+        <div className="space-y-4 border-t border-border/40 px-4 pb-5">
+          <div className="py-4">
             <div className="space-y-3">
               <div className="space-y-1">
                 <div className="text-sm font-medium text-foreground">Reasoning effort</div>
@@ -1135,19 +1130,21 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
     <div className="space-y-5">
       {(perWorkspaceSettings ? settingsTargets.length : defaultSettingsSourceWorkspaces.length) ===
         0 || !ws ? (
-        <Card className="border-border/80 bg-card/85">
-          <CardContent className="p-8 text-center">
-            {workspaceLifecycleEnabled ? (
+        <SettingsEmptyState
+          title="No workspaces yet"
+          description={
+            workspaceLifecycleEnabled
+              ? undefined
+              : "This browser shell stays attached to the current server target."
+          }
+          action={
+            workspaceLifecycleEnabled ? (
               <Button type="button" onClick={() => void addWorkspace()}>
                 Add workspace
               </Button>
-            ) : (
-              <div className="text-sm text-muted-foreground">
-                This browser shell stays attached to the current server target.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            ) : undefined
+          }
+        />
       ) : (
         <>
           <OperationFeedback operation={workspaceDefaultsOperation} />
@@ -1206,10 +1203,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
               </SettingsSection>
             )}
 
-            <SettingsSection
-              title="Behavior"
-              description="Execution and visibility options for all folders and chats."
-            >
+            <SettingsSection description="Execution and visibility options for all folders and chats.">
               <div className="space-y-4 px-4 py-4">
                 <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                   <div className="grid gap-1.5">
@@ -1302,7 +1296,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <div className="space-y-4 border-t border-border/70 px-4 py-4">
+                    <div className="space-y-4 px-4 py-4">
                       <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                         <div>
                           <div className="text-sm font-medium">
@@ -1355,7 +1349,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       ) : null}
 
                       {workspaceLifecycleEnabled && selectedSettingsTarget?.kind !== "chats" ? (
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/20 bg-destructive/5 p-3 max-[960px]:items-start max-[960px]:flex-col">
+                        <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                           <div>
                             <div className="text-sm font-medium text-destructive">
                               Remove from Cowork
@@ -1400,16 +1394,13 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
               visibleTab !== "models" && "hidden",
             )}
           >
-            <div className="space-y-3">
-              <div>
-                <div className="text-sm font-semibold text-foreground">Defaults</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  The provider and model Cowork uses for new chats.
-                </div>
-              </div>
-              <div className="app-shadow-surface space-y-4 rounded-xl border border-border/75 bg-card/85 px-4 py-4">
+            <SettingsSection
+              title="Defaults"
+              description="The provider and model Cowork uses for new chats."
+            >
+              <div className="space-y-4 px-4 py-4">
                 {availableProviders.length === 0 ? (
-                  <div className={MODEL_CARD_PANEL_CLASS}>
+                  <div>
                     <div className="text-sm font-medium text-foreground">
                       No configured providers
                     </div>
@@ -1421,7 +1412,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                 ) : (
                   <>
                     {!currentProviderIsConfigured ? (
-                      <div className={MODEL_CARD_PANEL_CLASS}>
+                      <div>
                         <div className="text-sm font-medium text-foreground">
                           Current provider is not set up here
                         </div>
@@ -1513,7 +1504,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                       </div>
                     </div>
 
-                    <div className="space-y-3 border-t border-border/60 pt-4">
+                    <div className="space-y-3 border-t border-border/40 pt-4">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <div className="text-sm font-medium text-foreground">Subagents</div>
@@ -1652,7 +1643,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                         <Collapsible
                           open={subagentModelsOpen}
                           onOpenChange={setSubagentModelsOpen}
-                          className={cn(MODEL_CARD_PANEL_CLASS, "space-y-3")}
+                          className="space-y-3"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
@@ -1686,7 +1677,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                             </div>
                           </div>
 
-                          <CollapsibleContent className="space-y-3 border-t border-border/60 pt-3">
+                          <CollapsibleContent className="space-y-3 border-t border-border/40 pt-3">
                             {childTargetGroups.length > 0 ? (
                               <div className="max-h-96 space-y-3 overflow-auto pr-1">
                                 {childTargetGroups.map((group) => (
@@ -1701,7 +1692,7 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                                         return (
                                           <div
                                             key={ref}
-                                            className="flex min-w-0 items-center gap-2 rounded-sm border border-border/60 px-3 py-2 text-sm"
+                                            className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm"
                                           >
                                             <Checkbox
                                               id={childModelCheckboxId}
@@ -1755,35 +1746,30 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                   </>
                 )}
               </div>
-            </div>
+            </SettingsSection>
 
             {hasConfiguredProviderStatus(providerStatusByName["codex-cli"]) ||
             hasConfiguredProviderStatus(providerStatusByName.openai) ||
             hasConfiguredProviderStatus(providerStatusByName.google) ? (
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm font-semibold text-foreground">Provider Settings</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">
-                    Extra tuning options for your connected providers.
-                  </div>
-                </div>
-                <div className="app-shadow-surface divide-y divide-border/60 overflow-hidden rounded-xl border border-border/75 bg-card/85">
-                  <OpenAiCompatibleModelSettingsCard
-                    workspace={ws}
-                    updateWorkspaceDefaults={updateWorkspaceDefaults}
-                    providerStatusByName={providerStatusByName}
-                  />
-                  <GeminiApiSettingsCard
-                    workspace={ws}
-                    updateWorkspaceDefaults={updateWorkspaceDefaults}
-                    providerStatusByName={providerStatusByName}
-                    googleDefaultModel={
-                      providerDefaultModelByProvider.google?.trim() ||
-                      defaultModelForProvider("google")
-                    }
-                  />
-                </div>
-              </div>
+              <SettingsSection
+                title="Provider Settings"
+                description="Extra tuning options for your connected providers."
+              >
+                <OpenAiCompatibleModelSettingsCard
+                  workspace={ws}
+                  updateWorkspaceDefaults={updateWorkspaceDefaults}
+                  providerStatusByName={providerStatusByName}
+                />
+                <GeminiApiSettingsCard
+                  workspace={ws}
+                  updateWorkspaceDefaults={updateWorkspaceDefaults}
+                  providerStatusByName={providerStatusByName}
+                  googleDefaultModel={
+                    providerDefaultModelByProvider.google?.trim() ||
+                    defaultModelForProvider("google")
+                  }
+                />
+              </SettingsSection>
             ) : null}
           </div>
 

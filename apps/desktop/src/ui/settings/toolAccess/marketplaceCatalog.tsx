@@ -33,7 +33,7 @@ function MarketplaceCard({
   onInstall: () => void;
 }) {
   return (
-    <article className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-border/55 bg-background/45 p-3.5">
+    <article className="flex min-w-0 flex-col gap-2.5 p-3.5">
       <div className="flex items-start gap-3">
         <EntityIcon src={icon} name={name} />
         <div className="min-w-0 flex-1">

@@ -124,7 +124,7 @@ export function ChatComposer(props: {
       <div className="relative mx-auto w-full max-w-[56rem] pointer-events-auto">
         {developerMode ? <MessageBarResizer /> : null}
         <MessageComposerRoot
-          className="app-surface-opaque w-full max-w-full rounded-[28px] border border-border/55 app-shadow-overlay"
+          className="app-surface-opaque w-full max-w-full rounded-[28px] border border-border/45 app-shadow-overlay"
           style={{ "--composer-cap": `${messageBarHeight}px` } as CSSProperties}
           fileDrop={
             inputDisabled || transcriptOnly ? undefined : { onFiles: ingestAttachmentFiles }

@@ -70,18 +70,14 @@ function ToolStateIndicator({ state }: { state: ToolFeedState }) {
     return (
       <Badge
         variant="destructive"
-        className="gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide animate-pulse"
+        className="gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
       >
         <ShieldAlertIcon className="size-2.5" />
         Review
       </Badge>
     );
   }
-  return (
-    <ClockIcon
-      className={cn("size-3 text-primary", state === "input-streaming" && "animate-pulse")}
-    />
-  );
+  return <span className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />;
 }
 
 /* ── Timeline building block ────────────────────────────────────────────────── */
@@ -101,7 +97,7 @@ function TimelineNode({
         <div className="mt-0.5 flex size-[1.125rem] shrink-0 items-center justify-center">
           {icon}
         </div>
-        {!isLast && <div className="mt-1 w-px flex-1 bg-border/45" />}
+        {!isLast && <div className="mt-1 w-px flex-1 bg-border/35" />}
       </div>
       <div className="min-w-0 flex-1 pb-3">{children}</div>
     </div>
@@ -187,26 +183,26 @@ function ReasoningSectionNode({
   }
 
   return (
-    <div className="min-w-0 py-1 border-b border-border/12 last:border-b-0 pb-3 last:pb-0 mb-2.5 last:mb-0">
+    <div className="min-w-0 py-1">
       <button
         type="button"
         aria-controls={disclosureId}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1.5 text-left text-[13px] font-medium text-foreground outline-none hover:text-foreground/80"
+        className="flex items-center gap-1.5 text-left text-[13px] font-medium text-foreground/90 outline-none transition-colors hover:text-foreground"
       >
-        <span>{title}</span>
         <ChevronRightIcon
           className={cn(
-            "size-3.5 text-muted-foreground/50 transition-transform duration-150",
+            "size-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-150",
             open && "rotate-90",
           )}
         />
+        <span>{title}</span>
       </button>
       {open && body && (
         <div
           id={disclosureId}
-          className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground/80 pl-0.5 select-text"
+          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed text-muted-foreground/85 select-text"
         >
           <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
             {body}
@@ -323,7 +319,7 @@ function ToolTimelineNode({
     >
       {hasDetails ? (
         <Collapsible open={open} onOpenChange={handleOpenChange}>
-          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-muted/20 focus-visible:ring-1 focus-visible:ring-ring/40">
+          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring/40">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
@@ -361,13 +357,13 @@ function ToolTimelineNode({
               aria-hidden
             />
           </CollapsibleTrigger>
-          <CollapsibleContent className="pt-1.5">
+          <CollapsibleContent className="activity-trace-content pt-1.5">
             {detailRows.length > 0 ? (
               <div className="grid gap-1.5 sm:grid-cols-2">
                 {detailRows.map((row) => (
                   <div
                     key={`${item.id}-${row.label}`}
-                    className="rounded-md border border-border/45 bg-muted/15 px-2 py-1.5"
+                    className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
                   >
                     <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                       {row.label}
@@ -380,17 +376,17 @@ function ToolTimelineNode({
               </div>
             ) : null}
             {argsText ? (
-              <pre className="mt-1.5 max-h-40 overflow-auto rounded-md border border-border/40 bg-background/50 p-2 text-[11px] leading-relaxed text-foreground/80">
+              <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-[11px] leading-relaxed text-foreground/80">
                 {argsText}
               </pre>
             ) : null}
             {resultText ? (
               <pre
                 className={cn(
-                  "mt-1.5 max-h-48 overflow-auto rounded-md border p-2 text-[11px] leading-relaxed",
+                  "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-[11px] leading-relaxed",
                   item.state === "output-error" || item.state === "output-denied"
-                    ? "border-destructive/30 bg-destructive/5 text-destructive"
-                    : "border-border/40 bg-background/50 text-foreground/80",
+                    ? "bg-destructive/[0.06] text-destructive"
+                    : "bg-foreground/[0.04] text-foreground/80",
                 )}
               >
                 {resultText}
@@ -701,11 +697,20 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               <CollapsibleTrigger className="group min-w-0 flex-1 pb-2.5 pt-1.5 outline-none before:hidden">
                 {hasUnrecoveredIssue ? (
                   <AlertTriangleIcon className="size-3.5 shrink-0 text-destructive/75" />
+                ) : props.live ? (
+                  <span
+                    className="activity-live-dot size-1.5 shrink-0 self-center rounded-full bg-primary"
+                    aria-hidden
+                  />
                 ) : null}
                 <MarkerContent
                   className={cn(
-                    "font-mono tracking-tight transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
-                    hasUnrecoveredIssue && "text-destructive/85 group-hover:text-destructive",
+                    "text-[13px] font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                    hasUnrecoveredIssue
+                      ? "text-destructive/85 group-hover:text-destructive"
+                      : props.live
+                        ? "text-foreground/85"
+                        : "text-muted-foreground",
                   )}
                 >
                   {hasUnrecoveredIssue
@@ -722,8 +727,8 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 </MarkerContent>
                 <ChevronRightIcon
                   className={cn(
-                    "size-3.5 shrink-0 transition-all duration-200 group-hover:opacity-100 group-data-[state=open]:rotate-90",
-                    hasUnrecoveredIssue ? "text-destructive/60 opacity-60" : "opacity-0",
+                    "size-3.5 shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-90",
+                    hasUnrecoveredIssue ? "text-destructive/60" : "text-muted-foreground/50",
                   )}
                 />
               </CollapsibleTrigger>
@@ -772,7 +777,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   }
 
   return (
-    <Card className="max-w-3xl gap-0 rounded-xl border border-border/32 bg-muted/[0.07] p-0 shadow-none backdrop-blur-none">
+    <Card className="max-w-3xl gap-0 rounded-xl border border-border/40 bg-foreground/[0.02] p-0 shadow-none backdrop-blur-none">
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
         <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-border/45 focus-visible:ring-inset focus-visible:shadow-none">
@@ -781,7 +786,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               <ClockIcon
                 className={cn(
                   "size-4 shrink-0 text-muted-foreground/45",
-                  useThinkingTreatment && "text-primary/70 animate-pulse",
+                  useThinkingTreatment && "text-primary/70",
                 )}
               />
               <span

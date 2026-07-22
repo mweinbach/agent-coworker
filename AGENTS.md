@@ -183,6 +183,38 @@ Go fix failing CI tests without being told how
 **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
 
+## Code Review Rules
+
+Apply these rules only when the changed code touches the named contract. Report a
+finding only for a concrete violation introduced by the diff; do not restate a
+rule as general advice on an otherwise safe change.
+
+### External and persisted contracts
+
+- Search for changes that remove, rename, or reinterpret an existing JSON-RPC
+  method, field, notification, projected item identity, model ID, config key, or
+  persisted value without a compatibility path. These surfaces may have desktop,
+  mobile, CLI, or third-party consumers even when they are marked internal or
+  experimental. Preserve the existing contract, add a backward-compatible
+  extension, or provide an explicit migration; keep schemas, protocol docs, and
+  regression tests aligned.
+
+### Authority boundaries
+
+- Search for privileged tools, task/thread operations, filesystem access, or
+  Electron IPC whose authorization is enforced only by a UI/client check or
+  after dispatch. Enforce least privilege at the server, tool factory, route, or
+  IPC boundary before the operation executes, and add a regression covering the
+  disallowed session or sender as well as the allowed path.
+
+### Harness-owned behavior
+
+- Search for product behavior implemented only in a desktop or mobile client
+  when the capability must also work from the CLI or another UI. Put state,
+  policy, persistence, and agent behavior in the harness/server, expose it
+  through typed JSON-RPC, and keep each UI as a thin adapter. Pure presentation
+  and platform-native window behavior may remain client-specific.
+
 ## Engineering Rules
 
 Durable rules distilled from prior corrections. Apply before editing, not after. When the user corrects you, add the new rule here.

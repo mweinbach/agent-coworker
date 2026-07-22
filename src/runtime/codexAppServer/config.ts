@@ -71,6 +71,15 @@ export function normalizeSummary(value: string | undefined): string | undefined 
   return ["auto", "concise", "detailed", "none"].includes(value) ? value : undefined;
 }
 
+export function normalizeSummaryForModel(
+  modelId: string,
+  value: string | undefined,
+): string | undefined {
+  const model = getSupportedModel(CODEX_APP_SERVER_PROVIDER, modelId);
+  if (model && !("reasoningSummary" in model.providerOptionsDefaults)) return undefined;
+  return normalizeSummary(value);
+}
+
 function normalizeWebSearchMode(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return ["disabled", "cached", "live"].includes(value) ? value : undefined;

@@ -106,4 +106,32 @@ Desktop renderer WebSocket traffic uses JSON-RPC over `cowork.jsonrpc.v1`. Share
 - Use the shared `Switch` for binary settings and reserve `Checkbox` for checklist selection.
 - Preview updates to existing components with `--dry-run` or `--diff`; do not overwrite desktop-customized wrappers without checking the diff and running relevant tests.
 
+## Code Review Rules
+
+Apply these rules only to diffs that touch the relevant desktop surface. Report
+only concrete violations introduced by the change.
+
+### Privileged IPC
+
+- Search for a renderer capability that bypasses the typed preload bridge, or an
+  IPC contract changed in only part of the call chain. Keep the channel and
+  payload types, preload exposure, main-process handler, and renderer wrapper in
+  sync. Validate the sender and inputs in the main process; never expose an
+  unrestricted Node or filesystem primitive to the renderer.
+
+### Workspace persistence
+
+- Search for new, renamed, or cleared workspace fields that do not round-trip
+  through persistence sanitization and migration. Preserve explicit
+  clear/inherit semantics, mutate the same workspace class the control renders,
+  and add save/reload coverage so a setting cannot appear to work and then
+  silently disappear after restart.
+
+### Optimistic message identity
+
+- Search for chat send, retry, steer, replay, or projection changes that drop or
+  regenerate `clientMessageId`. Preserve the originating ID through JSON-RPC,
+  server events, projected user items, retries, and reconciliation so an
+  accepted send cannot render duplicate user messages.
+
 <!-- HEROUI-REACT-AGENTS-MD-END -->

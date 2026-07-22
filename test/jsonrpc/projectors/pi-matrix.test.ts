@@ -171,6 +171,92 @@ describe("JSON-RPC projectors", () => {
       expect(new Set(journalFinalTools.map((event) => event.payload?.item?.id)).size).toBe(2);
     });
 
+    test(`projectors preserve streamed PI tool args when approval arrives before input end for ${provider}`, () => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const emissions: Array<{ eventType: string; payload: any }> = [];
+      const live = createJsonRpcNotificationProjector({
+        threadId: sessionId,
+        send: (message) => outbound.push(message as { method: string; params?: any }),
+      });
+      const journal = createThreadJournalNotificationProjector({
+        threadId: sessionId,
+        emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+      });
+
+      for (const projector of [live, journal] as const) {
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          busy: true,
+          turnId,
+          cause: "user_message",
+        });
+        projector.handle(
+          piChunk(provider, model, "tool_input_start", {
+            id: "tool_call_approval",
+            toolName: "bash",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_approval",
+            delta: '{"command":"bun ',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_approval",
+            delta: 'test"}',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_approval_request", {
+            approvalId: "approval-1",
+            toolCall: {
+              toolCallId: "tool_call_approval",
+              toolName: "bash",
+            },
+          }),
+        );
+      }
+
+      const liveApproval = outbound
+        .filter((message) => message.method === "item/completed")
+        .map((message) => message.params?.item)
+        .find((item) => item?.state === "approval-requested");
+      expect(liveApproval).toMatchObject({
+        type: "toolCall",
+        toolName: "bash",
+        state: "approval-requested",
+        args: { command: "bun test" },
+        approval: {
+          approvalId: "approval-1",
+          toolCall: {
+            toolCallId: "tool_call_approval",
+            toolName: "bash",
+          },
+        },
+      });
+
+      const journalApproval = emissions
+        .filter((event) => event.eventType === "item/completed")
+        .map((event) => event.payload?.item)
+        .find((item) => item?.state === "approval-requested");
+      expect(journalApproval).toMatchObject({
+        type: "toolCall",
+        toolName: "bash",
+        state: "approval-requested",
+        args: { command: "bun test" },
+        approval: {
+          approvalId: "approval-1",
+          toolCall: {
+            toolCallId: "tool_call_approval",
+            toolName: "bash",
+          },
+        },
+      });
+    });
+
     test(`projectors coalesce PI tool deltas and apply final errors for ${provider}`, () => {
       const outbound: Array<{ method: string; params?: any }> = [];
       const emissions: Array<{ eventType: string; payload: any }> = [];

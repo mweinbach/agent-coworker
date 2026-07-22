@@ -1095,6 +1095,42 @@ describe("codex app-server turn lifecycle", () => {
           },
         });
         controlled.emitNotification({
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread_1",
+            turnId: "turn_1",
+            item: {
+              type: "customToolCall",
+              id: "custom-2",
+              callId: "call-2",
+              name: "functions.exec",
+              arguments: { code: "await tools.some_nested_tool()" },
+            },
+          },
+        });
+        controlled.emitNotification({
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread_1",
+            turnId: "turn_1",
+            item: {
+              type: "customToolCallOutput",
+              callId: "call-2",
+              result: {
+                contentItems: [
+                  {
+                    type: "inputText",
+                    text: [
+                      "Alias source (https://example.com/alias)",
+                      "citeturn1search3 Alias result.",
+                    ].join("\n"),
+                  },
+                ],
+              },
+            },
+          },
+        });
+        controlled.emitNotification({
           method: "turn/completed",
           params: {
             threadId: "thread_1",
@@ -1137,6 +1173,36 @@ describe("codex app-server turn lifecycle", () => {
                 referenceId: "turn0search10",
                 title: "Second source",
                 url: "https://example.com/two",
+              },
+            ],
+          },
+          providerExecuted: true,
+        });
+        expect(streamParts).toContainEqual({
+          type: "tool-call",
+          toolCallId: "call-2",
+          toolName: "functions.exec",
+          input: { code: "await tools.some_nested_tool()" },
+          providerExecuted: true,
+        });
+        expect(streamParts).toContainEqual({
+          type: "tool-result",
+          toolCallId: "call-2",
+          toolName: "functions.exec",
+          output: {
+            contentItems: {
+              contentItems: [
+                {
+                  type: "inputText",
+                  text: expect.stringContaining("citeturn1search3"),
+                },
+              ],
+            },
+            citationSources: [
+              {
+                referenceId: "turn1search3",
+                title: "Alias source",
+                url: "https://example.com/alias",
               },
             ],
           },

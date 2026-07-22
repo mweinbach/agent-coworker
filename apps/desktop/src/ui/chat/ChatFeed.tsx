@@ -214,12 +214,12 @@ function WorkingPlaceholderRow() {
   return (
     <div className="flex w-full items-center gap-1.5" data-slot="working-placeholder">
       <Marker variant="border" className="min-w-0 flex-1 pb-2.5 pt-1.5">
-        <MarkerContent className="font-mono tracking-tight">
+        <MarkerContent className="flex items-center gap-2 text-[13px] font-medium">
           <span
-            role="status"
-            aria-live="polite"
-            className="activity-thinking-shimmer inline-flex items-center"
-          >
+            className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary"
+            aria-hidden
+          />
+          <span role="status" aria-live="polite" className="activity-thinking-shimmer">
             Working
           </span>
         </MarkerContent>
@@ -231,11 +231,11 @@ function WorkingPlaceholderRow() {
 function DaySeparatorRow(props: { label: string }) {
   return (
     <div className="flex w-full items-center gap-3 py-1" data-slot="day-separator">
-      <div className="h-px flex-1 bg-border/60" />
-      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="h-px flex-1 bg-border/40" />
+      <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground/80">
         {props.label}
       </span>
-      <div className="h-px flex-1 bg-border/60" />
+      <div className="h-px flex-1 bg-border/40" />
     </div>
   );
 }
@@ -542,7 +542,7 @@ function TranscriptScroller(props: {
       >
         <MessageScrollerContent
           ref={contentRef}
-          className="mx-auto w-full max-w-3xl gap-3.5 px-4 py-5 pt-6"
+          className="chat-feed-content mx-auto w-full max-w-3xl gap-4 px-4 py-5 pt-6"
         >
           {children}
         </MessageScrollerContent>
@@ -552,7 +552,7 @@ function TranscriptScroller(props: {
           type="button"
           variant="secondary"
           size="sm"
-          className="absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border border-border/60 bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
+          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border border-border/60 bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
           aria-label={
             newMessageCount > 0
@@ -576,6 +576,8 @@ function TranscriptScroller(props: {
     </MessageScroller>
   );
 }
+
+const NOOP = () => {};
 
 export const ChatFeed = memo(function ChatFeed(props: {
   busy: boolean;
@@ -633,8 +635,8 @@ export const ChatFeed = memo(function ChatFeed(props: {
     retryFailedTurnDisabled,
     retryUnavailableReason,
     hiddenFeedItemCount = 0,
-    onExpandOlderFeed = () => {},
-    onShowAllOlderFeed = () => {},
+    onExpandOlderFeed = NOOP,
+    onShowAllOlderFeed = NOOP,
   } = props;
   recordDesktopRenderMetric("chat-feed", selectedThreadId ?? undefined);
   const lastUserTurnId = lastVisibleUserTurnId(renderItems);

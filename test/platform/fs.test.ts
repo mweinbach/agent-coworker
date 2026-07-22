@@ -783,7 +783,7 @@ describe("acquireLockDir", () => {
       mkdir: async (target, options) => {
         if (String(target) === lockPath && options?.recursive === true) {
           ownerParentMkdirCalls += 1;
-          if (ownerParentMkdirCalls === 2) {
+          if (ownerParentMkdirCalls === 1) {
             startHeartbeatMkdir();
             await heartbeatMkdirGate;
           }
@@ -792,18 +792,19 @@ describe("acquireLockDir", () => {
       },
       rename: async (from, to) => {
         await fsp.rename(from, to);
-        if (String(to) === ownerPath && ownerParentMkdirCalls >= 2) {
+        if (String(to) === ownerPath && ownerParentMkdirCalls >= 1) {
           finishHeartbeat();
         }
       },
     });
 
-    const handle = await acquireLockDir(lockPath, { heartbeatMs: 1 }, { fsImpl });
+    const handle = await acquireLockDir(lockPath, { heartbeatMs: 60_000 }, { fsImpl });
+    const heartbeatPromise = handle.heartbeat();
     await heartbeatMkdirStarted;
     const releasePromise = handle.release();
     await Bun.sleep(10);
     allowHeartbeatMkdir();
-    await Promise.all([releasePromise, heartbeatFinished]);
+    await Promise.all([releasePromise, heartbeatPromise, heartbeatFinished]);
 
     expect(fs.existsSync(lockPath)).toBe(false);
   });
@@ -1083,6 +1084,43 @@ describe("hardenPrivateDir / hardenPrivateFile", () => {
       {
         file: "icacls.exe",
         args: [file, "/inheritancelevel:r", "/grant:r", `*${currentUserSid}:F`, "/Q"],
+      },
+    ]);
+  });
+
+  test("win32: rejects an invalid injected SID before mutating ACLs", async () => {
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    await expect(
+      hardenPrivateDir("C:\\private", {
+        platform: "win32",
+        currentUserSid: "not-a-sid",
+        runCommand,
+      }),
+    ).rejects.toThrow('platform.fs: invalid Windows user SID: "not-a-sid"');
+    expect(commands).toEqual([]);
+  });
+
+  test("win32: rejects malformed whoami output before mutating ACLs", async () => {
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: '"MACHINE\\user","not-a-sid"\r\n', stderr: "" };
+    };
+
+    await expect(
+      hardenPrivateDir("C:\\private", { platform: "win32", runCommand }),
+    ).rejects.toThrow(
+      'platform.fs: resolve current Windows user SID: whoami.exe returned no SID: "\\"MACHINE\\\\user\\",\\"not-a-sid\\""',
+    );
+    expect(commands).toEqual([
+      {
+        file: "whoami.exe",
+        args: ["/user", "/fo", "csv", "/nh"],
       },
     ]);
   });

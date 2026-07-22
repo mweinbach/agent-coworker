@@ -194,6 +194,18 @@ export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | nu
   return Math.min(...timestamps);
 }
 
+type FeedItemRenderItem = Extract<ChatRenderItem, { kind: "feed-item" }>;
+const feedItemWrapperCache = new WeakMap<FeedItem, FeedItemRenderItem>();
+
+function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
+  let cached = feedItemWrapperCache.get(item);
+  if (!cached || cached.item !== item) {
+    cached = { kind: "feed-item", item };
+    feedItemWrapperCache.set(item, cached);
+  }
+  return cached;
+}
+
 export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   const items: ChatRenderItem[] = [];
   let currentGroup: ActivityFeedItem[] = [];
@@ -227,7 +239,7 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
       continue;
     }
     flushGroup();
-    items.push({ kind: "feed-item", item });
+    items.push(getFeedItemWrapper(item));
   }
 
   flushGroup();

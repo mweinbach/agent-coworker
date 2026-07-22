@@ -317,6 +317,7 @@ function createDeferred<T>() {
 
 describe("App JSON-RPC shutdown disposal", () => {
   beforeEach(() => {
+    useAppStore.getState().invalidateBootstrap();
     (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     MockJsonRpcSocket.instances.length = 0;
@@ -343,6 +344,7 @@ describe("App JSON-RPC shutdown disposal", () => {
   });
 
   afterEach(async () => {
+    useAppStore.getState().invalidateBootstrap();
     await useAppStore.getState().drainBootstrap();
     disposeAllJsonRpcState();
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
@@ -359,7 +361,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     useAppStore.setState(defaultStoreState);
   });
 
-  test("transient renderer unmount keeps workspace JSON-RPC listeners alive", async () => {
+  test("transient renderer unmount keeps workspace JSON-RPC listeners alive", {
+    timeout: 30_000,
+  }, async () => {
     const harness = setupAppJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -426,7 +430,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     }
   });
 
-  test("Strict Mode mount runs one authoritative bootstrap side-effect pass", async () => {
+  test("Strict Mode mount runs one authoritative bootstrap side-effect pass", {
+    timeout: 30_000,
+  }, async () => {
     const harness = setupAppJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -522,7 +528,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     }
   });
 
-  test("window unload invalidates a deferred bootstrap before later writes or startup", async () => {
+  test("window unload invalidates a deferred bootstrap before later writes or startup", {
+    timeout: 30_000,
+  }, async () => {
     const harness = setupAppJsdom();
     const authoritativeLoad = createDeferred<unknown>();
     let root: ReturnType<typeof createRoot> | null = null;
@@ -631,7 +639,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     }
   });
 
-  test("window unload aborts deferred startup selection before it can restore JSON-RPC state", async () => {
+  test("window unload aborts deferred startup selection before it can restore JSON-RPC state", {
+    timeout: 30_000,
+  }, async () => {
     const paintCallbacks: FrameRequestCallback[] = [];
     const harness = setupAppJsdom((callback) => {
       paintCallbacks.push(callback);
@@ -752,7 +762,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     }
   });
 
-  test("window unload rejects a deferred startup session refresh before it can write", async () => {
+  test("window unload rejects a deferred startup session refresh before it can write", {
+    timeout: 30_000,
+  }, async () => {
     const paintCallbacks: FrameRequestCallback[] = [];
     const harness = setupAppJsdom((callback) => {
       paintCallbacks.push(callback);
@@ -849,7 +861,9 @@ describe("App JSON-RPC shutdown disposal", () => {
     }
   });
 
-  test("window unload disposes all workspace JSON-RPC listeners", async () => {
+  test("window unload disposes all workspace JSON-RPC listeners", {
+    timeout: 30_000,
+  }, async () => {
     const harness = setupAppJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 

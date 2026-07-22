@@ -15,6 +15,9 @@ class FakeReadline {
     const list = this.handlers.get(event) ?? [];
     list.push(cb);
     this.handlers.set(event, list);
+    if (event === "close" && this.closed) {
+      cb();
+    }
     return this;
   }
 
@@ -175,8 +178,8 @@ describe("CLI REPL port option handling", () => {
         },
       });
 
-      // Wait a short tick for it to initialize and call startAgentServer
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Wait for websocket handshake to establish
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       rlRef?.close();
       await replPromise;

@@ -6,12 +6,14 @@ export type BufferedReasoningState = {
   itemId: string;
   mode: ProjectedReasoningMode;
   text: string;
+  textChunks?: string[];
   started: boolean;
 };
 
 export type BufferedAssistantState = {
   itemId: string;
   text: string;
+  textChunks?: string[];
   started: boolean;
 };
 

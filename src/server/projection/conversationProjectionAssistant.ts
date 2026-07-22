@@ -61,6 +61,13 @@ function assistantRemainderForTurn(
   return text;
 }
 
+export function resolveAssistantText(assistantState: BufferedAssistantState): string {
+  if (assistantState.textChunks) {
+    assistantState.text = assistantState.textChunks.join("");
+  }
+  return assistantState.text;
+}
+
 export function createAssistantProjection(state: ConversationProjectionState) {
   const ensureActiveAssistantState = (turnId: string) => {
     const existing = state.activeAssistantByTurn.get(turnId);
@@ -93,7 +100,7 @@ export function createAssistantProjection(state: ConversationProjectionState) {
   ) => {
     const assistantState = state.activeAssistantByTurn.get(turnId);
     if (!assistantState) return;
-    const text = finalText ?? assistantState.text;
+    const text = finalText ?? resolveAssistantText(assistantState);
     state.activeAssistantByTurn.delete(turnId);
     if (!hasVisibleAssistantText(text)) return;
     startAssistantState(turnId, assistantState);
@@ -115,8 +122,9 @@ export function createAssistantProjection(state: ConversationProjectionState) {
   ) => {
     const assistantState = state.activeAssistantByTurn.get(turnId);
     if (!assistantState) return;
-    if (assistantState.text) {
-      completeAssistantState(turnId, assistantState.text, annotations);
+    const text = resolveAssistantText(assistantState);
+    if (text) {
+      completeAssistantState(turnId, text, annotations);
       return;
     }
     state.activeAssistantByTurn.delete(turnId);

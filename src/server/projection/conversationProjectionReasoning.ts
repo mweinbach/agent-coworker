@@ -12,6 +12,13 @@ import {
   reasoningModeFromPart,
 } from "./shared";
 
+export function resolveReasoningText(reasoningState: BufferedReasoningState): string {
+  if (reasoningState.textChunks) {
+    reasoningState.text = reasoningState.textChunks.join("");
+  }
+  return reasoningState.text;
+}
+
 export function createReasoningProjection(state: ConversationProjectionState) {
   const rememberStreamedReasoningText = (text: string) => {
     const normalized = normalizeReasoningText(text);
@@ -26,7 +33,7 @@ export function createReasoningProjection(state: ConversationProjectionState) {
     if (state.reasoningTextsSeenInTurn.has(normalized)) return true;
 
     for (const reasoningState of state.reasoningByKey.values()) {
-      if (normalizeReasoningText(reasoningState.text) === normalized) {
+      if (normalizeReasoningText(resolveReasoningText(reasoningState)) === normalized) {
         return true;
       }
     }
@@ -35,7 +42,7 @@ export function createReasoningProjection(state: ConversationProjectionState) {
       [
         ...state.reasoningTextHistoryInTurn,
         ...[...state.reasoningByKey.values()]
-          .map((reasoningState) => normalizeReasoningText(reasoningState.text))
+          .map((reasoningState) => normalizeReasoningText(resolveReasoningText(reasoningState)))
           .filter((current): current is string => current !== null),
       ].join("\n\n"),
     );
@@ -102,29 +109,31 @@ export function createReasoningProjection(state: ConversationProjectionState) {
     const reasoningState = state.reasoningByKey.get(key);
     if (!reasoningState) return;
     state.reasoningByKey.delete(key);
+    const text = resolveReasoningText(reasoningState);
     startBufferedReasoning(turnId, reasoningState);
     state.opts.sink.emitItemCompleted(turnId, {
       id: reasoningState.itemId,
       type: "reasoning",
       mode: reasoningState.mode,
-      text: reasoningState.text,
+      text,
     });
-    rememberStreamedReasoningText(reasoningState.text);
+    rememberStreamedReasoningText(text);
   };
 
   const completeReasoningStateForTurn = (turnId: string) => {
     for (const [key, reasoningState] of [...state.reasoningByKey.entries()]) {
       if (!key.startsWith(`${turnId}:`)) continue;
       state.reasoningByKey.delete(key);
-      if (reasoningState.text.trim()) {
+      const text = resolveReasoningText(reasoningState);
+      if (text.trim()) {
         startBufferedReasoning(turnId, reasoningState);
         state.opts.sink.emitItemCompleted(turnId, {
           id: reasoningState.itemId,
           type: "reasoning",
           mode: reasoningState.mode,
-          text: reasoningState.text,
+          text,
         });
-        rememberStreamedReasoningText(reasoningState.text);
+        rememberStreamedReasoningText(text);
       } else if (reasoningState.started) {
         state.opts.sink.emitItemCompleted(turnId, {
           id: reasoningState.itemId,

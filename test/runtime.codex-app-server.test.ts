@@ -248,6 +248,29 @@ describe("codex app-server runtime", () => {
   );
 
   test.serial(
+    "settles a coalesced threadId-less completion from spawned app-server JSONL",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-coalesced-"));
+      const script = await writeMockAppServer(dir, { coalesceThreadlessCompletion: true });
+      process.env.COWORK_CODEX_APP_SERVER_COMMAND = testNodeCommand;
+      process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+      codexAppServerClientInternal.setClientFactoryForTests(undefined);
+
+      const runtime = createRuntime(makeConfig(dir));
+      const result = await runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Say hi" }],
+        tools: {},
+        maxSteps: 1,
+      });
+
+      expect(result.text).toBe("coalesced completion");
+    },
+    30_000,
+  );
+
+  test.serial(
     "preserves app-server assistant phases and excludes commentary from final text",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-commentary-"));

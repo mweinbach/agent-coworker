@@ -68,6 +68,7 @@ import {
   EntityIcon,
   SettingsEmptyState,
   SettingsPage,
+  SettingsSection,
   SettingsStatusPill,
 } from "../SettingsPrimitives";
 
@@ -609,7 +610,7 @@ export function SubagentsPage() {
             }
           />
         ) : (
-          <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
+          <SettingsSection>
             {profileRows.map((entry) => {
               const profileRef = `${entry.scope}:${entry.profile.id}`;
               const copyOperation =
@@ -650,43 +651,35 @@ export function SubagentsPage() {
                 />
               );
             })}
-          </div>
+          </SettingsSection>
         )}
 
         {scope === "workspace" && globalAvailabilityRows.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <div>
-              <div className="text-sm font-semibold text-foreground">
-                Global subagents in this workspace
-              </div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                Turn off global subagents you don't want available in this workspace. This only
-                affects the selected workspace.
-              </div>
-            </div>
-            <div className="app-shadow-surface divide-y divide-border/50 overflow-hidden rounded-xl border border-border/75 bg-card/85">
-              {globalAvailabilityRows.map((entry) => {
-                const operation =
-                  operationsByKey[
-                    operationKey("agent-profile", "availability", workspace.id, entry.profile.id)
-                  ];
-                return (
-                  <GlobalAvailabilityRow
-                    key={`availability:${entry.profile.id}`}
-                    entry={entry}
-                    pending={operation?.status === "pending"}
-                    onAvailabilityChange={(available) =>
-                      void setAgentProfileWorkspaceAvailability(
-                        entry.profile.id,
-                        !available,
-                        workspace.id,
-                      )
-                    }
-                  />
-                );
-              })}
-            </div>
-          </div>
+          <SettingsSection
+            title="Global subagents in this workspace"
+            description="Turn off global subagents you don't want available in this workspace. This only affects the selected workspace."
+          >
+            {globalAvailabilityRows.map((entry) => {
+              const operation =
+                operationsByKey[
+                  operationKey("agent-profile", "availability", workspace.id, entry.profile.id)
+                ];
+              return (
+                <GlobalAvailabilityRow
+                  key={`availability:${entry.profile.id}`}
+                  entry={entry}
+                  pending={operation?.status === "pending"}
+                  onAvailabilityChange={(available) =>
+                    void setAgentProfileWorkspaceAvailability(
+                      entry.profile.id,
+                      !available,
+                      workspace.id,
+                    )
+                  }
+                />
+              );
+            })}
+          </SettingsSection>
         ) : null}
       </div>
 
@@ -1018,7 +1011,7 @@ export function ProfileDialog({
                 />
               </ProfileField>
               <ProfileField label="Subagent id">
-                <div className="flex min-h-9 items-center rounded-md border border-border/60 bg-muted/30 px-3 text-sm text-muted-foreground">
+                <div className="flex min-h-9 items-center rounded-lg bg-foreground/[0.04] px-3 text-sm text-muted-foreground">
                   <code className="truncate text-xs">{generatedProfileRef}</code>
                 </div>
               </ProfileField>

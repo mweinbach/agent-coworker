@@ -31,6 +31,20 @@ describe("desktopShellBackgroundColor", () => {
     expect(rendererTokens).toContain(`--app-bg: ${NATIVE_THEME_TOKENS.shellSurface.light}`);
     expect(rendererTokens).toContain(`--app-bg: ${NATIVE_THEME_TOKENS.shellSurface.dark}`);
   });
+
+  test("keeps the Linux renderer shell opaque over its solid native window", () => {
+    const platformTokens = readFileSync(
+      resolve(import.meta.dir, "../src/styles/tokens/platform.css"),
+      "utf8",
+    );
+    const linuxBlock = platformTokens.match(
+      /:root\[data-platform="linux"\]:not\(\[data-reduced-transparency="true"\]\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1];
+
+    expect(linuxBlock).toBeDefined();
+    expect(linuxBlock).toContain("--window-bg: var(--app-bg);");
+    expect(linuxBlock).toContain("--shell-bg: var(--app-bg);");
+  });
 });
 
 describe("resolveWindowChromePaint", () => {

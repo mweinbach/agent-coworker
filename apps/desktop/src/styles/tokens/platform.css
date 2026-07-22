@@ -59,8 +59,10 @@
 }
 
 :root[data-platform="linux"]:not([data-reduced-transparency="true"]) {
-  --window-bg: transparent;
-  --shell-bg: transparent;
+  /* Linux has no native material behind the renderer. Match the solid native
+     window paint so DOM contrast tools see the same compositing surface. */
+  --window-bg: var(--app-bg);
+  --shell-bg: var(--app-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
   --sidebar-pane-surface: color-mix(in srgb, var(--sidebar-bg) 20%, transparent);
   --content-surface: color-mix(in srgb, var(--sidebar-bg) 70%, var(--app-bg) 30%);

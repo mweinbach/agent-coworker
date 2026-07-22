@@ -44,6 +44,7 @@ const migratedHierarchyFiles = new Set([
   "ui/file-explorer/WorkspaceFileExplorer.tsx",
   "ui/settings/SettingsPrimitives.tsx",
   "ui/settings/SettingsShell.tsx",
+  "ui/tasks/TaskContextSidebar.tsx",
 ]);
 const inlineStyleBlockPattern = /style=\{\{([\s\S]*?)\}\}/g;
 const colorBearingInlineStylePattern =

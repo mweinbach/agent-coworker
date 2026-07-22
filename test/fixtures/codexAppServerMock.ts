@@ -10,13 +10,17 @@ import { UNHANDLED_CODEX_APP_SERVER_REQUEST } from "../../src/providers/codexApp
 
 export const mockInterrupts: Array<{ threadId: string; turnId?: string }> = [];
 
-export async function writeMockAppServer(dir: string): Promise<string> {
+export async function writeMockAppServer(
+  dir: string,
+  options: { coalesceThreadlessCompletion?: boolean } = {},
+): Promise<string> {
   const script = path.join(dir, "mock-codex-app-server.js");
   await fs.writeFile(
     script,
     `
 const readline = require("node:readline");
 const fs = require("node:fs");
+const coalesceThreadlessCompletion = ${options.coalesceThreadlessCompletion === true};
 const rl = readline.createInterface({ input: process.stdin });
 process.stdin.resume();
 // Exit as soon as the parent closes stdin so abnormal test teardown (where the
@@ -59,6 +63,13 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "turn/start") {
+    if (coalesceThreadlessCompletion) {
+      process.stdout.write(
+        JSON.stringify({ id: msg.id, result: { turn: { id: "turn_1", status: "inProgress", items: [], error: null } } }) + "\\n" +
+        JSON.stringify({ method: "turn/completed", params: { turn: { id: "turn_1", status: "completed", items: [{ type: "agentMessage", id: "item_1", text: "coalesced completion", phase: null, memoryCitation: null }], error: null } } }) + "\\n"
+      );
+      return;
+    }
     send({ id: msg.id, result: { turn: { id: "turn_1", status: "inProgress", items: [], error: null } } });
     if (process.env.CODEX_APP_SERVER_DELAY_COMPLETION !== "1") completeTurn();
     return;

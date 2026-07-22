@@ -122,7 +122,11 @@ describe("desktop model stream mapper", () => {
   test("maps tool, source/file, and unknown parts", () => {
     expect(
       mapModelStreamChunk(
-        chunk("tool_input_start", { id: "tool_1", toolName: "read", args: { id: "tool_1", toolName: "read" } }, 0),
+        chunk(
+          "tool_input_start",
+          { id: "tool_1", toolName: "read", args: { id: "tool_1", toolName: "read" } },
+          0,
+        ),
       ),
     ).toEqual({
       kind: "tool_input_start",

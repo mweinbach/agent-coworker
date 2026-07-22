@@ -92,6 +92,21 @@ describe("mobile theme tokens", () => {
     }
   });
 
+  test("destructive buttons consume the semantic danger foreground", () => {
+    const themeSource = readFileSync(
+      fileURLToPath(new URL("../apps/mobile/src/theme/use-app-theme.ts", import.meta.url)),
+      "utf8",
+    );
+    const buttonSource = readFileSync(
+      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(themeSource).toContain("dangerText: tokens.dangerForeground");
+    expect(buttonSource).toContain("label: theme.dangerText");
+    expect(buttonSource).not.toContain('label: "#ffffff"');
+  });
+
   test("typography exposes IBM Plex families that match the desktop bundle", () => {
     expect(typography.fontFamilySans).toBe("IBMPlexSans");
     expect(typography.fontFamilyMono).toBe("IBMPlexMono");

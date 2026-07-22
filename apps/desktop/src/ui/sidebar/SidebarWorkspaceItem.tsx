@@ -329,7 +329,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               ) : (
                 <>
                   {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
-                    <div className="px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                    <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
                       Chats
                     </div>
                   ) : null}
@@ -376,7 +376,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
-                      <div className="px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                      <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
                         Tasks
                       </div>
                       {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (

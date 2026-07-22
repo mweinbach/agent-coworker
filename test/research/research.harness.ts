@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeWithRetry } from "../../src/platform/fs";
 import { __internal as citationMetadataInternal } from "../../src/server/citationMetadata";
 import { exportResearch } from "../../src/server/research/export";
 import {
@@ -10,7 +11,6 @@ import {
   type ResearchServiceRuntime,
 } from "../../src/server/research/ResearchService";
 import { type ResearchRecord, researchRecordSchema } from "../../src/server/research/types";
-import { removeWithRetry } from "../../src/platform/fs";
 import { SessionDb } from "../../src/server/sessionDb";
 
 type RuntimeEvent = Record<string, unknown>;

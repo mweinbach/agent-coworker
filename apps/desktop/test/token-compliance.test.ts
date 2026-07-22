@@ -32,6 +32,8 @@ const subfloorTextUtilityPattern = /text-\[(?:[0-9](?:\.\d+)?|1[01](?:\.\d+)?)px
 const opacityReducedTextPattern = /text-(?:foreground|muted-foreground)\/[0-9]+/g;
 const opacityReducedFocusRingPattern =
   /(?:focus|focus-visible|focus-within|group-focus-within):ring-[\w-]+\/[0-9]+/g;
+const unsupportedRingWidthPattern = /\bring-3\b/g;
+const lowContrastMutedTextPattern = /text-muted-foreground\/65/g;
 const migratedHierarchyFiles = new Set([
   "ui/Sidebar.tsx",
   "ui/ContextSidebar.tsx",
@@ -172,6 +174,16 @@ describe("desktop token compliance", () => {
 
   test("prevents translucent focus indicators", () => {
     const violations = collectMatches(readDesktopFiles(), opacityReducedFocusRingPattern);
+    expect(violations).toEqual([]);
+  });
+
+  test("uses an explicit arbitrary value for three-pixel rings", () => {
+    const violations = collectMatches(readDesktopFiles(), unsupportedRingWidthPattern);
+    expect(violations).toEqual([]);
+  });
+
+  test("prevents low-contrast muted text opacity", () => {
+    const violations = collectMatches(readDesktopFiles(), lowContrastMutedTextPattern);
     expect(violations).toEqual([]);
   });
 

@@ -69,8 +69,7 @@ function resolveVariant(variant: AppButtonVariant, theme: AppTheme): VariantStyl
       return {
         background: theme.danger,
         pressedBackground: alpha(theme.danger, 0.85),
-        // Desktop destructive uses text-white in both schemes.
-        label: "#ffffff",
+        label: theme.dangerText,
       };
     case "outline":
       return {

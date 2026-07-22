@@ -22,6 +22,7 @@ export type AppTheme = {
   warning: string;
   warningMuted: string;
   danger: string;
+  dangerText: string;
   dangerMuted: string;
   accent: string;
   accentMuted: string;
@@ -52,6 +53,7 @@ function buildAppTheme(scheme: "light" | "dark"): AppTheme {
     warning: tokens.warning,
     warningMuted: tokens.warningSoft,
     danger: tokens.danger,
+    dangerText: tokens.dangerForeground,
     dangerMuted: tokens.dangerSoft,
     accent: tokens.accent,
     accentMuted: tokens.accentSoft,

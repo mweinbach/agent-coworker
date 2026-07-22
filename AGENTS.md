@@ -228,6 +228,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Repo-Specific Contracts
 
+- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient. Use explicit arbitrary Tailwind values for nonstandard ring widths, and map high-contrast selected/focus states to the system `Highlight`/`HighlightText` pair.
+
 - **Platform boundary ratchet**: new code and tests must not introduce raw
   `process.platform`, `os.homedir()`, `os.tmpdir()`, `Bun.which`, or equivalent
   platform branching outside `src/platform/` and its sanctioned test helpers.

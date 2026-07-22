@@ -274,6 +274,8 @@
     --accent: Highlight;
     --accent-hover: Highlight;
     --accent-foreground: HighlightText;
+    --color-accent: Highlight;
+    --color-accent-foreground: HighlightText;
     --focus-ring: Highlight;
     --field-background: Field;
     --field-foreground: FieldText;
@@ -388,6 +390,8 @@
     --accent: Highlight;
     --accent-hover: Highlight;
     --accent-foreground: HighlightText;
+    --color-accent: Highlight;
+    --color-accent-foreground: HighlightText;
     --focus-ring: Highlight;
     --field-background: Field;
     --field-foreground: FieldText;

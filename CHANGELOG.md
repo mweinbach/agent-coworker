@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.23 - 2026-07-22
+
+### Changed
+
+- **Desktop UI rendering and server streaming performance** — Optimized
+  desktop renderer and server streaming architecture for improved responsiveness.
+
+### Fixed
+
+- **macOS menu icon sizing** — Corrected icon dimensions in the macOS menu bar.
+
+- **Desktop design refinements** — General design fixes from the Kimi redesign
+  branch merge.
+
+### Tests
+
+- Added loopback HTTP RPC boundary coverage.
+- Added creation preflight JSON-RPC route coverage.
+- Added coalesced Codex app-server completion coverage.
+- Added exec citation wire alias coverage.
+- Added malformed Windows SID hardening coverage.
+
 ## 1.2.22 - 2026-07-16
 
 ## 1.2.21 - 2026-07-06

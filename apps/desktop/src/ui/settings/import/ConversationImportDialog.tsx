@@ -393,7 +393,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                               <span>{formatDate(conversation.updatedAt)}</span>
                             </div>
                             {conversation.cwd ? (
-                              <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                              <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                                 {conversation.cwd}
                               </div>
                             ) : null}
@@ -422,7 +422,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                               </div>
                             ) : null}
                             {conversation.warnings.length > 0 ? (
-                              <div className="mt-2 flex flex-col gap-1 text-[11px] text-muted-foreground">
+                              <div className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
                                 {conversation.warnings.slice(0, 2).map((warning) => (
                                   <div key={`${conversation.fingerprint}:${warning.code}`}>
                                     {warning.message}

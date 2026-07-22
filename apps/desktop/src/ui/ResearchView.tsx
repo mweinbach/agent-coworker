@@ -61,7 +61,7 @@ export function ResearchView() {
         <div className="border-b border-border/35 px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground/72">
+              <div className="app-type-label uppercase tracking-[0.16em] app-text-secondary">
                 Research
               </div>
               <div className="mt-0.5 text-[13px] text-muted-foreground">

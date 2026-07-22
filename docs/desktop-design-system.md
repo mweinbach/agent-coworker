@@ -11,7 +11,7 @@ Short reference for the Electron desktop UI. Source of truth lives in code under
 
 ## Tokens overview
 
-Palette philosophy: **neutral canvas, olive signature**. Surfaces/borders/text are warm-neutral grays; the olive `--accent-base` (`#6f8042` light / `#a8b963` dark) is reserved for primary actions, active nav, focus rings, and live status — never as a wash over whole surfaces.
+Palette philosophy: **neutral canvas, olive signature**. Surfaces/borders/text are warm-neutral grays; the olive `--accent-base` (`#66763d` light / `#a8b963` dark) is reserved for primary actions, active nav, focus rings, and live status — never as a wash over whole surfaces.
 
 | Layer | Path | Role |
 |-------|------|------|
@@ -35,6 +35,19 @@ Use these instead of raw hex:
 ### Text
 
 - `--text-primary`, `--text-secondary`, `--text-muted`, `--text-subtle`, `--text-emphasis`, `--text-link`, `--text-inverse`
+- `--text-primary-on-accent` is the foreground for filled primary controls. It is deliberately independent from `--text-inverse`: white passes on the darker light-theme olive, while dark text passes on the brighter dark-theme olive.
+
+Approved foreground/background pairs are enforced in `apps/desktop/test/semantic-contrast.test.ts`:
+
+| Role | Light | Dark | Minimum |
+|------|-------|------|---------|
+| Filled primary | white on `#66763d` | `#1f1f1c` on `#a8b963` | 4.5:1 |
+| Link | accent on panel | accent on panel | 4.5:1 |
+| Primary and muted text | semantic text on panel | semantic text on panel | 4.5:1 |
+| Focus indicator | `--focus-ring` on window/panel | `--focus-ring` on window/panel | 3:1 |
+| Filled success/warning/danger | dedicated status foreground on status fill | dedicated status foreground on status fill | 4.5:1 |
+
+Do not substitute `text-white` for a semantic filled-control foreground. Bright dark-theme fills generally require dark text.
 
 ### Border / shadow / radius
 
@@ -48,7 +61,7 @@ Use these instead of raw hex:
 
 ### High contrast
 
-`data-high-contrast="true"` on `:root` flattens glass, strengthens borders/type, and disables backdrop blur (`tokens/platform.css`).
+`data-high-contrast="true"` on `:root` activates a complete system-color token pack in `theme-bridge.css`, while `tokens/platform.css` flattens glass and disables backdrop blur. A `forced-colors: active` fallback applies the same Canvas, CanvasText, Field, GrayText, LinkText, Highlight, and HighlightText contract before renderer state initializes.
 
 ## Z-index
 
@@ -70,7 +83,7 @@ Default interactive focus (buttons, treeitems, links, inputs):
 
 ```css
 box-shadow: var(--focus-ring-shadow);
-/* 0 0 0 2px window surface + 0 0 0 4px accent mix */
+/* 0 0 0 2px window surface + 0 0 0 4px opaque focus color */
 ```
 
 Exceptions (intentionally no ring frame):
@@ -92,8 +105,10 @@ Prefer `focus-visible` and, for hover-only row actions, **`group-focus-within:`*
 ## Density & type
 
 - Chat reading column: ~`max-w-3xl` for feed rows
-- Message body text: `text-[15px] leading-[1.65]` (assistant and user bubbles); activity/tool rows stay compact at `text-[13px]` / `text-[11px]`
-- Compact chrome: `text-xs` / `text-[11px]` for labels; avoid sub-10px for primary copy
+- Message body text: `text-[15px] leading-[1.65]` (assistant and user bubbles); activity/tool rows stay compact at `text-[13px]` with 12px supporting copy.
+- Meaningful supporting copy and interactive labels have a 12px floor. `token-compliance.test.ts` blocks arbitrary pixel utilities below that floor.
+- Prefer the named role utilities from `token-utilities.css`: `app-type-caption`, `app-type-label`, `app-type-body`, `app-type-title`, and `app-type-code`. Use `text-xs` for one-off 12px layout text when a role utility would add no clarity.
+- Use `app-text-secondary`, `app-text-muted`, and `app-text-subtle` for hierarchy. Do not reduce semantic text colors with arbitrary `/65`-style opacity modifiers.
 - Hit targets: icon buttons typically `size-6`–`size-7` (aim ≥ 28px for primary chrome)
 - Binary settings: shared `Switch`; multi-select checklists: `Checkbox`
 - Settings sections are flat: one `rounded-xl border border-border/50 bg-card` container with `divide-y` hairlines per section — compact rows and separators, **no nested rounded subcards**. Inner wells for raw code/JSON: `rounded-lg bg-foreground/[0.04]`, no border.

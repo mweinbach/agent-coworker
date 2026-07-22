@@ -28,6 +28,21 @@ const colorMixPattern = /color-mix\(/g;
 const hardcodedPaletteUtilityPattern =
   /\b(?:text|bg|border|ring|fill|stroke)-(?:amber|blue|emerald|green|red|orange|yellow|slate|zinc|neutral|stone|violet|purple|pink|rose|cyan|sky|teal|lime|indigo)(?:-[0-9]{2,3})?(?:\/(?:\[[^\]]+\]|[0-9]{1,3}))?\b/g;
 const selfReferentialVarPattern = /(--[\w-]+)\s*:\s*var\(\1\)\s*;/g;
+const subfloorTextUtilityPattern = /text-\[(?:[0-9](?:\.\d+)?|1[01](?:\.\d+)?)px\]/g;
+const opacityReducedTextPattern = /text-(?:foreground|muted-foreground)\/[0-9]+/g;
+const opacityReducedFocusRingPattern =
+  /(?:focus|focus-visible|focus-within|group-focus-within):ring-[\w-]+\/[0-9]+/g;
+const migratedHierarchyFiles = new Set([
+  "ui/Sidebar.tsx",
+  "ui/ContextSidebar.tsx",
+  "ui/Canvas.tsx",
+  "ui/ResearchView.tsx",
+  "ui/chat/ActivityGroupCard.tsx",
+  "ui/chat/CitationSourcesCarousel.tsx",
+  "ui/file-explorer/WorkspaceFileExplorer.tsx",
+  "ui/settings/SettingsPrimitives.tsx",
+  "ui/settings/SettingsShell.tsx",
+]);
 const inlineStyleBlockPattern = /style=\{\{([\s\S]*?)\}\}/g;
 const colorBearingInlineStylePattern =
   /\b(?:background|backgroundColor|color|borderColor|boxShadow|outlineColor|fill|stroke|filter)\s*:/;
@@ -83,6 +98,7 @@ describe("desktop token compliance", () => {
       "--text-primary",
       "--text-secondary",
       "--text-muted",
+      "--text-primary-on-accent",
       "--text-inverse",
       "--text-link",
       "--border-default",
@@ -93,6 +109,7 @@ describe("desktop token compliance", () => {
       "--shadow-surface",
       "--shadow-overlay",
       "--shadow-field",
+      "--focus-ring",
     ];
 
     for (const token of requiredTokens) {
@@ -138,5 +155,36 @@ describe("desktop token compliance", () => {
   test("does not define self-referential custom properties", () => {
     const violations = collectMatches(readDesktopFiles(), selfReferentialVarPattern);
     expect(violations).toEqual([]);
+  });
+
+  test("prevents meaningful desktop text from dropping below the 12px floor", () => {
+    const violations = collectMatches(readDesktopFiles(), subfloorTextUtilityPattern);
+    expect(violations).toEqual([]);
+  });
+
+  test("keeps migrated high-traffic surfaces on semantic text colors", () => {
+    const migratedFiles = readDesktopFiles().filter(({ relativePath }) =>
+      migratedHierarchyFiles.has(relativePath),
+    );
+    const violations = collectMatches(migratedFiles, opacityReducedTextPattern);
+    expect(violations).toEqual([]);
+  });
+
+  test("prevents translucent focus indicators", () => {
+    const violations = collectMatches(readDesktopFiles(), opacityReducedFocusRingPattern);
+    expect(violations).toEqual([]);
+  });
+
+  test("declares named typography utilities for common interface roles", () => {
+    const utilities = readFileSync(resolve(desktopSrcDir, "styles/token-utilities.css"), "utf8");
+    for (const className of [
+      ".app-type-caption",
+      ".app-type-label",
+      ".app-type-body",
+      ".app-type-title",
+      ".app-type-code",
+    ]) {
+      expect(utilities).toContain(className);
+    }
   });
 });

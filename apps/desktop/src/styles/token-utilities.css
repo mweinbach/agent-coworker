@@ -3,6 +3,35 @@
   box-shadow: var(--focus-ring-shadow);
 }
 
+.app-type-caption {
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-leading);
+}
+
+.app-type-label {
+  font-size: var(--type-label-size);
+  font-weight: 600;
+  line-height: var(--type-label-leading);
+  letter-spacing: 0.01em;
+}
+
+.app-type-body {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-leading);
+}
+
+.app-type-title {
+  font-size: var(--type-title-size);
+  font-weight: 600;
+  line-height: var(--type-title-leading);
+}
+
+.app-type-code {
+  font-family: var(--font-mono);
+  font-size: var(--type-code-size);
+  line-height: var(--type-code-leading);
+}
+
 .app-surface-card {
   background: var(--surface-card);
   color: var(--text-primary);

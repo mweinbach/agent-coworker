@@ -113,7 +113,7 @@
   --muted-base: var(--text-base);
   --shadow-surface-base: none;
   --shadow-overlay-base: 0 0 0 1px currentColor;
-  --focus-ring-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-base) 70%, transparent);
+  --focus-ring-shadow: 0 0 0 2px Canvas, 0 0 0 4px Highlight;
 }
 
 /* High contrast: kill blur so borders and type stay sharp. */

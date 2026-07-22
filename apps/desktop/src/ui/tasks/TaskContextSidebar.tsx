@@ -51,7 +51,7 @@ function WorkItemIcon({ item }: { item: WorkItem }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2.5 px-3 py-3">
-      <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+      <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
         {title}
       </h2>
       {children}
@@ -226,14 +226,14 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
             >
               {formatTaskStatus(task.status)}
             </Badge>
-            <span className="text-[11px] tabular-nums text-muted-foreground">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {completed}/{task.workItems.length}
             </span>
           </div>
           <Progress value={progress} aria-label={`${Math.round(progress)} percent complete`} />
           {task.context ? (
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                 Context handoff
               </p>
               <p className="mt-1 whitespace-pre-wrap text-xs leading-5">{task.context}</p>
@@ -306,7 +306,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                   .filter((item) => item.status === "active")
                   .map((requirement) => (
                     <div key={requirement.id} className="flex items-start gap-2 text-xs leading-5">
-                      <Badge variant="secondary" className="mt-0.5 shrink-0 text-[9px]">
+                      <Badge variant="secondary" className="mt-0.5 shrink-0 text-xs">
                         {requirement.kind === "acceptance_criterion"
                           ? "Accept"
                           : requirement.kind === "constraint"
@@ -353,7 +353,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                       {item.title}
                     </span>
                     {item.dependsOn.length > 0 ? (
-                      <span className="mt-1 flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
+                      <span className="mt-1 flex items-start gap-1 text-xs leading-4 text-muted-foreground">
                         <GitBranchIcon className="mt-0.5 size-3 shrink-0" />
                         After{" "}
                         {item.dependsOn.map((id) => workItemTitleById.get(id) ?? id).join(", ")}
@@ -429,7 +429,7 @@ export function TaskContextSidebar({ variant = "sidebar" }: { variant?: "sidebar
                 {task.activity.slice(0, 8).map((activity) => (
                   <div key={activity.id} className="text-xs leading-5">
                     <p>{activity.summary}</p>
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {new Date(activity.createdAt).toLocaleString()}
                     </p>
                   </div>

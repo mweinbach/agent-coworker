@@ -21,7 +21,8 @@
   --color-popover-foreground: var(--text-primary);
 
   --color-primary: var(--accent);
-  --color-primary-foreground: var(--text-inverse);
+  --color-primary-hover: var(--accent-hover);
+  --color-primary-foreground: var(--text-primary-on-accent);
 
   --color-secondary: var(--surface-secondary);
   --color-secondary-foreground: var(--text-primary);
@@ -33,10 +34,11 @@
 
   --color-border: var(--border-default);
   --color-input: var(--border-subtle);
-  --color-ring: var(--accent);
+  --color-ring: var(--focus-ring);
 
   --color-destructive: var(--danger);
-  --color-destructive-foreground: var(--text-inverse);
+  --color-destructive-hover: var(--danger-hover);
+  --color-destructive-foreground: var(--danger-foreground);
   --color-success: var(--status-success);
   --color-success-foreground: var(--status-success-foreground);
   --color-warning: var(--status-warning);
@@ -114,6 +116,7 @@
     --text-emphasis: color-mix(in srgb, var(--text-base) 96%, transparent);
     --text-subtle: color-mix(in srgb, var(--muted-base) 92%, transparent);
     --text-muted-subtle: color-mix(in srgb, var(--muted-base) 78%, transparent);
+    --text-primary-on-accent: var(--primary-foreground-base);
     --text-inverse: var(--inverse-text);
     --text-link: var(--accent-base);
     --text-spreadsheet: #24292f;
@@ -153,7 +156,8 @@
     --default-foreground: var(--text-primary);
 
     --accent: var(--accent-base);
-    --accent-foreground: var(--text-inverse);
+    --accent-hover: var(--accent-hover-base);
+    --accent-foreground: var(--text-primary-on-accent);
 
     --field-background: var(--surface-field);
     --field-foreground: var(--text-primary);
@@ -172,14 +176,16 @@
     --warning-foreground: var(--status-warning-foreground);
 
     --danger: var(--danger-base);
-    --danger-foreground: var(--text-inverse);
+    --danger-hover: var(--danger-hover-base);
+    --danger-foreground: var(--danger-foreground-base);
 
     --segment: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg));
     --segment-foreground: var(--text-primary);
 
     --border: var(--border-default);
     --separator: var(--border-separator);
-    --focus: var(--accent);
+    --focus-ring: var(--focus-ring-base);
+    --focus: var(--focus-ring);
     --link: var(--text-link);
 
     --radius: var(--radius-base);
@@ -195,9 +201,7 @@
       0 1px 0 color-mix(in srgb, var(--text-base) 8%, transparent);
     --shadow-field: 0 0 0 0 transparent;
 
-    --focus-ring-shadow:
-      0 0 0 2px var(--surface-window),
-      0 0 0 4px color-mix(in srgb, var(--accent-base) 72%, transparent);
+    --focus-ring-shadow: 0 0 0 2px var(--surface-window), 0 0 0 4px var(--focus-ring);
     --scrollbar-thumb: color-mix(in srgb, var(--text-base) 18%, transparent);
     --scrollbar-thumb-hover: color-mix(in srgb, var(--text-base) 30%, transparent);
     --toolbar-button-filter: none;
@@ -233,6 +237,75 @@
     --field-background: var(--surface-spreadsheet);
     --field-foreground: var(--text-spreadsheet);
     color-scheme: light;
+  }
+
+  :root[data-high-contrast="true"] {
+    --surface-window: Canvas;
+    --surface-shell: Canvas;
+    --surface-sidebar: Canvas;
+    --surface-sidebar-pane: Canvas;
+    --surface-workspace-pane: Canvas;
+    --surface-main: Canvas;
+    --surface-main-card: Canvas;
+    --surface-card: Canvas;
+    --surface-card-elevated: Canvas;
+    --surface-overlay: Canvas;
+    --surface-secondary: Canvas;
+    --surface-accent: Canvas;
+    --surface-field: Field;
+    --surface-muted-fill: Canvas;
+    --surface-selection: Highlight;
+    --surface-selection-inverse: Highlight;
+    --text-primary: CanvasText;
+    --text-secondary: CanvasText;
+    --text-muted: GrayText;
+    --text-emphasis: CanvasText;
+    --text-subtle: GrayText;
+    --text-muted-subtle: GrayText;
+    --text-primary-on-accent: HighlightText;
+    --text-inverse: HighlightText;
+    --text-link: LinkText;
+    --border-default: CanvasText;
+    --border-subtle: CanvasText;
+    --border-strong: CanvasText;
+    --border-glass: CanvasText;
+    --border-glass-strong: CanvasText;
+    --border-separator: CanvasText;
+    --accent: Highlight;
+    --accent-hover: Highlight;
+    --accent-foreground: HighlightText;
+    --focus-ring: Highlight;
+    --field-background: Field;
+    --field-foreground: FieldText;
+    --field-placeholder: GrayText;
+    --field-border: CanvasText;
+    --status-success: CanvasText;
+    --status-success-foreground: Canvas;
+    --status-warning: CanvasText;
+    --status-warning-foreground: Canvas;
+    --danger: CanvasText;
+    --danger-hover: CanvasText;
+    --danger-foreground: Canvas;
+    --background: Canvas;
+    --foreground: CanvasText;
+    --surface: Canvas;
+    --surface-foreground: CanvasText;
+    --overlay: Canvas;
+    --overlay-foreground: CanvasText;
+    --border: CanvasText;
+    --separator: CanvasText;
+    --focus: Highlight;
+    --link: LinkText;
+    --shadow-surface: none;
+    --shadow-surface-elevated: none;
+    --shadow-overlay: 0 0 0 1px CanvasText;
+    --shadow-popover: 0 0 0 1px CanvasText;
+    --shadow-field: none;
+    --focus-ring-shadow: 0 0 0 2px Canvas, 0 0 0 4px Highlight;
+    --scrollbar-thumb: CanvasText;
+    --scrollbar-thumb-hover: Highlight;
+    color-scheme: light dark;
+    forced-color-adjust: auto;
   }
 
   :where(
@@ -276,5 +349,76 @@
   html.dark,
   html[data-theme="dark"] {
     color-scheme: dark;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --surface-window: Canvas;
+    --surface-shell: Canvas;
+    --surface-sidebar: Canvas;
+    --surface-sidebar-pane: Canvas;
+    --surface-workspace-pane: Canvas;
+    --surface-main: Canvas;
+    --surface-main-card: Canvas;
+    --surface-card: Canvas;
+    --surface-card-elevated: Canvas;
+    --surface-overlay: Canvas;
+    --surface-secondary: Canvas;
+    --surface-accent: Canvas;
+    --surface-field: Field;
+    --surface-muted-fill: Canvas;
+    --surface-selection: Highlight;
+    --surface-selection-inverse: Highlight;
+    --text-primary: CanvasText;
+    --text-secondary: CanvasText;
+    --text-muted: GrayText;
+    --text-emphasis: CanvasText;
+    --text-subtle: GrayText;
+    --text-muted-subtle: GrayText;
+    --text-primary-on-accent: HighlightText;
+    --text-inverse: HighlightText;
+    --text-link: LinkText;
+    --border-default: CanvasText;
+    --border-subtle: CanvasText;
+    --border-strong: CanvasText;
+    --border-glass: CanvasText;
+    --border-glass-strong: CanvasText;
+    --border-separator: CanvasText;
+    --accent: Highlight;
+    --accent-hover: Highlight;
+    --accent-foreground: HighlightText;
+    --focus-ring: Highlight;
+    --field-background: Field;
+    --field-foreground: FieldText;
+    --field-placeholder: GrayText;
+    --field-border: CanvasText;
+    --status-success: CanvasText;
+    --status-success-foreground: Canvas;
+    --status-warning: CanvasText;
+    --status-warning-foreground: Canvas;
+    --danger: CanvasText;
+    --danger-hover: CanvasText;
+    --danger-foreground: Canvas;
+    --background: Canvas;
+    --foreground: CanvasText;
+    --surface: Canvas;
+    --surface-foreground: CanvasText;
+    --overlay: Canvas;
+    --overlay-foreground: CanvasText;
+    --border: CanvasText;
+    --separator: CanvasText;
+    --focus: Highlight;
+    --link: LinkText;
+    --shadow-surface: none;
+    --shadow-surface-elevated: none;
+    --shadow-overlay: 0 0 0 1px CanvasText;
+    --shadow-popover: 0 0 0 1px CanvasText;
+    --shadow-field: none;
+    --focus-ring-shadow: 0 0 0 2px Canvas, 0 0 0 4px Highlight;
+    --scrollbar-thumb: CanvasText;
+    --scrollbar-thumb-hover: Highlight;
+    color-scheme: light dark;
+    forced-color-adjust: auto;
   }
 }

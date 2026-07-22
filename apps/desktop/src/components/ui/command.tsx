@@ -105,7 +105,7 @@ function CommandShortcut({ className, ...props }: React.ComponentProps<"span">) 
     <span
       data-slot="command-shortcut"
       className={cn(
-        "ml-auto inline-flex items-center gap-0.5 text-[11px] tracking-wide text-muted-foreground/80",
+        "ml-auto inline-flex items-center gap-0.5 text-xs tracking-wide text-muted-foreground/80",
         className,
       )}
       {...props}
@@ -120,7 +120,7 @@ function CommandKbd({ keys }: { keys: string[] }) {
       {keys.map((key) => (
         <kbd
           key={key}
-          className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/50 px-1 font-sans text-[10px] font-medium text-muted-foreground"
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/50 px-1 font-sans text-xs font-medium text-muted-foreground"
         >
           {key}
         </kbd>

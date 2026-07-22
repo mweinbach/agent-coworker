@@ -79,7 +79,7 @@ function CanvasSaveBadge({ status }: CanvasSaveBadgeProps) {
       aria-live="polite"
       aria-atomic="true"
       variant={status === "error" || status === "conflict" ? "destructive" : "outline"}
-      className="text-[10px] uppercase tracking-wide"
+      className="text-xs uppercase tracking-wide"
     >
       {label}
     </Badge>
@@ -671,7 +671,7 @@ export function Canvas({ path }: { path: string }) {
                   <span className="shrink-0 select-none text-xs font-semibold text-muted-foreground">
                     {projectTitle}
                   </span>
-                  <span className="text-[10px] text-muted-foreground/40 select-none">/</span>
+                  <span className="text-xs app-text-muted select-none">/</span>
                   <span className="truncate text-xs font-bold text-foreground" title={fileName}>
                     {fileName}
                   </span>
@@ -763,7 +763,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("h1")}
-              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              className="h-7 px-1.5 rounded-md font-semibold text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 1"
             >
               H1
@@ -773,7 +773,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("h2")}
-              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              className="h-7 px-1.5 rounded-md font-semibold text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 2"
             >
               H2
@@ -783,7 +783,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("h3")}
-              className="h-7 px-1.5 rounded-md font-semibold text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              className="h-7 px-1.5 rounded-md font-semibold text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Heading 3"
             >
               H3
@@ -793,7 +793,7 @@ export function Canvas({ path }: { path: string }) {
               variant="ghost"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => applyFormat("paragraph")}
-              className="h-7 px-1.5 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/60"
+              className="h-7 px-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60"
               title="Normal Text"
             >
               Normal
@@ -819,7 +819,7 @@ export function Canvas({ path }: { path: string }) {
               className="size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
               label="Numbered list"
             >
-              <span className="font-semibold text-[10px] font-mono">1.</span>
+              <span className="font-semibold text-xs font-mono">1.</span>
             </AccessibleIconButton>
           </div>
         )}
@@ -933,7 +933,7 @@ export function Canvas({ path }: { path: string }) {
                       className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
-                        <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
+                        <div className="text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span className="flex items-center gap-2">
                             <span>Markdown Source</span>
                             <CanvasSaveBadge status={saveStatus} />
@@ -969,7 +969,7 @@ export function Canvas({ path }: { path: string }) {
                       className="m-0 h-full bg-canvas p-0 outline-none data-[state=inactive]:hidden"
                     >
                       <div className={cn("flex h-full flex-col pb-2.5 pt-1.5 gap-2", pxClass)}>
-                        <div className="text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0">
+                        <div className="text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0">
                           <span className="flex items-center gap-2">
                             <span>Slide Source Code</span>
                             <CanvasSaveBadge status={saveStatus} />
@@ -993,7 +993,7 @@ export function Canvas({ path }: { path: string }) {
                   <div className="flex h-full flex-col gap-2 bg-canvas pb-2.5 pt-1.5">
                     <div
                       className={cn(
-                        "text-[10px] text-muted-foreground px-1 flex items-center justify-between shrink-0",
+                        "text-xs text-muted-foreground px-1 flex items-center justify-between shrink-0",
                         pxClass,
                       )}
                     >
@@ -1027,7 +1027,7 @@ export function Canvas({ path }: { path: string }) {
           pxClass,
         )}
       >
-        <div className="relative flex items-center rounded-xl border border-border/65 bg-background shadow-sm transition hover:border-border/80 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/70 focus-within:ring-offset-2 focus-within:ring-offset-background">
+        <div className="relative flex items-center rounded-xl border border-border/65 bg-background shadow-sm transition hover:border-border/80 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
           {promptError ? (
             <div
               role="alert"
@@ -1066,8 +1066,8 @@ export function Canvas({ path }: { path: string }) {
             className={cn(
               "absolute right-1.5 size-8.5 rounded-lg transition-all duration-150 shrink-0",
               promptText.trim()
-                ? "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-97 shadow-sm"
-                : "text-muted-foreground/45",
+                ? "bg-primary text-primary-foreground hover:bg-primary-hover active:scale-97 shadow-sm"
+                : "app-text-muted",
             )}
           >
             <SparklesIcon className="size-4" />
@@ -1096,7 +1096,7 @@ export function Canvas({ path }: { path: string }) {
                   size="xs"
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
-                  className="h-6 px-1.5 text-[10px] font-bold"
+                  className="h-6 px-1.5 text-xs font-bold"
                   onClick={() => applyFormat("bold")}
                   aria-label="Bold"
                   title="Bold"
@@ -1108,7 +1108,7 @@ export function Canvas({ path }: { path: string }) {
                   size="xs"
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
-                  className="h-6 px-1.5 text-[10px] italic"
+                  className="h-6 px-1.5 text-xs italic"
                   onClick={() => applyFormat("italic")}
                   aria-label="Italic"
                   title="Italic"
@@ -1121,7 +1121,7 @@ export function Canvas({ path }: { path: string }) {
                   size="xs"
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
-                  className="h-6 px-1.5 text-[10px] font-bold"
+                  className="h-6 px-1.5 text-xs font-bold"
                   onClick={() => applyFormat("h1")}
                 >
                   H1
@@ -1131,7 +1131,7 @@ export function Canvas({ path }: { path: string }) {
                   size="xs"
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
-                  className="h-6 px-1.5 text-[10px] font-bold"
+                  className="h-6 px-1.5 text-xs font-bold"
                   onClick={() => applyFormat("h2")}
                 >
                   H2
@@ -1141,20 +1141,18 @@ export function Canvas({ path }: { path: string }) {
                   size="xs"
                   variant="ghost"
                   onPointerDown={(e) => e.preventDefault()}
-                  className="h-6 px-1.5 text-[10px]"
+                  className="h-6 px-1.5 text-xs"
                   onClick={() => applyFormat("ul")}
                   aria-label="Bullet list"
                   title="Bullet list"
                 >
                   <ListIcon className="size-3" />
                 </Button>
-                <div className="ml-auto text-[9px] text-muted-foreground/60 px-1 font-medium">
-                  Format
-                </div>
+                <div className="ml-auto text-xs app-text-muted px-1 font-medium">Format</div>
               </div>
             )}
 
-            <div className="flex items-center gap-1 rounded-lg focus-within:ring-2 focus-within:ring-ring/70">
+            <div className="flex items-center gap-1 rounded-lg focus-within:ring-2 focus-within:ring-ring">
               <Input
                 value={floatingPromptText}
                 onChange={(e) => setFloatingPromptText(e.target.value)}

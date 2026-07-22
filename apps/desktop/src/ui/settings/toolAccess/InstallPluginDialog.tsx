@@ -305,7 +305,7 @@ export function InstallPluginDialog({
                 <div className="font-medium text-foreground">
                   {pluginPreview ? previewSummary(pluginPreview) : "No plugin preview"}
                 </div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
+                <div className="mt-1 text-xs text-muted-foreground">
                   Previewed for{" "}
                   {pluginPreview?.targetScope === "workspace" ? "workspace" : "library"} install.
                 </div>
@@ -320,11 +320,11 @@ export function InstallPluginDialog({
                           <div className="truncate font-medium text-foreground">
                             {candidate.displayName}
                           </div>
-                          <div className="truncate text-[11px] text-muted-foreground">
+                          <div className="truncate text-xs text-muted-foreground">
                             {candidate.pluginId}
                           </div>
                         </div>
-                        <div className="shrink-0 text-[11px] text-muted-foreground">
+                        <div className="shrink-0 text-xs text-muted-foreground">
                           {candidate.conflictsWithScope === "workspace"
                             ? "Workspace"
                             : candidate.conflictsWithScope === "user"
@@ -334,11 +334,11 @@ export function InstallPluginDialog({
                                 : "Shadowed"}
                         </div>
                       </div>
-                      <div className="mt-1 text-[11px] text-muted-foreground">
+                      <div className="mt-1 text-xs text-muted-foreground">
                         {candidate.description}
                       </div>
                       {candidate.diagnostics.length > 0 ? (
-                        <div className="mt-2 space-y-1 text-[11px] text-destructive">
+                        <div className="mt-2 space-y-1 text-xs text-destructive">
                           {candidate.diagnostics.map((diagnostic) => (
                             <div key={`${candidate.pluginId}:${diagnostic.code}`}>
                               {diagnostic.message}
@@ -350,7 +350,7 @@ export function InstallPluginDialog({
                   ))}
                 </div>
                 {(pluginPreview?.warnings?.length ?? 0) > 0 ? (
-                  <div className="mt-2 space-y-1 text-[11px] text-destructive">
+                  <div className="mt-2 space-y-1 text-xs text-destructive">
                     {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
@@ -366,13 +366,13 @@ export function InstallPluginDialog({
             ) : null}
             <OperationFeedback operation={installOperation} />
             {dialogError && lastMutationTargetScope ? (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 Last attempted target:{" "}
                 {lastMutationTargetScope === "workspace" ? "workspace" : "library"}.
               </div>
             ) : null}
             {showPreview && workspaceScopeAvailable ? (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 To install to {lastPreviewTargetScope === "workspace" ? "library" : "workspace"},
                 run a new preview for that scope first.
               </div>

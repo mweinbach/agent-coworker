@@ -143,7 +143,7 @@ export function ResearchExportMenu({
                 <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               )}
               <span className="flex-1 font-medium text-foreground">{label}</span>
-              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 {hint}
               </span>
             </DropdownMenuItem>

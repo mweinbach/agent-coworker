@@ -209,7 +209,7 @@ function CitationFavicon({ source, className }: { source: CitationSource; classN
   return (
     <div
       className={cn(
-        "relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-[10px] font-semibold uppercase text-muted-foreground",
+        "relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-xs font-semibold uppercase text-muted-foreground",
         className,
       )}
     >
@@ -467,7 +467,7 @@ function DesktopCitationChip({
               >
                 <ChevronRightIcon data-icon="inline-start" />
               </AccessibleIconButton>
-              <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+              <div className="ml-auto pr-0.5 text-xs font-medium tabular-nums text-muted-foreground">
                 {activeIndex + 1}/{sources.length}
               </div>
             </div>
@@ -484,7 +484,7 @@ function DesktopCitationChip({
               <div className="flex items-start gap-2.5 px-3 py-2.5">
                 <CitationFavicon
                   source={currentSource}
-                  className="mt-0.5 size-5 shrink-0 text-[10px]"
+                  className="mt-0.5 size-5 shrink-0 text-xs"
                 />
                 <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
                   <p
@@ -1393,9 +1393,7 @@ function normalizeDesktopMarkdownChildren(
   }
 
   return Children.map(children, (child) =>
-    typeof child === "string"
-      ? normalizeDisplayCitationMarkers(child, options)
-      : child,
+    typeof child === "string" ? normalizeDisplayCitationMarkers(child, options) : child,
   );
 }
 

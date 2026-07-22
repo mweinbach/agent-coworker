@@ -165,20 +165,20 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 <>
                   <span
                     aria-hidden="true"
-                    className="whitespace-nowrap tabular-nums text-foreground/80"
+                    className="whitespace-nowrap tabular-nums app-text-secondary"
                   >
                     {formatElapsed(elapsedMs)}
                   </span>
                   <span aria-hidden="true">·</span>
                   <span className="whitespace-nowrap">
-                    <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
+                    <span className="tabular-nums app-text-secondary">{sourceCount}</span>{" "}
                     {sourceCount === 1 ? "source" : "sources"}
                   </span>
                   {thoughtCount > 0 ? (
                     <>
                       <span aria-hidden="true">·</span>
                       <span className="whitespace-nowrap">
-                        <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
+                        <span className="tabular-nums app-text-secondary">{thoughtCount}</span>{" "}
                         {thoughtCount === 1 ? "reasoning update" : "reasoning updates"}
                       </span>
                     </>
@@ -214,7 +214,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   aria-hidden="true"
                 />
                 Sources
-                <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                <span className="rounded-full bg-muted/80 px-1.5 text-xs font-medium tabular-nums text-muted-foreground">
                   {sourceCount}
                 </span>
               </Button>
@@ -287,7 +287,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   ) : (
                     <div className="space-y-2">
                       <textarea
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-info focus:ring-1 focus:ring-info/20"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring"
                         rows={3}
                         placeholder="What would you like to change about the plan?"
                         value={refineInput}
@@ -375,9 +375,9 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 className="flex h-full min-h-0 min-w-0 flex-col"
                 style={{ width: sourcesOverlay ? "100%" : "var(--research-sources-panel-width)" }}
               >
-                <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                   Sources
-                  <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                  <span className="rounded-full bg-muted/80 px-1.5 text-xs font-medium tabular-nums text-muted-foreground">
                     {sourceCount}
                   </span>
                 </div>
@@ -542,7 +542,7 @@ function ResearchReasoningStream({
           </span>
           Reasoning stream
         </div>
-        <div className="text-[11px] font-medium tabular-nums text-muted-foreground">
+        <div className="text-xs font-medium tabular-nums text-muted-foreground">
           {thoughtSummaries.length} {thoughtSummaries.length === 1 ? "update" : "updates"}
         </div>
       </div>
@@ -568,7 +568,7 @@ function ResearchReasoningStream({
                     : "border-border/45 bg-background/55",
                 )}
               >
-                <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+                <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <span className="tabular-nums">Step {index + 1}</span>
                   <span aria-hidden="true">·</span>
                   <span>
@@ -579,7 +579,7 @@ function ResearchReasoningStream({
                     })}
                   </span>
                 </div>
-                <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+                <div className="whitespace-pre-wrap text-sm leading-6 app-text-secondary">
                   {thought.text}
                 </div>
               </div>

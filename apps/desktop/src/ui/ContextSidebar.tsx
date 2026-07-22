@@ -70,14 +70,13 @@ export const ContextSidebar = memo(function ContextSidebar({
   );
   const agents = threadRuntime?.agents ?? [];
   const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
-  const sectionLabelClassName =
-    "text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/78 uppercase";
+  const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
   const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
   const compactSectionBodyClassName = "px-3 pb-2.5 pt-0.5";
   const compactSectionScrollerClassName =
     "max-h-[10.5rem] overflow-y-auto overscroll-contain px-3 pb-2.5 pt-0.5";
-  const compactMutedCopyClassName = "text-[11px] leading-5 text-muted-foreground/82";
+  const compactMutedCopyClassName = "app-type-caption leading-5 app-text-muted";
 
   const hasActivity =
     (todos?.length ?? 0) > 0 ||
@@ -96,7 +95,7 @@ export const ContextSidebar = memo(function ContextSidebar({
               "flex flex-col items-center gap-2 pt-4 text-center opacity-75",
             )}
           >
-            <SparklesIcon className="size-5 text-muted-foreground/50" />
+            <SparklesIcon className="size-5 app-text-muted" />
             <span>Tasks, subagents, and files show here once the thread has activity.</span>
           </div>
         </section>
@@ -119,7 +118,7 @@ export const ContextSidebar = memo(function ContextSidebar({
               {todos?.map((todo) => (
                 <div
                   key={`${todo.status}:${todo.content}`}
-                  className="flex items-start gap-2 text-[11px]"
+                  className="flex items-start gap-2 text-xs"
                 >
                   {todo.status === "completed" ? (
                     <CheckCircle2Icon className={cn(taskStatusIconClassName, "text-success")} />
@@ -150,7 +149,7 @@ export const ContextSidebar = memo(function ContextSidebar({
           </div>
           {threadRuntime?.sessionKind === "agent" ? (
             <div className={compactSectionBodyClassName}>
-              <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
+              <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-xs text-muted-foreground">
                 <div className="flex items-center gap-2 text-foreground">
                   <BotIcon className="h-3.5 w-3.5" />
                   <span className="font-medium">This thread is a subagent</span>
@@ -178,25 +177,25 @@ export const ContextSidebar = memo(function ContextSidebar({
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <div className="truncate text-[11px] font-medium text-foreground">
+                          <div className="truncate text-xs font-medium text-foreground">
                             {agent.nickname || agent.title}
                           </div>
-                          <div className="truncate text-[10px] text-muted-foreground">
+                          <div className="truncate text-xs text-muted-foreground">
                             {agent.role} · depth {agent.depth} · {agent.effectiveModel}
                           </div>
                           {usageLabel ? (
-                            <div className="mt-0.5 truncate text-[10px] tabular-nums text-muted-foreground/88">
+                            <div className="mt-0.5 truncate text-xs tabular-nums app-text-muted">
                               {usageLabel}
                             </div>
                           ) : null}
                         </div>
-                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
                           {agentStatusIcon(agent)}
                           <span>{agentStatusLabel(agent)}</span>
                         </div>
                       </div>
                       {agent.lastMessagePreview ? (
-                        <DesktopMarkdown className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
+                        <DesktopMarkdown className="mt-1.5 line-clamp-2 text-xs leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
                           {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
                         </DesktopMarkdown>
                       ) : null}
@@ -233,7 +232,7 @@ export const ContextSidebar = memo(function ContextSidebar({
                 "flex flex-col items-center gap-1.5 py-3 text-center",
               )}
             >
-              <FolderOpenIcon className="size-4 text-muted-foreground/40" />
+              <FolderOpenIcon className="size-4 app-text-muted" />
               <span>No workspace selected</span>
             </div>
           </>

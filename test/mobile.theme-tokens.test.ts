@@ -14,6 +14,22 @@ import {
   typography,
 } from "../apps/mobile/src/theme/tokens";
 
+function luminance(hexColor: string): number {
+  const hex = hexColor.replace(/^#/, "");
+  if (!/^[0-9a-f]{6}$/i.test(hex)) throw new Error(`Expected a hex color, got ${hexColor}`);
+  const channels = [0, 2, 4].map((offset) => {
+    const normalized = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 describe("mobile theme tokens", () => {
   test("mix performs srgb interpolation that matches CSS color-mix", () => {
     expect(mix("#ffffff", "#000000", 50)).toBe("#808080");
@@ -30,7 +46,7 @@ describe("mobile theme tokens", () => {
   test("light palette mirrors desktop primitives", () => {
     expect(palette.light.appBg).toBe("#dde1ca");
     expect(palette.light.panelBg).toBe("#f8f9f2");
-    expect(palette.light.accentBase).toBe("#6f8042");
+    expect(palette.light.accentBase).toBe("#66763d");
     expect(palette.light.textBase).toBe("#232a18");
   });
 
@@ -59,6 +75,21 @@ describe("mobile theme tokens", () => {
     expect(semanticTokens.dark.surfaceCard).toBe(mix(palette.dark.panelBg, palette.dark.appBg, 94));
     expect(semanticTokens.dark.accent).toBe(palette.dark.accentBase);
     expect(semanticTokens.dark.accentForeground).toBe(palette.dark.accentForegroundBase);
+  });
+
+  test("primary controls pass WCAG AA in both mobile color schemes", () => {
+    expect(
+      contrastRatio(semanticTokens.light.accentForeground, semanticTokens.light.accent),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(semanticTokens.dark.accentForeground, semanticTokens.dark.accent),
+    ).toBeGreaterThanOrEqual(4.5);
+    for (const scheme of ["light", "dark"] as const) {
+      const tokens = semanticTokens[scheme];
+      expect(contrastRatio(tokens.successForeground, tokens.success)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(tokens.warningForeground, tokens.warning)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(tokens.dangerForeground, tokens.danger)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   test("typography exposes IBM Plex families that match the desktop bundle", () => {

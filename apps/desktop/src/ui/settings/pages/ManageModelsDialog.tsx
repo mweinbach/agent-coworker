@@ -259,7 +259,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
                       ) : null}
                     </div>
                     {custom ? (
-                      <Badge variant="outline" className="shrink-0 rounded-sm text-[10px]">
+                      <Badge variant="outline" className="shrink-0 rounded-sm text-xs">
                         Custom
                       </Badge>
                     ) : null}

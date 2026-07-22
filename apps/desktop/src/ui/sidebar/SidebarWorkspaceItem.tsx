@@ -329,7 +329,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               ) : (
                 <>
                   {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
-                    <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                    <div className="px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                       Chats
                     </div>
                   ) : null}
@@ -376,7 +376,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
-                      <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                      <div className="px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
                         Tasks
                       </div>
                       {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
@@ -398,7 +398,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                             <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
                               {task.title}
                             </span>
-                            <span className="block truncate text-[10px] text-muted-foreground">
+                            <span className="block truncate text-xs text-muted-foreground">
                               {task.completedWorkItemCount}/{task.totalWorkItemCount} ·{" "}
                               {task.status.replaceAll("_", " ")}
                               {task.pendingQuestionCount > 0 ? " · needs input" : ""}

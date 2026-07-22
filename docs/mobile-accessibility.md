@@ -57,6 +57,11 @@ manual checklist on physical devices or native simulators with the screen reader
 
 ## Display and motion
 
+Mobile primary and status fills use the same contrast contract as desktop. The light and dark
+foregrounds are intentionally independent, and `test/mobile.theme-tokens.test.ts` verifies every
+primary, success, warning, and danger pair at 4.5:1 or better while keeping `tokens.ts` and
+`global.css` in lockstep.
+
 Repeat the core workflow at 200% text size. Controls must reflow without hiding the primary label
 or action, and interactive targets must remain at least 44 points on iOS and 48 dp on Android.
 

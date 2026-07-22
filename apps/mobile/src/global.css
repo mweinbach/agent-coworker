@@ -10,11 +10,13 @@
   --color-light-panel-bg: #f8f9f2;
   --color-light-text-base: #232a18;
   --color-light-muted-base: #556041;
-  --color-light-accent-base: #6f8042;
+  --color-light-accent-base: #66763d;
   --color-light-accent-foreground: #ffffff;
   --color-light-inverse-text: #ffffff;
   --color-light-danger-base: #bb3e3e;
+  --color-light-danger-foreground: #ffffff;
   --color-light-success-base: #3ab665;
+  --color-light-success-foreground: #232a18;
   --color-light-border-base: rgba(62, 74, 40, 0.18);
   --color-light-shadow-surface-base:
     0px 1px 3px rgba(0, 0, 0, 0.05), inset 0px 1px 0px rgba(255, 255, 255, 0.4);
@@ -26,10 +28,12 @@
   --color-dark-text-base: #eef0dc;
   --color-dark-muted-base: #c7ceaf;
   --color-dark-accent-base: #a8b963;
-  --color-dark-accent-foreground: #ffffff;
+  --color-dark-accent-foreground: #171d13;
   --color-dark-inverse-text: #ffffff;
   --color-dark-danger-base: #e86060;
+  --color-dark-danger-foreground: #171d13;
   --color-dark-success-base: #5ecc7e;
+  --color-dark-success-foreground: #121a10;
   --color-dark-border-base: rgba(238, 241, 220, 0.14);
   --color-dark-shadow-surface-base:
     0px 1px 2px rgba(0, 0, 0, 0.24), inset 0px 1px 0px rgba(255, 255, 255, 0.08);
@@ -42,8 +46,8 @@
   --surface-card-elevated: #f8f9f2;
   --surface-overlay: var(--color-light-panel-bg);
   --surface-field: #f5f7ee;
-  --surface-secondary: #e8eadd;
-  --surface-accent: #e5e8d9;
+  --surface-secondary: #e6e9dc;
+  --surface-accent: #e4e7d9;
   --surface-muted-fill: rgba(35, 42, 24, 0.06);
 
   --text-primary: var(--color-light-text-base);
@@ -59,16 +63,16 @@
 
   --accent: var(--color-light-accent-base);
   --accent-foreground: var(--color-light-accent-foreground);
-  --accent-soft: rgba(111, 128, 66, 0.14);
+  --accent-soft: rgba(102, 118, 61, 0.14);
 
   --success: var(--color-light-success-base);
-  --success-foreground: #ffffff;
+  --success-foreground: var(--color-light-success-foreground);
   --success-soft: rgba(58, 182, 101, 0.15);
   --warning: #ecaa0b;
   --warning-foreground: #232a18;
   --warning-soft: rgba(236, 170, 11, 0.16);
   --danger: var(--color-light-danger-base);
-  --danger-foreground: var(--color-light-inverse-text);
+  --danger-foreground: var(--color-light-danger-foreground);
   --danger-soft: rgba(187, 62, 62, 0.12);
 
   --shadow-surface: var(--color-light-shadow-surface-base);
@@ -104,13 +108,13 @@
     --accent-soft: rgba(168, 185, 99, 0.14);
 
     --success: var(--color-dark-success-base);
-    --success-foreground: #121a10;
+    --success-foreground: var(--color-dark-success-foreground);
     --success-soft: rgba(94, 204, 126, 0.15);
     --warning: #f3b01d;
     --warning-foreground: #1a2012;
     --warning-soft: rgba(243, 176, 29, 0.16);
     --danger: var(--color-dark-danger-base);
-    --danger-foreground: var(--color-dark-inverse-text);
+    --danger-foreground: var(--color-dark-danger-foreground);
     --danger-soft: rgba(232, 96, 96, 0.14);
 
     --shadow-surface: var(--color-dark-shadow-surface-base);

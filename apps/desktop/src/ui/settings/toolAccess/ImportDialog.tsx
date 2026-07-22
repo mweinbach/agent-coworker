@@ -118,13 +118,13 @@ function ImportItemCard({
               {item.displayName}
             </span>
             {item.version ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">v{item.version}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">v{item.version}</span>
             ) : null}
           </div>
-          <div className="truncate font-mono text-[11px] text-muted-foreground">{item.id}</div>
+          <div className="truncate font-mono text-xs text-muted-foreground">{item.id}</div>
         </div>
         {installedEverywhere ? (
-          <Badge variant="secondary" className="shrink-0 text-[10px]">
+          <Badge variant="secondary" className="shrink-0 text-xs">
             Installed
           </Badge>
         ) : null}
@@ -137,7 +137,7 @@ function ImportItemCard({
       ) : null}
 
       {hasDiagnostics ? (
-        <div className="mt-2.5 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[11px] text-destructive">
+        <div className="mt-2.5 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive">
           <AlertTriangleIcon className="mt-0.5 h-3 w-3 shrink-0" />
           <div className="space-y-0.5">
             {item.diagnostics.map((diagnostic) => (
@@ -254,12 +254,10 @@ function FolderImportPanel({
               <div className="truncate font-semibold text-sm text-foreground">
                 {basename(folderPath)}
               </div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">
-                {folderPath}
-              </div>
+              <div className="truncate font-mono text-xs text-muted-foreground">{folderPath}</div>
             </div>
           </div>
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             Copies this folder into Cowork — the original is not moved or symlinked.
           </p>
           <div className="mt-3 flex flex-wrap justify-end gap-2">

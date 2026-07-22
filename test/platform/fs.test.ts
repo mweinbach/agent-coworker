@@ -1088,6 +1088,43 @@ describe("hardenPrivateDir / hardenPrivateFile", () => {
     ]);
   });
 
+  test("win32: rejects an invalid injected SID before mutating ACLs", async () => {
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    await expect(
+      hardenPrivateDir("C:\\private", {
+        platform: "win32",
+        currentUserSid: "not-a-sid",
+        runCommand,
+      }),
+    ).rejects.toThrow('platform.fs: invalid Windows user SID: "not-a-sid"');
+    expect(commands).toEqual([]);
+  });
+
+  test("win32: rejects malformed whoami output before mutating ACLs", async () => {
+    const commands: Array<{ file: string; args: string[] }> = [];
+    const runCommand = async (file: string, args: string[]) => {
+      commands.push({ file, args });
+      return { exitCode: 0, stdout: '"MACHINE\\user","not-a-sid"\r\n', stderr: "" };
+    };
+
+    await expect(
+      hardenPrivateDir("C:\\private", { platform: "win32", runCommand }),
+    ).rejects.toThrow(
+      'platform.fs: resolve current Windows user SID: whoami.exe returned no SID: "\\"MACHINE\\\\user\\",\\"not-a-sid\\""',
+    );
+    expect(commands).toEqual([
+      {
+        file: "whoami.exe",
+        args: ["/user", "/fo", "csv", "/nh"],
+      },
+    ]);
+  });
+
   test("win32: resolves the current user SID and surfaces icacls failures", async () => {
     const commands: Array<{ file: string; args: string[] }> = [];
     const currentUserSid = "S-1-5-21-2000";

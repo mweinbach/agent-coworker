@@ -547,6 +547,10 @@ rl.on("line", (line) => {
       send({ id: msg.id, error: { message: "wrong model" } });
       return;
     }
+    if (Object.prototype.hasOwnProperty.call(msg.params, "summary")) {
+      send({ id: msg.id, error: { message: "Unsupported parameter: 'reasoning.summary' is not supported with the 'gpt-5.3-codex-spark' model." } });
+      return;
+    }
     // Write the turn/start response and turn/completed notification as ONE
     // stdout chunk. Under full-suite load the pipe coalesces them anyway; doing
     // it explicitly makes that ordering deterministic instead of a rare flake.
@@ -575,9 +579,17 @@ rl.on("line", (line) => {
 
       const logs: string[] = [];
       const rawEvents: unknown[] = [];
-      const runtime = createRuntime(makeConfig(dir));
+      const config = {
+        ...makeConfig(dir),
+        providerOptions: {
+          "codex-cli": {
+            reasoningSummary: "detailed" as const,
+          },
+        },
+      };
+      const runtime = createRuntime(config);
       const result = await runtime.runTurn({
-        config: makeConfig(dir),
+        config,
         system: "You are Codex.",
         messages: [{ role: "user", content: "Say hi" }],
         tools: {},
@@ -616,6 +628,9 @@ rl.on("line", (line) => {
       expect(
         clientRequests.find((message) => message?.method === "turn/start")?.params?.model,
       ).toBe("gpt-5.3-codex-spark");
+      expect(
+        clientRequests.find((message) => message?.method === "turn/start")?.params,
+      ).not.toHaveProperty("summary");
     },
     30_000,
   );

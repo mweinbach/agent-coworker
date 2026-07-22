@@ -119,4 +119,12 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
       });
     },
   );
+
+  test("Spark omits the unsupported reasoning summary default", () => {
+    const opts = providerOptionsDefaultsForModel("codex-cli", "gpt-5.3-codex-spark");
+
+    expect(opts.reasoningEffort).toBe("high");
+    expect(opts.reasoningSummary).toBeUndefined();
+    expect(opts.textVerbosity).toBe("medium");
+  });
 });

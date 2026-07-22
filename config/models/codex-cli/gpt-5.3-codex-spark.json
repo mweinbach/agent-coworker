@@ -7,7 +7,6 @@
   "promptTemplate": "system-models/gpt-5.4.md",
   "providerOptionsDefaults": {
     "reasoningEffort": "high",
-    "reasoningSummary": "detailed",
     "textVerbosity": "medium"
   },
   "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high"],

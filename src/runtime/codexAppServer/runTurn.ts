@@ -23,7 +23,7 @@ import {
   codexSandboxPolicy,
   codexThreadConfig,
   normalizeEffort,
-  normalizeSummary,
+  normalizeSummaryForModel,
   providerOptionStringForCodex,
   resolveEffectiveCodexModel,
 } from "./config";
@@ -211,6 +211,10 @@ export function createCodexAppServerRuntime(): LlmRuntime {
 
         try {
           const completion = notificationRouter.waitForCompletion();
+          const reasoningSummary = normalizeSummaryForModel(
+            effectiveModel,
+            providerOptionStringForCodex(params.providerOptions, "reasoningSummary"),
+          );
           const turnStartRequest = requestWithAbort<unknown>(
             client,
             "turn/start",
@@ -224,9 +228,7 @@ export function createCodexAppServerRuntime(): LlmRuntime {
               effort: normalizeEffort(
                 providerOptionStringForCodex(params.providerOptions, "reasoningEffort"),
               ),
-              summary: normalizeSummary(
-                providerOptionStringForCodex(params.providerOptions, "reasoningSummary"),
-              ),
+              ...(reasoningSummary ? { summary: reasoningSummary } : {}),
               clientMessageId: params.clientMessageId,
             },
             CODEX_STARTUP_RPC_TIMEOUT_MS,

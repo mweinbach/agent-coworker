@@ -106,9 +106,9 @@ for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
         if (mode === "light" && canvasCase.kind === "markdown") {
           await assertNoSeriousAxeViolations(canvasWindow, testInfo);
         }
-        await expect(canvasWindow).toHaveScreenshot(
-          `canvas-${canvasCase.kind}-${mode satisfies QualityMode}.png`,
-        );
+        await expect
+          .soft(canvasWindow)
+          .toHaveScreenshot(`canvas-${canvasCase.kind}-${mode satisfies QualityMode}.png`);
         await canvasWindow.close();
       }
     });
@@ -130,7 +130,7 @@ test.describe("Canvas loading and error surfaces", () => {
     const loadingWindow = await openCanvasWindow(quality, "/quality/project/canvas-loading.md");
     await expect(loadingWindow.getByText("Reading file...", { exact: true })).toBeVisible();
     await expect(loadingWindow.locator("html")).toHaveAttribute("data-theme", "dark");
-    await expect(loadingWindow).toHaveScreenshot("canvas-markdown-loading-dark.png");
+    await expect.soft(loadingWindow).toHaveScreenshot("canvas-markdown-loading-dark.png");
     await loadingWindow.close();
 
     const errorWindow = await openCanvasWindow(quality, "/quality/project/canvas-error.md");
@@ -140,7 +140,7 @@ test.describe("Canvas loading and error surfaces", () => {
     ).toBeVisible();
     await expect(errorWindow.getByRole("button", { name: "Retry" })).toBeVisible();
     await settleQualityPage(errorWindow);
-    await expect(errorWindow).toHaveScreenshot("canvas-markdown-error-dark.png");
+    await expect.soft(errorWindow).toHaveScreenshot("canvas-markdown-error-dark.png");
     await errorWindow.close();
   });
 });

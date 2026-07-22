@@ -11,7 +11,9 @@ describe("task presentation", () => {
     const className = taskStatusBadgeClassName("blocked");
 
     expect(className).toContain("bg-destructive/5");
+    expect(className).toContain("text-foreground");
     expect(className).not.toContain("bg-destructive/10");
+    expect(className).not.toContain("text-destructive");
   });
 
   test("uses readable foreground text for completed task badges", () => {

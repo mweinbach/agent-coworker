@@ -199,7 +199,7 @@ export function PendingRequestCard({
                 justifyContent: "center",
                 borderRadius: radius.md,
                 borderCurve: "continuous",
-                backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+                backgroundColor: pressed ? theme.primaryPressed : theme.primary,
                 paddingHorizontal: 16,
                 paddingVertical: 10,
               })}
@@ -228,7 +228,7 @@ export function PendingRequestCard({
               justifyContent: "center",
               borderRadius: radius.md,
               borderCurve: "continuous",
-              backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+              backgroundColor: pressed ? theme.primaryPressed : theme.primary,
               paddingHorizontal: 16,
               paddingVertical: 10,
             })}

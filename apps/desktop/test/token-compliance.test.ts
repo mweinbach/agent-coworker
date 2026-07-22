@@ -96,6 +96,7 @@ describe("desktop token compliance", () => {
       "--surface-card",
       "--surface-card-elevated",
       "--surface-overlay",
+      "--surface-opaque",
       "--surface-field",
       "--surface-muted-fill",
       "--text-primary",

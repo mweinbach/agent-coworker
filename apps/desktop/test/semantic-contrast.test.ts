@@ -126,5 +126,6 @@ describe("desktop semantic contrast", () => {
     }
     expect(themeBridgeCss.match(/--color-accent:\s*Highlight;/g)).toHaveLength(2);
     expect(themeBridgeCss.match(/--color-accent-foreground:\s*HighlightText;/g)).toHaveLength(2);
+    expect(themeBridgeCss.match(/--surface-opaque:\s*Canvas;/g)).toHaveLength(2);
   });
 });

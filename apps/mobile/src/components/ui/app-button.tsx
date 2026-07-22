@@ -55,7 +55,7 @@ function resolveVariant(variant: AppButtonVariant, theme: AppTheme): VariantStyl
     case "primary":
       return {
         background: theme.primary,
-        pressedBackground: theme.primaryMuted,
+        pressedBackground: theme.primaryPressed,
         label: theme.primaryText,
       };
     case "secondary":

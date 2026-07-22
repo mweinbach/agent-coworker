@@ -403,7 +403,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-inherit",
+                "text-inherit",
                 row.expanded && "rotate-90",
               )}
             />
@@ -418,7 +418,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-link/85",
+                selected ? "text-inherit" : "text-link/85",
               )}
             />
           ) : (
@@ -426,7 +426,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-link/85",
+                selected ? "text-inherit" : "text-link/85",
               )}
             />
           )
@@ -435,7 +435,7 @@ const ExplorerTreeRowView = memo(
             strokeWidth={1.5}
             className={cn(
               "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-              selected ? "text-link/80" : "text-inherit",
+              "text-inherit",
             )}
           />
         )}
@@ -445,7 +445,7 @@ const ExplorerTreeRowView = memo(
           <div
             className={cn(
               "truncate text-xs leading-3.5",
-              selected ? "text-accent-foreground/85" : "text-muted-foreground",
+              selected ? "text-inherit" : "text-muted-foreground",
             )}
           >
             {entryMeta}
@@ -467,10 +467,7 @@ const ExplorerTreeRowView = memo(
           data-file-explorer-control="true"
           onClick={() => onOpenEntryMenu(entry)}
         >
-          <MoreVerticalIcon
-            strokeWidth={1.5}
-            className={cn("h-3.25 w-3.25", selected ? "text-link/80" : "text-inherit")}
-          />
+          <MoreVerticalIcon strokeWidth={1.5} className="h-3.25 w-3.25 text-inherit" />
         </AccessibleIconButton>
       </div>
     );

@@ -63,6 +63,11 @@ Do not substitute `text-white` for a semantic filled-control foreground. Bright 
 
 `data-high-contrast="true"` on `:root` activates a complete system-color token pack in `theme-bridge.css`, while `tokens/platform.css` flattens glass and disables backdrop blur. A `forced-colors: active` fallback applies the same Canvas, CanvasText, Field, GrayText, LinkText, Highlight, and HighlightText contract before renderer state initializes.
 
+Opaque popovers and dialogs consume `--surface-opaque`, which remains a solid panel on standard
+themes and maps to `Canvas` in high contrast. Selected rows must let icons and supporting text
+inherit `text-accent-foreground`; child LinkText or opacity overrides can make Highlight selections
+unreadable.
+
 ## Z-index
 
 Keep floating UI in documented bands. Do not invent `z-[9999]`.

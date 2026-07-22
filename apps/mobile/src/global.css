@@ -11,6 +11,7 @@
   --color-light-text-base: #232a18;
   --color-light-muted-base: #556041;
   --color-light-accent-base: #66763d;
+  --color-light-accent-pressed: #5b6a35;
   --color-light-accent-foreground: #ffffff;
   --color-light-inverse-text: #ffffff;
   --color-light-danger-base: #bb3e3e;
@@ -28,6 +29,7 @@
   --color-dark-text-base: #eef0dc;
   --color-dark-muted-base: #c7ceaf;
   --color-dark-accent-base: #a8b963;
+  --color-dark-accent-pressed: #b7c873;
   --color-dark-accent-foreground: #171d13;
   --color-dark-inverse-text: #ffffff;
   --color-dark-danger-base: #e86060;
@@ -62,6 +64,7 @@
   --border-strong: rgba(62, 74, 40, 0.166);
 
   --accent: var(--color-light-accent-base);
+  --accent-pressed: var(--color-light-accent-pressed);
   --accent-foreground: var(--color-light-accent-foreground);
   --accent-soft: rgba(102, 118, 61, 0.14);
 
@@ -104,6 +107,7 @@
     --border-strong: rgba(238, 241, 220, 0.129);
 
     --accent: var(--color-dark-accent-base);
+    --accent-pressed: var(--color-dark-accent-pressed);
     --accent-foreground: var(--color-dark-accent-foreground);
     --accent-soft: rgba(168, 185, 99, 0.14);
 
@@ -166,6 +170,7 @@
     --color-border-strong: var(--border-strong);
 
     --color-accent: var(--accent);
+    --color-accent-pressed: var(--accent-pressed);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent-soft: var(--accent-soft);
 

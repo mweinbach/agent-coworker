@@ -86,6 +86,9 @@ describe("mobile theme tokens", () => {
     ).toBeGreaterThanOrEqual(4.5);
     for (const scheme of ["light", "dark"] as const) {
       const tokens = semanticTokens[scheme];
+      expect(contrastRatio(tokens.accentForeground, tokens.accentPressed)).toBeGreaterThanOrEqual(
+        4.5,
+      );
       expect(contrastRatio(tokens.successForeground, tokens.success)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(tokens.warningForeground, tokens.warning)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(tokens.dangerForeground, tokens.danger)).toBeGreaterThanOrEqual(4.5);
@@ -105,6 +108,29 @@ describe("mobile theme tokens", () => {
     expect(themeSource).toContain("dangerText: tokens.dangerForeground");
     expect(buttonSource).toContain("label: theme.dangerText");
     expect(buttonSource).not.toContain('label: "#ffffff"');
+  });
+
+  test("pressed primary controls use the solid semantic pressed color", () => {
+    const themeSource = readFileSync(
+      fileURLToPath(new URL("../apps/mobile/src/theme/use-app-theme.ts", import.meta.url)),
+      "utf8",
+    );
+    const buttonSource = readFileSync(
+      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(themeSource).toContain("primaryPressed: tokens.accentPressed");
+    expect(buttonSource).toContain("pressedBackground: theme.primaryPressed");
+    expect(buttonSource.match(/pressedBackground: theme\.primaryMuted/g)).toHaveLength(1);
+
+    for (const relativePath of [
+      "../apps/mobile/src/components/thread/pending-request-card.tsx",
+      "../apps/mobile/src/app/(app)/(tabs)/(chats)/thread/[id].tsx",
+    ]) {
+      const source = readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+      expect(source).not.toContain("pressed ? theme.primaryMuted : theme.primary");
+    }
   });
 
   test("typography exposes IBM Plex families that match the desktop bundle", () => {
@@ -262,6 +288,7 @@ describe("mobile theme tokens — global.css ⟷ tokens.ts lockstep", () => {
     "--border-subtle": "borderSubtle",
     "--border-strong": "borderStrong",
     "--accent": "accent",
+    "--accent-pressed": "accentPressed",
     "--accent-foreground": "accentForeground",
     "--accent-soft": "accentSoft",
     "--success": "success",

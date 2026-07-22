@@ -935,7 +935,7 @@ export default function ThreadDetailScreen() {
                   justifyContent: "center",
                   borderRadius: 999,
                   borderCurve: "continuous",
-                  backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+                  backgroundColor: pressed ? theme.primaryPressed : theme.primary,
                   paddingHorizontal: 14,
                   paddingVertical: 8,
                 })}

@@ -15,6 +15,7 @@ export type AppTheme = {
   textSecondary: string;
   textTertiary: string;
   primary: string;
+  primaryPressed: string;
   primaryMuted: string;
   primaryText: string;
   success: string;
@@ -46,6 +47,7 @@ function buildAppTheme(scheme: "light" | "dark"): AppTheme {
     textSecondary: tokens.textMuted,
     textTertiary: tokens.textSubtle,
     primary: tokens.accent,
+    primaryPressed: tokens.accentPressed,
     primaryMuted: tokens.accentSoft,
     primaryText: tokens.accentForeground,
     success: tokens.success,

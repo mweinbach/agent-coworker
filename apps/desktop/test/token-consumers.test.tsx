@@ -184,8 +184,23 @@ describe("desktop token consumers", () => {
       resolve(import.meta.dir, "../src/components/ui/popover.tsx"),
       "utf8",
     );
+    const tokenUtilities = readFileSync(
+      resolve(import.meta.dir, "../src/styles/token-utilities.css"),
+      "utf8",
+    );
 
     expect(selectSource).toMatch(/data-slot="select-content"[\s\S]*app-surface-opaque/);
     expect(popoverSource).toMatch(/data-slot="popover-content"[\s\S]*app-surface-opaque/);
+    expect(tokenUtilities).toMatch(/\.app-surface-opaque\s*\{[^}]*var\(--surface-opaque\)/s);
+  });
+
+  test("selected file rows let icons and metadata inherit the accent foreground", () => {
+    const explorerSource = readFileSync(
+      resolve(import.meta.dir, "../src/ui/file-explorer/WorkspaceFileExplorer.tsx"),
+      "utf8",
+    );
+
+    expect(explorerSource).not.toContain('selected ? "text-link/80"');
+    expect(explorerSource).not.toContain('selected ? "text-accent-foreground/85"');
   });
 });

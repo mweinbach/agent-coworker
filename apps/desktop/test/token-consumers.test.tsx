@@ -14,9 +14,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../src/components/ui/select";
+import { Switch } from "../src/components/ui/switch";
 import { Textarea } from "../src/components/ui/textarea";
 import { ToolCard } from "../src/ui/chat/toolCards/ToolCard";
 import { setupJsdom } from "./jsdomHarness";
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 describe("desktop token consumers", () => {
   test("shared UI wrappers expose the canonical token utility classes", async () => {
@@ -253,6 +256,107 @@ describe("desktop token consumers", () => {
     expect(dialogSource).not.toContain(
       "data-[state=open]:bg-accent data-[state=open]:text-muted-foreground",
     );
+  });
+
+  test("accessibility row descendants and switch states use system contrast pairs", () => {
+    const switchSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/switch.tsx"),
+      "utf8",
+    );
+    const stopSource = readFileSync(
+      resolve(import.meta.dir, "../src/ui/composer/MessageComposer.tsx"),
+      "utf8",
+    );
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    const switchMarkup = renderToStaticMarkup(createElement(Switch));
+
+    expect(switchMarkup).toContain('data-slot="switch"');
+    expect(switchMarkup).toContain('data-state="unchecked"');
+    expect(switchMarkup).toContain('data-slot="switch-thumb"');
+
+    const switchRulesStart = stylesCss.indexOf(
+      ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"]',
+    );
+    expect(switchRulesStart).toBeGreaterThan(
+      stylesCss.lastIndexOf('@import "shadcn/tailwind.css";'),
+    );
+
+    const highContrastSwitchRules = [
+      [
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"]',
+        "background-color: CanvasText !important;",
+      ],
+      [
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"]',
+        "background-color: Canvas !important;",
+      ],
+      [
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"]',
+        "background-color: Highlight !important;",
+      ],
+      [
+        ':root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"]',
+        "background-color: HighlightText !important;",
+      ],
+    ] as const;
+    for (const [selector, declaration] of highContrastSwitchRules) {
+      const selectorPattern = escapeRegExp(selector).replace(/ /g, "\\s+");
+      expect(stylesCss).toMatch(
+        new RegExp(`${selectorPattern}\\s*\\{[^}]*${escapeRegExp(declaration)}`),
+      );
+    }
+
+    const forcedColorsBlock = stylesCss.slice(stylesCss.indexOf("@media (forced-colors: active)"));
+    expect(forcedColorsBlock).toContain(':root [data-slot="switch"][data-state="unchecked"]');
+    expect(forcedColorsBlock).toContain(
+      ':root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"]',
+    );
+    expect(forcedColorsBlock).toContain(':root [data-slot="switch"][data-state="checked"]');
+    expect(forcedColorsBlock).toContain(
+      ':root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"]',
+    );
+    expect(forcedColorsBlock).toContain("background-color: CanvasText !important;");
+    expect(forcedColorsBlock).toContain("background-color: Canvas !important;");
+    expect(forcedColorsBlock).toContain("background-color: Highlight !important;");
+    expect(forcedColorsBlock).toContain("background-color: HighlightText !important;");
+
+    expect(stylesCss).not.toMatch(/:where\([^)]*\[data-slot="switch(?:-thumb)?"\][^)]*\)\s*\{/);
+
+    for (const selector of [
+      '[data-slot="command-item"][data-selected="true"]',
+      '[data-slot="dropdown-menu-item"]:focus',
+    ]) {
+      expect(stylesCss).toContain(selector);
+    }
+    expect(stylesCss).toContain("color: var(--text-accent-foreground) !important;");
+    expect(stylesCss).not.toContain("fill: currentColor !important;");
+    expect(stylesCss).not.toContain("stroke: currentColor !important;");
+    expect(stylesCss).not.toContain('[aria-hidden="true"] *');
+    expect(stylesCss).toContain("[hidden] *");
+    expect(stylesCss).toContain(".sr-only *");
+    expect(stylesCss).toContain("input");
+    expect(stylesCss).toContain("textarea");
+    expect(stylesCss).toContain("select");
+    expect(stylesCss).toContain("button");
+    expect(stylesCss).toContain('[contenteditable="true"]');
+
+    expect(stylesCss).toContain('[data-slot="switch"][data-state="unchecked"]');
+    expect(stylesCss).toContain("background-color: CanvasText !important;");
+    expect(stylesCss).toContain('[data-state="unchecked"]');
+    expect(stylesCss).toContain('[data-slot="switch-thumb"]');
+    expect(stylesCss).toContain("background-color: Canvas !important;");
+    expect(stylesCss).toContain('[data-slot="switch"][data-state="checked"]');
+    expect(stylesCss).toContain("background-color: Highlight !important;");
+    expect(stylesCss).toContain('[data-state="checked"]');
+    expect(stylesCss).toContain("background-color: HighlightText !important;");
+
+    expect(switchSource).toContain("data-[state=unchecked]:bg-input");
+    expect(switchSource).toContain("dark:data-[state=unchecked]:bg-input/80");
+    expect(switchSource).toContain("dark:data-[state=unchecked]:bg-foreground");
+    expect(stopSource).toContain(
+      "disabled:bg-destructive disabled:text-destructive-foreground disabled:opacity-100",
+    );
+    expect(stopSource).not.toContain("disabled:bg-destructive/80");
   });
 
   test("selected file rows let icons and metadata inherit the accent foreground", () => {

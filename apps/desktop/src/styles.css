@@ -170,6 +170,34 @@ samp {
   color: var(--text-accent-foreground);
 }
 
+:where(:root[data-high-contrast="true"])
+  :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-accent-foreground) !important;
+}
+
+:where(:root[data-high-contrast="true"])
+  :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus)
+  :where(*):not(
+    [hidden],
+    .sr-only,
+    [hidden] *,
+    .sr-only *,
+    input,
+    textarea,
+    select,
+    button,
+    [contenteditable="true"],
+    input *,
+    textarea *,
+    select *,
+    button *,
+    [contenteditable="true"] *
+  ) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-accent-foreground) !important;
+}
+
 @media (forced-colors: active) {
   :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
     --danger: var(--text-accent-foreground);
@@ -180,6 +208,81 @@ samp {
   :root .is-user ::selection {
     color: var(--text-primary-on-accent);
   }
+
+  :where(:root)
+    :where(
+      [data-slot="command-item"][data-selected="true"],
+      [data-slot="dropdown-menu-item"]:focus
+    ) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-accent-foreground) !important;
+  }
+
+  :where(:root)
+    :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus)
+    :where(*):not(
+      [hidden],
+      .sr-only,
+      [hidden] *,
+      .sr-only *,
+      input,
+      textarea,
+      select,
+      button,
+      [contenteditable="true"],
+      input *,
+      textarea *,
+      select *,
+      button *,
+      [contenteditable="true"] *
+    ) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-accent-foreground) !important;
+  }
+
+  :root [data-slot="switch"][data-state="unchecked"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch track must override generated state background utilities */
+    background-color: CanvasText !important;
+  }
+
+  :root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
+    background-color: Canvas !important;
+  }
+
+  :root [data-slot="switch"][data-state="checked"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch track must override generated state background utilities */
+    background-color: Highlight !important;
+  }
+
+  :root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
+    background-color: HighlightText !important;
+  }
+}
+
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch track must override generated state background utilities */
+  background-color: CanvasText !important;
+}
+
+:root[data-high-contrast="true"]
+  [data-slot="switch"][data-state="unchecked"]
+  [data-slot="switch-thumb"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
+  background-color: Canvas !important;
+}
+
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch track must override generated state background utilities */
+  background-color: Highlight !important;
+}
+
+:root[data-high-contrast="true"]
+  [data-slot="switch"][data-state="checked"]
+  [data-slot="switch-thumb"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
+  background-color: HighlightText !important;
 }
 
 :where(

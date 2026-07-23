@@ -425,7 +425,7 @@ export function MessageComposerStop({
       size="icon"
       variant="destructive"
       className={cn(
-        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive-hover disabled:border-destructive/20 disabled:bg-destructive/80 disabled:text-destructive-foreground disabled:opacity-100",
+        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive-hover disabled:border-destructive/20 disabled:bg-destructive disabled:text-destructive-foreground disabled:opacity-100",
         className,
       )}
       disabled={disabled || pending}

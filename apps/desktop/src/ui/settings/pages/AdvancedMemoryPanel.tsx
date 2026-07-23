@@ -346,7 +346,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
                       <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                     )}
                     <span className="font-medium text-foreground text-sm">{entry.name}</span>
-                    <Badge variant="secondary" className="text-[10px] uppercase h-5">
+                    <Badge variant="secondary" className="text-xs uppercase h-5">
                       {entry.type}
                     </Badge>
                   </div>

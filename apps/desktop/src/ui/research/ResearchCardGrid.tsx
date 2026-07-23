@@ -162,8 +162,8 @@ function ResearchListItem({
       className={cn(
         "sidebar-thread-item sidebar-lift flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-left",
         selected
-          ? "border-border/45 bg-foreground/[0.05] text-foreground"
-          : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+          ? "border-border/45 app-selected-row"
+          : "app-text-secondary hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
       )}
       onClick={onSelect}
       onContextMenu={onContextMenu}
@@ -175,14 +175,14 @@ function ResearchListItem({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
           {isChild ? (
-            <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="mr-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Follow-up
             </span>
           ) : null}
           {displayTitle}
         </span>
         {snippet ? (
-          <span className="mt-0.5 block line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">
+          <span className="app-type-caption mt-0.5 block line-clamp-2 text-muted-foreground">
             {snippet}
           </span>
         ) : null}
@@ -196,7 +196,7 @@ function ResearchListItem({
           />
         ) : null}
         {timeLabel ? (
-          <span className="text-[11px] font-medium text-muted-foreground">{timeLabel}</span>
+          <span className="text-xs font-medium text-muted-foreground">{timeLabel}</span>
         ) : null}
       </span>
     </button>

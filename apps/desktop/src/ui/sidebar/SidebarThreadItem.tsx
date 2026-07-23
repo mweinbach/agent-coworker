@@ -97,7 +97,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
         className={cn(
           "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
           isActive
-            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+            ? "border-border/45 app-selected-row"
             : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
         )}
         onClick={() => selectThread(thread.id)}
@@ -117,7 +117,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
           {interactionCount > 0 ? (
             <Badge
               variant="secondary"
-              className="h-5 min-w-5 justify-center px-1.5 text-[10px]"
+              className="h-5 min-w-5 justify-center px-1.5 text-xs"
               aria-label={`${interactionCount} pending ${interactionCount === 1 ? "interaction" : "interactions"}`}
             >
               {interactionCount}
@@ -137,7 +137,7 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
           ) : ageLabel ? (
             <span
               className={cn(
-                "text-[11px] font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
+                "text-xs font-medium text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-hover:pointer-events-none group-focus-within:opacity-0 group-focus-within:pointer-events-none",
                 isActive && "opacity-0 pointer-events-none",
               )}
             >

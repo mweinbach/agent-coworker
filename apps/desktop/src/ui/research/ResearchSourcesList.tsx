@@ -108,7 +108,7 @@ function SourceRow({ source }: { source: SourceRow }) {
         <div className="truncate text-[12.5px] font-medium leading-tight text-foreground">
           {display.titleLabel}
         </div>
-        <div className="truncate text-[11px] leading-tight text-muted-foreground">
+        <div className="truncate text-xs leading-tight text-muted-foreground">
           {display.hostLabel}
         </div>
       </div>
@@ -127,7 +127,7 @@ function SourceFavicon({ src, letter }: { src: string | null; letter: string }) 
   return (
     <div
       className={cn(
-        "relative flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-muted/70 text-[9px] font-semibold uppercase text-muted-foreground",
+        "relative flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-muted/70 text-xs font-semibold uppercase text-muted-foreground",
       )}
     >
       <span aria-hidden="true">{letter}</span>

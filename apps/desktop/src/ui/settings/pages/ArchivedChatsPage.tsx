@@ -162,7 +162,7 @@ export function ArchivedChatsPage() {
                   description={
                     <span className="flex items-center gap-2.5">
                       <span>{wsName}</span>
-                      <span className="text-[10px] opacity-45">•</span>
+                      <span className="text-xs opacity-45">•</span>
                       <span className="flex items-center gap-1">
                         <ClockIcon className="h-3 w-3" />
                         <span>Archived {formatArchivedDate(thread.archivedAt)}</span>

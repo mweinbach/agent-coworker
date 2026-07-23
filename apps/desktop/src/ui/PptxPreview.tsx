@@ -143,7 +143,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
             {fileName}
           </p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {visibleSlides.length > 0
               ? `${visibleSlides.length} slide${visibleSlides.length === 1 ? "" : "s"}`
               : "Presentation"}
@@ -249,11 +249,11 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                       alt={`Slide ${s.slideIndex + 1}`}
                       className="h-full w-full object-cover"
                     />
-                    <div className="absolute bottom-0.5 right-0.5 rounded bg-background/85 px-1 py-px text-[10px] font-medium tabular-nums text-muted-foreground">
+                    <div className="absolute bottom-0.5 right-0.5 rounded bg-background/85 px-1 py-px text-xs font-medium tabular-nums text-muted-foreground">
                       {idx + 1}
                     </div>
                   </div>
-                  <span className="truncate px-0.5 text-[11px] text-muted-foreground">
+                  <span className="truncate px-0.5 text-xs text-muted-foreground">
                     {s.title || `Slide ${idx + 1}`}
                   </span>
                 </button>
@@ -287,7 +287,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                   >
                     <ChevronLeftIcon className="size-3.5" />
                   </Button>
-                  <span className="min-w-10 text-center text-[11px] font-medium tabular-nums text-muted-foreground">
+                  <span className="min-w-10 text-center text-xs font-medium tabular-nums text-muted-foreground">
                     {activeIndex + 1} / {visibleSlides.length}
                   </span>
                   <Button
@@ -327,7 +327,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
                       loading="lazy"
                       className="h-full w-full select-none object-cover"
                     />
-                    <div className="absolute bottom-1 right-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                    <div className="absolute bottom-1 right-1 rounded bg-background/85 px-1.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground">
                       {idx + 1}
                     </div>
                   </div>

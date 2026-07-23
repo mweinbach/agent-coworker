@@ -211,7 +211,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           "sidebar-workspace-card group/workspace-row flex items-center gap-1 rounded-lg px-1 py-0.5",
           reorderEnabled && "sidebar-workspace-card--reorderable",
           emphasizeWorkspace
-            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+            ? "border-border/45 app-selected-row"
             : active
               ? "text-foreground hover:bg-foreground/[0.03]"
               : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
@@ -329,7 +329,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               ) : (
                 <>
                   {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
-                    <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                    <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
                       Chats
                     </div>
                   ) : null}
@@ -376,7 +376,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
-                      <div className="px-2.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/65">
+                      <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
                         Tasks
                       </div>
                       {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
@@ -387,7 +387,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                           className={cn(
                             "sidebar-lift flex h-auto min-w-0 w-full items-center gap-2 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
                             task.id === selectedTaskId
-                              ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                              ? "border-border/45 app-selected-row"
                               : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
                           )}
                           onClick={() => selectTask(task.id)}
@@ -398,7 +398,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                             <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
                               {task.title}
                             </span>
-                            <span className="block truncate text-[10px] text-muted-foreground">
+                            <span className="block truncate text-xs text-muted-foreground">
                               {task.completedWorkItemCount}/{task.totalWorkItemCount} ·{" "}
                               {task.status.replaceAll("_", " ")}
                               {task.pendingQuestionCount > 0 ? " · needs input" : ""}

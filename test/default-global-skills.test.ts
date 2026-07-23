@@ -207,7 +207,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     ).toBe(false);
   });
 
-  test("installs curated marketplace plugins into the user plugin library and records a one-time state file", { timeout: 15_000 }, async () => {
+  test("installs curated marketplace plugins into the user plugin library and records a one-time state file", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-home-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }, { id: "beta" }];
@@ -256,7 +258,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("repairs a missing default marketplace plugin even when bootstrap state exists", { timeout: 15_000 }, async () => {
+  test("repairs a missing default marketplace plugin even when bootstrap state exists", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-once-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -295,7 +299,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("ready bootstrap cache is scoped by concurrent requested default plugin ids", { timeout: 15_000 }, async () => {
+  test("ready bootstrap cache is scoped by concurrent requested default plugin ids", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-ready-cache-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const { tree, files } = createMarketplaceFixture(["alpha", "beta"]);
@@ -368,7 +374,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("does not record unavailable default marketplace plugins as complete", { timeout: 15_000 }, async () => {
+  test("does not record unavailable default marketplace plugins as complete", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-missing-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }, { id: "beta" }];
@@ -411,7 +419,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("installs Workspace Tools as one default plugin with four bundled skills", { timeout: 15_000 }, async () => {
+  test("installs Workspace Tools as one default plugin with four bundled skills", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-workspace-tools-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -445,7 +455,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("migrates runtime-owned Workspace Tools before removing every legacy productivity skill", { timeout: 15_000 }, async () => {
+  test("migrates runtime-owned Workspace Tools before removing every legacy productivity skill", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-runtime-migration-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const pluginRoot = path.join(home, ".cowork", "plugins", "workspace-tools");
@@ -532,7 +544,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("skips locally installed defaults without fetching when the state file is stale", { timeout: 15_000 }, async () => {
+  test("skips locally installed defaults without fetching when the state file is stale", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-local-skip-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -570,7 +584,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("workspace plugins do not satisfy the default global plugin bootstrap", { timeout: 15_000 }, async () => {
+  test("workspace plugins do not satisfy the default global plugin bootstrap", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-user-scope-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-workspace-scope-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -611,7 +627,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("legacy default plugin tombstones suppress Workspace Tools bootstrap", { timeout: 15_000 }, async () => {
+  test("legacy default plugin tombstones suppress Workspace Tools bootstrap", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-legacy-tombstone-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -670,7 +688,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("disabled default plugins are not treated as uninstall tombstones", { timeout: 15_000 }, async () => {
+  test("disabled default plugins are not treated as uninstall tombstones", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-disabled-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];
@@ -710,7 +730,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("bootstrap failure writes a failure file and skips network retries within the backoff window", { timeout: 15_000 }, async () => {
+  test("bootstrap failure writes a failure file and skips network retries within the backoff window", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-backoff-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
@@ -770,7 +792,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("force bypasses the bootstrap failure backoff and success clears the failure file", { timeout: 15_000 }, async () => {
+  test("force bypasses the bootstrap failure backoff and success clears the failure file", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-force-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
@@ -816,7 +840,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("retries after the backoff window and keeps the state-file fast path unaffected", { timeout: 15_000 }, async () => {
+  test("retries after the backoff window and keeps the state-file fast path unaffected", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-failure-expiry-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "alpha" }];
@@ -873,7 +899,9 @@ describe("default global skills bootstrap", { timeout: 15_000 }, () => {
     }
   });
 
-  test("does not reinstall default plugins after the user uninstalls them", { timeout: 15_000 }, async () => {
+  test("does not reinstall default plugins after the user uninstalls them", {
+    timeout: 15_000,
+  }, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-uninstall-"));
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-default-skills-workspace-"));
     const skills: readonly DefaultSkillSpec[] = [{ id: "workspace-tools" }];

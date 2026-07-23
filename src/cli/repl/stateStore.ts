@@ -2,8 +2,8 @@ import path from "node:path";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../../connect";
-import { resolveAuthHomeDir } from "../../utils/authHome";
 import { writeTextFileAtomic } from "../../utils/atomicFile";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 
 type CliState = {
   version: 1;

@@ -70,14 +70,16 @@ function ToolStateIndicator({ state }: { state: ToolFeedState }) {
     return (
       <Badge
         variant="destructive"
-        className="gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+        className="gap-1 px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
       >
         <ShieldAlertIcon className="size-2.5" />
         Review
       </Badge>
     );
   }
-  return <span className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />;
+  return (
+    <span className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+  );
 }
 
 /* ── Timeline building block ────────────────────────────────────────────────── */
@@ -175,7 +177,7 @@ function ReasoningSectionNode({
     return (
       <DesktopMarkdown
         normalizeDisplayCitations
-        className="text-[13px] leading-snug text-foreground/82"
+        className="text-[13px] leading-snug app-text-secondary"
       >
         {body}
       </DesktopMarkdown>
@@ -189,11 +191,11 @@ function ReasoningSectionNode({
         aria-controls={disclosureId}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1.5 text-left text-[13px] font-medium text-foreground/90 outline-none transition-colors hover:text-foreground"
+        className="flex items-center gap-1.5 text-left text-[13px] font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
           className={cn(
-            "size-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-150",
+            "size-3.5 shrink-0 app-text-muted transition-transform duration-150",
             open && "rotate-90",
           )}
         />
@@ -202,7 +204,7 @@ function ReasoningSectionNode({
       {open && body && (
         <div
           id={disclosureId}
-          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed text-muted-foreground/85 select-text"
+          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed app-text-muted select-text"
         >
           <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
             {body}
@@ -230,10 +232,7 @@ function ReasoningTimelineNode({
 
   if (!reasoningText) {
     return (
-      <TimelineNode
-        icon={<ClockIcon className="size-3 text-muted-foreground/38" />}
-        isLast={isLast}
-      >
+      <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
         <span className="activity-thinking-shimmer inline-flex items-center text-[13px] leading-snug">
           Thinking
         </span>
@@ -244,7 +243,7 @@ function ReasoningTimelineNode({
   const sections = parseReasoningSections(reasoningText);
 
   return (
-    <TimelineNode icon={<ClockIcon className="size-3 text-muted-foreground/38" />} isLast={isLast}>
+    <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
       <div className="flex flex-col gap-1.5 min-w-0">
         {sections.map((section, idx) => {
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
@@ -312,21 +311,19 @@ function ToolTimelineNode({
 
   return (
     <TimelineNode
-      icon={
-        <TimelineToolIcon title={formatting.title} className="size-3 text-muted-foreground/45" />
-      }
+      icon={<TimelineToolIcon title={formatting.title} className="size-3 app-text-muted" />}
       isLast={isLast}
     >
       {hasDetails ? (
         <Collapsible open={open} onOpenChange={handleOpenChange}>
-          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring/40">
+          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
                 {recovered ? (
                   <Badge
                     variant="outline"
-                    className="px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+                    className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
                     data-tool-recovery="recovered"
                   >
                     Recovered
@@ -336,13 +333,13 @@ function ToolTimelineNode({
                 )}
               </div>
               {formatting.subtitle ? (
-                <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
+                <div className="mt-0.5 text-xs leading-snug app-text-muted">
                   {formatting.subtitle}
                 </div>
               ) : null}
               {item.retryOf ? (
                 <div
-                  className="mt-0.5 text-[10px] font-medium text-muted-foreground/70"
+                  className="mt-0.5 text-xs font-medium app-text-muted"
                   data-tool-recovery="retry"
                 >
                   Retry of failed call
@@ -351,7 +348,7 @@ function ToolTimelineNode({
             </div>
             <ChevronRightIcon
               className={cn(
-                "mt-0.5 size-3.5 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
+                "mt-0.5 size-3.5 shrink-0 app-text-muted transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
                 open && "rotate-90",
               )}
               aria-hidden
@@ -365,10 +362,10 @@ function ToolTimelineNode({
                     key={`${item.id}-${row.label}`}
                     className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
                   >
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                       {row.label}
                     </div>
-                    <div className="mt-0.5 break-words text-[11px] leading-snug text-foreground/85">
+                    <div className="mt-0.5 break-words text-xs leading-snug app-text-secondary">
                       {row.value}
                     </div>
                   </div>
@@ -376,17 +373,17 @@ function ToolTimelineNode({
               </div>
             ) : null}
             {argsText ? (
-              <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-[11px] leading-relaxed text-foreground/80">
+              <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-xs leading-relaxed app-text-secondary">
                 {argsText}
               </pre>
             ) : null}
             {resultText ? (
               <pre
                 className={cn(
-                  "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-[11px] leading-relaxed",
+                  "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
                   item.state === "output-error" || item.state === "output-denied"
                     ? "bg-destructive/[0.06] text-destructive"
-                    : "bg-foreground/[0.04] text-foreground/80",
+                    : "bg-foreground/[0.04] app-text-secondary",
                 )}
               >
                 {resultText}
@@ -401,7 +398,7 @@ function ToolTimelineNode({
             {recovered ? (
               <Badge
                 variant="outline"
-                className="px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+                className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
                 data-tool-recovery="recovered"
               >
                 Recovered
@@ -411,15 +408,10 @@ function ToolTimelineNode({
             )}
           </div>
           {formatting.subtitle ? (
-            <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground/65">
-              {formatting.subtitle}
-            </div>
+            <div className="mt-0.5 text-xs leading-snug app-text-muted">{formatting.subtitle}</div>
           ) : null}
           {item.retryOf ? (
-            <div
-              className="mt-0.5 text-[10px] font-medium text-muted-foreground/70"
-              data-tool-recovery="retry"
-            >
+            <div className="mt-0.5 text-xs font-medium app-text-muted" data-tool-recovery="retry">
               Retry of failed call
             </div>
           ) : null}
@@ -612,14 +604,7 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   summaryElapsedLabel: string | null;
   hasUnrecoveredIssue?: boolean;
 }) {
-  const {
-    items,
-    live,
-    liveNowMs,
-    liveStartedAt,
-    summaryElapsedLabel,
-    hasUnrecoveredIssue,
-  } = props;
+  const { items, live, liveNowMs, liveStartedAt, summaryElapsedLabel, hasUnrecoveredIssue } = props;
 
   const [nowMs, setNowMs] = useState(() => liveNowMs ?? Date.now());
 
@@ -648,9 +633,7 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
 
   if (hasUnrecoveredIssue) {
-    return displayElapsedLabel
-      ? `Couldn't finish after ${displayElapsedLabel}`
-      : "Couldn't finish";
+    return displayElapsedLabel ? `Couldn't finish after ${displayElapsedLabel}` : "Couldn't finish";
   }
 
   if (live) {
@@ -742,7 +725,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     hasUnrecoveredIssue
                       ? "text-destructive/85 group-hover:text-destructive"
                       : props.live
-                        ? "text-foreground/85"
+                        ? "app-text-secondary"
                         : "text-muted-foreground",
                   )}
                 >
@@ -758,7 +741,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 <ChevronRightIcon
                   className={cn(
                     "size-3.5 shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-90",
-                    hasUnrecoveredIssue ? "text-destructive/60" : "text-muted-foreground/50",
+                    hasUnrecoveredIssue ? "text-destructive/60" : "app-text-muted",
                   )}
                 />
               </CollapsibleTrigger>
@@ -778,7 +761,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               </Button>
             ) : hasUnrecoveredIssue && props.retryUnavailableReason ? (
               <span
-                className="max-w-48 text-right text-[10px] leading-tight text-muted-foreground"
+                className="max-w-48 text-right text-xs leading-tight text-muted-foreground"
                 data-slot="activity-retry-unavailable"
               >
                 {props.retryUnavailableReason}
@@ -810,12 +793,12 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     <Card className="max-w-3xl gap-0 rounded-xl border border-border/40 bg-foreground/[0.02] p-0 shadow-none backdrop-blur-none">
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
-        <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-border/45 focus-visible:ring-inset focus-visible:shadow-none">
+        <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:shadow-none">
           <CardHeader className="flex items-center justify-between gap-2 px-2.5 pt-1.5 pb-1 transition-colors hover:bg-muted/[0.06]">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <ClockIcon
                 className={cn(
-                  "size-4 shrink-0 text-muted-foreground/45",
+                  "size-4 shrink-0 app-text-muted",
                   useThinkingTreatment && "text-primary/70",
                 )}
               />
@@ -832,7 +815,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               {showStateBadge ? (
                 <Badge
                   variant="destructive"
-                  className="gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.1em]"
+                  className="gap-1 px-1.5 py-0 text-xs font-semibold uppercase tracking-[0.1em]"
                 >
                   {summary.status === "approval" ? (
                     <ShieldAlertIcon className="size-3.5 shrink-0" />
@@ -842,11 +825,11 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                   <span>{summary.statusLabel}</span>
                 </Badge>
               ) : null}
-              <ChevronDownIcon className="size-3.5 text-muted-foreground/35 transition-transform group-data-[state=open]:rotate-180" />
+              <ChevronDownIcon className="size-3.5 app-text-muted transition-transform group-data-[state=open]:rotate-180" />
             </div>
           </CardHeader>
           {!expanded && summary.preview && !isPendingReasoning && showStateBadge && (
-            <p className="px-2.5 pb-1.5 pt-0 text-[11px] leading-snug text-muted-foreground/85 line-clamp-2">
+            <p className="px-2.5 pb-1.5 pt-0 text-xs leading-snug app-text-muted line-clamp-2">
               {summary.preview}
             </p>
           )}

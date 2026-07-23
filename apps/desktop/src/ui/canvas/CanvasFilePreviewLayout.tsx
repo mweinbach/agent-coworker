@@ -55,7 +55,7 @@ export function CanvasFilePreviewLayout({
                     >
                       {fileName}
                     </span>
-                    <span className="text-[10px] text-muted-foreground shrink-0 uppercase">
+                    <span className="text-xs text-muted-foreground shrink-0 uppercase">
                       ({previewKind})
                     </span>
                   </div>

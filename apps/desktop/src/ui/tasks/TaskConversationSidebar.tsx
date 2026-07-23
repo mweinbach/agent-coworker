@@ -126,7 +126,7 @@ export function TaskConversationSidebar() {
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-l border-border bg-panel">
       <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-background px-2">
-        <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        <span className="mr-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
           Conversation
         </span>
         {task.threads.map((thread) => {

@@ -547,9 +547,7 @@ export function AppTopBar({
               >
                 <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-medium leading-none text-muted-foreground">
-                      Usage
-                    </p>
+                    <p className="text-xs font-medium leading-none text-muted-foreground">Usage</p>
                     {hasUsage ? (
                       <p className="mt-2 text-[13px] leading-snug tracking-tight text-foreground/92">
                         <span className="font-semibold tabular-nums">{estimatedCostLabel}</span>
@@ -567,7 +565,7 @@ export function AppTopBar({
                   {busy ? (
                     <Badge
                       variant="secondary"
-                      className="h-6 shrink-0 gap-1 rounded-full border-border/40 bg-muted/25 px-2 text-[10px] font-medium text-muted-foreground shadow-none"
+                      className="h-6 shrink-0 gap-1 rounded-full border-border/40 bg-muted/25 px-2 text-xs font-medium text-muted-foreground shadow-none"
                     >
                       <LoaderCircleIcon className="h-3 w-3 animate-spin opacity-80" />
                       Busy
@@ -632,7 +630,7 @@ export function AppTopBar({
                       variant="ghost"
                       aria-label={usageDetailsOpen ? "Show usage summary" : "Show usage details"}
                       aria-expanded={usageDetailsOpen}
-                      className="h-6 gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      className="h-6 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
                       onClick={() => setUsageDetailsOpen((open) => !open)}
                     >
                       <MoreVerticalIcon data-icon="inline-start" />
@@ -642,7 +640,7 @@ export function AppTopBar({
                 ) : null}
 
                 {lastTurnUsage ? (
-                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-[11px]">
+                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-xs">
                     <span className="text-muted-foreground">Last turn cost</span>
                     <span className="tabular-nums font-medium text-foreground/88">
                       {lastTurnCostLabel}
@@ -651,7 +649,7 @@ export function AppTopBar({
                 ) : null}
 
                 {budgetLine ? (
-                  <div className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="mt-2 px-0.5 text-xs leading-relaxed text-muted-foreground">
                     {budgetLine}
                   </div>
                 ) : null}
@@ -662,7 +660,7 @@ export function AppTopBar({
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 rounded-full px-3 text-[11px]"
+                      className="h-7 rounded-full px-3 text-xs"
                       onClick={() => {
                         onClearHardCap();
                         setDetailsOpen(false);
@@ -691,7 +689,7 @@ export function AppTopBar({
               aria-label="Busy"
               variant="secondary"
               className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-[11px] text-muted-foreground shadow-none",
+                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
                 compactToolbar ? "size-7 justify-center px-0" : "px-2",
               )}
             >
@@ -830,7 +828,7 @@ export function AppTopBar({
               aria-label="Busy"
               variant="secondary"
               className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-[11px] text-muted-foreground shadow-none",
+                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
                 compactToolbar ? "size-7 justify-center px-0" : "px-2",
               )}
             >
@@ -892,7 +890,7 @@ export function AppTopBar({
 function TopBarMetricRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border/20 py-1.5 last:border-b-0">
-      <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right text-[13px] font-medium tabular-nums tracking-tight text-foreground/90">
         {value}
       </span>

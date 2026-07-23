@@ -294,7 +294,7 @@ function SettingsNavigation({
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
             <button
-              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-foreground/72 transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
+              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium app-text-secondary transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
               type="button"
               onClick={onBack}
             >
@@ -305,7 +305,7 @@ function SettingsNavigation({
         </div>
         {perWorkspaceSettings && currentWorkspace ? (
           <div
-            className="truncate px-4 pb-3 text-[11px] text-foreground/68"
+            className="app-type-caption truncate px-4 pb-3 app-text-secondary"
             title={currentWorkspace.name}
           >
             {currentWorkspace.name}
@@ -320,7 +320,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-1 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+              <div className="app-type-label mb-1 px-2 py-1.5 uppercase tracking-[0.08em] app-text-muted">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
@@ -333,7 +333,7 @@ function SettingsNavigation({
                         "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors duration-150",
                         activePage === page.id
                           ? "settings-shell__nav-button--active font-semibold text-foreground"
-                          : "font-medium text-foreground/72 hover:bg-foreground/[0.045] hover:text-foreground",
+                          : "font-medium app-text-secondary hover:bg-foreground/[0.045] hover:text-foreground",
                       )}
                       type="button"
                       onClick={() => onSelectPage(page.id)}
@@ -341,7 +341,9 @@ function SettingsNavigation({
                       <Icon
                         className={cn(
                           "size-4 shrink-0",
-                          activePage === page.id ? "text-primary" : "text-muted-foreground",
+                          activePage === page.id
+                            ? "text-[var(--text-settings-nav-active-icon)]"
+                            : "text-muted-foreground",
                         )}
                       />
                       <span className="min-w-0 truncate">{page.label}</span>

@@ -25,7 +25,7 @@ function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem
           type="button"
           className={cn(
             MENTION_CHIP_PADDED_CLASS,
-            "inline cursor-pointer align-baseline transition-colors hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+            "inline cursor-pointer align-baseline transition-colors hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
           title={`View ${kind} "${name}"`}
         >
@@ -37,12 +37,12 @@ function MentionChip(props: { kind: MentionKind; name: string; item: MentionItem
           <span className="min-w-0 truncate text-sm font-semibold text-foreground">
             {item.label}
           </span>
-          <Badge variant="secondary" className="ml-auto shrink-0 text-[10px]">
+          <Badge variant="secondary" className="ml-auto shrink-0 text-xs">
             {kind === "skill" ? "Skill" : "Plugin"}
           </Badge>
         </div>
         {item.badge ? (
-          <div className="mb-1.5 text-[11px] text-muted-foreground">{item.badge}</div>
+          <div className="mb-1.5 text-xs text-muted-foreground">{item.badge}</div>
         ) : null}
         {item.description ? (
           <p className="text-xs leading-relaxed text-muted-foreground">{item.description}</p>

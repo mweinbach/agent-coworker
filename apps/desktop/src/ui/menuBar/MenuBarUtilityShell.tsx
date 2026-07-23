@@ -82,7 +82,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   variant="outline"
                   size="sm"
                   className={cn(
-                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md px-1 py-0 text-[10px] font-medium leading-tight text-foreground shadow-none",
+                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md px-1 py-0 text-xs font-medium leading-tight text-foreground shadow-none",
                     "border border-border/50 bg-primary/10 hover:bg-primary/[0.14] hover:text-foreground",
                   )}
                   onClick={() =>
@@ -97,7 +97,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                   variant="outline"
                   size="sm"
                   className={cn(
-                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md border border-border/50 bg-muted/30 px-1 py-0 text-[10px] font-medium leading-tight text-foreground shadow-none",
+                    "h-full min-h-[2.5rem] w-full min-w-0 flex-col justify-center gap-0.5 rounded-md border border-border/50 bg-muted/30 px-1 py-0 text-xs font-medium leading-tight text-foreground shadow-none",
                     "hover:bg-muted/50 hover:text-foreground",
                   )}
                   onClick={() => void showMainWindow().then(() => windowClose())}
@@ -108,7 +108,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col border-t border-border/35">
-                <div className="shrink-0 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="shrink-0 px-2 pb-0.5 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                   Recent Chats
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1.5">
@@ -142,7 +142,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
                               <div className="truncate text-[13px] font-medium tracking-[-0.016em] text-foreground">
                                 {threadTitle}
                               </div>
-                              <div className="truncate text-[11px] text-muted-foreground">
+                              <div className="truncate text-xs text-muted-foreground">
                                 {workspaceName}
                               </div>
                             </button>

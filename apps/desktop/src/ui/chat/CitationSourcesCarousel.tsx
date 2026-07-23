@@ -62,7 +62,7 @@ function FaviconImage({ url, className }: { url: string; className?: string }) {
     return (
       <div
         className={cn(
-          "flex items-center justify-center rounded bg-muted text-[10px] font-bold uppercase text-muted-foreground",
+          "app-type-label flex items-center justify-center rounded bg-muted uppercase text-muted-foreground",
           className,
         )}
       >
@@ -102,7 +102,7 @@ function SourceCard({
       <FaviconImage url={source.url} className="size-5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium text-foreground">{title}</div>
-        <div className="truncate text-[10px] text-muted-foreground">{domain}</div>
+        <div className="app-type-caption truncate text-muted-foreground">{domain}</div>
       </div>
     </Button>
   );
@@ -144,10 +144,10 @@ export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
   return (
     <div className={cn("relative group/carousel", className)}>
       <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="app-type-label uppercase tracking-[0.12em] text-muted-foreground">
           Sources
         </span>
-        <span className="text-[10px] text-muted-foreground/60">{sources.length}</span>
+        <span className="app-type-caption app-text-muted">{sources.length}</span>
       </div>
       <div className="relative">
         <div

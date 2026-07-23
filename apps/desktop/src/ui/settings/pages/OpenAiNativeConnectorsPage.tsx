@@ -146,7 +146,7 @@ export function OpenAiNativeConnectorsPage() {
                           {connector.isAccessible ? "Connected" : "Directory"}
                         </SettingsStatusPill>
                       </div>
-                      <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      <p className="truncate font-mono text-xs text-muted-foreground">
                         {connector.id}
                       </p>
                       {connector.description ? (

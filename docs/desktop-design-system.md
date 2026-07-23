@@ -114,6 +114,7 @@ Prefer `focus-visible` and, for hover-only row actions, **`group-focus-within:`*
 - Meaningful supporting copy and interactive labels have a 12px floor. `token-compliance.test.ts` blocks arbitrary pixel utilities below that floor.
 - Prefer the named role utilities from `token-utilities.css`: `app-type-caption`, `app-type-label`, `app-type-body`, `app-type-title`, and `app-type-code`. Use `text-xs` for one-off 12px layout text when a role utility would add no clarity.
 - Use `app-text-secondary`, `app-text-muted`, and `app-text-subtle` for hierarchy. Do not reduce semantic text colors with arbitrary `/65`-style opacity modifiers.
+- Use `app-selected-row` for active/current navigation and list rows. It preserves the subtle foreground wash in normal themes and maps to the system `Highlight`/`HighlightText` pair in high-contrast and forced-colors modes.
 - Hit targets: icon buttons typically `size-6`–`size-7` (aim ≥ 28px for primary chrome)
 - Binary settings: shared `Switch`; multi-select checklists: `Checkbox`
 - Settings sections are flat: one `rounded-xl border border-border/50 bg-card` container with `divide-y` hairlines per section — compact rows and separators, **no nested rounded subcards**. Inner wells for raw code/JSON: `rounded-lg bg-foreground/[0.04]`, no border.

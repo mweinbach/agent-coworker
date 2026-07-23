@@ -162,7 +162,7 @@ function ResearchListItem({
       className={cn(
         "sidebar-thread-item sidebar-lift flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-left",
         selected
-          ? "border-border/45 bg-foreground/[0.05] text-foreground"
+          ? "border-border/45 app-selected-row"
           : "app-text-secondary hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
       )}
       onClick={onSelect}

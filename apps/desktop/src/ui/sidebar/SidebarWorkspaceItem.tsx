@@ -211,7 +211,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           "sidebar-workspace-card group/workspace-row flex items-center gap-1 rounded-lg px-1 py-0.5",
           reorderEnabled && "sidebar-workspace-card--reorderable",
           emphasizeWorkspace
-            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+            ? "border-border/45 app-selected-row"
             : active
               ? "text-foreground hover:bg-foreground/[0.03]"
               : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
@@ -387,7 +387,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                           className={cn(
                             "sidebar-lift flex h-auto min-w-0 w-full items-center gap-2 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
                             task.id === selectedTaskId
-                              ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                              ? "border-border/45 app-selected-row"
                               : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
                           )}
                           onClick={() => selectTask(task.id)}

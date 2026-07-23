@@ -69,6 +69,13 @@
   background: var(--surface-muted-fill);
 }
 
+/* Active/current rows keep the normal subtle wash while mapping to the system
+ * Highlight/HighlightText pair in high-contrast and forced-colors modes. */
+.app-selected-row {
+  background: var(--surface-selected-row);
+  color: var(--text-selected-row);
+}
+
 .app-border-default {
   border-color: var(--border-default);
 }

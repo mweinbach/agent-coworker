@@ -6,6 +6,7 @@ const stylesDir = resolve(import.meta.dir, "../src/styles");
 const baseCss = readFileSync(resolve(stylesDir, "tokens/base.css"), "utf8");
 const themeBridgeCss = readFileSync(resolve(stylesDir, "theme-bridge.css"), "utf8");
 const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+const tokenUtilitiesCss = readFileSync(resolve(stylesDir, "token-utilities.css"), "utf8");
 const platformCss = readFileSync(resolve(stylesDir, "tokens/platform.css"), "utf8");
 
 function blockBody(source: string, startToken: string, from = 0): string {
@@ -198,6 +199,96 @@ describe("desktop semantic contrast", () => {
     expect(stylesCss).toContain(':root[data-high-contrast="true"] .is-user ::selection');
     expect(forcedColorsSelection).toContain("color: var(--text-primary-on-accent);");
     expect(forcedColorsMedia).toContain(".is-user ::selection");
+  });
+
+  test("selected rows and command items use complete system highlight pairs", () => {
+    expect(tokenUtilitiesCss).toMatch(
+      /\.app-selected-row\s*\{[^}]*background:\s*var\(--surface-selected-row\);[^}]*color:\s*var\(--text-selected-row\);/s,
+    );
+
+    for (const consumerPath of [
+      "../src/ui/sidebar/SidebarThreadItem.tsx",
+      "../src/ui/sidebar/SidebarWorkspaceItem.tsx",
+      "../src/ui/research/ResearchCardGrid.tsx",
+    ]) {
+      const consumer = readFileSync(resolve(import.meta.dir, consumerPath), "utf8");
+      expect(consumer).toContain("app-selected-row");
+      expect(consumer).not.toContain("bg-foreground/[0.05] text-foreground");
+    }
+
+    const highContrastSelectedRow = blockBody(
+      stylesCss,
+      ':where(:root[data-high-contrast="true"]) .app-selected-row:not([hidden], .sr-only)',
+    );
+    const forcedColorsMedia = blockBody(stylesCss, "@media (forced-colors: active)");
+    const forcedColorsSelectedRow = blockBody(
+      forcedColorsMedia,
+      ":where(:root) .app-selected-row:not([hidden], .sr-only)",
+    );
+
+    for (const [name, body] of [
+      ["app high contrast", highContrastSelectedRow],
+      ["forced colors", forcedColorsSelectedRow],
+    ] as const) {
+      expect(body, `${name} selected row`).toContain("color: var(--text-selected-row) !important;");
+    }
+
+    const selectedRowDescendantExclusions = (indent: string) => [
+      "[hidden]",
+      ".sr-only",
+      "[hidden] *",
+      ".sr-only *",
+      `:where(
+${indent}    .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]),
+${indent}    .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"])
+${indent}  )`,
+      `:where(
+${indent}    .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]) *,
+${indent}    .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"]) *
+${indent}  )`,
+    ];
+    for (const [name, source] of [
+      ["app high contrast", stylesCss],
+      ["forced colors", forcedColorsMedia],
+    ] as const) {
+      const descendantSelector =
+        source === stylesCss
+          ? ':where(:root[data-high-contrast="true"])\n  .app-selected-row:not([hidden], .sr-only)'
+          : ":where(:root)\n    .app-selected-row:not([hidden], .sr-only)";
+      const indent = source === stylesCss ? "  " : "    ";
+      const descendantRule = `${descendantSelector}\n${indent}:where(*):not(\n${indent}  ${selectedRowDescendantExclusions(
+        indent,
+      ).join(`,\n${indent}  `)}\n${indent})`;
+      const descendantBody = blockBody(source, descendantRule);
+      expect(descendantBody, `${name} selected row descendants`).toContain(
+        "color: var(--text-selected-row) !important;",
+      );
+      expect(descendantRule, `${name} selected row exclusion scope`).toContain(
+        '.app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"])',
+      );
+      expect(descendantRule, `${name} selected row exclusion scope`).not.toMatch(
+        /(?:^|,)\s*button \*,/m,
+      );
+    }
+
+    const highContrastCommand = blockBody(
+      stylesCss,
+      ':where(:root[data-high-contrast="true"]) [data-slot="command-item"][data-selected="true"]',
+    );
+    expect(highContrastCommand).toContain(
+      "background: var(--surface-accent-interactive) !important;",
+    );
+
+    const forcedColorsCommand = blockBody(
+      blockBody(stylesCss, "@media (forced-colors: active)"),
+      ':where(:root) [data-slot="command-item"][data-selected="true"]',
+    );
+    expect(forcedColorsCommand).toContain(
+      "background: var(--surface-accent-interactive) !important;",
+    );
+    expect(stylesCss).toContain(
+      ':where(:root)\n    :where(\n      [data-slot="command-item"][data-selected="true"],\n      [data-slot="dropdown-menu-item"]:focus\n    )',
+    );
   });
 
   test("platform translucency cannot shadow app high-contrast surfaces", () => {

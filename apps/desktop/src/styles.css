@@ -163,7 +163,19 @@ samp {
   color: var(--text-primary-on-accent);
 }
 
+:where(:root[data-high-contrast="true"])
+  [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
+  --danger: var(--text-accent-foreground);
+  background: var(--surface-accent-interactive);
+  color: var(--text-accent-foreground);
+}
+
 @media (forced-colors: active) {
+  :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
+    --danger: var(--text-accent-foreground);
+    background: var(--surface-accent-interactive);
+    color: var(--text-accent-foreground);
+  }
   :root ::selection,
   :root .is-user ::selection {
     color: var(--text-primary-on-accent);

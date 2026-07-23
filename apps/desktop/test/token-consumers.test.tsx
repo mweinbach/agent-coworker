@@ -207,6 +207,10 @@ describe("desktop token consumers", () => {
       resolve(import.meta.dir, "../src/components/ui/dropdown-menu.tsx"),
       "utf8",
     );
+    const dialogSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/dialog.tsx"),
+      "utf8",
+    );
     const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
     const themeBridgeSource = readFileSync(
       resolve(import.meta.dir, "../src/styles/theme-bridge.css"),
@@ -233,7 +237,22 @@ describe("desktop token consumers", () => {
     );
     expect(selectSource).toContain("focus:[&_svg:not([class*='text-'])]:text-accent-foreground");
     expect(selectSource).not.toContain("data-[state=checked]:[&_svg:not([class*='text-'])]");
+    expect(dropdownSource).toContain("data-[variant=destructive]:text-destructive");
+    expect(dropdownSource).toContain("data-[variant=destructive]:focus:bg-destructive/10");
+    expect(dropdownSource).toContain("data-[variant=destructive]:focus:text-destructive");
     expect(dropdownSource).toContain("focus:[&_svg:not([class*='text-'])]:text-accent-foreground");
+    expect(stylesCss).toMatch(
+      /:where\(:root\[data-high-contrast="true"\]\)\s+\[data-slot="dropdown-menu-item"\]\[data-variant="destructive"\]:focus\s*\{[^}]*--danger:\s*var\(--text-accent-foreground\);[^}]*background:\s*var\(--surface-accent-interactive\);[^}]*color:\s*var\(--text-accent-foreground\);/s,
+    );
+    expect(stylesCss).toMatch(
+      /@media \(forced-colors: active\)[\s\S]*:where\(:root\)\s+\[data-slot="dropdown-menu-item"\]\[data-variant="destructive"\]:focus\s*\{[^}]*--danger:\s*var\(--text-accent-foreground\);[^}]*background:\s*var\(--surface-accent-interactive\);[^}]*color:\s*var\(--text-accent-foreground\);/s,
+    );
+    expect(dialogSource).toContain(
+      "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+    );
+    expect(dialogSource).not.toContain(
+      "data-[state=open]:bg-accent data-[state=open]:text-muted-foreground",
+    );
   });
 
   test("selected file rows let icons and metadata inherit the accent foreground", () => {

@@ -136,6 +136,7 @@ describe("desktop semantic contrast", () => {
       expect(palette["--surface-accent"]).toBe("Canvas");
       expect(palette["--surface-accent-interactive"]).toBe("Highlight");
       expect(palette["--surface-card"]).toBe("Canvas");
+      expect(palette["--surface-opaque"]).toBe("Canvas");
       expect(palette["--surface-field"]).toBe("Field");
       expect(palette["--text-primary"]).toBe("CanvasText");
       expect(palette["--text-secondary"]).toBe("CanvasText");
@@ -176,6 +177,7 @@ describe("desktop semantic contrast", () => {
     }
 
     expect(canvasHighContrast["--surface-accent-interactive"]).toBe("Highlight");
+    expect(canvasHighContrast["--surface-opaque"]).toBe("Canvas");
     expect(canvasHighContrast["--text-accent-foreground"]).toBe("HighlightText");
     expect(canvasHighContrast["--text-secondary"]).toBe("CanvasText");
     expect(canvasHighContrast["--text-muted"]).toBe("GrayText");

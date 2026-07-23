@@ -397,6 +397,7 @@
     --surface-card: Canvas;
     --surface-card-elevated: Canvas;
     --surface-overlay: Canvas;
+    --surface-opaque: Canvas;
     --surface-secondary: Canvas;
     --surface-accent: Canvas;
     --surface-accent-interactive: Highlight;

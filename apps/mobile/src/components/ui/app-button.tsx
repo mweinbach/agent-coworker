@@ -7,7 +7,7 @@ import {
   minimumTouchTarget,
   useReducedMotionEnabled,
 } from "@/features/accessibility/mobile-accessibility";
-import { alpha, radius } from "@/theme/tokens";
+import { radius } from "@/theme/tokens";
 import { type AppTheme, useAppTheme } from "@/theme/use-app-theme";
 
 import { SFSymbol } from "./sf-symbol";
@@ -68,7 +68,7 @@ function resolveVariant(variant: AppButtonVariant, theme: AppTheme): VariantStyl
     case "destructive":
       return {
         background: theme.danger,
-        pressedBackground: alpha(theme.danger, 0.85),
+        pressedBackground: theme.danger,
         label: theme.dangerText,
       };
     case "outline":

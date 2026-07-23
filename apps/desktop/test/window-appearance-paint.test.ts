@@ -38,7 +38,7 @@ describe("desktopShellBackgroundColor", () => {
       "utf8",
     );
     const linuxBlock = platformTokens.match(
-      /:root\[data-platform="linux"\]:not\(\[data-reduced-transparency="true"\]\)\s*\{([\s\S]*?)\n\}/,
+      /:root\[data-platform="linux"\]:not\(\[data-reduced-transparency="true"\]\):not\(\s*\[data-high-contrast="true"\]\s*\)\s*\{([\s\S]*?)\n\}/,
     )?.[1];
 
     expect(linuxBlock).toBeDefined();

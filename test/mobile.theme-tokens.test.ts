@@ -110,6 +110,21 @@ describe("mobile theme tokens", () => {
     expect(buttonSource).not.toContain('label: "#ffffff"');
   });
 
+  test("pressed destructive controls use an opaque semantic danger color", () => {
+    const buttonSource = readFileSync(
+      fileURLToPath(new URL("../apps/mobile/src/components/ui/app-button.tsx", import.meta.url)),
+      "utf8",
+    );
+    const darkTokens = semanticTokens.dark;
+
+    expect(buttonSource).toContain("pressedBackground: theme.danger");
+    expect(buttonSource).not.toContain("pressedBackground: alpha(theme.danger");
+    expect(darkTokens.danger).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(contrastRatio(darkTokens.dangerForeground, darkTokens.danger)).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  });
+
   test("pressed primary controls use the solid semantic pressed color", () => {
     const themeSource = readFileSync(
       fileURLToPath(new URL("../apps/mobile/src/theme/use-app-theme.ts", import.meta.url)),

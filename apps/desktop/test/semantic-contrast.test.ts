@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 const stylesDir = resolve(import.meta.dir, "../src/styles");
 const baseCss = readFileSync(resolve(stylesDir, "tokens/base.css"), "utf8");
 const themeBridgeCss = readFileSync(resolve(stylesDir, "theme-bridge.css"), "utf8");
+const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+const platformCss = readFileSync(resolve(stylesDir, "tokens/platform.css"), "utf8");
 
 function blockBody(source: string, startToken: string, from = 0): string {
   const at = source.indexOf(startToken, from);
@@ -107,25 +109,85 @@ describe("desktop semantic contrast", () => {
     expect(themeBridgeCss).toContain("--color-ring: var(--focus-ring);");
   });
 
-  test("high contrast has a complete root token pack and a forced-colors fallback", () => {
+  test("high contrast and forced-colors preserve semantic hierarchy and surfaces", () => {
     expect(themeBridgeCss).toMatch(/:root\[data-high-contrast="true"\]\s*\{/);
     expect(themeBridgeCss).toContain("@media (forced-colors: active)");
-    for (const token of [
-      "--surface-window: Canvas;",
-      "--surface-card: Canvas;",
-      "--surface-field: Field;",
-      "--text-primary: CanvasText;",
-      "--text-muted: GrayText;",
-      "--text-link: LinkText;",
-      "--accent: Highlight;",
-      "--text-primary-on-accent: HighlightText;",
-      "--focus-ring: Highlight;",
-      "--border-default: CanvasText;",
-    ]) {
-      expect(themeBridgeCss).toContain(token);
+
+    const highContrast = declarations(
+      blockBody(themeBridgeCss, ':root[data-high-contrast="true"]'),
+    );
+    const forcedColors = declarations(
+      blockBody(blockBody(themeBridgeCss, "@media (forced-colors: active)"), ":root"),
+    );
+    const canvasHighContrast = declarations(
+      blockBody(
+        themeBridgeCss,
+        ':where(\n    :root[data-high-contrast="true"][data-canvas-surface],',
+      ),
+    );
+
+    for (const palette of [highContrast, forcedColors]) {
+      expect(palette["--surface-window"]).toBe("Canvas");
+      expect(palette["--surface-card"]).toBe("Canvas");
+      expect(palette["--surface-field"]).toBe("Field");
+      expect(palette["--text-primary"]).toBe("CanvasText");
+      expect(palette["--text-secondary"]).toBe("CanvasText");
+      expect(palette["--text-muted"]).toBe("GrayText");
+      expect(palette["--text-link"]).toBe("LinkText");
+      expect(palette["--accent"]).toBe("Highlight");
+      expect(palette["--text-primary-on-accent"]).toBe("HighlightText");
+      expect(palette["--focus-ring"]).toBe("Highlight");
+      expect(palette["--border-default"]).toBe("CanvasText");
+
+      for (const token of [
+        "--surface-topbar-thread-hover",
+        "--surface-topbar-popover",
+        "--surface-context-panel",
+        "--surface-context-panel-nested",
+        "--surface-settings-main",
+        "--surface-settings-nav-active",
+        "--surface-settings-nav-hover",
+        "--surface-settings-row-hover",
+      ]) {
+        expect(palette[token]).toBe("Canvas");
+      }
     }
-    expect(themeBridgeCss.match(/--color-accent:\s*Highlight;/g)).toHaveLength(2);
-    expect(themeBridgeCss.match(/--color-accent-foreground:\s*HighlightText;/g)).toHaveLength(2);
-    expect(themeBridgeCss.match(/--surface-opaque:\s*Canvas;/g)).toHaveLength(2);
+
+    expect(canvasHighContrast["--text-secondary"]).toBe("CanvasText");
+    expect(canvasHighContrast["--text-muted"]).toBe("GrayText");
+  });
+
+  test("selection pairs system highlight backgrounds with their foreground", () => {
+    expect(blockBody(stylesCss, "::selection")).toContain("color: inherit;");
+    expect(blockBody(stylesCss, ".is-user ::selection")).toContain("color: inherit;");
+
+    const highContrastSelection = blockBody(
+      stylesCss,
+      ':root[data-high-contrast="true"] ::selection',
+    );
+    const forcedColorsMedia = blockBody(stylesCss, "@media (forced-colors: active)");
+    const forcedColorsSelection = blockBody(forcedColorsMedia, ":root ::selection");
+
+    expect(highContrastSelection).toContain("color: var(--text-primary-on-accent);");
+    expect(stylesCss).toContain(':root[data-high-contrast="true"] .is-user ::selection');
+    expect(forcedColorsSelection).toContain("color: var(--text-primary-on-accent);");
+    expect(forcedColorsMedia).toContain(".is-user ::selection");
+  });
+
+  test("platform translucency cannot shadow app high-contrast surfaces", () => {
+    for (const selector of [
+      ':root[data-platform="darwin"]:not([data-reduced-transparency="true"]):not(',
+      ':root[data-platform="win32"]:not([data-reduced-transparency="true"]):not(',
+      ':root[data-platform="linux"]:not([data-reduced-transparency="true"]):not(',
+      ':root[data-reduced-transparency="true"]:not([data-high-contrast="true"])',
+    ]) {
+      expect(platformCss).toContain(selector);
+    }
+
+    const platformHighContrast = declarations(
+      blockBody(platformCss, ':root[data-high-contrast="true"]'),
+    );
+    expect(platformHighContrast["--surface-overlay"]).toBeUndefined();
+    expect(platformHighContrast["--surface-main-card"]).toBeUndefined();
   });
 });

@@ -158,6 +158,18 @@ samp {
   color: inherit;
 }
 
+:root[data-high-contrast="true"] ::selection,
+:root[data-high-contrast="true"] .is-user ::selection {
+  color: var(--text-primary-on-accent);
+}
+
+@media (forced-colors: active) {
+  :root ::selection,
+  :root .is-user ::selection {
+    color: var(--text-primary-on-accent);
+  }
+}
+
 :where(
   button,
   [role="button"],

@@ -341,7 +341,9 @@ function SettingsNavigation({
                       <Icon
                         className={cn(
                           "size-4 shrink-0",
-                          activePage === page.id ? "text-primary" : "text-muted-foreground",
+                          activePage === page.id
+                            ? "text-[var(--text-settings-nav-active-icon)]"
+                            : "text-muted-foreground",
                         )}
                       />
                       <span className="min-w-0 truncate">{page.label}</span>

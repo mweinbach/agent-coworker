@@ -194,6 +194,48 @@ describe("desktop token consumers", () => {
     expect(tokenUtilities).toMatch(/\.app-surface-opaque\s*\{[^}]*var\(--surface-opaque\)/s);
   });
 
+  test("high-contrast selected rows keep descendants on the selected foreground", () => {
+    const commandSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/command.tsx"),
+      "utf8",
+    );
+    const selectSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/select.tsx"),
+      "utf8",
+    );
+    const dropdownSource = readFileSync(
+      resolve(import.meta.dir, "../src/components/ui/dropdown-menu.tsx"),
+      "utf8",
+    );
+    const stylesCss = readFileSync(resolve(import.meta.dir, "../src/styles.css"), "utf8");
+    const themeBridgeSource = readFileSync(
+      resolve(import.meta.dir, "../src/styles/theme-bridge.css"),
+      "utf8",
+    );
+    const settingsSource = readFileSync(
+      resolve(import.meta.dir, "../src/ui/settings/SettingsShell.tsx"),
+      "utf8",
+    );
+
+    expect(themeBridgeSource).toContain("--color-accent: var(--surface-accent-interactive);");
+    expect(themeBridgeSource).toContain(
+      "--color-accent-foreground: var(--text-accent-foreground);",
+    );
+    expect(stylesCss).toMatch(
+      /\.settings-shell__nav-button--active\s*\{[^}]*background:\s*var\(--surface-settings-nav-active\);[^}]*color:\s*var\(--text-settings-nav-active\);/s,
+    );
+    expect(settingsSource).toContain("text-[var(--text-settings-nav-active-icon)]");
+    expect(commandSource).toContain(
+      "data-[selected=true]:[&_svg:not([class*='text-'])]:text-accent-foreground",
+    );
+    expect(commandSource).toContain(
+      "data-[selected=true]:[&_[data-slot='command-shortcut']_kbd]:text-accent-foreground",
+    );
+    expect(selectSource).toContain("focus:[&_svg:not([class*='text-'])]:text-accent-foreground");
+    expect(selectSource).not.toContain("data-[state=checked]:[&_svg:not([class*='text-'])]");
+    expect(dropdownSource).toContain("focus:[&_svg:not([class*='text-'])]:text-accent-foreground");
+  });
+
   test("selected file rows let icons and metadata inherit the accent foreground", () => {
     const explorerSource = readFileSync(
       resolve(import.meta.dir, "../src/ui/file-explorer/WorkspaceFileExplorer.tsx"),

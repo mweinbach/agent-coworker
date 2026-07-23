@@ -26,8 +26,8 @@
 
   --color-secondary: var(--surface-secondary);
   --color-secondary-foreground: var(--text-primary);
-  --color-accent: var(--surface-accent);
-  --color-accent-foreground: var(--text-primary);
+  --color-accent: var(--surface-accent-interactive);
+  --color-accent-foreground: var(--text-accent-foreground);
 
   --color-muted: var(--surface-muted-fill);
   --color-muted-foreground: var(--text-muted);
@@ -73,6 +73,7 @@
     --surface-opaque: var(--panel-bg);
     --surface-secondary: color-mix(in srgb, var(--accent-base) 12%, var(--panel-bg));
     --surface-accent: color-mix(in srgb, var(--accent-base) 14%, var(--panel-bg));
+    --surface-accent-interactive: var(--surface-accent);
     --surface-field: color-mix(in srgb, var(--panel-bg) 90%, var(--app-bg));
     --surface-muted-fill: color-mix(in srgb, var(--text-base) 6%, transparent);
     --surface-topbar-thread-hover: color-mix(in srgb, var(--content-surface) 60%, transparent);
@@ -88,6 +89,8 @@
       var(--panel-bg)
     );
     --surface-settings-nav-active: color-mix(in srgb, var(--accent-base) 12%, transparent);
+    --text-settings-nav-active: var(--text-primary);
+    --text-settings-nav-active-icon: var(--accent);
     --surface-settings-nav-hover: color-mix(in srgb, var(--foreground) 5%, transparent);
     --surface-settings-row-hover: color-mix(in srgb, var(--foreground) 4%, transparent);
     --surface-selection: color-mix(in srgb, var(--accent-base) 35%, transparent);
@@ -112,6 +115,7 @@
     );
 
     --text-primary: var(--text-base);
+    --text-accent-foreground: var(--text-primary);
     --text-secondary: color-mix(in srgb, var(--text-base) 88%, transparent);
     --text-muted: var(--muted-base);
     --text-emphasis: color-mix(in srgb, var(--text-base) 96%, transparent);
@@ -254,6 +258,7 @@
     --surface-opaque: Canvas;
     --surface-secondary: Canvas;
     --surface-accent: Canvas;
+    --surface-accent-interactive: Highlight;
     --surface-field: Field;
     --surface-muted-fill: Canvas;
     --surface-topbar-thread-hover: Canvas;
@@ -261,12 +266,15 @@
     --surface-context-panel: Canvas;
     --surface-context-panel-nested: Canvas;
     --surface-settings-main: Canvas;
-    --surface-settings-nav-active: Canvas;
+    --surface-settings-nav-active: Highlight;
+    --text-settings-nav-active: HighlightText;
+    --text-settings-nav-active-icon: HighlightText;
     --surface-settings-nav-hover: Canvas;
     --surface-settings-row-hover: Canvas;
     --surface-selection: Highlight;
     --surface-selection-inverse: Highlight;
     --text-primary: CanvasText;
+    --text-accent-foreground: HighlightText;
     --text-secondary: CanvasText;
     --text-muted: GrayText;
     --text-emphasis: CanvasText;
@@ -335,6 +343,7 @@
     --surface-opaque: Canvas;
     --surface-secondary: Canvas;
     --surface-accent: Highlight;
+    --surface-accent-interactive: Highlight;
     --surface-field: Field;
     --surface-muted-fill: Canvas;
     --surface-topbar-thread-hover: Canvas;
@@ -342,10 +351,13 @@
     --surface-context-panel: Canvas;
     --surface-context-panel-nested: Canvas;
     --surface-settings-main: Canvas;
-    --surface-settings-nav-active: Canvas;
+    --surface-settings-nav-active: Highlight;
+    --text-settings-nav-active: HighlightText;
+    --text-settings-nav-active-icon: HighlightText;
     --surface-settings-nav-hover: Canvas;
     --surface-settings-row-hover: Canvas;
     --text-primary: CanvasText;
+    --text-accent-foreground: HighlightText;
     --text-secondary: CanvasText;
     --text-muted: GrayText;
     --border-default: CanvasText;
@@ -387,6 +399,7 @@
     --surface-overlay: Canvas;
     --surface-secondary: Canvas;
     --surface-accent: Canvas;
+    --surface-accent-interactive: Highlight;
     --surface-field: Field;
     --surface-muted-fill: Canvas;
     --surface-topbar-thread-hover: Canvas;
@@ -394,12 +407,15 @@
     --surface-context-panel: Canvas;
     --surface-context-panel-nested: Canvas;
     --surface-settings-main: Canvas;
-    --surface-settings-nav-active: Canvas;
+    --surface-settings-nav-active: Highlight;
+    --text-settings-nav-active: HighlightText;
+    --text-settings-nav-active-icon: HighlightText;
     --surface-settings-nav-hover: Canvas;
     --surface-settings-row-hover: Canvas;
     --surface-selection: Highlight;
     --surface-selection-inverse: Highlight;
     --text-primary: CanvasText;
+    --text-accent-foreground: HighlightText;
     --text-secondary: CanvasText;
     --text-muted: GrayText;
     --text-emphasis: CanvasText;

@@ -445,6 +445,7 @@ samp {
 
 .settings-shell__nav-button--active {
   background: var(--surface-settings-nav-active);
+  color: var(--text-settings-nav-active);
   box-shadow: none;
 }
 

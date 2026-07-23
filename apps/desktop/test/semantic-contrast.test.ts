@@ -103,6 +103,10 @@ describe("desktop semantic contrast", () => {
   }
 
   test("semantic primary and focus colors do not reuse inverse text or translucent accent", () => {
+    expect(themeBridgeCss).toContain("--text-accent-foreground: var(--text-primary);");
+    expect(themeBridgeCss).toContain("--color-accent: var(--surface-accent-interactive);");
+    expect(themeBridgeCss).toContain("--surface-accent-interactive: var(--surface-accent);");
+    expect(themeBridgeCss).toContain("--color-accent-foreground: var(--text-accent-foreground);");
     expect(themeBridgeCss).toContain("--text-primary-on-accent: var(--primary-foreground-base);");
     expect(themeBridgeCss).toContain("--color-primary-foreground: var(--text-primary-on-accent);");
     expect(themeBridgeCss).toContain("--focus-ring: var(--focus-ring-base);");
@@ -110,6 +114,7 @@ describe("desktop semantic contrast", () => {
   });
 
   test("high contrast and forced-colors preserve semantic hierarchy and surfaces", () => {
+    expect(themeBridgeCss).toContain("--text-settings-nav-active-icon: var(--accent);");
     expect(themeBridgeCss).toMatch(/:root\[data-high-contrast="true"\]\s*\{/);
     expect(themeBridgeCss).toContain("@media (forced-colors: active)");
 
@@ -128,6 +133,8 @@ describe("desktop semantic contrast", () => {
 
     for (const palette of [highContrast, forcedColors]) {
       expect(palette["--surface-window"]).toBe("Canvas");
+      expect(palette["--surface-accent"]).toBe("Canvas");
+      expect(palette["--surface-accent-interactive"]).toBe("Highlight");
       expect(palette["--surface-card"]).toBe("Canvas");
       expect(palette["--surface-field"]).toBe("Field");
       expect(palette["--text-primary"]).toBe("CanvasText");
@@ -135,6 +142,7 @@ describe("desktop semantic contrast", () => {
       expect(palette["--text-muted"]).toBe("GrayText");
       expect(palette["--text-link"]).toBe("LinkText");
       expect(palette["--accent"]).toBe("Highlight");
+      expect(palette["--text-accent-foreground"]).toBe("HighlightText");
       expect(palette["--text-primary-on-accent"]).toBe("HighlightText");
       expect(palette["--focus-ring"]).toBe("Highlight");
       expect(palette["--border-default"]).toBe("CanvasText");
@@ -142,17 +150,33 @@ describe("desktop semantic contrast", () => {
       for (const token of [
         "--surface-topbar-thread-hover",
         "--surface-topbar-popover",
+        "--surface-accent-interactive",
         "--surface-context-panel",
         "--surface-context-panel-nested",
         "--surface-settings-main",
         "--surface-settings-nav-active",
+        "--text-accent-foreground",
+        "--text-settings-nav-active",
+        "--text-settings-nav-active-icon",
         "--surface-settings-nav-hover",
         "--surface-settings-row-hover",
       ]) {
-        expect(palette[token]).toBe("Canvas");
+        if (token === "--surface-settings-nav-active" || token === "--surface-accent-interactive") {
+          expect(palette[token]).toBe("Highlight");
+        } else if (
+          token === "--text-accent-foreground" ||
+          token === "--text-settings-nav-active" ||
+          token === "--text-settings-nav-active-icon"
+        ) {
+          expect(palette[token]).toBe("HighlightText");
+        } else {
+          expect(palette[token]).toBe("Canvas");
+        }
       }
     }
 
+    expect(canvasHighContrast["--surface-accent-interactive"]).toBe("Highlight");
+    expect(canvasHighContrast["--text-accent-foreground"]).toBe("HighlightText");
     expect(canvasHighContrast["--text-secondary"]).toBe("CanvasText");
     expect(canvasHighContrast["--text-muted"]).toBe("GrayText");
   });

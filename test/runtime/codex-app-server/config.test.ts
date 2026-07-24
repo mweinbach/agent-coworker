@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   normalizeEffort,
+  normalizeSummaryForModel,
   resolveEffectiveCodexModel,
 } from "../../../src/runtime/codexAppServer/config";
 
@@ -17,6 +18,17 @@ function modelListClient(models: unknown[]) {
 describe("codex app-server model resolution", () => {
   test("passes the GPT-5.6 max effort through to app-server", () => {
     expect(normalizeEffort("max")).toBe("max");
+  });
+
+  test("omits reasoning summaries for Spark and keeps them for summary-capable models", () => {
+    expect(normalizeSummaryForModel("gpt-5.3-codex-spark", "detailed")).toBeUndefined();
+    expect(normalizeSummaryForModel("gpt-5.3-codex-spark", "auto")).toBeUndefined();
+    expect(normalizeSummaryForModel("gpt-5.3-codex-spark", undefined)).toBeUndefined();
+
+    expect(normalizeSummaryForModel("gpt-5.4", "detailed")).toBe("detailed");
+    expect(normalizeSummaryForModel("gpt-5.4", "concise")).toBe("concise");
+    expect(normalizeSummaryForModel("gpt-5.4", "unsupported")).toBeUndefined();
+    expect(normalizeSummaryForModel("gpt-5.4", undefined)).toBeUndefined();
   });
 
   test("honors an explicitly selected GPT-5.6 tier when available", async () => {

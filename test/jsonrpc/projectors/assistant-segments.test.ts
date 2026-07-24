@@ -202,4 +202,87 @@ describe("JSON-RPC projectors", () => {
     expect(assistantCompleted).toHaveLength(1);
     expect(String(assistantCompleted[0]?.payload?.item?.text ?? "")).toBe("Final answer.");
   });
+
+  test("notification projector micro-batches rapid assistant deltas into one emit before text_end", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "Hel" }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "lo " }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "world" }));
+    // Before the 16ms timer fires, a non-delta boundary must flush the batch.
+    expect(outbound.filter((message) => message.method === "item/agentMessage/delta")).toHaveLength(
+      0,
+    );
+
+    projector.handle(streamChunk("text_end", { id: "s0" }));
+    projector.handle({
+      type: "assistant_message",
+      sessionId,
+      text: "Hello world",
+    });
+
+    const assistantDeltas = outbound
+      .filter((message) => message.method === "item/agentMessage/delta")
+      .map((message) => String(message.params?.delta ?? ""));
+    expect(assistantDeltas).toEqual(["Hello world"]);
+
+    const assistantCompleted = outbound
+      .filter((message) => message.method === "item/completed")
+      .filter((message) => message.params?.item?.type === "agentMessage");
+    expect(assistantCompleted.map((message) => String(message.params?.item?.text ?? ""))).toEqual([
+      "Hello world",
+    ]);
+  });
+
+  test("journal projector micro-batches rapid assistant deltas into one emit before text_end", () => {
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const projector = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "Hel" }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "lo " }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "world" }));
+    expect(emissions.filter((event) => event.eventType === "item/agentMessage/delta")).toHaveLength(
+      0,
+    );
+
+    projector.handle(streamChunk("text_end", { id: "s0" }));
+    projector.handle({
+      type: "assistant_message",
+      sessionId,
+      text: "Hello world",
+    });
+
+    const assistantDeltas = emissions
+      .filter((event) => event.eventType === "item/agentMessage/delta")
+      .map((event) => String(event.payload?.delta ?? ""));
+    expect(assistantDeltas).toEqual(["Hello world"]);
+
+    const assistantCompleted = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .filter((event) => event.payload?.item?.type === "agentMessage");
+    expect(assistantCompleted.map((event) => String(event.payload?.item?.text ?? ""))).toEqual([
+      "Hello world",
+    ]);
+  });
 });

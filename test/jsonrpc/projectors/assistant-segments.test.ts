@@ -221,9 +221,9 @@ describe("JSON-RPC projectors", () => {
     projector.handle(streamChunk("text_delta", { id: "s0", text: "lo " }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "world" }));
     // Before the 16ms timer fires, a non-delta boundary must flush the batch.
-    expect(
-      outbound.filter((message) => message.method === "item/agentMessage/delta"),
-    ).toHaveLength(0);
+    expect(outbound.filter((message) => message.method === "item/agentMessage/delta")).toHaveLength(
+      0,
+    );
 
     projector.handle(streamChunk("text_end", { id: "s0" }));
     projector.handle({
@@ -262,9 +262,9 @@ describe("JSON-RPC projectors", () => {
     projector.handle(streamChunk("text_delta", { id: "s0", text: "Hel" }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "lo " }));
     projector.handle(streamChunk("text_delta", { id: "s0", text: "world" }));
-    expect(
-      emissions.filter((event) => event.eventType === "item/agentMessage/delta"),
-    ).toHaveLength(0);
+    expect(emissions.filter((event) => event.eventType === "item/agentMessage/delta")).toHaveLength(
+      0,
+    );
 
     projector.handle(streamChunk("text_end", { id: "s0" }));
     projector.handle({

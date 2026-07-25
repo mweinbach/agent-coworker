@@ -335,9 +335,15 @@ export function createWorkspaceDefaultsActions(
     ) {
       configPatch.childModelRoutingMode = opts.desired.childModelRoutingMode;
     }
+    // The ref is the canonical form of the same setting, and the server drops a
+    // stale ref whenever the legacy field is patched alone — which then makes it
+    // resolve a bare model id against the chat provider and reject the whole
+    // write (e.g. a Google subagent model left over after switching to
+    // codex-cli). Send them as a pair whenever either one moves.
     if (
       opts.desired.preferredChildModelRef &&
-      opts.desired.preferredChildModelRef !== currentSessionConfig.preferredChildModelRef
+      (configPatch.preferredChildModel !== undefined ||
+        opts.desired.preferredChildModelRef !== currentSessionConfig.preferredChildModelRef)
     ) {
       configPatch.preferredChildModelRef = opts.desired.preferredChildModelRef;
     }
@@ -609,17 +615,25 @@ export function createWorkspaceDefaultsActions(
           })
         : null;
 
+    const applyFailure: { message?: string } = {};
     const persisted = controlReady
       ? !controlMessage ||
-        (await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
-          cwd: workspacePath,
-          ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
-          ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
-          ...(controlMessage.enableMcp !== undefined
-            ? { enableMcp: controlMessage.enableMcp }
-            : {}),
-          ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
-        }))
+        (await requestJsonRpcControlEvent(
+          get,
+          set,
+          workspaceId,
+          "cowork/session/defaults/apply",
+          {
+            cwd: workspacePath,
+            ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
+            ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
+            ...(controlMessage.enableMcp !== undefined
+              ? { enableMcp: controlMessage.enableMcp }
+              : {}),
+            ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
+          },
+          applyFailure,
+        ))
       : false;
 
     if (persisted && controlMessage) {
@@ -664,7 +678,14 @@ export function createWorkspaceDefaultsActions(
     }
 
     if (!persisted && opts.userInitiated) {
-      throw new Error("Cowork could not apply these settings to the running workspace.");
+      // The server's own rejection reason is the only actionable part of this
+      // failure, so it goes in the message rather than being swallowed.
+      const detail = applyFailure.message?.trim();
+      throw new Error(
+        detail
+          ? `Cowork could not apply these settings to the running workspace: ${detail}`
+          : "Cowork could not apply these settings to the running workspace.",
+      );
     }
 
     const threadIds = get()

@@ -112,6 +112,65 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().notifications).toHaveLength(0);
   });
 
+  test("keeps the preferred subagent model and its ref together in one patch", async () => {
+    // Reproduces a real workspace: the chat provider moved to codex-cli while a
+    // Google subagent model stayed saved. Sending the legacy model id alone made
+    // the server drop the ref, resolve "gemini-3.1-pro-preview" against
+    // codex-cli, and reject every settings write with a validation error.
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: [
+        {
+          ...state.workspaces[0]!,
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          defaultPreferredChildModel: "gemini-3.1-pro-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3.1-pro-preview",
+          defaultAllowedChildModelRefs: [],
+        },
+      ],
+    }));
+    // The live session already reports the ref the workspace wants, so the ref
+    // diff alone does not fire and only the legacy field would be patched.
+    const liveSessionConfig = {
+      yolo: false,
+      preferredChildModel: "gpt-5.4",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "google:gemini-3.1-pro-preview",
+      allowedChildModelRefs: [],
+    };
+    jsonRpcResponseOverrides.set("cowork/session/state/read", async () => ({
+      events: [
+        {
+          type: "config_updated",
+          sessionId: "jsonrpc-control",
+          config: { provider: "codex-cli", model: "gpt-5.4", workingDirectory: "/tmp/workspace" },
+        },
+        { type: "session_config", sessionId: "jsonrpc-control", config: liveSessionConfig },
+      ],
+    }));
+    setControlSessionConfigResponse(liveSessionConfig);
+    await requestJsonRpcControlEvent(
+      useAppStore.getState,
+      useAppStore.setState,
+      workspaceId,
+      "cowork/session/state/read",
+      { cwd: "/tmp/workspace" },
+    );
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultPreferredChildModel: "gemini-3.1-pro-preview",
+    });
+
+    const applied = latestRequest("cowork/session/defaults/apply")?.params as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    expect(applied?.config?.preferredChildModel).toBe("gemini-3.1-pro-preview");
+    expect(applied?.config?.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
+  });
+
   test("shared workspace defaults copy the complete settings shape into one-off chats", async () => {
     useAppStore.setState((state) => ({
       ...state,
@@ -391,10 +450,12 @@ describe("workspace settings sync", () => {
       },
     });
 
+    // The server's rejection reason is carried through instead of being replaced
+    // by a generic message — that detail is the only actionable part.
     expect(result).toMatchObject({
       ok: false,
       error: {
-        message: "Cowork could not apply these settings to the running workspace.",
+        message: "Cowork could not apply these settings to the running workspace: boom",
         repairAction: "Retry, or restart the workspace if it keeps failing.",
       },
     });

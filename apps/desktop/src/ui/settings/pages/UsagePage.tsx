@@ -360,7 +360,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                       <span className="font-medium text-foreground text-sm capitalize">
                         {group.provider}
                       </span>
-                      <Badge variant="secondary" className="text-[10px] uppercase h-5">
+                      <Badge variant="secondary" className="text-xs uppercase h-5">
                         {group.models.length} model{group.models.length === 1 ? "" : "s"}
                       </Badge>
                     </div>

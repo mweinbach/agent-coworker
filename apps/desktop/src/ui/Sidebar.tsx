@@ -583,13 +583,13 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/75">
+          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
             Chats
           </span>
           <Button
             aria-expanded={chatsOpen}
             aria-label={chatsOpen ? "Collapse chats" : "Expand chats"}
-            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
             size="icon-sm"
@@ -616,7 +616,7 @@ export const Sidebar = memo(function Sidebar() {
       </div>
       {chatsOpen ? (
         oneOffChatThreads.length === 0 ? (
-          <div className="px-3 py-2 text-[12px] text-muted-foreground/60 italic">No chats yet</div>
+          <div className="px-3 py-2 text-[12px] app-text-muted italic">No chats yet</div>
         ) : (
           <div className="flex flex-col gap-1">
             <div
@@ -674,13 +674,13 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/75">
+          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
             Projects
           </span>
           <Button
             aria-expanded={projectsOpen}
             aria-label={projectsOpen ? "Collapse projects" : "Expand projects"}
-            className="size-6 shrink-0 rounded-md bg-transparent text-muted-foreground/75 hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
             size="icon-sm"
@@ -711,10 +711,7 @@ export const Sidebar = memo(function Sidebar() {
         projectWorkspaces.length === 0 ? (
           <div className="flex flex-col">
             <div className="rounded-md border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
-              <FolderPlusIcon
-                strokeWidth={1.5}
-                className="mx-auto mb-2 h-6 w-6 text-muted-foreground/70"
-              />
+              <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 app-text-muted" />
               <div>No projects yet</div>
               {workspaceLifecycleEnabled ? (
                 <Button
@@ -762,7 +759,7 @@ export const Sidebar = memo(function Sidebar() {
               size="sm"
               aria-current={isOnNewChatLanding ? "page" : undefined}
               className={cn(
-                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
                 "hover:bg-foreground/[0.045] hover:text-foreground",
                 isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
               )}
@@ -780,7 +777,7 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={isOnNewChatLanding ? "page" : undefined}
           className={cn(
-            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
             "hover:bg-foreground/[0.045] hover:text-foreground",
             isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
           )}
@@ -810,10 +807,7 @@ export const Sidebar = memo(function Sidebar() {
         >
           <MessageCircleQuestionIcon data-icon="inline-start" />
           Needs input
-          <Badge
-            variant="outline"
-            className="ml-auto h-5 min-w-5 justify-center px-1.5 text-[10px]"
-          >
+          <Badge variant="outline" className="ml-auto h-5 min-w-5 justify-center px-1.5 text-xs">
             {interactionCount}
           </Badge>
         </Button>
@@ -824,7 +818,7 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
             "hover:bg-foreground/[0.045] hover:text-foreground",
             effectiveView === "task" &&
               selectedTaskId === null &&
@@ -842,7 +836,7 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={effectiveView === "research" ? "page" : undefined}
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
             "hover:bg-foreground/[0.045] hover:text-foreground",
             effectiveView === "research" && "bg-foreground/[0.055] text-foreground",
           )}
@@ -855,7 +849,7 @@ export const Sidebar = memo(function Sidebar() {
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
             "hover:bg-foreground/[0.045] hover:text-foreground",
           )}
           onClick={() => void openSkills()}
@@ -889,7 +883,7 @@ export const Sidebar = memo(function Sidebar() {
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/78",
+            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
             "hover:bg-foreground/[0.045] hover:text-foreground",
             view === "settings" && "bg-foreground/[0.055] text-foreground",
           )}

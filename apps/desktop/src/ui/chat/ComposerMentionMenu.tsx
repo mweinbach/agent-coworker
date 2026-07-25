@@ -145,7 +145,7 @@ export function ComposerMentionMenu(props: {
               <div
                 id={headingId}
                 role="presentation"
-                className="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="px-2 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
                 {group.kind === "skill" ? "Skills" : "Plugins"}
               </div>
@@ -187,7 +187,7 @@ export function ComposerMentionMenu(props: {
                         </span>
                       ) : null}
                     </div>
-                    <Badge variant="secondary" className="ml-auto shrink-0 text-[10px]">
+                    <Badge variant="secondary" className="ml-auto shrink-0 text-xs">
                       {item.badge}
                     </Badge>
                   </div>

@@ -232,7 +232,7 @@ function DaySeparatorRow(props: { label: string }) {
   return (
     <div className="flex w-full items-center gap-3 py-1" data-slot="day-separator">
       <div className="h-px flex-1 bg-border/40" />
-      <span className="shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground/80">
+      <span className="shrink-0 text-xs font-medium tracking-wide text-muted-foreground/80">
         {props.label}
       </span>
       <div className="h-px flex-1 bg-border/40" />

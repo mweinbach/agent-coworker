@@ -315,7 +315,7 @@ export function InstallSkillDialog({
                 <div className="font-medium text-foreground">
                   {skillPreview ? skillPreviewSummary(skillPreview) : "No skill preview"}
                 </div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
+                <div className="mt-1 text-xs text-muted-foreground">
                   Previewed for{" "}
                   {skillPreview?.targetScope ? skillTargetLabel(skillPreview.targetScope) : "skill"}{" "}
                   install.
@@ -331,11 +331,11 @@ export function InstallSkillDialog({
                           <div className="truncate font-medium text-foreground">
                             {candidate.name}
                           </div>
-                          <div className="truncate text-[11px] text-muted-foreground">
+                          <div className="truncate text-xs text-muted-foreground">
                             {candidate.relativeRootPath}
                           </div>
                         </div>
-                        <div className="shrink-0 text-[11px] text-muted-foreground">
+                        <div className="shrink-0 text-xs text-muted-foreground">
                           {candidate.conflictsWithScope
                             ? skillScopeLabel(candidate.conflictsWithScope)
                             : candidate.wouldBeEffective
@@ -343,11 +343,11 @@ export function InstallSkillDialog({
                               : "Shadowed"}
                         </div>
                       </div>
-                      <div className="mt-1 text-[11px] text-muted-foreground">
+                      <div className="mt-1 text-xs text-muted-foreground">
                         {candidate.description}
                       </div>
                       {candidate.diagnostics.length > 0 ? (
-                        <div className="mt-2 space-y-1 text-[11px] text-destructive">
+                        <div className="mt-2 space-y-1 text-xs text-destructive">
                           {candidate.diagnostics.map((diagnostic) => (
                             <div key={`${candidate.name}:${diagnostic.code}`}>
                               {diagnostic.message}
@@ -359,7 +359,7 @@ export function InstallSkillDialog({
                   ))}
                 </div>
                 {(skillPreview?.warnings?.length ?? 0) > 0 ? (
-                  <div className="mt-2 space-y-1 text-[11px] text-destructive">
+                  <div className="mt-2 space-y-1 text-xs text-destructive">
                     {skillPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
@@ -375,7 +375,7 @@ export function InstallSkillDialog({
             ) : null}
             <OperationFeedback operation={installOperation} />
             {dialogError && lastMutationTargetScope ? (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 Last attempted target: {skillTargetLabel(lastMutationTargetScope)}.
               </div>
             ) : null}
@@ -385,7 +385,7 @@ export function InstallSkillDialog({
               </div>
             ) : null}
             {showPreview && projectScopeAvailable ? (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 To install to{" "}
                 {lastPreviewTargetScope === "project" ? "Cowork Library" : "workspace"}, run a new
                 preview for that scope first.

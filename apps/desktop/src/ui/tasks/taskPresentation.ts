@@ -18,7 +18,7 @@ export function formatTaskStatus(status: TaskStatus): string {
 export function taskStatusBadgeClassName(status: TaskStatus): string {
   if (status === "completed") return "border-success/30 bg-success/10 text-foreground";
   if (status === "blocked" || status === "failed") {
-    return "border-destructive/30 bg-destructive/5 text-destructive";
+    return "border-destructive/30 bg-destructive/5 text-foreground";
   }
   if (status === "awaiting_review") return "border-primary/30 bg-primary/10 text-primary";
   if (status === "cancelled") return "text-muted-foreground";

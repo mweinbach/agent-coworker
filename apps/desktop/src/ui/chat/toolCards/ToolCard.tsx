@@ -153,7 +153,7 @@ function ToolHeader({
                   ? "outline"
                   : "secondary"
             }
-            className="mt-0.5 gap-1 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.14em]"
+            className="mt-0.5 gap-1 px-1.5 py-0 text-xs font-semibold uppercase tracking-[0.14em]"
           >
             <ToolStatusIcon state={state} />
             <span>{stateLabel[state]}</span>
@@ -183,7 +183,7 @@ function ToolHeader({
             {title}
           </div>
           {subtitle ? (
-            <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{subtitle}</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{subtitle}</div>
           ) : null}
         </div>
       </div>
@@ -196,7 +196,7 @@ function ToolHeader({
                 ? "outline"
                 : "secondary"
           }
-          className="gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+          className="gap-1.5 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide"
         >
           <ToolStatusIcon state={state} />
           <span>{stateLabel[state]}</span>
@@ -252,7 +252,7 @@ function ToolCodeBlock({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+        <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/60">
           {label}
         </div>
         <div className="flex items-center gap-1">
@@ -260,7 +260,7 @@ function ToolCodeBlock({
             type="button"
             onClick={handleCopy}
             aria-label={copied ? "Copied" : "Copy"}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {copied ? (
               <CheckIcon className="size-3 text-success" />
@@ -274,7 +274,7 @@ function ToolCodeBlock({
             onClick={() => setExpanded((current) => !current)}
             aria-label={expanded ? "Collapse" : "Expand"}
             aria-expanded={expanded}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ChevronDownIcon
               className={cn("size-3 transition-transform", expanded && "rotate-180")}
@@ -285,11 +285,9 @@ function ToolCodeBlock({
       </div>
       <pre
         className={cn(
-          "overflow-auto rounded-lg bg-foreground/[0.04] p-3 text-[11px] leading-relaxed",
+          "overflow-auto rounded-lg bg-foreground/[0.04] p-3 text-xs leading-relaxed",
           expanded ? "max-h-none" : "max-h-72",
-          tone === "error"
-            ? "bg-destructive/[0.06] text-destructive"
-            : "text-foreground/80",
+          tone === "error" ? "bg-destructive/[0.06] text-destructive" : "text-foreground/80",
         )}
       >
         {value}
@@ -365,7 +363,7 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
                   key={`${props.name}-${row.label}`}
                   className="rounded-lg bg-foreground/[0.04] px-2.5 py-2"
                 >
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     {row.label}
                   </div>
                   <div className="mt-1 break-words text-xs leading-5 text-foreground/85">

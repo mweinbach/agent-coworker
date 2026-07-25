@@ -15,6 +15,7 @@ export type AppTheme = {
   textSecondary: string;
   textTertiary: string;
   primary: string;
+  primaryPressed: string;
   primaryMuted: string;
   primaryText: string;
   success: string;
@@ -22,6 +23,7 @@ export type AppTheme = {
   warning: string;
   warningMuted: string;
   danger: string;
+  dangerText: string;
   dangerMuted: string;
   accent: string;
   accentMuted: string;
@@ -45,6 +47,7 @@ function buildAppTheme(scheme: "light" | "dark"): AppTheme {
     textSecondary: tokens.textMuted,
     textTertiary: tokens.textSubtle,
     primary: tokens.accent,
+    primaryPressed: tokens.accentPressed,
     primaryMuted: tokens.accentSoft,
     primaryText: tokens.accentForeground,
     success: tokens.success,
@@ -52,6 +55,7 @@ function buildAppTheme(scheme: "light" | "dark"): AppTheme {
     warning: tokens.warning,
     warningMuted: tokens.warningSoft,
     danger: tokens.danger,
+    dangerText: tokens.dangerForeground,
     dangerMuted: tokens.dangerSoft,
     accent: tokens.accent,
     accentMuted: tokens.accentSoft,

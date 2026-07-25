@@ -213,7 +213,7 @@ export function ConnectPage({
                   className="h-auto w-full flex-col items-start justify-start gap-0.5 px-3 py-2 text-left whitespace-normal"
                 >
                   <span className="text-[13px] font-semibold text-foreground">{ws.name}</span>
-                  <span className="text-[11px] font-normal text-muted-foreground">{ws.path}</span>
+                  <span className="text-xs font-normal text-muted-foreground">{ws.path}</span>
                 </Button>
               ))}
             </div>
@@ -236,7 +236,7 @@ export function ConnectPage({
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
-          className={`bg-transparent p-0 text-[11px] text-muted-foreground hover:text-foreground ${
+          className={`bg-transparent p-0 text-xs text-muted-foreground hover:text-foreground ${
             showAdvanced ? "mb-3" : ""
           }`}
         >
@@ -259,15 +259,15 @@ export function ConnectPage({
               onKeyDown={handleKeyDown}
               placeholder="ws://127.0.0.1:7337/ws"
             />
-            <p className="m-0 text-[11px] text-muted-foreground">
+            <p className="m-0 text-xs text-muted-foreground">
               Defaults to same-origin via the Vite dev proxy. Override to point at a different
               Cowork server.
             </p>
           </div>
         ) : null}
 
-        <p className="mt-4 mb-0 text-[11px] text-muted-foreground">
-          Tip: <code className="text-[11px]">bun run desktop:web -- --dir /path/to/project</code>
+        <p className="mt-4 mb-0 text-xs text-muted-foreground">
+          Tip: <code className="text-xs">bun run desktop:web -- --dir /path/to/project</code>
         </p>
       </div>
     </div>

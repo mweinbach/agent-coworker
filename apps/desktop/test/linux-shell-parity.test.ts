@@ -42,7 +42,7 @@ describe("linux desktop shell parity", () => {
     const css = readPlatformTokensCss();
 
     const linuxTokenRule = css.match(
-      /:root\[data-platform="linux"\]:not\(\[data-reduced-transparency="true"\]\)\s*\{([^}]*)\}/s,
+      /:root\[data-platform="linux"\]:not\(\[data-reduced-transparency="true"\]\):not\(\s*\[data-high-contrast="true"\]\s*\)\s*\{([^}]*)\}/s,
     );
 
     expect(linuxTokenRule).not.toBeNull();

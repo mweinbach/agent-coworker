@@ -7,7 +7,7 @@ import {
   minimumTouchTarget,
   useReducedMotionEnabled,
 } from "@/features/accessibility/mobile-accessibility";
-import { alpha, radius } from "@/theme/tokens";
+import { radius } from "@/theme/tokens";
 import { type AppTheme, useAppTheme } from "@/theme/use-app-theme";
 
 import { SFSymbol } from "./sf-symbol";
@@ -55,7 +55,7 @@ function resolveVariant(variant: AppButtonVariant, theme: AppTheme): VariantStyl
     case "primary":
       return {
         background: theme.primary,
-        pressedBackground: theme.primaryMuted,
+        pressedBackground: theme.primaryPressed,
         label: theme.primaryText,
       };
     case "secondary":
@@ -68,9 +68,8 @@ function resolveVariant(variant: AppButtonVariant, theme: AppTheme): VariantStyl
     case "destructive":
       return {
         background: theme.danger,
-        pressedBackground: alpha(theme.danger, 0.85),
-        // Desktop destructive uses text-white in both schemes.
-        label: "#ffffff",
+        pressedBackground: theme.danger,
+        label: theme.dangerText,
       };
     case "outline":
       return {

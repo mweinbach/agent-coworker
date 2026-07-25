@@ -132,7 +132,7 @@ function ErrorFeedRow(props: { message: string }) {
               type="button"
               onClick={handleCopy}
               aria-label={copied ? "Copied" : "Copy error"}
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {copied ? (
                 <CheckIcon className="size-3 text-success" />
@@ -146,7 +146,7 @@ function ErrorFeedRow(props: { message: string }) {
               onClick={() => setExpanded((e) => !e)}
               aria-label={expanded ? "Collapse" : "Show full error"}
               aria-expanded={expanded}
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {expanded ? "Less" : "More"}
             </button>
@@ -173,20 +173,20 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 select-none">
-        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-foreground/90">
+        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-foreground/90">
           <FileGlyph className="size-3 shrink-0 text-primary/80" />
           <span className="max-w-[200px] truncate" title={request.fileName ?? undefined}>
             {request.fileName ?? fallbackName}
           </span>
         </span>
         {request.sheet ? (
-          <span className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 text-xs text-muted-foreground">
             <Table2Icon className="size-3 shrink-0" />
             {request.sheet}
           </span>
         ) : null}
         {request.region ? (
-          <span className="inline-flex items-center rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+          <span className="inline-flex items-center rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
             {request.region}
           </span>
         ) : null}

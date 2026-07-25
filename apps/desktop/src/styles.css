@@ -158,6 +158,193 @@ samp {
   color: inherit;
 }
 
+:root[data-high-contrast="true"] ::selection,
+:root[data-high-contrast="true"] .is-user ::selection {
+  color: var(--text-primary-on-accent);
+}
+
+:where(:root[data-high-contrast="true"])
+  [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
+  --danger: var(--text-accent-foreground);
+  background: var(--surface-accent-interactive);
+  color: var(--text-accent-foreground);
+}
+
+:where(:root[data-high-contrast="true"]) [data-slot="command-item"][data-selected="true"] {
+  /* biome-ignore lint/complexity/noImportantStyles: selected command rows must override caller background utilities */
+  background: var(--surface-accent-interactive) !important;
+}
+
+:where(:root[data-high-contrast="true"])
+  :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-accent-foreground) !important;
+}
+
+:where(:root[data-high-contrast="true"])
+  :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus)
+  :where(*):not(
+    [hidden],
+    .sr-only,
+    [hidden] *,
+    .sr-only *,
+    input,
+    textarea,
+    select,
+    button,
+    [contenteditable="true"],
+    input *,
+    textarea *,
+    select *,
+    button *,
+    [contenteditable="true"] *
+  ) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-accent-foreground) !important;
+}
+
+:where(:root[data-high-contrast="true"]) .app-selected-row:not([hidden], .sr-only) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-selected-row) !important;
+}
+
+:where(:root[data-high-contrast="true"])
+  .app-selected-row:not([hidden], .sr-only)
+  :where(*):not(
+    [hidden],
+    .sr-only,
+    [hidden] *,
+    .sr-only *,
+    :where(
+      .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]),
+      .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"])
+    ),
+    :where(
+      .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]) *,
+      .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"]) *
+    )
+  ) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+  color: var(--text-selected-row) !important;
+}
+
+@media (forced-colors: active) {
+  :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
+    --danger: var(--text-accent-foreground);
+    background: var(--surface-accent-interactive);
+    color: var(--text-accent-foreground);
+  }
+  :root ::selection,
+  :root .is-user ::selection {
+    color: var(--text-primary-on-accent);
+  }
+
+  :where(:root) [data-slot="command-item"][data-selected="true"] {
+    /* biome-ignore lint/complexity/noImportantStyles: selected command rows must override caller background utilities */
+    background: var(--surface-accent-interactive) !important;
+  }
+
+  :where(:root)
+    :where(
+      [data-slot="command-item"][data-selected="true"],
+      [data-slot="dropdown-menu-item"]:focus
+    ) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-accent-foreground) !important;
+  }
+
+  :where(:root)
+    :where([data-slot="command-item"][data-selected="true"], [data-slot="dropdown-menu-item"]:focus)
+    :where(*):not(
+      [hidden],
+      .sr-only,
+      [hidden] *,
+      .sr-only *,
+      input,
+      textarea,
+      select,
+      button,
+      [contenteditable="true"],
+      input *,
+      textarea *,
+      select *,
+      button *,
+      [contenteditable="true"] *
+    ) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-accent-foreground) !important;
+  }
+
+  :where(:root) .app-selected-row:not([hidden], .sr-only) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-selected-row) !important;
+  }
+
+  :where(:root)
+    .app-selected-row:not([hidden], .sr-only)
+    :where(*):not(
+      [hidden],
+      .sr-only,
+      [hidden] *,
+      .sr-only *,
+      :where(
+        .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]),
+        .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"])
+      ),
+      :where(
+        .app-selected-row > :is(input, textarea, select, button, [contenteditable="true"]) *,
+        .app-selected-row > * :is(input, textarea, select, button, [contenteditable="true"]) *
+      )
+    ) {
+    /* biome-ignore lint/complexity/noImportantStyles: selected accessibility rows must override explicit child color utilities */
+    color: var(--text-selected-row) !important;
+  }
+
+  :root [data-slot="switch"][data-state="unchecked"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch track must override generated state background utilities */
+    background-color: CanvasText !important;
+  }
+
+  :root [data-slot="switch"][data-state="unchecked"] [data-slot="switch-thumb"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
+    background-color: Canvas !important;
+  }
+
+  :root [data-slot="switch"][data-state="checked"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch track must override generated state background utilities */
+    background-color: Highlight !important;
+  }
+
+  :root [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+    /* biome-ignore lint/complexity/noImportantStyles: forced-colors Switch thumb must override generated state background utilities */
+    background-color: HighlightText !important;
+  }
+}
+
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="unchecked"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch track must override generated state background utilities */
+  background-color: CanvasText !important;
+}
+
+:root[data-high-contrast="true"]
+  [data-slot="switch"][data-state="unchecked"]
+  [data-slot="switch-thumb"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
+  background-color: Canvas !important;
+}
+
+:root[data-high-contrast="true"] [data-slot="switch"][data-state="checked"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch track must override generated state background utilities */
+  background-color: Highlight !important;
+}
+
+:root[data-high-contrast="true"]
+  [data-slot="switch"][data-state="checked"]
+  [data-slot="switch-thumb"] {
+  /* biome-ignore lint/complexity/noImportantStyles: accessibility Switch thumb must override generated state background utilities */
+  background-color: HighlightText !important;
+}
+
 :where(
   button,
   [role="button"],
@@ -433,6 +620,7 @@ samp {
 
 .settings-shell__nav-button--active {
   background: var(--surface-settings-nav-active);
+  color: var(--text-settings-nav-active);
   box-shadow: none;
 }
 

@@ -6,8 +6,8 @@ import { SkillImprover } from "../src/skillImprovement";
 import { __internalSkillImprover } from "../src/skillImprovement/SkillImprover";
 import type { SkillImproverRunInput } from "../src/skillImprovement/types";
 import type { AgentConfig } from "../src/types";
-import { makeConfig } from "./session/agentSession.harness";
 import { symlinkOrJunction } from "./helpers/platform";
+import { makeConfig } from "./session/agentSession.harness";
 
 const { resolveInsideRoot } = __internalSkillImprover;
 
@@ -80,7 +80,9 @@ describe("SkillImprover sandbox", () => {
     const { root, skillRoot } = await makeSkillDir();
     const outsideFile = path.join(root, "outside.txt");
     await fs.writeFile(outsideFile, "secret", "utf-8");
-    const link = await symlinkOrJunction(outsideFile, path.join(skillRoot, "evil.txt"), { type: "file" });
+    const link = await symlinkOrJunction(outsideFile, path.join(skillRoot, "evil.txt"), {
+      type: "file",
+    });
     if (!link.created) return;
     await expect(resolveInsideRoot(skillRoot, "evil.txt")).rejects.toThrow(/escapes/);
   });

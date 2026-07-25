@@ -92,7 +92,7 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[selected=true]:[&_svg:not([class*='text-'])]:text-accent-foreground data-[selected=true]:[&_[data-slot='command-shortcut']]:text-accent-foreground data-[selected=true]:[&_[data-slot='command-shortcut']_kbd]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
         className,
       )}
       {...props}
@@ -105,7 +105,7 @@ function CommandShortcut({ className, ...props }: React.ComponentProps<"span">) 
     <span
       data-slot="command-shortcut"
       className={cn(
-        "ml-auto inline-flex items-center gap-0.5 text-[11px] tracking-wide text-muted-foreground/80",
+        "ml-auto inline-flex items-center gap-0.5 text-xs tracking-wide text-muted-foreground/80",
         className,
       )}
       {...props}
@@ -120,7 +120,7 @@ function CommandKbd({ keys }: { keys: string[] }) {
       {keys.map((key) => (
         <kbd
           key={key}
-          className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/50 px-1 font-sans text-[10px] font-medium text-muted-foreground"
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/70 bg-muted/50 px-1 font-sans text-xs font-medium text-muted-foreground"
         >
           {key}
         </kbd>

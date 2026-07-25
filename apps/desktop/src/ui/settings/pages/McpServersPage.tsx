@@ -901,11 +901,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     <span className="truncate text-sm font-medium text-foreground">
                       {server.name}
                     </span>
-                    <Badge variant="secondary" className="h-5 text-[10px]">
+                    <Badge variant="secondary" className="h-5 text-xs">
                       {sourceLabel(server.source)}
                     </Badge>
                     {!serverEnabled ? (
-                      <Badge variant="secondary" className="h-5 text-[10px]">
+                      <Badge variant="secondary" className="h-5 text-xs">
                         Disabled
                       </Badge>
                     ) : null}
@@ -921,7 +921,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     <button
                       type="button"
                       aria-label={`Authenticate ${server.name}`}
-                      className="inline-flex h-6 shrink-0 items-center rounded-md border border-warning/35 bg-warning/12 px-2 text-[11px] font-medium text-warning-foreground shadow-none outline-none transition-colors hover:bg-warning/20 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      className="inline-flex h-6 shrink-0 items-center rounded-md border border-warning/35 bg-warning/12 px-2 text-xs font-medium text-warning-foreground shadow-none outline-none transition-colors hover:bg-warning/20 focus-visible:ring-[3px] focus-visible:ring-ring"
                       onClick={(event) => {
                         event.stopPropagation();
                         authorizeServer();
@@ -977,16 +977,16 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
               {isExpanded && (
                 <div className="flex flex-col gap-4 px-11 pb-4 text-xs">
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground">
                       Connection
                     </span>
-                    <span className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-[11px]">
+                    <span className="inline-block w-fit rounded bg-muted/30 px-2 py-1 font-mono text-xs">
                       {formatTransport(server)}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground">
                       Authentication
                     </span>
                     <span className="text-[13px] text-foreground">
@@ -996,7 +996,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
 
                   {server.authMessage && (
                     <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">
                         Status
                       </span>
                       <span className="text-[13px] text-foreground">{server.authMessage}</span>
@@ -1005,7 +1005,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
 
                   {validation && (
                     <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">
                         Last check
                       </span>
                       {!validation.ok && needsOAuthSignIn ? (
@@ -1025,11 +1025,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
 
                   {validation?.ok && availableToolCount > 0 && (
                     <div className="mt-2 grid grid-cols-[120px_1fr] items-start gap-2">
-                      <span className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
                         Tools
                       </span>
                       <div className="flex flex-col gap-1.5">
-                        <span className="text-[11px] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           {availableToolCount === 1
                             ? "1 tool available"
                             : `${availableToolCount} tools available`}

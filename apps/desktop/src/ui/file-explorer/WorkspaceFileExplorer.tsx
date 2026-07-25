@@ -327,7 +327,7 @@ const ExplorerTreeRowView = memo(
           data-file-row-key={explorerRowDomKey(row)}
           role="none"
           className={cn(
-            "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            "flex items-center gap-1 rounded py-1 text-xs transition-opacity duration-150 ease-out motion-reduce:transition-none",
             row.status === "error" ? "text-destructive" : "text-muted-foreground",
           )}
           style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
@@ -355,7 +355,7 @@ const ExplorerTreeRowView = memo(
         aria-selected={isDirectory ? false : selected}
         aria-expanded={isDirectory ? row.expanded : undefined}
         className={cn(
-          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-[9px] py-0.5 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
+          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-[9px] py-0.5 pr-1 text-xs transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
           selected
             ? "bg-accent text-accent-foreground"
             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -403,7 +403,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-inherit",
+                "text-inherit",
                 row.expanded && "rotate-90",
               )}
             />
@@ -418,7 +418,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-link/85",
+                selected ? "text-inherit" : "text-link/85",
               )}
             />
           ) : (
@@ -426,7 +426,7 @@ const ExplorerTreeRowView = memo(
               strokeWidth={1.5}
               className={cn(
                 "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                selected ? "text-link/80" : "text-link/85",
+                selected ? "text-inherit" : "text-link/85",
               )}
             />
           )
@@ -435,7 +435,7 @@ const ExplorerTreeRowView = memo(
             strokeWidth={1.5}
             className={cn(
               "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-              selected ? "text-link/80" : "text-inherit",
+              "text-inherit",
             )}
           />
         )}
@@ -444,8 +444,8 @@ const ExplorerTreeRowView = memo(
           <div className="truncate font-medium">{entry.name}</div>
           <div
             className={cn(
-              "truncate text-[9px] leading-3.5",
-              selected ? "text-accent-foreground/85" : "text-muted-foreground",
+              "truncate text-xs leading-3.5",
+              selected ? "text-inherit" : "text-muted-foreground",
             )}
           >
             {entryMeta}
@@ -467,10 +467,7 @@ const ExplorerTreeRowView = memo(
           data-file-explorer-control="true"
           onClick={() => onOpenEntryMenu(entry)}
         >
-          <MoreVerticalIcon
-            strokeWidth={1.5}
-            className={cn("h-3.25 w-3.25", selected ? "text-link/80" : "text-inherit")}
-          />
+          <MoreVerticalIcon strokeWidth={1.5} className="h-3.25 w-3.25 text-inherit" />
         </AccessibleIconButton>
       </div>
     );
@@ -1250,7 +1247,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               type="button"
               variant="link"
               size="sm"
-              className="h-auto min-w-0 justify-start p-0 text-[10px] font-semibold tracking-[0.16em] uppercase text-muted-foreground/80 no-underline hover:text-foreground hover:underline"
+              className="app-type-label h-auto min-w-0 justify-start p-0 tracking-[0.16em] uppercase app-text-muted no-underline hover:text-foreground hover:underline"
               data-file-explorer-control="true"
               onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
               title="Open in native explorer"
@@ -1259,15 +1256,15 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
             </Button>
           ) : (
             <>
-              <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">
+              <div className="app-type-label shrink-0 tracking-[0.16em] app-text-muted uppercase">
                 Files
               </div>
-              <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>
+              <div className="app-text-muted text-xs shrink-0 font-light">/</div>
               <Button
                 type="button"
                 variant="link"
                 size="sm"
-                className="h-auto min-w-0 justify-start p-0 text-[11.5px] font-semibold text-foreground/88 no-underline hover:text-foreground hover:underline"
+                className="app-type-label h-auto min-w-0 justify-start p-0 app-text-secondary no-underline hover:text-foreground hover:underline"
                 data-file-explorer-control="true"
                 onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
                 title="Open in native explorer"

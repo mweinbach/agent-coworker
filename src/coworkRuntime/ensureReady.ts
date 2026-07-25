@@ -81,7 +81,6 @@ async function verifyInstalledRuntime(opts: {
     host: opts.host,
     env: opts.env,
     trustedKeys: opts.trustedKeys,
-    cacheTrust: true,
   });
   return verification.ok;
 }

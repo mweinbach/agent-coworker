@@ -280,6 +280,34 @@ List and query sessions via:
 | `COWORK_BOOTSTRAP_DEFAULT_SKILLS` | Download the default marketplace plugin set on startup (desktop defaults to `1`) |
 | `COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP` | Skip first-run skill installation |
 | `COWORK_RUNTIME_ALLOW_NETWORK` | Allow the server to download the platform runtime release (desktop defaults to `1`) |
+| `COWORK_RUNTIME_FULL_VERIFY` | Re-hash the entire signed runtime tree on every verification instead of reusing a fingerprint |
+
+#### Runtime integrity verification
+
+The Cowork runtime is a signed tree of roughly 38k files and 2.4 GB. Hashing it is
+expensive, and it was being hashed twice over: once at startup (the exact-tree
+check) and again on every turn, because `buildRuntimeEnv` re-verified every
+entrypoint closure — 76% of the tree — each time it assembled the tool
+environment. On a Windows machine with Defender active that cost ~128 s before the
+first turn and ~12 s per turn after it.
+
+Verification is now anchored on a stat fingerprint of the whole signed tree: every
+path, kind, size, link count, and mtime. A full hash still runs whenever the
+fingerprint is not already known-good, and on success it is recorded both in
+memory and in `<runtime-dir>.verified.json` (alongside the signed manifest's
+signature hash). Every later verification — the next turn, or the next launch —
+re-collects the fingerprint and re-hashes only when it differs, when the signed
+manifest changes, or when `COWORK_RUNTIME_FULL_VERIFY` is set. Because the
+fingerprint covers the whole tree, it also still catches files added anywhere
+under the runtime, which a per-closure check could not. The record is written only
+when the tree is byte-identical immediately before and after the hash pass, and is
+removed when a runtime is replaced, pruned, or rolled back.
+
+The trade-off is explicit: an attacker who rewrites a runtime file *and* restores
+its exact size and mtime is not caught by the fingerprint alone. The recursive
+directory watcher invalidates trust as changes arrive, but it is an optimization,
+not the guarantee — the fingerprint is re-collected before every use regardless.
+Set `COWORK_RUNTIME_FULL_VERIFY=1` to opt back into hashing every time.
 
 ### Runtime Config Patching
 

@@ -163,6 +163,7 @@ export async function startAgentServer(opts: StartAgentServerOptions): Promise<{
               startup: {
                 ready: startupReady && runtimeStartup.ready,
                 ...(runtimeStartup.error ? { error: runtimeStartup.error } : {}),
+                ...(runtimeStartup.progress ? { progress: runtimeStartup.progress } : {}),
               },
             },
             { headers: corsHeaders },

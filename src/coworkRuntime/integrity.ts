@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { createReadStream, type FSWatcher, watch } from "node:fs";
+import { createReadStream, type Dirent, type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,28 @@ import type {
 export const RUNTIME_INTEGRITY_MANIFEST_FILE = "runtime-integrity.json";
 export const RUNTIME_INTEGRITY_SIGNATURE_FILE = "runtime-integrity.sig";
 
+/**
+ * Records that a runtime tree passed full signed verification, plus a cheap
+ * fingerprint of the tree at that moment. The Cowork runtime is ~2.4 GB across
+ * ~38k files, so re-hashing it on every launch cost minutes before the first
+ * turn could run; re-statting it costs seconds.
+ */
+const RUNTIME_ATTESTATION_SCHEMA_VERSION = 1;
+const FULL_VERIFY_ENV = "COWORK_RUNTIME_FULL_VERIFY";
+
+type RuntimeAttestation = {
+  schemaVersion: typeof RUNTIME_ATTESTATION_SCHEMA_VERSION;
+  runtimeVersion: string;
+  asset: string;
+  /** Ties the record to the exact signed manifest that was verified. */
+  signatureSha256: string;
+  /** Digest over every path, kind, size, link count, and mtime in the tree. */
+  treeStateSha256: string;
+  fileCount: number;
+  bytes: number;
+  verifiedAt: string;
+};
+
 export type RuntimeKeyMaterial = string | Buffer;
 export type TrustedRuntimeKeys = Readonly<Record<string, RuntimeKeyMaterial>>;
 
@@ -29,14 +51,15 @@ type VerifiedIntegrityBundle = {
   integrity: RuntimeIntegrityManifest;
   filesByPath: Map<string, RuntimeIntegrityFile>;
   keyId: string;
+  signatureSha256: string;
 };
 
 type RuntimeTrustState = {
   watcher: FSWatcher | null;
   watcherAvailable: boolean;
   generation: number;
-  exactTreeVerified: boolean;
-  verifiedComponents: Set<string>;
+  /** Stat fingerprint of the tree at its last successful signature verification. */
+  trustedTreeDigest: string | null;
   verification: Promise<void> | null;
 };
 
@@ -83,15 +106,31 @@ async function describeEntry(root: string, relativePath: string): Promise<Runtim
   return { path: relativePath, kind: "file", size: stat.size, sha256: await sha256File(absolute) };
 }
 
-async function collectRuntimeFiles(root: string): Promise<RuntimeIntegrityFile[]> {
+function hasKnownDirentType(entry: Dirent): boolean {
+  return (
+    entry.isFile() ||
+    entry.isDirectory() ||
+    entry.isSymbolicLink() ||
+    entry.isBlockDevice() ||
+    entry.isCharacterDevice() ||
+    entry.isFIFO() ||
+    entry.isSocket()
+  );
+}
+
+/**
+ * Every signed file under `root`, sorted, excluding the integrity manifest and
+ * its signature. This runs on every runtime use, so it carries the relative path
+ * down the recursion rather than recomputing it per entry, and leaves ordering
+ * to the single sort at the end.
+ */
+async function listRuntimeRelativePaths(root: string): Promise<string[]> {
   const relativePaths: string[] = [];
   const seen = new Set<string>();
-  const visit = async (directory: string): Promise<void> => {
+  const visit = async (directory: string, prefix: string): Promise<void> => {
     const children = await fs.readdir(directory, { withFileTypes: true });
-    children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
-      const absolute = path.join(directory, child.name);
-      const relative = path.relative(root, absolute).split(path.sep).join("/");
+      const relative = prefix ? `${prefix}/${child.name}` : child.name;
       if (
         relative === RUNTIME_INTEGRITY_MANIFEST_FILE ||
         relative === RUNTIME_INTEGRITY_SIGNATURE_FILE
@@ -101,29 +140,141 @@ async function collectRuntimeFiles(root: string): Promise<RuntimeIntegrityFile[]
       const identity = process.platform === "win32" ? relative.toLowerCase() : relative;
       if (seen.has(identity)) throw new Error(`Duplicate runtime path: ${relative}.`);
       seen.add(identity);
-      const stat = await fs.lstat(absolute);
-      if (stat.isDirectory()) await visit(absolute);
+      const absolute = path.join(directory, child.name);
+      // readdir dirents already carry lstat-equivalent types, so the extra stat
+      // per entry only happens on filesystems that report an unknown type.
+      const isDirectory = hasKnownDirentType(child)
+        ? child.isDirectory()
+        : (await fs.lstat(absolute)).isDirectory();
+      if (isDirectory) await visit(absolute, relative);
       else relativePaths.push(relative);
     }
   };
-  await visit(root);
+  await visit(root, "");
   relativePaths.sort();
-  const files = new Array<RuntimeIntegrityFile>(relativePaths.length);
+  return relativePaths;
+}
+
+function runtimeVerifyConcurrency(): number {
+  return Math.max(2, Math.min(16, os.availableParallelism()));
+}
+
+async function mapWithConcurrency<T>(
+  count: number,
+  run: (index: number) => Promise<T>,
+): Promise<T[]> {
+  const results = new Array<T>(count);
   let nextIndex = 0;
   const worker = async (): Promise<void> => {
-    while (nextIndex < relativePaths.length) {
+    while (nextIndex < count) {
       const index = nextIndex++;
-      const relativePath = relativePaths[index];
-      if (relativePath === undefined) return;
-      files[index] = await describeEntry(root, relativePath);
+      results[index] = await run(index);
     }
   };
-  const concurrency = Math.max(2, Math.min(16, os.availableParallelism()));
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, relativePaths.length) }, () => worker()),
+    Array.from({ length: Math.min(runtimeVerifyConcurrency(), count) }, () => worker()),
   );
+  return results;
+}
+
+async function collectRuntimeFiles(root: string): Promise<RuntimeIntegrityFile[]> {
+  const relativePaths = await listRuntimeRelativePaths(root);
+  const files = await mapWithConcurrency(relativePaths.length, async (index) => {
+    const relativePath = relativePaths[index];
+    if (relativePath === undefined) throw new Error("Runtime path list changed during collection.");
+    return await describeEntry(root, relativePath);
+  });
   files.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return files;
+}
+
+/**
+ * Fingerprints the given paths without reading file contents. Detects resized,
+ * relinked, retimed, or removed entries; a full re-hash follows any mismatch.
+ */
+async function fingerprintPaths(
+  root: string,
+  relativePaths: readonly string[],
+): Promise<{ digest: string; fileCount: number; bytes: number }> {
+  const descriptors = await mapWithConcurrency(relativePaths.length, async (index) => {
+    const relativePath = relativePaths[index];
+    if (relativePath === undefined) throw new Error("Runtime path list changed during collection.");
+    assertSafeRelativePath(relativePath, "integrity file path");
+    const absolute = path.join(root, ...relativePath.split("/"));
+    const stat = await fs.lstat(absolute);
+    if (stat.isSymbolicLink()) {
+      const target = await fs.readlink(absolute);
+      assertSafeSymlink(root, absolute, target);
+      return { line: `${relativePath}\0symlink\0${target}`, size: Buffer.byteLength(target) };
+    }
+    if (!stat.isFile()) throw new Error(`Unsupported runtime entry: ${relativePath}`);
+    if (stat.nlink !== 1) throw new Error(`Runtime hard links are forbidden: ${relativePath}`);
+    return {
+      line: `${relativePath}\0file\0${stat.size}\0${stat.nlink}\0${Math.round(stat.mtimeMs)}`,
+      size: stat.size,
+    };
+  });
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for (const descriptor of descriptors) {
+    hash.update(descriptor.line);
+    hash.update("\n");
+    bytes += descriptor.size;
+  }
+  return { digest: hash.digest("hex"), fileCount: descriptors.length, bytes };
+}
+
+/** Whole-tree fingerprint; also detects files added to or removed from the tree. */
+async function collectRuntimeTreeState(
+  root: string,
+): Promise<{ digest: string; fileCount: number; bytes: number }> {
+  return await fingerprintPaths(root, await listRuntimeRelativePaths(root));
+}
+
+export function runtimeAttestationPath(runtimeDir: string): string {
+  return `${path.resolve(runtimeDir)}.verified.json`;
+}
+
+async function readRuntimeAttestation(root: string): Promise<RuntimeAttestation | null> {
+  const raw = await fs.readFile(runtimeAttestationPath(root), "utf8").catch(() => null);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<RuntimeAttestation>;
+    if (
+      parsed.schemaVersion !== RUNTIME_ATTESTATION_SCHEMA_VERSION ||
+      typeof parsed.runtimeVersion !== "string" ||
+      typeof parsed.asset !== "string" ||
+      typeof parsed.signatureSha256 !== "string" ||
+      typeof parsed.treeStateSha256 !== "string" ||
+      !Number.isSafeInteger(parsed.fileCount) ||
+      !Number.isSafeInteger(parsed.bytes)
+    ) {
+      return null;
+    }
+    return parsed as RuntimeAttestation;
+  } catch {
+    return null;
+  }
+}
+
+async function writeRuntimeAttestation(
+  root: string,
+  attestation: RuntimeAttestation,
+): Promise<void> {
+  const target = runtimeAttestationPath(root);
+  const temp = `${target}.${process.pid}.tmp`;
+  try {
+    await fs.writeFile(temp, `${JSON.stringify(attestation, null, 2)}\n`, "utf8");
+    await fs.rename(temp, target);
+  } catch {
+    // A cached attestation is an optimization; failing to persist it only means
+    // the next launch verifies the full tree again.
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+export async function clearRuntimeAttestation(runtimeDir: string): Promise<void> {
+  await fs.rm(runtimeAttestationPath(runtimeDir), { force: true }).catch(() => undefined);
 }
 
 function parseSignatureEnvelope(value: unknown): SignatureEnvelope {
@@ -261,6 +412,7 @@ async function readVerifiedIntegrityBundle(opts: {
     integrity,
     filesByPath: new Map(integrity.files.map((entry) => [entry.path, entry])),
     keyId: envelope.keyId,
+    signatureSha256: createHash("sha256").update(signatureBytes).digest("hex"),
   };
 }
 
@@ -269,28 +421,6 @@ function assertEntryMatches(actual: RuntimeIntegrityFile, expected: RuntimeInteg
   if (actual.size !== expected.size) throw new Error(`Runtime file size mismatch: ${actual.path}.`);
   if (actual.sha256 !== expected.sha256) {
     throw new Error(`Runtime file SHA-256 mismatch: ${actual.path}.`);
-  }
-}
-
-async function verifyExpectedPaths(
-  root: string,
-  bundle: VerifiedIntegrityBundle,
-  paths: Iterable<string>,
-): Promise<void> {
-  for (const relativePath of new Set(paths)) {
-    const expected = bundle.filesByPath.get(relativePath);
-    if (!expected)
-      throw new Error(`Signed runtime file is missing from integrity data: ${relativePath}.`);
-    let actual: RuntimeIntegrityFile;
-    try {
-      actual = await describeEntry(root, relativePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`Missing runtime file: ${relativePath}.`);
-      }
-      throw error;
-    }
-    assertEntryMatches(actual, expected);
   }
 }
 
@@ -317,14 +447,75 @@ async function verifyExactTree(
   };
 }
 
+/**
+ * Establishes that every signed path under `root` currently matches the
+ * signature, then remembers the tree's stat fingerprint. Later calls — the next
+ * turn, or the next launch via the persisted attestation — re-collect that
+ * fingerprint instead of re-hashing the tree, and fall through to the full hash
+ * on any difference in the path set, sizes, link counts, or mtimes.
+ */
+async function trustVerifiedRuntimeTree(
+  root: string,
+  bundle: VerifiedIntegrityBundle,
+  state: RuntimeTrustState,
+  env: Record<string, string | undefined> = process.env,
+): Promise<{ fileCount: number; bytes: number }> {
+  const forceFullVerify = /^(1|true|yes|on)$/i.test(env[FULL_VERIFY_ENV]?.trim() ?? "");
+  const current = await collectRuntimeTreeState(root);
+  if (!forceFullVerify) {
+    if (state.trustedTreeDigest === current.digest) {
+      return { fileCount: current.fileCount, bytes: current.bytes };
+    }
+    const attestation = await readRuntimeAttestation(root);
+    if (
+      attestation &&
+      attestation.runtimeVersion === bundle.integrity.runtimeVersion &&
+      attestation.asset === bundle.integrity.asset &&
+      attestation.signatureSha256 === bundle.signatureSha256 &&
+      attestation.treeStateSha256 === current.digest &&
+      attestation.fileCount === current.fileCount
+    ) {
+      startRuntimeWatcher(root, state);
+      state.trustedTreeDigest = current.digest;
+      return { fileCount: current.fileCount, bytes: current.bytes };
+    }
+  }
+
+  const result = await verifyExactTree(root, bundle);
+  // Re-fingerprint after hashing so a tree that changed mid-verification is never
+  // trusted or attested: only a stable tree earns the fast path.
+  const after = await collectRuntimeTreeState(root);
+  if (current.digest !== after.digest || after.fileCount !== result.fileCount) {
+    state.trustedTreeDigest = null;
+    await clearRuntimeAttestation(root);
+    throw new Error("Runtime changed while it was being verified.");
+  }
+  startRuntimeWatcher(root, state);
+  state.trustedTreeDigest = after.digest;
+  if (!forceFullVerify) {
+    await writeRuntimeAttestation(root, {
+      schemaVersion: RUNTIME_ATTESTATION_SCHEMA_VERSION,
+      runtimeVersion: bundle.integrity.runtimeVersion,
+      asset: bundle.integrity.asset,
+      signatureSha256: bundle.signatureSha256,
+      treeStateSha256: after.digest,
+      fileCount: after.fileCount,
+      bytes: after.bytes,
+      verifiedAt: new Date().toISOString(),
+    });
+  }
+  return result;
+}
+
 export async function verifyRuntimeIntegrity(opts: {
   root: string;
   manifest: CoworkRuntimeManifest;
   trustedKeys: TrustedRuntimeKeys;
+  env?: Record<string, string | undefined>;
 }): Promise<{ fileCount: number; bytes: number; keyId: string }> {
   const root = path.resolve(opts.root);
   const bundle = await readVerifiedIntegrityBundle({ ...opts, root });
-  const result = await verifyExactTree(root, bundle);
+  const result = await trustVerifiedRuntimeTree(root, bundle, stateFor(root), opts.env);
   return { ...result, keyId: bundle.keyId };
 }
 
@@ -335,8 +526,7 @@ function stateFor(root: string): RuntimeTrustState {
     watcher: null,
     watcherAvailable: true,
     generation: 0,
-    exactTreeVerified: false,
-    verifiedComponents: new Set(),
+    trustedTreeDigest: null,
     verification: null,
   };
   trustStates.set(root, state);
@@ -354,8 +544,8 @@ function startRuntimeWatcher(root: string, state: RuntimeTrustState): void {
     });
     state.watcher.unref();
   } catch {
-    // A platform without recursive watch remains safe by rechecking the full
-    // signed tree on every use instead of caching trust.
+    // The watcher only invalidates trust early. Correctness does not depend on
+    // it: every use re-collects the tree fingerprint before trusting the cache.
     state.watcherAvailable = false;
   }
 }
@@ -365,8 +555,7 @@ export function invalidateRuntimeTrust(runtimeDir: string, watcherHealthy = true
   const state = trustStates.get(root);
   if (!state) return;
   state.generation += 1;
-  state.exactTreeVerified = false;
-  state.verifiedComponents.clear();
+  state.trustedTreeDigest = null;
   if (!watcherHealthy) {
     state.watcherAvailable = false;
     state.watcher?.close();
@@ -380,63 +569,43 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   trustedKeys: TrustedRuntimeKeys;
   entrypoints: string[];
   components?: string[] | "all";
-}): Promise<{ keyId: string; fullTreeVerified: boolean }> {
+}): Promise<{ keyId: string }> {
   const root = path.resolve(opts.root);
   const state = stateFor(root);
   const bundle = await readVerifiedIntegrityBundle({ ...opts, root });
 
-  if (!state.exactTreeVerified || !state.watcherAvailable) {
-    if (!state.verification) {
-      state.watcher?.close();
-      state.watcher = null;
-      state.verification = verifyExactTree(root, bundle)
-        .then(() => {
-          startRuntimeWatcher(root, state);
-          state.exactTreeVerified = state.watcherAvailable;
-          for (const component of Object.keys(bundle.integrity.components)) {
-            state.verifiedComponents.add(component);
-          }
-        })
-        .finally(() => {
-          state.verification = null;
-        });
-    }
-    await state.verification;
-  }
-
-  const selected = ["runtime.json"];
+  // A missing closure means the caller asked for something the signed manifest
+  // does not describe, which stays an error however the tree is verified.
   const requestedComponents =
     opts.components === "all" ? Object.keys(bundle.integrity.components) : (opts.components ?? []);
   for (const name of requestedComponents) {
-    if (state.verifiedComponents.has(name)) continue;
-    const closure = bundle.integrity.components[name];
-    if (!closure?.length)
+    if (!bundle.integrity.components[name]?.length) {
       throw new Error(`Runtime integrity component closure is missing: ${name}.`);
-    selected.push(...closure);
+    }
   }
   for (const name of opts.entrypoints) {
-    const closure = bundle.integrity.entrypoints[name];
-    if (!closure?.length)
+    if (!bundle.integrity.entrypoints[name]?.length) {
       throw new Error(`Runtime integrity entrypoint closure is missing: ${name}.`);
-    selected.push(...closure);
+    }
   }
+
+  // Every entrypoint and component closure is a subset of the signed tree, so
+  // one fingerprint pass covers all of them — and, unlike a per-closure check,
+  // it also catches files added anywhere under the runtime.
   const generation = state.generation;
-  await verifyExpectedPaths(root, bundle, selected);
-  if (state.watcherAvailable && state.generation !== generation) {
-    state.exactTreeVerified = false;
+  if (!state.verification) {
+    state.verification = trustVerifiedRuntimeTree(root, bundle, state)
+      .then(() => undefined)
+      .finally(() => {
+        state.verification = null;
+      });
+  }
+  await state.verification;
+  if (state.generation !== generation) {
+    state.trustedTreeDigest = null;
     throw new Error("Runtime changed while an entrypoint was being verified.");
   }
-  for (const name of requestedComponents) state.verifiedComponents.add(name);
-  return { keyId: bundle.keyId, fullTreeVerified: state.exactTreeVerified };
-}
-
-export function primeVerifiedRuntimeTrust(runtimeDir: string, components: string[]): void {
-  const root = path.resolve(runtimeDir);
-  if (trustStates.has(root)) return;
-  const state = stateFor(root);
-  startRuntimeWatcher(root, state);
-  state.exactTreeVerified = state.watcherAvailable;
-  for (const component of components) state.verifiedComponents.add(component);
+  return { keyId: bundle.keyId };
 }
 
 export function releaseRuntimeTrust(runtimeDir: string): void {

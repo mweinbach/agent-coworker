@@ -3,7 +3,10 @@ import { describe, expect, test } from "bun:test";
 import type { ProviderCatalogPayload } from "../src/providers/connectionCatalog";
 import { runCreationPreflight } from "../src/server/readiness/creationPreflight";
 import { hasGoogleResearchApiKey } from "../src/server/research/googleApiKey";
-import type { CreationPreflightParams } from "../src/shared/creationReadiness";
+import {
+  COWORK_RUNTIME_STARTING_MESSAGE,
+  type CreationPreflightParams,
+} from "../src/shared/creationReadiness";
 import type { AgentConfig } from "../src/types";
 
 const config = {
@@ -170,6 +173,57 @@ describe("creation readiness preflight", () => {
     expect(result.checks.find((entry) => entry.id === "research_credentials")).toMatchObject({
       status: "blocked",
       repairAction: { type: "connectProvider", provider: "google" },
+    });
+  });
+
+  test("treats an in-flight startup bootstrap as pending, not as a blocker", async () => {
+    const result = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      {
+        getRuntimeStartup: () => ({
+          ready: false,
+          progress: {
+            phase: "downloading",
+            version: "1.2.3",
+            transferredBytes: 62,
+            totalBytes: 100,
+            percent: 62,
+          },
+        }),
+      },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "pending",
+      message: "Downloading the Cowork runtime — 62%.",
+    });
+  });
+
+  test("falls back to a generic pending message without bootstrap progress", async () => {
+    const result = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      { getRuntimeStartup: () => ({ ready: false }) },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toMatchObject({
+      status: "pending",
+      message: COWORK_RUNTIME_STARTING_MESSAGE,
+    });
+  });
+
+  test("still blocks when the startup bootstrap failed", async () => {
+    const result = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      { getRuntimeStartup: () => ({ ready: false, error: "runtime archive is corrupt" }) },
+    );
+
+    expect(result.ready).toBe(false);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toMatchObject({
+      status: "blocked",
+      message: "Cowork runtime failed to start: runtime archive is corrupt",
     });
   });
 

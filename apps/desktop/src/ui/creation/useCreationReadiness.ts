@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  COWORK_RUNTIME_STARTING_MESSAGE,
-  type CreationPreflightParams,
-  type CreationPreflightResult,
+import type {
+  CreationPreflightParams,
+  CreationPreflightResult,
 } from "../../../../../src/shared/creationReadiness";
 import { useAppStore } from "../../app/store";
 
@@ -39,12 +38,7 @@ export function useCreationReadiness(
     refresh();
   }, [providerStatusLastUpdatedAt, refresh]);
 
-  const runtimeStarting = result?.checks.some(
-    (entry) =>
-      entry.id === "runtime_ready" &&
-      entry.status === "blocked" &&
-      entry.message === COWORK_RUNTIME_STARTING_MESSAGE,
-  );
+  const runtimeStarting = result?.checks.some((entry) => entry.status === "pending");
 
   useEffect(() => {
     if (!runtimeStarting) return;
@@ -56,7 +50,6 @@ export function useCreationReadiness(
     const controller = new AbortController();
     setChecking(true);
     setError(null);
-    setResult(null);
     void preflightCreation(
       {
         kind,
@@ -82,6 +75,9 @@ export function useCreationReadiness(
         }
       });
     return () => controller.abort();
+    // The previous result is deliberately kept while a recheck is in flight: the
+    // pending-runtime loop rechecks every second, and clearing it first made the
+    // notice and the submit button flicker once per poll.
   }, [preflightCreation, refreshKey, cwd, kind, model, provider, workspaceId]);
 
   return { checking, error, refresh, result };

@@ -779,7 +779,7 @@ thread or research state.
 
 - params: `{ kind: "chat" | "research", cwd?, provider?, model? }`
 - result: `{ ready, checks }`
-- each check is `{ id, status: "ok" | "blocked", message, repairAction? }`
+- each check is `{ id, status: "ok" | "pending" | "blocked", message, repairAction? }`
 - check ids are `project_access`, `provider_connected`, `model_available`, `credentials`,
   `runtime_ready`, and `research_credentials`
 - repair actions are typed as `connectProvider`, `openProviderSettings`, `startLmStudio`, or
@@ -791,8 +791,16 @@ runtime state are evaluated together. For research preflight, Google Deep Resear
 accepted from the saved Google API-key connection or the server's
 `GOOGLE_GENERATIVE_AI_API_KEY`/`GOOGLE_API_KEY` environment.
 
-`ready` is true only when every returned check has status `ok`. A blocked result is an expected,
-actionable product state and is returned as a successful JSON-RPC result rather than an error.
+`ready` is true when no returned check is `blocked`. A blocked result is an expected, actionable
+product state and is returned as a successful JSON-RPC result rather than an error.
+
+`pending` is reserved for work the server finishes on its own, and never gates creation. Today the
+only pending check is `runtime_ready` while the server's startup bootstrap (Cowork runtime download
+and install, default skills, system prompt preload) is still running; its `message` names the
+current step, for example `Downloading the Cowork runtime — 62%.`. `turn/start`, `turn/steer`, and
+`command/execute` already await startup readiness before touching a session, so a client may start
+a chat during this window and the server queues the turn. Clients should present pending checks as
+progress rather than as a failure, and re-poll until the check clears.
 
 ### Research JSON-RPC methods
 

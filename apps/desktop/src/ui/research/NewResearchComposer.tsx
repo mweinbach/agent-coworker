@@ -81,6 +81,10 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
     workspaceId: readinessWorkspaceId,
     ...(readinessWorkspace ? { cwd: readinessWorkspace.path } : {}),
   });
+  const readinessBlocked = Boolean(readiness.error) || readiness.result?.ready === false;
+  const readinessPending =
+    !readinessBlocked &&
+    (readiness.result?.checks.some((entry) => entry.status === "pending") ?? false);
   const attachmentPreviews = draft.attachments.map((attachment) => ({
     filename: attachment.filename,
     mimeType: attachment.mimeType,
@@ -105,7 +109,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
 
   const submit = async () => {
     const trimmed = draft.text.trim();
-    if (!trimmed || submitting || readiness.checking || readiness.result?.ready !== true) {
+    if (!trimmed || submitting || readiness.result?.ready !== true) {
       return;
     }
     const draftRevision = draft.revision;
@@ -207,9 +211,13 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
               ? cancelling
                 ? "Cancelling research…"
                 : researchPhaseLabel(creationPhase)
-              : readiness.checking
-                ? "Validating readiness…"
-                : "Setup required"}
+              : readinessBlocked
+                ? "Setup required"
+                : readinessPending
+                  ? "Finishing setup — your run starts automatically"
+                  : readiness.checking && !readiness.result
+                    ? "Validating readiness…"
+                    : null}
           </MessageComposerStatus>
           <MessageComposerBody>
             {creationError ? (
@@ -287,12 +295,7 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
             ) : null}
             <MessageComposerSubmit
               status={submitting ? "pending" : "ready"}
-              disabled={
-                !draft.text.trim() ||
-                submitting ||
-                readiness.checking ||
-                readiness.result?.ready !== true
-              }
+              disabled={!draft.text.trim() || submitting || readiness.result?.ready !== true}
             />
           </MessageComposerFooter>
         </MessageComposerForm>

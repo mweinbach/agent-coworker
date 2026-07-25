@@ -15,8 +15,11 @@ import {
   resolveCurrentRuntime,
   resolveRuntimeAssetForHost,
   runtimeAssetFileName,
+  runtimeAttestationPath,
   sha256File,
+  verifyRuntime,
 } from "../src/coworkRuntime";
+import { hostPlatform } from "../src/platform/host";
 import { buildPluginCatalogSnapshot } from "../src/plugins";
 import { S_IFREG, writeZip } from "./fixtures/zipBuilder";
 
@@ -418,6 +421,142 @@ describe("Cowork unified runtime", () => {
     await expect(
       buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys),
     ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("reuses a stored attestation instead of re-hashing an unchanged tree", async () => {
+    const root = await tempRoot("attestation");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    const attestationPath = runtimeAttestationPath(installed.runtimeDir);
+    expect(JSON.parse(await fs.readFile(attestationPath, "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      runtimeVersion: "2026-06-21",
+    });
+
+    const filterDll = path.join(
+      installed.runtimeDir,
+      "dependencies",
+      "libreoffice",
+      "program",
+      "filter.dll",
+    );
+    const original = await fs.readFile(filterDll, "utf8");
+    // Pin an exact whole-second timestamp so the fingerprint is reproducible
+    // across the rewrite below, then re-attest against it.
+    const pinned = new Date("2026-01-01T00:00:00.000Z");
+    await fs.utimes(filterDll, pinned, pinned);
+    await fs.rm(attestationPath, { force: true });
+    releaseAllRuntimeTrust();
+    expect(
+      (await verifyRuntime({ runtimeDir: installed.runtimeDir, execute: false, trustedKeys })).ok,
+    ).toBe(true);
+
+    // Same length, same mtime: the stat fingerprint is unchanged, so the stored
+    // attestation stands in for re-hashing the whole tree on every launch. This
+    // is the documented limit of the fast path.
+    await fs.writeFile(filterDll, "TRUSTED FILTER DLL".slice(0, original.length));
+    await fs.utimes(filterDll, pinned, pinned);
+
+    releaseAllRuntimeTrust();
+    const cached = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(cached.ok).toBe(true);
+
+    // The escape hatch always re-hashes, and catches it.
+    releaseAllRuntimeTrust();
+    const forced = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+      env: { COWORK_RUNTIME_FULL_VERIFY: "1" },
+    });
+    expect(forced.ok).toBe(false);
+    expect(forced.errors.join("\n")).toMatch(/SHA-256 mismatch/i);
+  });
+
+  test("re-collects the tree fingerprint on every runtime use", async () => {
+    const root = await tempRoot("per-use-fingerprint");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+
+    // Detected without waiting for a watcher event: the fingerprint is collected
+    // before the cached verification is honoured.
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await fs.writeFile(
+      path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool"),
+      "a longer replacement tool",
+    );
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(/mismatch/i);
+  });
+
+  test("re-verifies when the tree fingerprint or signed manifest moves", async () => {
+    const root = await tempRoot("attestation-invalidation");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+
+    // A different size changes the fingerprint, so the full hash runs and fails.
+    await fs.writeFile(nodePath, "a much longer replacement for node");
+    releaseAllRuntimeTrust();
+    const resized = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(resized.ok).toBe(false);
+    expect(resized.errors.join("\n")).toMatch(/mismatch/i);
+
+    // An unexpected file is not in the fingerprint's path set either.
+    await fs.writeFile(nodePath, "node");
+    await fs.rm(runtimeAttestationPath(installed.runtimeDir), { force: true });
+    releaseAllRuntimeTrust();
+    expect(
+      (await verifyRuntime({ runtimeDir: installed.runtimeDir, execute: false, trustedKeys })).ok,
+    ).toBe(true);
+    await fs.writeFile(path.join(installed.runtimeDir, "planted.dll"), "surprise");
+    releaseAllRuntimeTrust();
+    const planted = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(planted.ok).toBe(false);
+    expect(planted.errors.join("\n")).toMatch(/Unexpected runtime file/i);
   });
 
   test("blocks signature tampering and unexpected files before managed execution", async () => {

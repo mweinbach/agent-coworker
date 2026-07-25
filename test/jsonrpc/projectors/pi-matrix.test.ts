@@ -257,6 +257,76 @@ describe("JSON-RPC projectors", () => {
       });
     });
 
+    test(`projectors parse streamed PI tool args when tool_call omits input and input end for ${provider}`, () => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const emissions: Array<{ eventType: string; payload: any }> = [];
+      const live = createJsonRpcNotificationProjector({
+        threadId: sessionId,
+        send: (message) => outbound.push(message as { method: string; params?: any }),
+      });
+      const journal = createThreadJournalNotificationProjector({
+        threadId: sessionId,
+        emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+      });
+
+      for (const projector of [live, journal] as const) {
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          busy: true,
+          turnId,
+          cause: "user_message",
+        });
+        projector.handle(
+          piChunk(provider, model, "tool_input_start", {
+            id: "tool_call_deferred",
+            toolName: "bash",
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_deferred",
+            delta: '{"command":"bun ',
+          }),
+        );
+        projector.handle(
+          piChunk(provider, model, "tool_input_delta", {
+            id: "tool_call_deferred",
+            delta: 'lint"}',
+          }),
+        );
+        // Some providers emit tool_call without tool_input_end and without input.
+        projector.handle(
+          piChunk(provider, model, "tool_call", {
+            toolCallId: "tool_call_deferred",
+            toolName: "bash",
+          }),
+        );
+      }
+
+      const liveTool = outbound
+        .filter((message) => message.method === "item/completed")
+        .map((message) => message.params?.item)
+        .find((item) => item?.type === "toolCall" && item?.state === "input-available");
+      expect(liveTool).toMatchObject({
+        type: "toolCall",
+        toolName: "bash",
+        state: "input-available",
+        args: { command: "bun lint" },
+      });
+
+      const journalTool = emissions
+        .filter((event) => event.eventType === "item/completed")
+        .map((event) => event.payload?.item)
+        .find((item) => item?.type === "toolCall" && item?.state === "input-available");
+      expect(journalTool).toMatchObject({
+        type: "toolCall",
+        toolName: "bash",
+        state: "input-available",
+        args: { command: "bun lint" },
+      });
+    });
+
     test(`projectors coalesce PI tool deltas and apply final errors for ${provider}`, () => {
       const outbound: Array<{ method: string; params?: any }> = [];
       const emissions: Array<{ eventType: string; payload: any }> = [];

@@ -1715,8 +1715,20 @@ export function createControlSocketHelpers(
         .filter((p) => p.authorized || p.verified)
         .map((p) => p.provider)
         .filter((provider): provider is ProviderName => deps.isProviderName(provider));
-      set((s) => ({
-        providerStatusByName: { ...s.providerStatusByName, ...byName },
+      // Repeated refreshes usually report identical status. Restamping the
+      // timestamp anyway rewrote persisted state and re-ran every consumer that
+      // watches it (creation readiness rechecks, for one), so only move it when
+      // the status actually changed.
+      const current = get();
+      const nextStatusByName = { ...current.providerStatusByName, ...byName };
+      if (
+        JSON.stringify([nextStatusByName, connected]) ===
+        JSON.stringify([current.providerStatusByName, current.providerConnected])
+      ) {
+        return;
+      }
+      set(() => ({
+        providerStatusByName: nextStatusByName,
         providerStatusLastUpdatedAt: deps.nowIso(),
         providerConnected: connected,
       }));

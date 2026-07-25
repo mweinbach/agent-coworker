@@ -401,6 +401,7 @@ const {
 const { __internal: jsonRpcSocketInternal } = await import(
   "../src/app/store.helpers/jsonRpcSocket"
 );
+const { __internal: persistenceInternal } = await import("../src/app/store.helpers/persistence");
 
 function requestsFor(method: string) {
   return jsonRpcRequests.filter((entry) => entry.method === method);
@@ -600,6 +601,9 @@ export function registerWorkspaceSettingsSyncLifecycleHooks() {
   beforeEach(() => {
     installWorkspaceSettingsSyncMocks();
     setJsonRpcSocketOverride(MockJsonRpcSocket);
+    // persist() skips writes whose serialized state is unchanged, and that cache
+    // is module-scoped, so it has to be cleared between tests in a shared process.
+    persistenceInternal.resetPersistedStateCache();
     jsonRpcSocketInternal.reset();
     __controlSocketInternal.reset();
     __threadEventReducerInternal.reset();

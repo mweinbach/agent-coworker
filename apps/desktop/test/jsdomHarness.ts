@@ -68,14 +68,17 @@ function restoreGlobalProperty({ key, descriptor }: SavedGlobalDescriptor) {
     delete (globalThis as any).window;
     return;
   }
+  // Between harnesses there is no DOM. Animation libraries keep their own
+  // frameloop alive across unmounts (motion-dom re-schedules from a projection
+  // node), so a straggler frame scheduled by one test file would otherwise run
+  // during the next one and throw `document is not defined`. Hand back an inert
+  // scheduler until another harness installs a real one.
   if (key === "requestAnimationFrame") {
-    (globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) =>
-      globalThis.setTimeout(() => cb(Date.now()), 0) as any;
+    (globalThis as any).requestAnimationFrame = () => 0;
     return;
   }
   if (key === "cancelAnimationFrame") {
-    (globalThis as any).cancelAnimationFrame = (handle: number) =>
-      globalThis.clearTimeout(handle as any);
+    (globalThis as any).cancelAnimationFrame = () => {};
     return;
   }
   delete (globalThis as Record<string, unknown>)[key];

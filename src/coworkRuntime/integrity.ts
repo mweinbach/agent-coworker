@@ -86,9 +86,18 @@ function assertSafeSymlink(root: string, absolute: string, target: string): void
   }
 }
 
-async function describeEntry(root: string, relativePath: string): Promise<RuntimeIntegrityFile> {
-  assertSafeRelativePath(relativePath, "integrity file path");
-  const absolute = path.join(root, ...relativePath.split("/"));
+async function describeEntry(
+  root: string,
+  relativePath: string,
+  resolvedAbsolute?: string,
+): Promise<RuntimeIntegrityFile> {
+  let absolute = resolvedAbsolute;
+  if (absolute === undefined) {
+    // Only untrusted, caller-supplied paths need the traversal guard; the tree
+    // walk builds its own absolute paths and passes them through.
+    assertSafeRelativePath(relativePath, "integrity file path");
+    absolute = path.join(root, ...relativePath.split("/"));
+  }
   const stat = await fs.lstat(absolute);
   if (stat.isSymbolicLink()) {
     const target = await fs.readlink(absolute);
@@ -118,15 +127,19 @@ function hasKnownDirentType(entry: Dirent): boolean {
   );
 }
 
+/** A signed file, with both spellings the callers need, resolved once. */
+type RuntimeEntryPath = { relative: string; absolute: string };
+
 /**
  * Every signed file under `root`, sorted, excluding the integrity manifest and
- * its signature. This runs on every runtime use, so it carries the relative path
- * down the recursion rather than recomputing it per entry, and leaves ordering
- * to the single sort at the end.
+ * its signature. This runs on every runtime use over ~38k entries, so it carries
+ * both the relative and absolute path down the recursion instead of re-deriving
+ * either per entry, and leaves ordering to the single sort at the end.
  */
-async function listRuntimeRelativePaths(root: string): Promise<string[]> {
-  const relativePaths: string[] = [];
+async function listRuntimeEntryPaths(root: string): Promise<RuntimeEntryPath[]> {
+  const entries: RuntimeEntryPath[] = [];
   const seen = new Set<string>();
+  const caseInsensitive = process.platform === "win32";
   const visit = async (directory: string, prefix: string): Promise<void> => {
     const children = await fs.readdir(directory, { withFileTypes: true });
     for (const child of children) {
@@ -137,7 +150,7 @@ async function listRuntimeRelativePaths(root: string): Promise<string[]> {
       ) {
         continue;
       }
-      const identity = process.platform === "win32" ? relative.toLowerCase() : relative;
+      const identity = caseInsensitive ? relative.toLowerCase() : relative;
       if (seen.has(identity)) throw new Error(`Duplicate runtime path: ${relative}.`);
       seen.add(identity);
       const absolute = path.join(directory, child.name);
@@ -147,12 +160,14 @@ async function listRuntimeRelativePaths(root: string): Promise<string[]> {
         ? child.isDirectory()
         : (await fs.lstat(absolute)).isDirectory();
       if (isDirectory) await visit(absolute, relative);
-      else relativePaths.push(relative);
+      else entries.push({ relative, absolute });
     }
   };
   await visit(root, "");
-  relativePaths.sort();
-  return relativePaths;
+  entries.sort((left, right) =>
+    left.relative < right.relative ? -1 : left.relative > right.relative ? 1 : 0,
+  );
+  return entries;
 }
 
 function runtimeVerifyConcurrency(): number {
@@ -178,39 +193,39 @@ async function mapWithConcurrency<T>(
 }
 
 async function collectRuntimeFiles(root: string): Promise<RuntimeIntegrityFile[]> {
-  const relativePaths = await listRuntimeRelativePaths(root);
-  const files = await mapWithConcurrency(relativePaths.length, async (index) => {
-    const relativePath = relativePaths[index];
-    if (relativePath === undefined) throw new Error("Runtime path list changed during collection.");
-    return await describeEntry(root, relativePath);
+  const entries = await listRuntimeEntryPaths(root);
+  const files = await mapWithConcurrency(entries.length, async (index) => {
+    const entry = entries[index];
+    if (entry === undefined) throw new Error("Runtime path list changed during collection.");
+    return await describeEntry(root, entry.relative, entry.absolute);
   });
   files.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return files;
 }
 
 /**
- * Fingerprints the given paths without reading file contents. Detects resized,
- * relinked, retimed, or removed entries; a full re-hash follows any mismatch.
+ * Fingerprints the whole signed tree without reading file contents. Detects
+ * resized, relinked, retimed, added, and removed entries; a full re-hash follows
+ * any mismatch. This is the per-turn cost, so it does one stat per entry and no
+ * redundant path work.
  */
-async function fingerprintPaths(
+async function collectRuntimeTreeState(
   root: string,
-  relativePaths: readonly string[],
 ): Promise<{ digest: string; fileCount: number; bytes: number }> {
-  const descriptors = await mapWithConcurrency(relativePaths.length, async (index) => {
-    const relativePath = relativePaths[index];
-    if (relativePath === undefined) throw new Error("Runtime path list changed during collection.");
-    assertSafeRelativePath(relativePath, "integrity file path");
-    const absolute = path.join(root, ...relativePath.split("/"));
-    const stat = await fs.lstat(absolute);
+  const entries = await listRuntimeEntryPaths(root);
+  const descriptors = await mapWithConcurrency(entries.length, async (index) => {
+    const entry = entries[index];
+    if (entry === undefined) throw new Error("Runtime path list changed during collection.");
+    const stat = await fs.lstat(entry.absolute);
     if (stat.isSymbolicLink()) {
-      const target = await fs.readlink(absolute);
-      assertSafeSymlink(root, absolute, target);
-      return { line: `${relativePath}\0symlink\0${target}`, size: Buffer.byteLength(target) };
+      const target = await fs.readlink(entry.absolute);
+      assertSafeSymlink(root, entry.absolute, target);
+      return { line: `${entry.relative}\0symlink\0${target}`, size: Buffer.byteLength(target) };
     }
-    if (!stat.isFile()) throw new Error(`Unsupported runtime entry: ${relativePath}`);
-    if (stat.nlink !== 1) throw new Error(`Runtime hard links are forbidden: ${relativePath}`);
+    if (!stat.isFile()) throw new Error(`Unsupported runtime entry: ${entry.relative}`);
+    if (stat.nlink !== 1) throw new Error(`Runtime hard links are forbidden: ${entry.relative}`);
     return {
-      line: `${relativePath}\0file\0${stat.size}\0${stat.nlink}\0${Math.round(stat.mtimeMs)}`,
+      line: `${entry.relative}\0file\0${stat.size}\0${stat.nlink}\0${Math.round(stat.mtimeMs)}`,
       size: stat.size,
     };
   });
@@ -222,13 +237,6 @@ async function fingerprintPaths(
     bytes += descriptor.size;
   }
   return { digest: hash.digest("hex"), fileCount: descriptors.length, bytes };
-}
-
-/** Whole-tree fingerprint; also detects files added to or removed from the tree. */
-async function collectRuntimeTreeState(
-  root: string,
-): Promise<{ digest: string; fileCount: number; bytes: number }> {
-  return await fingerprintPaths(root, await listRuntimeRelativePaths(root));
 }
 
 export function runtimeAttestationPath(runtimeDir: string): string {

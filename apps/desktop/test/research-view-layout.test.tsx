@@ -258,7 +258,10 @@ describe("research view layout", () => {
       }
 
       const root = createRoot(container);
-      resetAppStore();
+      // Pin the readiness check to in-flight. Leaving it to whatever
+      // preflightCreation the ambient store carries made this order-dependent:
+      // the composer only renders a status region when it has something to say.
+      resetAppStore({ preflightCreation: () => new Promise(() => {}) });
 
       await act(async () => {
         root.render(createElement(ResearchView));
@@ -268,6 +271,7 @@ describe("research view layout", () => {
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.getAttribute("aria-live"),
       ).toBe("polite");
+      expect(container.textContent).toContain("Validating readiness");
       expect(container.textContent).not.toContain("Ready");
       expect(container.textContent).not.toContain(
         "Deep Research runs in the background and streams cited markdown as it arrives.",

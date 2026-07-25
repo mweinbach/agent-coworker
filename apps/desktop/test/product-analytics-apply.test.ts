@@ -13,19 +13,6 @@ const electronMockOverrides = {
 setElectronMockOverrides(electronMockOverrides);
 mock.module("electron", () => createElectronMock());
 
-const localLogLines: Array<Record<string, unknown>> = [];
-mock.module("../electron/services/localLogs", () => ({
-  writeLocalLog: (
-    _file: string,
-    _level: string,
-    category: string,
-    message: string,
-    meta?: Record<string, unknown>,
-  ) => {
-    localLogLines.push({ category, message, meta });
-  },
-}));
-
 const { DesktopProductAnalyticsService } = await import("../electron/services/productAnalytics");
 
 function makeState(overrides: Record<string, unknown> = {}) {
@@ -37,61 +24,67 @@ function makeState(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
+function makeService() {
+  const initCalls: unknown[] = [];
+  const service = new DesktopProductAnalyticsService({
+    env: { COWORK_POSTHOG_KEY: "phc_test", COWORK_PRODUCT_ANALYTICS_ENABLED: "true" },
+    appVersion: () => "1.2.23",
+    isPackaged: () => true,
+    platform: "win32",
+    arch: "x64",
+    generateAnonymousId: () => "anon_0123456789abcdef0123456789abcdef",
+    // Injected rather than module-mocked: mock.module is process-global and
+    // would follow this file into every later suite.
+    initProductAnalyticsImpl: async (context) => {
+      initCalls.push(context);
+      return {
+        initialized: false,
+        reason: "disabled",
+        enabled: false,
+        keyConfigured: true,
+      } as never;
+    },
+  });
+  return { service, initCalls };
+}
+
 describe("DesktopProductAnalyticsService.applyPersistedState", () => {
   beforeEach(() => {
     setElectronMockOverrides(electronMockOverrides);
-    localLogLines.length = 0;
   });
 
   test("only re-applies when the analytics configuration actually changes", async () => {
-    const service = new DesktopProductAnalyticsService({
-      env: { COWORK_POSTHOG_KEY: "phc_test", COWORK_PRODUCT_ANALYTICS_ENABLED: "true" },
-      appVersion: () => "1.2.23",
-      isPackaged: () => true,
-      platform: "win32",
-      arch: "x64",
-      generateAnonymousId: () => "anon_0123456789abcdef0123456789abcdef",
-    });
-
+    const { service, initCalls } = makeService();
     const consented = makeState({
       privacyTelemetrySettings: { productAnalyticsEnabled: true },
     });
 
-    // The renderer persists desktop state several times a second; those saves
-    // are identical as far as analytics is concerned.
     await service.applyPersistedState(consented);
+    expect(initCalls).toHaveLength(1);
+
+    // The renderer persists desktop state several times a second; those saves are
+    // identical as far as analytics is concerned.
     await service.applyPersistedState(
       makeState({ privacyTelemetrySettings: { productAnalyticsEnabled: true }, threads: [] }),
     );
     await service.applyPersistedState(consented);
-
-    expect(localLogLines).toHaveLength(1);
+    expect(initCalls).toHaveLength(1);
 
     // Withdrawing consent is a real change and must be applied.
     await service.applyPersistedState(
       makeState({ privacyTelemetrySettings: { productAnalyticsEnabled: false } }),
     );
-
-    expect(localLogLines).toHaveLength(2);
-    expect(localLogLines.at(-1)).toMatchObject({ message: "product analytics status" });
+    expect(initCalls).toHaveLength(2);
 
     // Repeating the withdrawn-consent state stays quiet again.
     await service.applyPersistedState(
       makeState({ privacyTelemetrySettings: { productAnalyticsEnabled: false } }),
     );
-
-    expect(localLogLines).toHaveLength(2);
+    expect(initCalls).toHaveLength(2);
   });
 
   test("still returns the prepared state on every call", async () => {
-    const service = new DesktopProductAnalyticsService({
-      env: { COWORK_POSTHOG_KEY: "phc_test", COWORK_PRODUCT_ANALYTICS_ENABLED: "true" },
-      appVersion: () => "1.2.23",
-      isPackaged: () => true,
-      platform: "win32",
-      arch: "x64",
-      generateAnonymousId: () => "anon_0123456789abcdef0123456789abcdef",
-    });
+    const { service } = makeService();
 
     const first = await service.applyPersistedState(makeState());
     const second = await service.applyPersistedState(makeState());

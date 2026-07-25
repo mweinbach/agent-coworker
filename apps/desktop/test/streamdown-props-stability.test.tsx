@@ -29,13 +29,26 @@ mock.module("../src/lib/agentSocket", () => ({
 
 let capturedStreamdownProps: Record<string, unknown>[] = [];
 
-// Clean mock of streamdown without self-import circularity
+// Streamdown is stubbed for speed — the real one pulls in mermaid/math/code and
+// hangs under jsdom. But mock.module is process-global and cannot be undone once
+// a module has bound the import, so this stub stays installed for every later
+// test file in the same process. Rendering string children as markup (what the
+// real component does with HTML release notes) keeps it from silently changing
+// what unrelated suites see: updates-page was left asserting against escaped
+// `&lt;h1&gt;` text.
 mock.module("streamdown", () => ({
   defaultRemarkPlugins: { gfm: () => {} },
   defaultRehypePlugins: { raw: () => {}, harden: () => {} },
   Streamdown: (props: Record<string, unknown>) => {
     capturedStreamdownProps.push(props);
-    return createElement("div", { "data-testid": "streamdown-mock" }, props.children as any);
+    const children = props.children;
+    if (typeof children === "string") {
+      return createElement("div", {
+        "data-testid": "streamdown-mock",
+        dangerouslySetInnerHTML: { __html: children },
+      });
+    }
+    return createElement("div", { "data-testid": "streamdown-mock" }, children as any);
   },
 }));
 

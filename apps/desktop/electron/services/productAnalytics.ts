@@ -29,6 +29,8 @@ type DesktopProductAnalyticsServiceOptions = {
   platform?: NodeJS.Platform;
   arch?: string;
   generateAnonymousId?: () => string;
+  /** Injectable so tests can observe re-initialization without module mocks. */
+  initProductAnalyticsImpl?: typeof initProductAnalytics;
 };
 
 type PreparedPersistedState = {
@@ -221,6 +223,7 @@ export class DesktopProductAnalyticsService {
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
   private readonly generateAnonymousId: () => string;
+  private readonly initProductAnalytics: typeof initProductAnalytics;
   private persistedState: PersistedProductAnalyticsState | undefined;
   private pendingAppUpdated = false;
   private startupCaptured = false;
@@ -234,6 +237,7 @@ export class DesktopProductAnalyticsService {
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
     this.generateAnonymousId = options.generateAnonymousId ?? generateAnonymousInstallationId;
+    this.initProductAnalytics = options.initProductAnalyticsImpl ?? initProductAnalytics;
   }
 
   getStatus(): ProductAnalyticsStatus | null {
@@ -341,7 +345,7 @@ export class DesktopProductAnalyticsService {
     }
     this.lastAppliedSignature = signature;
 
-    this.lastStatus = await initProductAnalytics(initContext);
+    this.lastStatus = await this.initProductAnalytics(initContext);
     writeLocalLog("desktop-main.log", "info", "product-analytics", "product analytics status", {
       initialized: this.lastStatus.initialized,
       reason: this.lastStatus.reason,

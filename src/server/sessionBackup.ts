@@ -234,17 +234,50 @@ async function normalizeMetadataOnLoad(
 // SessionBackupManager
 // ---------------------------------------------------------------------------
 
+export type PruneBackupsRootOptions = {
+  maxClosedSessions?: number;
+  maxClosedAgeDays?: number;
+  maxOrphanAgeDays?: number;
+  maxInactiveAgeDays?: number;
+  maxStageAgeHours?: number;
+  skipSessionId?: string;
+};
+
+/**
+ * One prune at a time per backups root. `create()` fires a prune for every new
+ * session, so two sessions starting together used to sweep the same tree
+ * concurrently and race each other's recursive removals — `force` only
+ * suppresses ENOENT, not the EPERM/ENOTEMPTY a parallel delete produces. Runs
+ * are chained instead of dropped so a caller still observes a complete sweep.
+ */
+const pruneChainsByRoot = new Map<string, Promise<void>>();
+
 export class SessionBackupManager implements SessionBackupHandle {
   static async pruneBackupsRoot(
     backupsRootDir: string,
-    opts?: {
-      maxClosedSessions?: number;
-      maxClosedAgeDays?: number;
-      maxOrphanAgeDays?: number;
-      maxInactiveAgeDays?: number;
-      maxStageAgeHours?: number;
-      skipSessionId?: string;
-    },
+    opts?: PruneBackupsRootOptions,
+  ): Promise<void> {
+    const key = path.resolve(backupsRootDir);
+    const previous = pruneChainsByRoot.get(key) ?? Promise.resolve();
+    const run = previous.then(
+      () => SessionBackupManager.pruneBackupsRootOnce(backupsRootDir, opts),
+      // A failed prune must not poison the ones queued behind it.
+      () => SessionBackupManager.pruneBackupsRootOnce(backupsRootDir, opts),
+    );
+    const tail = run.catch(() => undefined);
+    pruneChainsByRoot.set(key, tail);
+    try {
+      await run;
+    } finally {
+      if (pruneChainsByRoot.get(key) === tail) {
+        pruneChainsByRoot.delete(key);
+      }
+    }
+  }
+
+  private static async pruneBackupsRootOnce(
+    backupsRootDir: string,
+    opts?: PruneBackupsRootOptions,
   ): Promise<void> {
     await ensureSecureDirectory(backupsRootDir);
     const maxClosedSessions = Math.max(

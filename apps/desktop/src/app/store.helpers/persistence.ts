@@ -149,11 +149,29 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
   return syncDesktopStateCacheState(get());
 }
 
+/**
+ * Serialized form of the last state handed to the main process. Store updates
+ * arrive continuously (control events, provider refreshes, thread deltas) and
+ * most leave the persisted projection identical, so without this the debounce
+ * re-armed and rewrote the whole state file several times a second while idle.
+ * The local UI cache is still refreshed on every flush; only the write is
+ * skipped.
+ */
+let _lastPersistedJson: string | null = null;
+
+function shouldWriteState(state: PersistedState): boolean {
+  const serialized = JSON.stringify(state);
+  if (serialized === _lastPersistedJson) return false;
+  _lastPersistedJson = serialized;
+  return true;
+}
+
 export function persist(get: () => AppStoreState) {
   if (_persistTimer) clearTimeout(_persistTimer);
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
     const state = syncDesktopStateCacheNow(get);
+    if (!shouldWriteState(state)) return;
     void saveState(state);
   }, PERSIST_DEBOUNCE_MS);
 }
@@ -164,9 +182,13 @@ export async function persistNow(get: () => AppStoreState) {
     _persistTimer = null;
   }
   const state = syncDesktopStateCacheNow(get);
+  if (!shouldWriteState(state)) return;
   await saveState(state);
 }
 
 export const __internal = {
   buildPersistableThreads,
+  resetPersistedStateCache: () => {
+    _lastPersistedJson = null;
+  },
 };

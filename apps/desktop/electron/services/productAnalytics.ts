@@ -85,6 +85,16 @@ function buildInitContext(opts: {
   };
 }
 
+/**
+ * Everything that decides how product analytics behaves, collapsed to a
+ * comparable string. The raw API key is reduced to `keyConfigured` so the
+ * signature never carries a secret.
+ */
+function productAnalyticsSignature(context: ReturnType<typeof buildInitContext>): string {
+  const { apiKey: _apiKey, ...resolved } = resolveProductAnalyticsConfig(context);
+  return JSON.stringify(resolved);
+}
+
 function resolveDesktopConfig(opts: {
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   productAnalyticsState?: PersistedProductAnalyticsState | null;
@@ -215,6 +225,7 @@ export class DesktopProductAnalyticsService {
   private pendingAppUpdated = false;
   private startupCaptured = false;
   private lastStatus: ProductAnalyticsStatus | null = null;
+  private lastAppliedSignature: string | null = null;
 
   constructor(options: DesktopProductAnalyticsServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -311,18 +322,26 @@ export class DesktopProductAnalyticsService {
       this.env,
     );
 
-    this.lastStatus = await initProductAnalytics(
-      buildInitContext({
-        enabled: settings.productAnalyticsEnabled,
-        productAnalyticsState: prepared.state.productAnalytics,
-        env: this.env,
-        appVersion: this.resolveAppVersion(),
-        isPackaged: this.resolveIsPackaged(),
-        platform: this.platform,
-        arch: this.arch,
-        eventSource: "main",
-      }),
-    );
+    const initContext = buildInitContext({
+      enabled: settings.productAnalyticsEnabled,
+      productAnalyticsState: prepared.state.productAnalytics,
+      env: this.env,
+      appVersion: this.resolveAppVersion(),
+      isPackaged: this.resolveIsPackaged(),
+      platform: this.platform,
+      arch: this.arch,
+      eventSource: "main",
+    });
+    // The renderer saves desktop state a few times a second, and every save
+    // lands here. Re-initializing (and logging) each time produced thousands of
+    // identical log lines per session, so only act on real config changes.
+    const signature = productAnalyticsSignature(initContext);
+    if (this.lastAppliedSignature === signature) {
+      return prepared;
+    }
+    this.lastAppliedSignature = signature;
+
+    this.lastStatus = await initProductAnalytics(initContext);
     writeLocalLog("desktop-main.log", "info", "product-analytics", "product analytics status", {
       initialized: this.lastStatus.initialized,
       reason: this.lastStatus.reason,

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { extractRuntimeArchive, sha256File } from "./archive";
-import { releaseRuntimeTrust, type TrustedRuntimeKeys } from "./integrity";
+import { clearRuntimeAttestation, releaseRuntimeTrust, type TrustedRuntimeKeys } from "./integrity";
 import { readRuntimeManifest } from "./manifest";
 import { assertRuntimeVersion } from "./platform";
 import { verifyRuntime } from "./runtime";
@@ -106,6 +106,7 @@ export async function pruneInstalledRuntimes(
   for (const runtime of installed) {
     if (retained.has(runtime.version)) continue;
     releaseRuntimeTrust(runtime.path);
+    await clearRuntimeAttestation(runtime.path);
     await fs.rm(runtime.path, { recursive: true, force: true });
     removed.push({ version: runtime.version, path: runtime.path });
   }
@@ -177,6 +178,7 @@ export async function installRuntimeArchive(opts: {
     if (existing) {
       backup = `${destination}.replaced-${crypto.randomUUID()}`;
       releaseRuntimeTrust(destination);
+      await clearRuntimeAttestation(destination);
       await fs.rename(destination, backup);
     }
     await fs.rename(staging, destination);
@@ -212,6 +214,7 @@ export async function installRuntimeArchive(opts: {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
     if (destination && promoted) {
       releaseRuntimeTrust(destination);
+      await clearRuntimeAttestation(destination);
       await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
     }
     if (destination && backup) {
@@ -221,5 +224,8 @@ export async function installRuntimeArchive(opts: {
     throw error;
   } finally {
     if (backup) await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
+    // The staging tree is verified before promotion, which leaves an attestation
+    // beside a directory that no longer exists once it is renamed or discarded.
+    await clearRuntimeAttestation(staging);
   }
 }

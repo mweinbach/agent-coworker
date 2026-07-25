@@ -50,6 +50,15 @@ import {
   resolveWorkspaceMemoryDefaultsFromControl,
 } from "./workspaceMemoryDefaults";
 
+/**
+ * A settings save is a foreground action, so it waits noticeably longer than the
+ * 3s default: on a cold start the control bootstrap fans out a dozen RPCs
+ * (including network provider refreshes) before the session id lands.
+ */
+const CONTROL_SESSION_APPLY_TIMEOUT_MS = 10_000;
+/** Upper bound on the background catch-up push after a cold start. */
+const DEFERRED_CONTROL_SYNC_TIMEOUT_MS = 120_000;
+
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
   get: StoreGet,
@@ -493,9 +502,40 @@ export function createWorkspaceDefaultsActions(
     );
   };
 
+  /**
+   * A workspace whose control session was still connecting when settings were
+   * saved. The change is already persisted; this pushes it to the live session
+   * once the connection lands so the two never drift.
+   */
+  const deferredControlSyncWorkspaces = new Set<string>();
+
+  const scheduleDeferredControlSync = (workspaceId: string) => {
+    if (deferredControlSyncWorkspaces.has(workspaceId)) return;
+    deferredControlSyncWorkspaces.add(workspaceId);
+    void (async () => {
+      try {
+        const ready = await waitForControlSession(
+          get,
+          set,
+          workspaceId,
+          DEFERRED_CONTROL_SYNC_TIMEOUT_MS,
+        );
+        if (!ready) return;
+        // Re-reads the store, so it pushes whatever the settings are by then.
+        await syncWorkspaceDefaultsToRuntime(workspaceId, { ensureControl: false });
+      } catch {
+        // Best effort: the next settings change or thread start re-applies.
+      } finally {
+        deferredControlSyncWorkspaces.delete(workspaceId);
+      }
+    })();
+  };
+
   const syncWorkspaceDefaultsToRuntime = async (
     workspaceId: string,
-    opts: { ensureControl: boolean; notifyOnMissingControl?: boolean },
+    // `userInitiated` marks the workspace the person actually acted on: only that
+    // one reports apply failures upward and gets a background catch-up push.
+    opts: { ensureControl: boolean; userInitiated?: boolean },
   ) => {
     const desiredWorkspace = get().workspaces.find((workspace) => workspace.id === workspaceId);
     if (!desiredWorkspace) return;
@@ -506,7 +546,7 @@ export function createWorkspaceDefaultsActions(
     }
 
     const controlReady = opts.ensureControl
-      ? await waitForControlSession(get, set, workspaceId)
+      ? await waitForControlSession(get, set, workspaceId, CONTROL_SESSION_APPLY_TIMEOUT_MS)
       : Boolean(get().workspaceRuntimeById[workspaceId]?.controlSessionId);
     set((state) => ({
       workspaces: state.workspaces.map((workspace) =>
@@ -612,8 +652,19 @@ export function createWorkspaceDefaultsActions(
       });
     }
 
-    if (!persisted && opts.notifyOnMissingControl) {
-      throw new Error("Control session is not fully connected yet.");
+    if (!controlReady) {
+      // Settings are already saved to disk; only the push to the live session is
+      // outstanding. Reporting that as a failure (and rolling the toggle back)
+      // was wrong — during a cold start the control session routinely needs
+      // longer than a user is willing to stare at a red alert.
+      if (opts.userInitiated) {
+        scheduleDeferredControlSync(workspaceId);
+      }
+      return;
+    }
+
+    if (!persisted && opts.userInitiated) {
+      throw new Error("Cowork could not apply these settings to the running workspace.");
     }
 
     const threadIds = get()
@@ -932,7 +983,7 @@ export function createWorkspaceDefaultsActions(
         label: "Update workspace settings",
         errorTitle: "Workspace settings not updated",
         errorMessage: "Unable to update workspace settings.",
-        repairAction: "Wait for the workspace connection to finish, then retry.",
+        repairAction: "Retry, or restart the workspace if it keeps failing.",
         optimistic: () => {
           set((state) => ({
             workspaces: state.workspaces.map((workspace) => {
@@ -999,7 +1050,7 @@ export function createWorkspaceDefaultsActions(
             const workspaceIds = get().workspaces.map((workspace) => workspace.id);
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
-              notifyOnMissingControl: true,
+              userInitiated: true,
             });
             await Promise.all(
               workspaceIds
@@ -1007,7 +1058,7 @@ export function createWorkspaceDefaultsActions(
                 .map((targetWorkspaceId) =>
                   syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
                     ensureControl: false,
-                    notifyOnMissingControl: false,
+                    userInitiated: false,
                   }),
                 ),
             );
@@ -1020,7 +1071,7 @@ export function createWorkspaceDefaultsActions(
               .map((workspace) => workspace.id);
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
-              notifyOnMissingControl: true,
+              userInitiated: true,
             });
             await Promise.all(
               workspaceIds
@@ -1028,7 +1079,7 @@ export function createWorkspaceDefaultsActions(
                 .map((targetWorkspaceId) =>
                   syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
                     ensureControl: false,
-                    notifyOnMissingControl: false,
+                    userInitiated: false,
                   }),
                 ),
             );
@@ -1038,7 +1089,7 @@ export function createWorkspaceDefaultsActions(
           if (!sharedSettings) {
             await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
               ensureControl: true,
-              notifyOnMissingControl: true,
+              userInitiated: true,
             });
             return;
           }
@@ -1046,7 +1097,7 @@ export function createWorkspaceDefaultsActions(
           const workspaceIds = get().workspaces.map((workspace) => workspace.id);
           await syncWorkspaceDefaultsToRuntime(sourceWorkspace.id, {
             ensureControl: true,
-            notifyOnMissingControl: true,
+            userInitiated: true,
           });
           await Promise.all(
             workspaceIds
@@ -1054,7 +1105,7 @@ export function createWorkspaceDefaultsActions(
               .map((targetWorkspaceId) =>
                 syncWorkspaceDefaultsToRuntime(targetWorkspaceId, {
                   ensureControl: false,
-                  notifyOnMissingControl: false,
+                  userInitiated: false,
                 }),
               ),
           );

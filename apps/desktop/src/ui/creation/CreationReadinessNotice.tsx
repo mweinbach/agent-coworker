@@ -52,8 +52,26 @@ export function CreationReadinessNotice({
   }
 
   const blockedChecks = result?.checks.filter((entry) => entry.status === "blocked") ?? [];
+  const pendingChecks = result?.checks.filter((entry) => entry.status === "pending") ?? [];
+
+  // Setup that finishes on its own is progress, not a failure: no destructive
+  // styling, no retry button, and the composer stays usable behind it.
   if (!error && blockedChecks.length === 0) {
-    return null;
+    if (pendingChecks.length === 0) {
+      return null;
+    }
+    return (
+      <Alert role="status" aria-live="polite">
+        <LoaderCircleIcon className="animate-spin" aria-hidden />
+        <AlertTitle>Finishing setup</AlertTitle>
+        <AlertDescription className="flex flex-col gap-0.5">
+          <span>{pendingChecks.map((entry) => entry.message).join(" ")}</span>
+          <span className="text-xs text-muted-foreground/80">
+            You can keep working — this clears as soon as setup finishes.
+          </span>
+        </AlertDescription>
+      </Alert>
+    );
   }
 
   return (

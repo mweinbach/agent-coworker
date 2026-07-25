@@ -1,3 +1,4 @@
+import type { CoworkRuntimeBootstrapProgress } from "../../coworkRuntime/types";
 import type { CodexAppServerInstallStatus } from "../../providers/codexAppServerResolver";
 import type { ProviderCatalogPayload } from "../../providers/connectionCatalog";
 import type { LmStudioLocalStatus } from "../../providers/lmstudio/local";
@@ -14,11 +15,42 @@ export type CreationPreflightDependencies = {
   config: AgentConfig;
   resolveWorkspace: (cwd: string | undefined) => string;
   getProviderCatalog: () => Promise<ProviderCatalogPayload>;
-  getRuntimeStartup: () => { ready: boolean; error?: string };
+  getRuntimeStartup: () => {
+    ready: boolean;
+    error?: string;
+    progress?: CoworkRuntimeBootstrapProgress | null;
+  };
   getLmStudioStatus?: () => Promise<LmStudioLocalStatus>;
   getCodexAppServerStatus?: () => Promise<CodexAppServerInstallStatus>;
   hasResearchCredentials?: () => boolean;
 };
+
+/**
+ * Names the setup step currently running so a two-minute first launch reads as
+ * progress rather than as an opaque wait.
+ */
+function startupProgressMessage(
+  progress: CoworkRuntimeBootstrapProgress | null | undefined,
+): string {
+  if (!progress) return COWORK_RUNTIME_STARTING_MESSAGE;
+  switch (progress.phase) {
+    case "waiting":
+      return "Another Cowork window is finishing the one-time setup.";
+    case "downloading":
+      return progress.percent === null
+        ? "Downloading the Cowork runtime."
+        : `Downloading the Cowork runtime — ${Math.round(progress.percent)}%.`;
+    case "installing":
+      return "Verifying and installing the Cowork runtime.";
+    default:
+      return COWORK_RUNTIME_STARTING_MESSAGE;
+  }
+}
+
+/** Pending checks resolve without user action, so only blocked checks gate creation. */
+function isReady(checks: CreationReadinessCheck[]): boolean {
+  return checks.every((entry) => entry.status !== "blocked");
+}
 
 function check(
   id: CreationReadinessCheck["id"],
@@ -41,14 +73,12 @@ async function appendRuntimeChecks(
 ): Promise<void> {
   const startup = deps.getRuntimeStartup();
   if (!startup.ready) {
+    // Startup bootstrap resolves on its own and `turn/start` already awaits it,
+    // so this is pending work, not a blocker the person has to act on.
     checks.push(
-      check(
-        "runtime_ready",
-        "blocked",
-        startup.error
-          ? `Cowork runtime failed to start: ${startup.error}`
-          : COWORK_RUNTIME_STARTING_MESSAGE,
-      ),
+      startup.error
+        ? check("runtime_ready", "blocked", `Cowork runtime failed to start: ${startup.error}`)
+        : check("runtime_ready", "pending", startupProgressMessage(startup.progress)),
     );
     return;
   }
@@ -120,7 +150,7 @@ export async function runCreationPreflight(
           ),
     );
     await appendRuntimeChecks(checks, undefined, deps);
-    return { ready: checks.every((entry) => entry.status === "ok"), checks };
+    return { ready: isReady(checks), checks };
   }
 
   const provider = params.provider ?? deps.config.provider;
@@ -180,5 +210,5 @@ export async function runCreationPreflight(
   );
 
   await appendRuntimeChecks(checks, provider, deps);
-  return { ready: checks.every((entry) => entry.status === "ok"), checks };
+  return { ready: isReady(checks), checks };
 }

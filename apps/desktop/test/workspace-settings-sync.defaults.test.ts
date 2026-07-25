@@ -394,8 +394,8 @@ describe("workspace settings sync", () => {
     expect(result).toMatchObject({
       ok: false,
       error: {
-        message: "Control session is not fully connected yet.",
-        repairAction: "Wait for the workspace connection to finish, then retry.",
+        message: "Cowork could not apply these settings to the running workspace.",
+        repairAction: "Retry, or restart the workspace if it keeps failing.",
       },
     });
     expect(
@@ -406,7 +406,38 @@ describe("workspace settings sync", () => {
       title: "Workspace settings not updated",
       audience: "foreground",
     });
-    expect(notification?.detail).toContain("Wait for the workspace connection to finish");
+    expect(notification?.detail).toContain("Retry, or restart the workspace");
+  });
+
+  test("updateWorkspaceDefaults keeps the saved change when the control session is still connecting", async () => {
+    // A control socket that never reaches ready is exactly the cold-start state
+    // the desktop hit: settings were already persisted, so reporting a failure
+    // and reverting the toggle was wrong.
+    class NeverReadyJsonRpcSocket extends MockJsonRpcSocket {
+      readonly readyPromise = Promise.reject(new Error("still connecting"));
+      override connect() {}
+    }
+    // The rejection is consumed by waitForReady; keep Bun from flagging it early.
+    setJsonRpcSocketOverride(NeverReadyJsonRpcSocket);
+    RUNTIME.jsonRpcSockets.clear();
+    __controlSocketInternal.reset();
+    jsonRpcRequests.length = 0;
+    useAppStore.setState((state) => ({ ...state, notifications: [] }));
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "gpt-5.4",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.defaultModel,
+    ).toBe("gpt-5.4");
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+    expect(
+      useAppStore
+        .getState()
+        .notifications.filter((entry) => entry.title === "Workspace settings not updated"),
+    ).toHaveLength(0);
   });
 
   test("updateWorkspaceDefaults updates yolo configuration dynamically", async () => {

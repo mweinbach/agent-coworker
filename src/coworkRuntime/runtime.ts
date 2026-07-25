@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 
 import { execFileCompat } from "../utils/execFileCompat";
 import {
-  primeVerifiedRuntimeTrust,
   RUNTIME_INTEGRITY_MANIFEST_FILE,
   RUNTIME_INTEGRITY_SIGNATURE_FILE,
   type TrustedRuntimeKeys,
@@ -229,7 +228,6 @@ export async function verifyRuntime(opts: {
   host?: RuntimeHost;
   env?: Record<string, string | undefined>;
   trustedKeys?: TrustedRuntimeKeys;
-  cacheTrust?: boolean;
 }): Promise<RuntimeVerification> {
   const runtimeDir = path.resolve(opts.runtimeDir);
   const errors: string[] = [];
@@ -253,6 +251,7 @@ export async function verifyRuntime(opts: {
       root: runtimeDir,
       manifest,
       trustedKeys: opts.trustedKeys ?? TRUSTED_COWORK_RUNTIME_KEYS,
+      ...(opts.env ? { env: opts.env } : {}),
     });
     checks.integrity = `${integrity.fileCount} files signed by ${integrity.keyId}`;
   } catch (error) {
@@ -284,12 +283,8 @@ export async function verifyRuntime(opts: {
     }
   }
 
-  if (errors.length === 0 && (opts.cacheTrust === true || opts.execute === true)) {
-    primeVerifiedRuntimeTrust(
-      runtimeDir,
-      manifest.components.map((component) => component.id),
-    );
-  }
+  // `verifyRuntimeIntegrity` above already recorded the verified tree fingerprint
+  // on the shared trust state, so later uses in this process reuse it.
 
   if (opts.execute && errors.length === 0) {
     try {

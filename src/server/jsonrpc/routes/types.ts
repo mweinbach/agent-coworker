@@ -1,4 +1,5 @@
 import type { LibreOfficeCapabilityDiagnostic } from "../../../coworkRuntime";
+import type { CoworkRuntimeBootstrapProgress } from "../../../coworkRuntime/types";
 import type { ConversationImportService } from "../../../import/conversations";
 import type { LmStudioLocalService } from "../../../providers/lmstudio/local";
 import type { SkillImprovementService } from "../../../skillImprovement";
@@ -171,6 +172,7 @@ export interface JsonRpcRouteContext {
       startup: {
         ready: boolean;
         error?: string;
+        progress?: CoworkRuntimeBootstrapProgress | null;
       };
       sendQueue: {
         queuedSends: number;

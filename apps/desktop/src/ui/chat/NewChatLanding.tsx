@@ -197,8 +197,13 @@ export function NewChatLanding() {
     model: modelSelection.model,
   });
   const readinessBlocked = Boolean(readiness.error) || readiness.result?.ready === false;
-  const canSubmitNewChat =
-    hasSubmittableContent && !readiness.checking && readiness.result?.ready === true;
+  const readinessPending =
+    !readinessBlocked &&
+    (readiness.result?.checks.some((entry) => entry.status === "pending") ?? false);
+  // Startup work is queued server-side by `turn/start`, so a pending check must
+  // not gate the send. `checking` is intentionally not part of this: the pending
+  // recheck loop toggles it every second and would flicker the submit button.
+  const canSubmitNewChat = hasSubmittableContent && readiness.result?.ready === true;
 
   const reasoningConfig = useMemo(
     () =>
@@ -489,11 +494,13 @@ export function NewChatLanding() {
             <MessageComposerStatus role="status" aria-live="polite" aria-atomic="true">
               {submitting
                 ? (creationPhaseLabel(creationPhase) ?? "Starting chat…")
-                : readiness.checking
-                  ? "Validating readiness…"
-                  : readinessBlocked
-                    ? "Setup required"
-                    : null}
+                : readinessBlocked
+                  ? "Setup required"
+                  : readinessPending
+                    ? "Finishing setup — your message will send automatically"
+                    : readiness.checking && !readiness.result
+                      ? "Validating readiness…"
+                      : null}
             </MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (

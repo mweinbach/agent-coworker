@@ -86,4 +86,56 @@ describe("CreationReadinessNotice", () => {
     act(() => connect?.click());
     expect(onRepair).toHaveBeenCalledWith({ type: "connectProvider", provider: "google" });
   });
+
+  test("shows startup work as polite progress instead of an assertive failure", () => {
+    act(() => {
+      root.render(
+        createElement(CreationReadinessNotice, {
+          checking: false,
+          error: null,
+          result: {
+            ready: true,
+            checks: [
+              { id: "provider_connected", status: "ok", message: "Google is available." },
+              {
+                id: "runtime_ready",
+                status: "pending",
+                message: "Downloading the Cowork runtime — 62%.",
+              },
+            ],
+          },
+          repairing: false,
+          onRepair: () => {},
+          onRetry: () => {},
+        }),
+      );
+    });
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    const status = container.querySelector('[role="status"]');
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.textContent).toContain("Finishing setup");
+    expect(status?.textContent).toContain("Downloading the Cowork runtime — 62%.");
+    expect(container.textContent).not.toContain("Retry check");
+  });
+
+  test("renders nothing once every check is ok", () => {
+    act(() => {
+      root.render(
+        createElement(CreationReadinessNotice, {
+          checking: false,
+          error: null,
+          result: {
+            ready: true,
+            checks: [{ id: "runtime_ready", status: "ok", message: "Runtime is ready." }],
+          },
+          repairing: false,
+          onRepair: () => {},
+          onRetry: () => {},
+        }),
+      );
+    });
+
+    expect(container.textContent).toBe("");
+  });
 });

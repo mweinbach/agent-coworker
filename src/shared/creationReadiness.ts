@@ -2,8 +2,7 @@ import { z } from "zod";
 
 import { PROVIDER_NAMES } from "../types";
 
-export const COWORK_RUNTIME_STARTING_MESSAGE =
-  "Cowork is still starting. Wait a moment, then retry.";
+export const COWORK_RUNTIME_STARTING_MESSAGE = "Cowork is finishing setup in the background.";
 
 export const creationKindSchema = z.enum(["chat", "research"]);
 
@@ -44,7 +43,9 @@ export const creationReadinessCheckSchema = z
       "runtime_ready",
       "research_credentials",
     ]),
-    status: z.enum(["ok", "blocked"]),
+    // `pending` is work Cowork finishes on its own (startup bootstrap). It never
+    // blocks creation: the server queues `turn/start` until startup completes.
+    status: z.enum(["ok", "pending", "blocked"]),
     message: z.string().trim().min(1),
     repairAction: creationRepairActionSchema.optional(),
   })

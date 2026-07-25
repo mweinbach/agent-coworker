@@ -16,6 +16,70 @@ import {
 } from "./flow.harness";
 
 describe("server JSON-RPC flows", () => {
+  test("creation preflight reports background startup as pending, not blocked", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseRuntimeSetup: () => void = () => undefined;
+    const runtimeSetupGate = new Promise<void>((resolve) => {
+      releaseRuntimeSetup = resolve;
+    });
+    const { server, url, ready } = await startAgentServer(
+      serverOpts(tmpDir, {
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async ({ onProgress }) => {
+          onProgress?.({
+            phase: "downloading",
+            version: "9.9.9",
+            transferredBytes: 620,
+            totalBytes: 1000,
+            percent: 62,
+          });
+          await runtimeSetupGate;
+          return null;
+        },
+        ensureDefaultGlobalSkillsReadyImpl: async () => null,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const starting = await rpc.sendRequest("cowork/creation/preflight", {
+        kind: "chat",
+        cwd: tmpDir,
+      });
+      const startingCheck = starting.result.checks.find(
+        (entry: { id: string }) => entry.id === "runtime_ready",
+      );
+      expect(startingCheck).toMatchObject({
+        status: "pending",
+        message: "Downloading the Cowork runtime — 62%.",
+      });
+      // Credentials are absent in the harness, so only assert that startup work
+      // itself no longer contributes a blocker.
+      expect(
+        starting.result.checks.filter(
+          (entry: { id: string; status: string }) =>
+            entry.id === "runtime_ready" && entry.status === "blocked",
+        ),
+      ).toHaveLength(0);
+
+      releaseRuntimeSetup();
+      await ready;
+
+      const settled = await rpc.sendRequest("cowork/creation/preflight", {
+        kind: "chat",
+        cwd: tmpDir,
+      });
+      expect(
+        settled.result.checks.find((entry: { id: string }) => entry.id === "runtime_ready"),
+      ).toMatchObject({ status: "ok" });
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start waits for background startup readiness before starting a turn", {
     timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
   }, async () => {

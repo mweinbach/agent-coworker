@@ -154,6 +154,8 @@ export type HealthSnapshot = {
 export type RuntimeStartupReadiness = {
   ready: boolean;
   error?: string;
+  /** Latest Cowork runtime bootstrap progress, so clients can name the current step. */
+  progress?: CoworkRuntimeBootstrapProgress | null;
 };
 
 export type AgentServerRuntime = {
@@ -226,6 +228,7 @@ export async function createAgentServerRuntime(
   let initialSkillCatalogMtimeSnapshot: string | null = null;
   let startupReady = false;
   let startupError: string | null = null;
+  let startupProgress: CoworkRuntimeBootstrapProgress | null = null;
   let resolveStartupReady: () => void = () => undefined;
   const startupReadyPromise = new Promise<void>((resolve) => {
     resolveStartupReady = resolve;
@@ -619,7 +622,13 @@ export async function createAgentServerRuntime(
     const runtimeSetup = ensureRuntimeReady({
       homedir: opts.homedir,
       env,
-      onProgress: opts.onCoworkRuntimeBootstrapProgress,
+      // Retained as well as forwarded: the desktop stops rendering the spawn-time
+      // progress card once the socket is listening, so post-listen clients read
+      // the current step back through startup diagnostics instead.
+      onProgress: (progress) => {
+        startupProgress = progress;
+        opts.onCoworkRuntimeBootstrapProgress?.(progress);
+      },
       log: (line) => {
         console.warn(`[cowork-runtime] ${line}`);
       },
@@ -859,6 +868,7 @@ export async function createAgentServerRuntime(
           startup: {
             ready: startupReady,
             ...(startupError ? { error: startupError } : {}),
+            ...(startupProgress ? { progress: startupProgress } : {}),
           },
           sendQueue: sendQueue.getStats(),
           journal: {
@@ -1001,6 +1011,7 @@ export async function createAgentServerRuntime(
     getStartupReadiness: () => ({
       ready: startupReady,
       ...(startupError ? { error: startupError } : {}),
+      ...(startupProgress ? { progress: startupProgress } : {}),
     }),
     waitForStartupReady: async () => {
       await startupReadyPromise;

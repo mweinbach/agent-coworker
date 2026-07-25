@@ -211,7 +211,7 @@ function ComparisonContent({ comparison }: { comparison: ArtifactDiff }) {
           {comparison.changes.slice(0, 100).map((change) => (
             <pre
               key={JSON.stringify(change)}
-              className="overflow-x-auto rounded-md border border-border bg-muted/35 p-2 font-mono text-[11px] leading-4"
+              className="overflow-x-auto rounded-md border border-border bg-muted/35 p-2 font-mono text-xs leading-4"
             >
               {JSON.stringify(change, null, 2)}
             </pre>
@@ -422,14 +422,14 @@ export function ArtifactReviewCard({
                 <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{artifact.title}</span>
               </CardTitle>
-              <CardDescription className="mt-1 truncate text-[10px]" title={artifact.path}>
+              <CardDescription className="mt-1 truncate text-xs" title={artifact.path}>
                 {artifact.path}
               </CardDescription>
             </div>
             <ReviewStatus detail={detail} />
           </CardHeader>
           <CardContent className="flex items-center justify-between gap-2 px-3">
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {loadingDetail
                 ? "Loading versions…"
                 : latestVersion
@@ -477,7 +477,7 @@ export function ArtifactReviewCard({
             <div className="grid min-h-0 grid-cols-[15rem_minmax(0,1fr)] border-y border-border">
               <ScrollArea className="min-h-0 border-r border-border">
                 <div className="flex flex-col gap-1 p-3">
-                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                     Version history
                   </p>
                   {loadingDetail ? (
@@ -513,7 +513,7 @@ export function ArtifactReviewCard({
                                 <Badge variant="secondary">Accepted</Badge>
                               ) : null}
                             </span>
-                            <span className="line-clamp-2 text-[10px] font-normal leading-4 text-muted-foreground">
+                            <span className="line-clamp-2 text-xs font-normal leading-4 text-muted-foreground">
                               {version.changeSummary || "No change summary"}
                             </span>
                           </span>
@@ -585,7 +585,7 @@ export function ArtifactReviewCard({
                       <Separator />
                       <div className="flex flex-col gap-2">
                         <h3 className="text-sm font-semibold">Provenance</h3>
-                        <pre className="overflow-x-auto rounded-md border border-border bg-muted/35 p-3 font-mono text-[11px] leading-4">
+                        <pre className="overflow-x-auto rounded-md border border-border bg-muted/35 p-3 font-mono text-xs leading-4">
                           {JSON.stringify(selectedVersion.provenance, null, 2)}
                         </pre>
                       </div>

@@ -116,7 +116,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           <p className="truncate text-xs font-semibold text-foreground" title={fileName}>
             {fileName}
           </p>
-          <p className="text-[11px] text-muted-foreground">Slide preview</p>
+          <p className="text-xs text-muted-foreground">Slide preview</p>
         </div>
         <Button
           variant="outline"
@@ -140,7 +140,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           <div className="flex max-w-md flex-col items-center gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 text-center">
             <AlertTriangleIcon className="size-6 text-destructive" />
             <h3 className="text-sm font-medium text-foreground">Couldn’t render slide</h3>
-            <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-[11px] leading-relaxed text-foreground">
+            <pre className="max-h-48 w-full overflow-auto rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left font-mono text-xs leading-relaxed text-foreground">
               {visibleError}
             </pre>
           </div>

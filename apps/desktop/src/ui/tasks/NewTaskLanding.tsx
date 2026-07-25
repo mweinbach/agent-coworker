@@ -427,7 +427,7 @@ export function NewTaskLanding() {
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium">Step {index + 1}</p>
-                          <p className="font-mono text-[11px] text-muted-foreground">{item.key}</p>
+                          <p className="font-mono text-xs text-muted-foreground">{item.key}</p>
                         </div>
                         {workItems.length > 1 ? (
                           <Button
@@ -672,7 +672,7 @@ export function NewTaskLanding() {
                 <button
                   key={task.id}
                   type="button"
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => void selectTask(task.id)}
                 >
                   <span className="min-w-0 flex-1">

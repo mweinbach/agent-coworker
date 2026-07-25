@@ -47,9 +47,7 @@ function ComposerModelOption({
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-xs font-medium text-foreground">{label}</span>
         {description ? (
-          <span className="truncate text-[11px] leading-4 text-muted-foreground">
-            {description}
-          </span>
+          <span className="truncate text-xs leading-4 text-muted-foreground">{description}</span>
         ) : null}
       </div>
       <CheckIcon

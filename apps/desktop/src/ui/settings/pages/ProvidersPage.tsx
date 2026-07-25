@@ -846,7 +846,7 @@ export function ProvidersPage({
                               <div className="truncate text-xs font-medium text-foreground">
                                 {model.displayName || model.id}
                               </div>
-                              <div className="truncate text-[10px] text-muted-foreground">
+                              <div className="truncate text-xs text-muted-foreground">
                                 {model.id}
                               </div>
                             </label>
@@ -985,7 +985,7 @@ export function ProvidersPage({
 
                   {visibleRateLimits.length > 0 ? (
                     <div className="space-y-1.5">
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Rate limits
                       </div>
                       <div className="divide-y divide-border/40">
@@ -1020,7 +1020,7 @@ export function ProvidersPage({
                                 <div className="text-sm font-medium text-foreground">
                                   {formatRateLimitName(entry)}
                                 </div>
-                                <div className="text-[11px] font-medium text-foreground/90">
+                                <div className="text-xs font-medium text-foreground/90">
                                   {primaryRemainingPercent === null
                                     ? "--"
                                     : `${Math.round(primaryRemainingPercent)}% remaining`}
@@ -1042,7 +1042,7 @@ export function ProvidersPage({
                                     />
                                   </div>
                                   {detailLine ? (
-                                    <div className="text-[11px] leading-4 text-muted-foreground">
+                                    <div className="text-xs leading-4 text-muted-foreground">
                                       {detailLine}
                                     </div>
                                   ) : null}
@@ -1052,7 +1052,7 @@ export function ProvidersPage({
                                 <div className="pt-0.5">
                                   <Badge
                                     variant="destructive"
-                                    className="h-5 rounded-sm px-1.5 text-[10px] font-medium"
+                                    className="h-5 rounded-sm px-1.5 text-xs font-medium"
                                   >
                                     Limit reached
                                   </Badge>
@@ -1133,7 +1133,7 @@ export function ProvidersPage({
                       Available models
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="text-[11px] text-muted-foreground">
+                      <div className="text-xs text-muted-foreground">
                         {catalogModels.length > 0
                           ? `${enabledModelCount} of ${catalogModels.length} enabled`
                           : `${allModelIds.length} total`}

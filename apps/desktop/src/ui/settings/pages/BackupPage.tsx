@@ -206,7 +206,7 @@ function BackupSidebar({
                   <Badge
                     variant="outline"
                     className={cn(
-                      "h-5 px-2 text-[10px] font-medium",
+                      "h-5 px-2 text-xs font-medium",
                       lifecycleBadgeClass(entry.lifecycle),
                     )}
                   >
@@ -282,7 +282,7 @@ function BackupDetailView({
             <FolderOpenIcon className="h-5 w-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
               Selected backup
             </div>
             <h2 className="text-lg font-semibold truncate">{backupTitle(entry)}</h2>
@@ -292,14 +292,14 @@ function BackupDetailView({
               </span>
               <Badge
                 variant="outline"
-                className={cn("h-5 text-[10px]", lifecycleBadgeClass(entry.lifecycle))}
+                className={cn("h-5 text-xs", lifecycleBadgeClass(entry.lifecycle))}
               >
                 {entry.lifecycle}
               </Badge>
               {entry.status === "failed" && (
                 <Badge
                   variant="outline"
-                  className="h-5 border-destructive/25 bg-destructive/5 text-[10px] text-destructive/80"
+                  className="h-5 border-destructive/25 bg-destructive/5 text-xs text-destructive/80"
                 >
                   Failed
                 </Badge>
@@ -444,7 +444,7 @@ function CheckpointDeltaView({
             <FileTextIcon className="h-4 w-4" />
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
               Checkpoint snapshot
             </div>
             <div className="flex items-center gap-2">
@@ -453,7 +453,7 @@ function CheckpointDeltaView({
                 <span className="ml-1 font-mono text-foreground/80">{checkpoint.id}</span>
               </h2>
               {checkpoint.trigger !== "manual" && (
-                <Badge variant="outline" className="text-[9px] uppercase h-4 py-0">
+                <Badge variant="outline" className="text-xs uppercase h-4 py-0">
                   {checkpoint.trigger}
                 </Badge>
               )}
@@ -519,7 +519,7 @@ function CheckpointDeltaView({
         <div className="flex shrink-0 items-center justify-between border-b border-border/40 px-5 py-3 text-xs">
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
-            <Badge variant="secondary" className="font-mono text-[10px]">
+            <Badge variant="secondary" className="font-mono text-xs">
               {delta?.baselineLabel || "..."}
             </Badge>
           </span>
@@ -576,7 +576,7 @@ function CheckpointDeltaView({
                       <Badge
                         variant="outline"
                         className={cn(
-                          "text-[10px] uppercase h-5 py-0",
+                          "text-xs uppercase h-5 py-0",
                           f.change === "added"
                             ? "border-success/20 bg-success/[0.04] text-success/80 group-hover:bg-success/[0.07]"
                             : f.change === "modified"

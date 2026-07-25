@@ -112,7 +112,8 @@ describe("research view layout", () => {
       const historyLabel = Array.from(container.querySelectorAll("div")).find(
         (element) => element.textContent?.trim() === "Research",
       );
-      expect(historyLabel?.className).toContain("text-foreground/72");
+      expect(historyLabel?.className).toContain("app-type-label");
+      expect(historyLabel?.className).toContain("app-text-secondary");
 
       await act(async () => {
         root.unmount();

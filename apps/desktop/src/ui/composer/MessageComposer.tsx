@@ -300,7 +300,7 @@ export const MessageComposerStatus = forwardRef<HTMLDivElement, ComponentProps<"
         ref={ref}
         data-slot="message-composer-status"
         className={cn(
-          "flex h-6 min-w-0 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground",
+          "flex h-6 min-w-0 shrink-0 items-center px-1 text-xs leading-none text-muted-foreground",
           className,
         )}
         {...props}
@@ -360,7 +360,7 @@ export function MessageComposerSubmit({
         type="button"
         size="icon"
         className={cn(
-          "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
+          "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
           "disabled:border-primary/15 disabled:bg-primary disabled:text-primary-foreground disabled:opacity-100",
           className,
         )}
@@ -382,7 +382,7 @@ export function MessageComposerSubmit({
       className={cn(
         steerReady || steerPending
           ? "size-10 rounded-full border border-warning/35 bg-warning text-warning-foreground shadow-none hover:brightness-105"
-          : "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
+          : "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
         steerPending && "animate-pulse",
         "disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
@@ -425,7 +425,7 @@ export function MessageComposerStop({
       size="icon"
       variant="destructive"
       className={cn(
-        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90 disabled:border-destructive/20 disabled:bg-destructive/80 disabled:text-destructive-foreground disabled:opacity-100",
+        "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive-hover disabled:border-destructive/20 disabled:bg-destructive disabled:text-destructive-foreground disabled:opacity-100",
         className,
       )}
       disabled={disabled || pending}

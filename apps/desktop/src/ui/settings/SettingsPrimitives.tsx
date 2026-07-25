@@ -126,7 +126,7 @@ export function SettingsEmptyState({
         className,
       )}
     >
-      {icon ? <div className="text-muted-foreground/60 [&_svg]:size-8">{icon}</div> : null}
+      {icon ? <div className="app-text-muted [&_svg]:size-8">{icon}</div> : null}
       <div className="space-y-1">
         <div className="text-sm font-medium text-foreground">{title}</div>
         {description ? (
@@ -153,9 +153,12 @@ export function SettingsStatTile({
 }) {
   return (
     <div
-      className={cn("settings-stat-tile min-w-0 rounded-lg bg-foreground/[0.045] px-4 py-3", className)}
+      className={cn(
+        "settings-stat-tile min-w-0 rounded-lg bg-foreground/[0.045] px-4 py-3",
+        className,
+      )}
     >
-      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="app-type-label uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
       <div className="pt-1 text-lg font-semibold tabular-nums leading-tight text-foreground">
@@ -170,7 +173,7 @@ const ENTITY_ICON_PALETTE = [
   "bg-primary/10 text-primary",
   "bg-success/10 text-success",
   "bg-warning/12 text-warning-foreground",
-  "bg-foreground/[0.05] text-foreground/70",
+  "bg-foreground/[0.05] app-text-secondary",
   "bg-primary/15 text-primary",
 ] as const;
 
@@ -204,7 +207,7 @@ export function EntityIcon({
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClass = size === "sm" ? "size-6" : size === "lg" ? "size-10" : "size-8";
-  const textClass = size === "sm" ? "text-[10px]" : size === "lg" ? "text-base" : "text-xs";
+  const textClass = size === "sm" ? "text-xs" : size === "lg" ? "text-base" : "text-xs";
   const paletteClass = useMemo(() => entityIconPaletteClass(name), [name]);
   const trimmed = src?.trim() ?? "";
   const renderableImage = trimmed !== "" && isRenderableImageSource(trimmed);
@@ -277,7 +280,7 @@ export function SettingsStatusPill({
     <Badge
       variant="outline"
       className={cn(
-        "h-6 rounded-md px-2 text-[11px] font-medium shadow-none",
+        "h-6 rounded-md px-2 text-xs font-medium shadow-none",
         tone === "success" && "border-success/25 bg-success/10 text-foreground",
         tone === "warning" && "border-warning/35 bg-warning/12 text-warning-foreground",
         tone === "danger" && "border-destructive/25 bg-destructive/10 text-destructive",

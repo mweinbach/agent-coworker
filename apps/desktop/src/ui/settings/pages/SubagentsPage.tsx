@@ -1209,7 +1209,7 @@ function Checklist({
     <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
       <legend className="flex items-center gap-2 p-0">
         <span className="text-xs text-muted-foreground">{title}</span>
-        <Badge variant="outline" className="rounded-md text-[11px]">
+        <Badge variant="outline" className="rounded-md text-xs">
           {selected.length}
         </Badge>
       </legend>

@@ -130,12 +130,14 @@ export const palette = {
     panelBg: "#f8f9f2",
     textBase: "#232a18",
     mutedBase: "#556041",
-    accentBase: "#6f8042",
+    accentBase: "#66763d",
+    accentPressedBase: "#5b6a35",
     accentForegroundBase: "#ffffff",
     inverseText: "#ffffff",
     dangerBase: "#bb3e3e",
+    dangerForegroundBase: "#ffffff",
     successBase: "#3ab665",
-    successForegroundBase: "#ffffff",
+    successForegroundBase: "#232a18",
     warningBase: "#ecaa0b",
     warningForegroundBase: "#232a18",
     borderBase: "rgba(62, 74, 40, 0.18)",
@@ -150,9 +152,11 @@ export const palette = {
     textBase: "#eef0dc",
     mutedBase: "#c7ceaf",
     accentBase: "#a8b963",
-    accentForegroundBase: "#ffffff",
+    accentPressedBase: "#b7c873",
+    accentForegroundBase: "#171d13",
     inverseText: "#ffffff",
     dangerBase: "#e86060",
+    dangerForegroundBase: "#171d13",
     successBase: "#5ecc7e",
     successForegroundBase: "#121a10",
     warningBase: "#f3b01d",
@@ -199,6 +203,7 @@ export type SemanticTokens = {
   borderStrong: string;
 
   accent: string;
+  accentPressed: string;
   accentForeground: string;
   accentSoft: string;
 
@@ -242,6 +247,7 @@ function buildSemanticTokens(p: PalettePrimitives, isDark: boolean): SemanticTok
     borderStrong: scaleAlpha(p.borderBase, 0.92),
 
     accent: p.accentBase,
+    accentPressed: p.accentPressedBase,
     accentForeground: p.accentForegroundBase,
     accentSoft: alpha(p.accentBase, 0.14),
 
@@ -252,7 +258,7 @@ function buildSemanticTokens(p: PalettePrimitives, isDark: boolean): SemanticTok
     warningForeground: p.warningForegroundBase,
     warningSoft: alpha(p.warningBase, 0.16),
     danger: p.dangerBase,
-    dangerForeground: p.inverseText,
+    dangerForeground: p.dangerForegroundBase,
     dangerSoft: alpha(p.dangerBase, isDark ? 0.14 : 0.12),
 
     shadowSurface: p.shadowSurfaceBase,

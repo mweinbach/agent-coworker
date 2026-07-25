@@ -819,7 +819,7 @@ export function MemoryPage({
                                 }
                               />
                               <span className="min-w-0 flex-1 truncate">{skill.skillName}</span>
-                              <span className="shrink-0 text-[10px] uppercase text-muted-foreground/70">
+                              <span className="shrink-0 text-xs uppercase text-muted-foreground/70">
                                 {skill.scope}
                               </span>
                             </label>
@@ -905,7 +905,7 @@ export function MemoryPage({
                                     ? "destructive"
                                     : "secondary"
                               }
-                              className="h-5 text-[10px] uppercase"
+                              className="h-5 text-xs uppercase"
                             >
                               {entry.status}
                             </Badge>
@@ -1114,7 +1114,7 @@ export function MemoryPage({
                           </span>
                           <Badge
                             variant={entry.scope === "workspace" ? "default" : "secondary"}
-                            className="text-[10px] uppercase h-5"
+                            className="text-xs uppercase h-5"
                           >
                             {scopeLabel(entry.scope)}
                           </Badge>

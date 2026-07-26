@@ -544,6 +544,7 @@ export function createWebAdapter(): DesktopApi {
       openAiNativeConnectors: false,
       canvas: overrides?.canvas ?? false,
       tasks: overrides?.tasks ?? false,
+      workflows: overrides?.workflows ?? false,
     };
   };
   const features = resolveWebDesktopFeatureFlags();

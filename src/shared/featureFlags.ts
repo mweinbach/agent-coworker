@@ -6,6 +6,7 @@ export const FEATURE_FLAG_IDS = [
   "openAiNativeConnectors",
   "canvas",
   "tasks",
+  "workflows",
 ] as const;
 
 export type FeatureFlagId = (typeof FEATURE_FLAG_IDS)[number];
@@ -78,6 +79,15 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
     envOverride: "COWORK_ENABLE_TASKS",
     restartRequired: true,
   },
+  workflows: {
+    id: "workflows",
+    label: "Workflows",
+    description:
+      "Enable the `workflow` agent tool: deterministic multi-agent orchestration driven by a sandboxed script.",
+    defaultEnabled: false,
+    envOverride: "COWORK_ENABLE_WORKFLOWS",
+    restartRequired: true,
+  },
 };
 
 function parseBooleanFlag(value: string | undefined): boolean | null {
@@ -116,6 +126,7 @@ export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): Featur
     openAiNativeConnectors: FEATURE_FLAG_DEFINITIONS.openAiNativeConnectors.defaultEnabled,
     canvas: FEATURE_FLAG_DEFINITIONS.canvas.defaultEnabled,
     tasks: FEATURE_FLAG_DEFINITIONS.tasks.defaultEnabled,
+    workflows: FEATURE_FLAG_DEFINITIONS.workflows.defaultEnabled,
   };
 
   for (const flagId of FEATURE_FLAG_IDS) {

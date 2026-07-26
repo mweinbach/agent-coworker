@@ -310,6 +310,14 @@ export interface AgentConfig {
    */
   tasksEnabled?: boolean;
 
+  /**
+   * Whether the Workflow feature is enabled for this session/run. Gates the
+   * `workflow` agent tool. Resolved from the `workflows` feature flag (env
+   * `COWORK_ENABLE_WORKFLOWS`, default false). Packaged builds ignore local
+   * config overrides — see `resolveFeatureFlags`.
+   */
+  workflowsEnabled?: boolean;
+
   /** Internal experiment gates resolved from environment. Not persisted. */
   experimentalFeatures?: {
     openAiNativeConnectors?: boolean;

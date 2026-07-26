@@ -765,6 +765,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     env,
   }).tasks;
 
+  // Workflow feature gate. Same resolution path as `tasksEnabled` above (env
+  // `COWORK_ENABLE_WORKFLOWS`, default off).
+  const workflowsEnabled = resolveFeatureFlags({
+    isPackaged: env.COWORK_IS_PACKAGED === "true",
+    env,
+  }).workflows;
+
   const openAiNativeConnectorsExperimentEnabled = isOpenAiNativeConnectorsExperimentEnabled(env);
 
   const backupsEnabled =
@@ -909,6 +916,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     skillImprovementExcludedSkills,
     includeRawChunks,
     tasksEnabled,
+    workflowsEnabled,
     experimentalFeatures: {
       openAiNativeConnectors: openAiNativeConnectorsExperimentEnabled,
     },

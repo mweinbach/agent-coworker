@@ -280,6 +280,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       includeRawChunks,
       costTracker: context.state.costTracker ?? undefined,
       toolEnv: context.deps.toolEnv,
+      onWorkflowProgress: (progress) => {
+        context.emit({ type: "workflow_progress", sessionId: context.id, progress });
+      },
       onSessionUsageBudgetUpdated: (snapshot) => {
         context.emit({
           type: "session_usage",

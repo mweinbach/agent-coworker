@@ -136,6 +136,9 @@ export function createJsonRpcNotificationProjector(
         case "agent_spawned":
           sendNotification("cowork/session/agentSpawned", event);
           return;
+        case "workflow_progress":
+          sendNotification("cowork/session/workflowProgress", event);
+          return;
         case "agent_status":
           sendNotification("cowork/session/agentStatus", event);
           return;

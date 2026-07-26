@@ -19,6 +19,7 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openai
 import type { OpenAiNativeConnectorsEvent } from "../shared/openaiNativeConnectors";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import type { ToolInputDigest } from "../shared/toolInputDigest";
+import type { WorkflowProgressPayload } from "../shared/workflows";
 import type { SkillImprovementStatusEvent } from "../skillImprovement";
 import type {
   AgentConfig,
@@ -61,7 +62,7 @@ type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pendi
 
 // Version of the internal session event payload schema documented for JSON-RPC
 // control envelopes and persisted session artifacts.
-export const WEBSOCKET_PROTOCOL_VERSION = "7.47";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.48";
 
 export type SessionConfigPatch = {
   yolo?: boolean;
@@ -551,6 +552,18 @@ export type SessionEvent =
       sessionId: string;
       targetSessionId: string;
       snapshot: SessionSnapshot;
+    }
+  | {
+      /**
+       * Live progress for a running `workflow` tool call. Emitted on phase
+       * changes and whenever a workflow-driven child agent changes state, so
+       * clients can render the run as a phase/agent tree instead of a wall of
+       * log lines. Superseded by the next event for the same `runId`; the final
+       * emission carries an `outcome`.
+       */
+      type: "workflow_progress";
+      sessionId: string;
+      progress: WorkflowProgressPayload;
     }
   | { type: "agent_spawned"; sessionId: string; agent: PersistentAgentSummary }
   | { type: "agent_list"; sessionId: string; agents: PersistentAgentSummary[] }

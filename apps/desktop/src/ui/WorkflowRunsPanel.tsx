@@ -7,12 +7,13 @@ import {
   MinusCircleIcon,
   WorkflowIcon,
 } from "lucide-react";
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { formatCost } from "../../../../src/session/pricing";
 import type { ThreadWorkflowRun } from "../app/types";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
+import { WorkflowRunDetailDialog } from "./WorkflowRunDetailDialog";
 
 type WorkflowAgentRow = ThreadWorkflowRun["agents"][number];
 
@@ -70,7 +71,13 @@ function groupByPhase(run: ThreadWorkflowRun): Array<[string, WorkflowAgentRow[]
   return [...groups.entries()].filter(([, agents]) => agents.length > 0);
 }
 
-const WorkflowRunCard = memo(function WorkflowRunCard({ run }: { run: ThreadWorkflowRun }) {
+const WorkflowRunCard = memo(function WorkflowRunCard({
+  run,
+  onOpen,
+}: {
+  run: ThreadWorkflowRun;
+  onOpen: (run: ThreadWorkflowRun) => void;
+}) {
   const phases = groupByPhase(run);
   const settled = run.outcome !== undefined;
   // Carry each line's absolute position before slicing: `logs` is append-only, so
@@ -79,7 +86,12 @@ const WorkflowRunCard = memo(function WorkflowRunCard({ run }: { run: ThreadWork
   const recentLogs = run.logs.map((line, position) => ({ line, position })).slice(-3);
 
   return (
-    <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2">
+    <button
+      type="button"
+      onClick={() => onOpen(run)}
+      aria-label={`Open workflow run ${run.name}`}
+      className="app-context-sidebar__nested-panel w-full rounded-[10px] border px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <WorkflowIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -140,7 +152,7 @@ const WorkflowRunCard = memo(function WorkflowRunCard({ run }: { run: ThreadWork
           ))}
         </div>
       ) : null}
-    </div>
+    </button>
   );
 });
 
@@ -157,6 +169,11 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
   labelClassName: string;
   scrollerClassName: string;
 }) {
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
+  // Read the run back out of `runs` rather than holding the object: progress
+  // events replace it wholesale, and a captured copy would freeze mid-run.
+  const openRun = runs.find((run) => run.runId === openRunId) ?? null;
+
   if (runs.length === 0) return null;
 
   return (
@@ -167,10 +184,21 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
       <ScrollShadow className={scrollerClassName} data-sidebar-section="workflows">
         <div className="space-y-1.5">
           {runs.map((run) => (
-            <WorkflowRunCard key={run.runId} run={run} />
+            <WorkflowRunCard
+              key={run.runId}
+              run={run}
+              onOpen={(selected) => setOpenRunId(selected.runId)}
+            />
           ))}
         </div>
       </ScrollShadow>
+      <WorkflowRunDetailDialog
+        run={openRun}
+        open={openRun !== null}
+        onOpenChange={(next) => {
+          if (!next) setOpenRunId(null);
+        }}
+      />
     </section>
   );
 });

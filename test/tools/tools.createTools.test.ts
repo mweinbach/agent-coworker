@@ -1182,4 +1182,70 @@ describe("createTools", () => {
       lifecycleState: "closed",
     });
   });
+
+  test("workflow tool follows the workflows feature flag", async () => {
+    const dir = await tmpDir();
+    const agentControl = {
+      spawn: async () => ({}) as never,
+      list: async () => [],
+      sendInput: async () => {},
+      wait: async () => ({}) as never,
+      inspect: async () => ({}) as never,
+      resume: async () => ({}) as never,
+      close: async () => ({}) as never,
+    };
+
+    const off = createTools(makeCtx(dir, { agentControl }));
+    expect(off.workflow).toBeUndefined();
+
+    const on = createTools(
+      makeCtx(dir, {
+        agentControl,
+        config: makeConfig(dir, { workflowsEnabled: true }),
+      }),
+    );
+    expect(on.workflow).toBeDefined();
+    expect(on.spawnAgent).toBeDefined();
+  });
+
+  test("workflow tool is withheld from task sessions and scoped children", async () => {
+    const dir = await tmpDir();
+    const agentControl = {
+      spawn: async () => ({}) as never,
+      list: async () => [],
+      sendInput: async () => {},
+      wait: async () => ({}) as never,
+      inspect: async () => ({}) as never,
+      resume: async () => ({}) as never,
+      close: async () => ({}) as never,
+    };
+    const config = makeConfig(dir, { workflowsEnabled: true });
+
+    // Reaching the agent-control tier only rules out child agents and non-session
+    // turns. Task sessions carry agentControl too (see createTaskReviewTool), and a
+    // path-scoped root must not spawn unscoped children through a script.
+    const taskSession = createTools(
+      makeCtx(dir, {
+        agentControl,
+        config,
+        taskContext: { id: "task-1", revision: 1 } as never,
+      }),
+    );
+    expect(taskSession.workflow).toBeUndefined();
+
+    const scoped = createTools(makeCtx(dir, { agentControl, config, agentTargetPaths: ["src"] }));
+    expect(scoped.workflow).toBeUndefined();
+  });
+
+  test("listSessionToolNames reports workflow only when enabled", async () => {
+    const dir = await tmpDir();
+    const base = makeConfig(dir);
+
+    expect(listSessionToolNames(base, { includeAgentControl: true })).not.toContain("workflow");
+    expect(
+      listSessionToolNames({ ...base, workflowsEnabled: true }, { includeAgentControl: true }),
+    ).toContain("workflow");
+    // Without agent control there is nothing for a workflow to orchestrate.
+    expect(listSessionToolNames({ ...base, workflowsEnabled: true })).not.toContain("workflow");
+  });
 });

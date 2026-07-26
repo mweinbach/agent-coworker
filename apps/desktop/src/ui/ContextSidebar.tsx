@@ -8,11 +8,11 @@ import {
   MinusCircleIcon,
   SparklesIcon,
 } from "lucide-react";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
-import type { ThreadAgentSummary } from "../app/types";
+import type { FeedItem, ThreadAgentSummary } from "../app/types";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
@@ -20,6 +20,26 @@ import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 import { DesktopMarkdown } from "./markdown";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
+
+/** True when a newer user turn exists after the last todo snapshot. */
+function isPlanSnapshotStale(feed: FeedItem[] | undefined): boolean {
+  if (!feed || feed.length === 0) return false;
+  let lastTodosTsMs: number | null = null;
+  let lastUserTsMs: number | null = null;
+  for (const item of feed) {
+    if (item.kind === "todos") {
+      const ms = Date.parse(item.ts);
+      if (Number.isFinite(ms)) lastTodosTsMs = ms;
+      continue;
+    }
+    if (item.kind === "message" && item.role === "user") {
+      const ms = Date.parse(item.ts);
+      if (Number.isFinite(ms)) lastUserTsMs = ms;
+    }
+  }
+  if (lastTodosTsMs === null || lastUserTsMs === null) return false;
+  return lastUserTsMs > lastTodosTsMs;
+}
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 
@@ -87,6 +107,13 @@ export const ContextSidebar = memo(function ContextSidebar({
     threadRuntime?.sessionKind === "agent" ||
     Boolean(selectedWorkspaceId);
 
+  const showTodos = (todos?.length ?? 0) > 0;
+  const showAgents = agents.length > 0;
+  const planIsStale = useMemo(
+    () => showTodos && isPlanSnapshotStale(threadRuntime?.feed),
+    [showTodos, threadRuntime?.feed],
+  );
+
   if (!hasActivity) {
     return (
       <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
@@ -106,18 +133,15 @@ export const ContextSidebar = memo(function ContextSidebar({
     );
   }
 
-  const showTodos = (todos?.length ?? 0) > 0;
-  const showAgents = agents.length > 0;
-
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-1 overflow-hidden p-1.5">
       {showTodos ? (
         <section className={compactSectionClassName} data-sidebar-panel="tasks">
           <div className={compactSectionHeaderClassName}>
-            <span className={sectionLabelClassName}>Plan</span>
+            <span className={sectionLabelClassName}>{planIsStale ? "Previous plan" : "Plan"}</span>
           </div>
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
-            <div className="space-y-1.5">
+            <div className={cn("space-y-1.5", planIsStale && "opacity-75")}>
               {todos?.map((todo) => (
                 <div
                   key={`${todo.status}:${todo.content}`}
@@ -126,14 +150,20 @@ export const ContextSidebar = memo(function ContextSidebar({
                   {todo.status === "completed" ? (
                     <CheckCircle2Icon className={cn(taskStatusIconClassName, "text-success")} />
                   ) : todo.status === "in_progress" ? (
-                    <CircleDashedIcon className={cn(taskStatusIconClassName, "text-primary")} />
+                    <CircleDashedIcon
+                      className={cn(
+                        taskStatusIconClassName,
+                        planIsStale ? "text-muted-foreground" : "text-primary",
+                      )}
+                    />
                   ) : (
                     <CircleIcon className={cn(taskStatusIconClassName, "text-muted-foreground")} />
                   )}
                   <span
                     className={cn(
                       "leading-5 text-foreground",
-                      todo.status === "completed" && "line-through text-muted-foreground",
+                      (todo.status === "completed" || planIsStale) && "text-muted-foreground",
+                      todo.status === "completed" && "line-through",
                     )}
                   >
                     {todo.content}
@@ -234,7 +264,7 @@ export const ContextSidebar = memo(function ContextSidebar({
         ) : (
           <>
             <div className={compactSectionHeaderClassName}>
-              <span className={sectionLabelClassName}>Files</span>
+              <span className={sectionLabelClassName}>Workspace files</span>
             </div>
             <div
               className={cn(

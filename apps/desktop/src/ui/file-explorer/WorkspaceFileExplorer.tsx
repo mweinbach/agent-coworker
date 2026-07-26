@@ -1252,12 +1252,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
               title="Open in native explorer"
             >
-              Files
+              Chat folder
             </Button>
           ) : (
             <>
               <div className="app-type-label shrink-0 tracking-[0.16em] app-text-muted uppercase">
-                Files
+                Workspace files
               </div>
               <div className="app-text-muted text-xs shrink-0 font-light">/</div>
               <Button
@@ -1286,7 +1286,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           </div>
         ) : treeRows.length === 0 &&
           (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
+          <div className="space-y-1 px-3 py-6 text-center text-xs text-muted-foreground">
+            <div>No visible files yet</div>
+            <div className="leading-5 app-text-muted">
+              Research and tool results stay in chat until the agent saves an output here.
+            </div>
+          </div>
         ) : (
           <div
             role="tree"

@@ -23,7 +23,31 @@ describe("desktop sources carousel", () => {
     expect(html).toBe("");
   });
 
-  test("invokes onOpenSource with the source url when a card is clicked", async () => {
+  test("starts collapsed behind a Sources button", () => {
+    const html = renderToStaticMarkup(
+      createElement(CitationSourcesCarousel, {
+        sources: [
+          {
+            title: "HeroUI Migration",
+            url: "https://example.com/articles/hero-ui-migration-guide",
+          },
+          {
+            title: "Other",
+            url: "https://example.com/other",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain('data-slot="citation-sources-trigger"');
+    expect(html).toContain("Sources");
+    expect(html).toContain("2");
+    expect(html).toContain('aria-label="Show 2 sources"');
+    // Cards stay collapsed until the user expands the control.
+    expect(html).not.toContain("HeroUI Migration");
+  });
+
+  test("expands into cards and invokes onOpenSource when a card is clicked", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const onOpenSource = mock((_url: string) => {});
 
@@ -44,6 +68,17 @@ describe("desktop sources carousel", () => {
             onOpenSource,
           }),
         );
+      });
+
+      const trigger = container.querySelector(
+        '[data-slot="citation-sources-trigger"]',
+      ) as HTMLButtonElement | null;
+      if (!trigger) throw new Error("missing sources trigger");
+
+      expect(container.textContent).not.toContain("HeroUI Migration");
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>

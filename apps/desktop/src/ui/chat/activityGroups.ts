@@ -206,6 +206,167 @@ function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
   return cached;
 }
 
+function assistantAsActivityReasoning(
+  item: Extract<FeedItem, { kind: "message" }>,
+): Extract<FeedItem, { kind: "reasoning" }> {
+  return {
+    id: item.id,
+    kind: "reasoning",
+    mode: "summary",
+    ts: item.ts,
+    text: item.text,
+  };
+}
+
+function isUserFeedItem(item: ChatRenderItem): item is {
+  kind: "feed-item";
+  item: Extract<FeedItem, { kind: "message" }> & { role: "user" };
+} {
+  return item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "user";
+}
+
+function isAssistantFeedItem(item: ChatRenderItem): item is {
+  kind: "feed-item";
+  item: Extract<FeedItem, { kind: "message" }> & { role: "assistant" };
+} {
+  return (
+    item.kind === "feed-item" && item.item.kind === "message" && item.item.role === "assistant"
+  );
+}
+
+/**
+ * Fold short assistant progress lines into neighboring activity groups so one
+ * busy turn does not render as assistant → Worked → assistant → Worked.
+ *
+ * @deprecated Prefer {@link mergeTurnActivity}; kept for targeted tests.
+ */
+export function compactProgressNarration(items: ChatRenderItem[]): ChatRenderItem[] {
+  return mergeTurnActivity(items);
+}
+
+/**
+ * Merge every activity group and intermediate assistant narration inside a
+ * user turn into one activity trace. Only the last assistant message of the
+ * turn remains a standalone bubble (final answer + sources).
+ */
+export function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
+  const out: ChatRenderItem[] = [];
+  let index = 0;
+
+  while (index < items.length) {
+    const current = items[index];
+    if (!current) {
+      index += 1;
+      continue;
+    }
+
+    if (isUserFeedItem(current)) {
+      out.push(current);
+      index += 1;
+      continue;
+    }
+
+    const segment: ChatRenderItem[] = [];
+    while (index < items.length) {
+      const entry = items[index];
+      if (!entry || isUserFeedItem(entry)) break;
+      segment.push(entry);
+      index += 1;
+    }
+
+    let lastAssistantIdx = -1;
+    for (let j = segment.length - 1; j >= 0; j--) {
+      const candidate = segment[j];
+      if (candidate && isAssistantFeedItem(candidate)) {
+        lastAssistantIdx = j;
+        break;
+      }
+    }
+
+    const mergedItems: ActivityFeedItem[] = [];
+    let recoveredToolIds: string[] = [];
+    let groupId: string | null = null;
+
+    const flushMerged = () => {
+      if (mergedItems.length === 0) return;
+      const first = mergedItems[0];
+      if (!first) return;
+      out.push({
+        kind: "activity-group",
+        id: groupId ?? `activity-${first.id}`,
+        items: [...mergedItems],
+        recoveredToolIds,
+      });
+      mergedItems.length = 0;
+      groupId = null;
+    };
+
+    for (let j = 0; j < segment.length; j++) {
+      const entry = segment[j];
+      if (!entry) continue;
+
+      if (entry.kind === "activity-group") {
+        if (!groupId) groupId = entry.id;
+        mergedItems.push(...entry.items);
+        recoveredToolIds = entry.recoveredToolIds;
+        continue;
+      }
+
+      if (isAssistantFeedItem(entry)) {
+        if (j === lastAssistantIdx) {
+          flushMerged();
+          out.push(entry);
+          continue;
+        }
+        // Intermediate assistant text (progress, mid-turn narration) belongs
+        // in the activity timeline so the turn stays one expandable row.
+        if (!groupId) groupId = `activity-${entry.item.id}`;
+        mergedItems.push(assistantAsActivityReasoning(entry.item));
+        continue;
+      }
+
+      // Errors / system / logs break the merge so they stay visible in place.
+      flushMerged();
+      out.push(entry);
+    }
+
+    flushMerged();
+  }
+
+  return out;
+}
+
+/** Compact label for collapsed activity headers (e.g. "Read ×2 · Todo Write"). */
+export function formatActivityContentSummary(items: ActivityFeedItem[]): string | null {
+  const toolItems = items.filter(
+    (item): item is Extract<ActivityFeedItem, { kind: "tool" }> => item.kind === "tool",
+  );
+  if (toolItems.length === 0) {
+    return items.some((item) => item.kind === "reasoning") ? "Thought" : null;
+  }
+
+  const counts = new Map<string, { title: string; count: number }>();
+  for (const tool of toolItems) {
+    const key = tool.name.toLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    counts.set(key, {
+      title: formatToolCard(tool.name, undefined, undefined, "output-available").title,
+      count: 1,
+    });
+  }
+
+  const parts: string[] = [];
+  for (const { title, count } of counts.values()) {
+    parts.push(count > 1 ? `${title} ×${count}` : title);
+  }
+  if (parts.length > 3) return `${toolItems.length} tools`;
+  return parts.join(" · ");
+}
+
 export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   const items: ChatRenderItem[] = [];
   let currentGroup: ActivityFeedItem[] = [];
@@ -243,7 +404,7 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   }
 
   flushGroup();
-  return items;
+  return mergeTurnActivity(items);
 }
 
 /**

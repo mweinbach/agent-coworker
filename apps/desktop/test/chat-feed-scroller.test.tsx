@@ -765,7 +765,7 @@ describe("desktop chat message scroller", () => {
         root.render(renderFeed([...initialThreadA, ...firstAwayBatch], "thread-a"));
       });
       expect(
-        container.querySelector('[aria-label="3 new messages. Jump to latest"]'),
+        container.querySelector('[aria-label="3 new updates. Jump to latest"]'),
       ).not.toBeNull();
       const firstRestoredViewport = container.querySelector(
         '[data-slot="message-scroller-viewport"]',
@@ -789,7 +789,7 @@ describe("desktop chat message scroller", () => {
         );
       });
       expect(
-        container.querySelector('[aria-label="5 new messages. Jump to latest"]'),
+        container.querySelector('[aria-label="5 new updates. Jump to latest"]'),
       ).not.toBeNull();
       expect(
         (container.querySelector('[data-slot="message-scroller-viewport"]') as HTMLElement | null)
@@ -1064,16 +1064,16 @@ describe("desktop chat message scroller", () => {
       });
 
       const jumpButton = container.querySelector(
-        '[aria-label="2 new messages. Jump to latest"]',
+        '[aria-label="2 new updates. Jump to latest"]',
       ) as HTMLButtonElement | null;
       expect(jumpButton).not.toBeNull();
-      expect(jumpButton?.textContent).toContain("2 new messages");
+      expect(jumpButton?.textContent).toContain("2 new updates");
       expect(viewport.scrollTop).toBe(100);
 
       await act(async () => {
         jumpButton?.click();
       });
-      expect(container.querySelector('[aria-label="2 new messages. Jump to latest"]')).toBeNull();
+      expect(container.querySelector('[aria-label="2 new updates. Jump to latest"]')).toBeNull();
       expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
 
       await act(async () => root.unmount());
@@ -1203,7 +1203,7 @@ describe("desktop chat message scroller", () => {
       expect(
         container.querySelector('[data-message-id="activity-tool-1"]')?.firstElementChild,
       ).toBe(activityShell);
-      expect(container.textContent).toContain("Worked for");
+      expect(container.textContent).toMatch(/Read · 1s|Worked for/);
 
       await act(async () => root.unmount());
     } finally {

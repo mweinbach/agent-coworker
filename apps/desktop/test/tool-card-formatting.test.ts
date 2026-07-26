@@ -117,4 +117,32 @@ describe("tool card formatting ask summaries", () => {
     expect(out.title).toBe("Wait for Agents");
     expect(out.subtitle).toBe("Waiting for 4 agents");
   });
+
+  test("summarizes modern todoWrite args without a generic Completed suffix", () => {
+    const out = formatToolCard(
+      "todoWrite",
+      {
+        todos: [
+          { content: "Research", status: "completed" },
+          { content: "Synthesize", status: "completed" },
+          { content: "Write PDF", status: "in_progress" },
+          { content: "Verify", status: "pending" },
+        ],
+      },
+      "ok",
+      "output-available",
+    );
+    expect(out.title).toBe("Todo Write");
+    expect(out.subtitle).toBe("1 active · 2 complete · 1 pending");
+    expect(out.subtitle).not.toContain("Completed");
+  });
+
+  test("preserves basenames when truncating long Windows paths", () => {
+    const longPath =
+      "C:\\Users\\maxw6\\.cowork\\chats\\20260726T202054Z-use-a-workflow-and-do-research-into-kimi-b4\\research\\kimi-k3.md";
+    const out = formatToolCard("read", { filePath: longPath }, "file contents", "output-available");
+    expect(out.subtitle).toContain("kimi-k3.md");
+    expect(out.subtitle).not.toContain("Completed");
+    expect(out.subtitle.length).toBeLessThan(longPath.length);
+  });
 });

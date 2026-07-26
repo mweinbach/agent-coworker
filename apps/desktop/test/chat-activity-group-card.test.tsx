@@ -124,10 +124,12 @@ describe("desktop activity group card", () => {
       }),
     );
 
-    const readIndex = html.indexOf("Read");
+    // Prefer unique body content over tool titles — the collapsed header also
+    // lists tool names for the content summary and would otherwise confuse order.
+    const readIndex = html.indexOf("a.ts");
     const firstSummaryIndex = html.indexOf("Inspecting the first file.");
-    const grepIndex = html.indexOf("Grep");
-    const globIndex = html.indexOf("Glob");
+    const grepIndex = html.indexOf("TODO");
+    const globIndex = html.indexOf("**/*.ts");
     const secondSummaryIndex = html.lastIndexOf("Summarizing the matched files.");
 
     expect(readIndex).toBeGreaterThan(-1);
@@ -716,9 +718,9 @@ describe("desktop activity group card", () => {
       await renderActivity(6);
       expect(timeline.scrollTop).toBe(200);
       const jumpButton = container.querySelector(
-        '[aria-label="2 new activities. Jump to latest"]',
+        '[aria-label="2 new updates. Jump to latest"]',
       ) as HTMLButtonElement | null;
-      expect(jumpButton?.textContent).toContain("2 new activities");
+      expect(jumpButton?.textContent).toContain("2 new updates");
 
       await act(async () => {
         jumpButton?.click();

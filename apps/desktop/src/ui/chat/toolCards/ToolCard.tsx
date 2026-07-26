@@ -21,6 +21,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../../../components/ui/collapsible";
+import { writeClipboardText } from "../../../lib/clipboard";
 import { cn } from "../../../lib/utils";
 
 import { formatToolCard } from "./toolCardFormatting";
@@ -241,7 +242,7 @@ function ToolCodeBlock({
   const [expanded, setExpanded] = useState(false);
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(value);
+      await writeClipboardText(value);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {

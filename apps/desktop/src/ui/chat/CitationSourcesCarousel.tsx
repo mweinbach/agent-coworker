@@ -1,5 +1,11 @@
+import { ChevronRightIcon, LinkIcon } from "lucide-react";
 import { memo, useCallback, useRef, useState } from "react";
 import { Button } from "../../components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
 import { cn } from "../../lib/utils";
 
 export type SourceItem = {
@@ -108,19 +114,14 @@ function SourceCard({
   );
 }
 
-export type CitationSourcesCarouselProps = {
-  sources: SourceItem[];
-  /** Invoked with the source URL when a card is activated. The caller owns the open flow. */
-  onOpenSource?: (url: string) => void;
-  className?: string;
-};
-
-export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
+function SourcesCarouselBody({
   sources,
   onOpenSource,
-  className,
-}: CitationSourcesCarouselProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+}: {
+  sources: SourceItem[];
+  onOpenSource?: (url: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -139,87 +140,133 @@ export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
     scrollRef.current?.scrollBy({ left: delta, behavior: "smooth" });
   }, []);
 
+  return (
+    <div className="relative group/carousel pt-1.5">
+      <div
+        ref={(el) => {
+          scrollRef.current = el;
+          if (el) {
+            requestAnimationFrame(updateScrollState);
+          }
+        }}
+        className="flex gap-2 overflow-x-auto scrollbar-none"
+        onScroll={onScroll}
+      >
+        {sources.map((source) => (
+          <SourceCard key={source.url} source={source} onOpenSource={onOpenSource} />
+        ))}
+      </div>
+
+      {canScrollLeft ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
+          onClick={() => scrollBy(-180)}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            className="text-foreground"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M7.5 2.5L4 6l3.5 3.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </Button>
+      ) : null}
+      {canScrollRight ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
+          onClick={() => scrollBy(180)}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            className="text-foreground"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M4.5 2.5L8 6l-3.5 3.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+export type CitationSourcesCarouselProps = {
+  sources: SourceItem[];
+  /** Invoked with the source URL when a card is activated. The caller owns the open flow. */
+  onOpenSource?: (url: string) => void;
+  className?: string;
+  /** Start expanded. Defaults to collapsed so sources don't fill the transcript. */
+  defaultOpen?: boolean;
+};
+
+export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
+  sources,
+  onOpenSource,
+  className,
+  defaultOpen = false,
+}: CitationSourcesCarouselProps) {
+  const [open, setOpen] = useState(defaultOpen);
+
   if (sources.length === 0) return null;
 
-  return (
-    <div className={cn("relative group/carousel", className)}>
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="app-type-label uppercase tracking-[0.12em] text-muted-foreground">
-          Sources
-        </span>
-        <span className="app-type-caption app-text-muted">{sources.length}</span>
-      </div>
-      <div className="relative">
-        <div
-          ref={(el) => {
-            (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
-            if (el) {
-              requestAnimationFrame(updateScrollState);
-            }
-          }}
-          className="flex gap-2 overflow-x-auto scrollbar-none"
-          onScroll={onScroll}
-        >
-          {sources.map((source) => (
-            <SourceCard key={source.url} source={source} onOpenSource={onOpenSource} />
-          ))}
-        </div>
+  const countLabel = sources.length === 1 ? "1 source" : `${sources.length} sources`;
 
-        {canScrollLeft && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
-            onClick={() => scrollBy(-180)}
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 12 12"
-              fill="none"
-              className="text-foreground"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <path
-                d="M7.5 2.5L4 6l3.5 3.5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </Button>
-        )}
-        {canScrollRight && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
-            onClick={() => scrollBy(180)}
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 12 12"
-              fill="none"
-              className="text-foreground"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <path
-                d="M4.5 2.5L8 6l-3.5 3.5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </Button>
-        )}
-      </div>
-    </div>
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={cn("max-w-full", className)}
+      data-slot="citation-sources"
+    >
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 rounded-full border-border/60 bg-background/60 px-2.5 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/50 hover:text-foreground"
+          aria-label={open ? `Hide ${countLabel}` : `Show ${countLabel}`}
+          data-slot="citation-sources-trigger"
+        >
+          <LinkIcon className="size-3.5 shrink-0" aria-hidden />
+          <span>Sources</span>
+          <span className="tabular-nums app-text-muted">{sources.length}</span>
+          <ChevronRightIcon
+            className={cn(
+              "size-3.5 shrink-0 transition-transform duration-150",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="activity-trace-content overflow-hidden">
+        <SourcesCarouselBody sources={sources} onOpenSource={onOpenSource} />
+      </CollapsibleContent>
+    </Collapsible>
   );
 });

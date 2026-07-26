@@ -33,6 +33,7 @@ import type { ActivityFeedItem, ActivityGroupSummary } from "./activityGroups";
 import {
   activityTimestampMs,
   firstActivityTimestampMs,
+  formatActivityContentSummary,
   formatActivityElapsedMs,
   summarizeActivityGroup,
 } from "./activityGroups";
@@ -43,6 +44,7 @@ import {
   isNearScrollEnd,
   restoreScrollAnchor,
   type ScrollAnchorPosition,
+  scrollDistanceFromEnd,
   scrollViewportToEnd,
 } from "./scrollOwnership";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
@@ -337,34 +339,95 @@ function toPrettyJson(value: unknown): string {
   }
 }
 
+function ToolRowSummary({
+  title,
+  subtitle,
+  recovered,
+  state,
+  hideTitle,
+  retryOf,
+}: {
+  title: string;
+  subtitle: string;
+  recovered: boolean;
+  state: ToolFeedState;
+  hideTitle?: boolean;
+  retryOf?: string;
+}) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-1.5">
+        {hideTitle ? (
+          <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
+            {subtitle || title}
+          </span>
+        ) : (
+          <span className="text-[13px] font-medium text-foreground">{title}</span>
+        )}
+        {recovered ? (
+          <Badge
+            variant="outline"
+            className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
+            data-tool-recovery="recovered"
+          >
+            Recovered
+          </Badge>
+        ) : (
+          <ToolStateIndicator state={state} />
+        )}
+      </div>
+      {!hideTitle && subtitle ? (
+        <div className="mt-0.5 text-xs leading-snug app-text-muted">{subtitle}</div>
+      ) : null}
+      {retryOf ? (
+        <div className="mt-0.5 text-xs font-medium app-text-muted" data-tool-recovery="retry">
+          Retry of failed call
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ToolTimelineNode({
   item,
   isLast,
   recovered,
   hideTitle = false,
+  forcePlain = false,
+  embedded = false,
 }: {
   item: Extract<ActivityFeedItem, { kind: "tool" }>;
   isLast: boolean;
   recovered: boolean;
   /** When true, the parent cluster already shows the tool name — only render the row detail. */
   hideTitle?: boolean;
+  /** Cluster children render as plain rows; only issues get their own disclosure. */
+  forcePlain?: boolean;
+  /** Skip the outer timeline rail when nested under a cluster disclosure. */
+  embedded?: boolean;
 }) {
   const formatting = useMemo(
     () => formatToolCard(item.name, item.args, item.result, item.state),
     [item.args, item.name, item.result, item.state],
   );
   const detailRows = useMemo(
-    () => formatting.details.filter((row) => row.label !== "Status"),
-    [formatting.details],
+    () =>
+      formatting.details.filter(
+        (row) => row.label !== "Status" && !(row.label === "Path" && formatting.subtitle),
+      ),
+    [formatting.details, formatting.subtitle],
   );
   const argsText = useMemo(() => toPrettyJson(item.args), [item.args]);
   const resultText = useMemo(() => toPrettyJson(item.result), [item.result]);
-  const hasDetails = detailRows.length > 0 || Boolean(argsText || resultText || item.approval);
+  const hasRawPayload = Boolean(argsText || resultText);
+  const hasDetails = detailRows.length > 0 || hasRawPayload || Boolean(item.approval);
   const shouldAutoExpand =
     item.state === "approval-requested" ||
     item.state === "output-error" ||
     item.state === "output-denied";
-  const [open, setOpen] = useState(shouldAutoExpand && hasDetails);
+  const allowDisclosure = !forcePlain || shouldAutoExpand;
+  const [open, setOpen] = useState(shouldAutoExpand && hasDetails && allowDisclosure);
+  const [rawOpen, setRawOpen] = useState(false);
   const userToggledRef = useRef(false);
   const handleOpenChange = (nextOpen: boolean) => {
     userToggledRef.current = true;
@@ -372,133 +435,103 @@ function ToolTimelineNode({
   };
 
   useEffect(() => {
-    if (!userToggledRef.current && shouldAutoExpand && hasDetails) {
+    if (!userToggledRef.current && shouldAutoExpand && hasDetails && allowDisclosure) {
       setOpen(true);
     }
-  }, [hasDetails, shouldAutoExpand]);
+  }, [allowDisclosure, hasDetails, shouldAutoExpand]);
+
+  const summary = (
+    <ToolRowSummary
+      title={formatting.title}
+      subtitle={formatting.subtitle}
+      recovered={recovered}
+      state={item.state}
+      hideTitle={hideTitle}
+      retryOf={item.retryOf}
+    />
+  );
+
+  const body =
+    hasDetails && allowDisclosure ? (
+      <Collapsible open={open} onOpenChange={handleOpenChange}>
+        <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
+          {summary}
+          <ChevronRightIcon
+            className={cn(
+              "mt-0.5 size-3.5 shrink-0 app-text-muted transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="activity-trace-content pt-1.5">
+          {detailRows.length > 0 ? (
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {detailRows.map((row) => (
+                <div
+                  key={`${item.id}-${row.label}`}
+                  className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    {row.label}
+                  </div>
+                  <div className="mt-0.5 break-words text-xs leading-snug app-text-secondary">
+                    {row.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {item.approval ? (
+            <div className="mt-1.5 rounded-lg bg-foreground/[0.04] px-2 py-1.5 text-xs app-text-secondary">
+              Approval required
+            </div>
+          ) : null}
+          {hasRawPayload ? (
+            <Collapsible open={rawOpen} onOpenChange={setRawOpen}>
+              <CollapsibleTrigger className="mt-1.5 flex items-center gap-1 text-xs font-medium app-text-muted outline-none hover:text-foreground">
+                <ChevronRightIcon
+                  className={cn("size-3 transition-transform", rawOpen && "rotate-90")}
+                />
+                Raw input/output
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                {argsText ? (
+                  <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-xs leading-relaxed app-text-secondary">
+                    {argsText}
+                  </pre>
+                ) : null}
+                {resultText ? (
+                  <pre
+                    className={cn(
+                      "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
+                      item.state === "output-error" || item.state === "output-denied"
+                        ? "bg-destructive/[0.06] text-destructive"
+                        : "bg-foreground/[0.04] app-text-secondary",
+                    )}
+                  >
+                    {resultText}
+                  </pre>
+                ) : null}
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
+        </CollapsibleContent>
+      </Collapsible>
+    ) : (
+      <div className="min-w-0 py-0.5">{summary}</div>
+    );
+
+  if (embedded) {
+    return body;
+  }
 
   return (
     <TimelineNode
       icon={<TimelineToolIcon title={formatting.title} className="size-3 app-text-muted" />}
       isLast={isLast}
     >
-      {hasDetails ? (
-        <Collapsible open={open} onOpenChange={handleOpenChange}>
-          <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                {hideTitle ? (
-                  <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
-                    {formatting.subtitle || formatting.title}
-                  </span>
-                ) : (
-                  <span className="text-[13px] font-medium text-foreground">
-                    {formatting.title}
-                  </span>
-                )}
-                {recovered ? (
-                  <Badge
-                    variant="outline"
-                    className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
-                    data-tool-recovery="recovered"
-                  >
-                    Recovered
-                  </Badge>
-                ) : (
-                  <ToolStateIndicator state={item.state} />
-                )}
-              </div>
-              {!hideTitle && formatting.subtitle ? (
-                <div className="mt-0.5 text-xs leading-snug app-text-muted">
-                  {formatting.subtitle}
-                </div>
-              ) : null}
-              {item.retryOf ? (
-                <div
-                  className="mt-0.5 text-xs font-medium app-text-muted"
-                  data-tool-recovery="retry"
-                >
-                  Retry of failed call
-                </div>
-              ) : null}
-            </div>
-            <ChevronRightIcon
-              className={cn(
-                "mt-0.5 size-3.5 shrink-0 app-text-muted transition-transform duration-150 group-hover/tool-row:text-muted-foreground",
-                open && "rotate-90",
-              )}
-              aria-hidden
-            />
-          </CollapsibleTrigger>
-          <CollapsibleContent className="activity-trace-content pt-1.5">
-            {detailRows.length > 0 ? (
-              <div className="grid gap-1.5 sm:grid-cols-2">
-                {detailRows.map((row) => (
-                  <div
-                    key={`${item.id}-${row.label}`}
-                    className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
-                  >
-                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                      {row.label}
-                    </div>
-                    <div className="mt-0.5 break-words text-xs leading-snug app-text-secondary">
-                      {row.value}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {argsText ? (
-              <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-xs leading-relaxed app-text-secondary">
-                {argsText}
-              </pre>
-            ) : null}
-            {resultText ? (
-              <pre
-                className={cn(
-                  "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
-                  item.state === "output-error" || item.state === "output-denied"
-                    ? "bg-destructive/[0.06] text-destructive"
-                    : "bg-foreground/[0.04] app-text-secondary",
-                )}
-              >
-                {resultText}
-              </pre>
-            ) : null}
-          </CollapsibleContent>
-        </Collapsible>
-      ) : (
-        <div className="min-w-0 py-0.5">
-          <div className="flex items-center gap-1.5">
-            {hideTitle ? (
-              <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
-                {formatting.subtitle || formatting.title}
-              </span>
-            ) : (
-              <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
-            )}
-            {recovered ? (
-              <Badge
-                variant="outline"
-                className="px-1.5 py-0 text-xs font-semibold uppercase tracking-wide"
-                data-tool-recovery="recovered"
-              >
-                Recovered
-              </Badge>
-            ) : (
-              <ToolStateIndicator state={item.state} />
-            )}
-          </div>
-          {!hideTitle && formatting.subtitle ? (
-            <div className="mt-0.5 text-xs leading-snug app-text-muted">{formatting.subtitle}</div>
-          ) : null}
-          {item.retryOf ? (
-            <div className="mt-0.5 text-xs font-medium app-text-muted" data-tool-recovery="retry">
-              Retry of failed call
-            </div>
-          ) : null}
-        </div>
-      )}
+      {body}
     </TimelineNode>
   );
 }
@@ -535,6 +568,127 @@ function bucketTimelineEntries(entries: ActivityGroupSummary["entries"]): Timeli
   return buckets;
 }
 
+function ToolClusterNode({
+  entries,
+  isLastBucket,
+  recoveredToolIds,
+}: {
+  entries: Array<ActivityGroupSummary["entries"][number] & { kind: "tool" }>;
+  isLastBucket: boolean;
+  recoveredToolIds: ReadonlySet<string>;
+}) {
+  const showClusterChrome = entries.length > 1;
+  const clusterLabel = formatToolCard(
+    entries[0].item.name,
+    undefined,
+    undefined,
+    "output-available",
+  ).title;
+  const clusterOpenByDefault = entries.some(
+    (entry) =>
+      entry.item.state === "approval-requested" ||
+      entry.item.state === "output-error" ||
+      entry.item.state === "output-denied" ||
+      entry.item.state === "input-streaming" ||
+      entry.item.state === "input-available",
+  );
+  const [clusterOpen, setClusterOpen] = useState(clusterOpenByDefault || !showClusterChrome);
+  const previews = entries
+    .map(
+      (entry) =>
+        formatToolCard(entry.item.name, entry.item.args, entry.item.result, entry.item.state)
+          .subtitle,
+    )
+    .filter((line) => line.length > 0)
+    .slice(0, 3);
+
+  if (!showClusterChrome) {
+    const entry = entries[0];
+    return (
+      <div
+        data-activity-entry-kind="tool-cluster"
+        data-tool-cluster-size="1"
+        data-scroll-anchor-id={entry.item.id}
+      >
+        <div data-activity-entry-kind="tool" data-scroll-anchor-id={entry.item.id}>
+          <ToolTimelineNode
+            item={entry.item}
+            isLast={isLastBucket}
+            recovered={recoveredToolIds.has(entry.item.id)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-activity-entry-kind="tool-cluster"
+      data-tool-cluster-size={entries.length}
+      data-scroll-anchor-id={entries[0].item.id}
+      className="mb-0.5"
+    >
+      <TimelineNode
+        icon={<TimelineToolIcon title={clusterLabel} className="size-3 app-text-muted" />}
+        isLast={isLastBucket}
+      >
+        <Collapsible open={clusterOpen} onOpenChange={setClusterOpen}>
+          <CollapsibleTrigger
+            className="group/cluster flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring"
+            data-slot="tool-cluster-label"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                <span>{clusterLabel}</span>
+                <span className="tabular-nums app-text-muted">×{entries.length}</span>
+              </div>
+              {previews.length > 0 ? (
+                <div className="mt-0.5 space-y-0.5 text-xs leading-snug app-text-muted">
+                  {previews.map((preview) => (
+                    <div key={preview} className="truncate">
+                      {preview}
+                    </div>
+                  ))}
+                  {entries.length > previews.length ? (
+                    <div>+{entries.length - previews.length} more</div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <ChevronRightIcon
+              className={cn(
+                "mt-0.5 size-3.5 shrink-0 app-text-muted transition-transform duration-150",
+                clusterOpen && "rotate-90",
+              )}
+              aria-hidden
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="activity-trace-content pt-1.5">
+            <div className="ml-0.5 space-y-1 border-l border-border/30 pl-2.5">
+              {entries.map((entry) => (
+                <div
+                  key={entry.item.id}
+                  data-activity-entry-kind="tool"
+                  data-scroll-anchor-id={entry.item.id}
+                >
+                  <ToolTimelineNode
+                    item={entry.item}
+                    isLast
+                    recovered={recoveredToolIds.has(entry.item.id)}
+                    hideTitle
+                    forcePlain
+                    embedded
+                  />
+                </div>
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </TimelineNode>
+    </div>
+  );
+}
+
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -542,6 +696,8 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const [newActivityCount, setNewActivityCount] = useState(0);
   const followingRef = useRef(following);
   const anchorRef = useRef<ScrollAnchorPosition | null>(null);
+  const userScrollPendingRef = useRef(false);
+  const clearPendingFrameRef = useRef<number | null>(null);
   const entryIds = useMemo(() => summary.entries.map((entry) => entry.item.id), [summary.entries]);
   const timelineBuckets = useMemo(() => bucketTimelineEntries(summary.entries), [summary.entries]);
   const previousEntryIdsRef = useRef(entryIds);
@@ -557,6 +713,20 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
     const content = contentRef.current;
     if (!node || !content) return;
     anchorRef.current = captureScrollAnchor(node, content);
+  }, []);
+
+  const markUserScrollPending = useCallback(() => {
+    userScrollPendingRef.current = true;
+    if (clearPendingFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearPendingFrameRef.current);
+    }
+    // Clear after two frames if no scroll event arrives (nested gesture with no movement).
+    clearPendingFrameRef.current = window.requestAnimationFrame(() => {
+      clearPendingFrameRef.current = window.requestAnimationFrame(() => {
+        clearPendingFrameRef.current = null;
+        userScrollPendingRef.current = false;
+      });
+    });
   }, []);
 
   useEffect(() => {
@@ -577,6 +747,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       resizeFrame = window.requestAnimationFrame(() => {
         resizeFrame = null;
+        if (userScrollPendingRef.current) return;
         const node = containerRef.current;
         const currentContent = contentRef.current;
         if (!node || !currentContent) return;
@@ -594,6 +765,9 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
     observer.observe(content);
     return () => {
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      if (clearPendingFrameRef.current !== null) {
+        window.cancelAnimationFrame(clearPendingFrameRef.current);
+      }
       observer.disconnect();
     };
   }, [captureAnchor]);
@@ -601,6 +775,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const handleScroll = useCallback(() => {
     const node = containerRef.current;
     if (!node) return;
+    userScrollPendingRef.current = false;
     if (isNearScrollEnd(node)) {
       setFollowTail(true);
       setNewActivityCount(0);
@@ -612,12 +787,22 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
+      const node = containerRef.current;
+      if (!node) return;
+      const canScrollUp = node.scrollTop > 0;
+      const canScrollDown = scrollDistanceFromEnd(node) > 0;
+      // Own the gesture while this viewport can move so the outer transcript
+      // does not detach from a nested activity scroll.
+      if ((event.deltaY < 0 && canScrollUp) || (event.deltaY > 0 && canScrollDown)) {
+        event.stopPropagation();
+      }
       if (event.deltaY < 0) {
+        markUserScrollPending();
         setFollowTail(false);
         captureAnchor();
       }
     },
-    [captureAnchor, setFollowTail],
+    [captureAnchor, markUserScrollPending, setFollowTail],
   );
 
   const jumpToLatest = useCallback(() => {
@@ -672,52 +857,13 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
               );
             }
 
-            const cluster = bucket.entries;
-            const showClusterChrome = cluster.length > 1;
-            const clusterLabel = formatToolCard(
-              cluster[0].item.name,
-              undefined,
-              undefined,
-              "output-available",
-            ).title;
-
             return (
-              <div
-                key={`cluster:${cluster[0].item.id}`}
-                data-activity-entry-kind="tool-cluster"
-                data-tool-cluster-size={cluster.length}
-                data-scroll-anchor-id={cluster[0].item.id}
-                className={cn(showClusterChrome && "mb-0.5")}
-              >
-                {showClusterChrome ? (
-                  <div
-                    className="mb-1 ml-[1.625rem] text-[11px] font-medium uppercase tracking-wide app-text-muted"
-                    data-slot="tool-cluster-label"
-                  >
-                    {clusterLabel}
-                    <span className="ml-1 tabular-nums normal-case tracking-normal">
-                      ×{cluster.length}
-                    </span>
-                  </div>
-                ) : null}
-                {cluster.map((entry, toolIndex) => {
-                  const isLast = isLastBucket && toolIndex === cluster.length - 1;
-                  return (
-                    <div
-                      key={entry.item.id}
-                      data-activity-entry-kind="tool"
-                      data-scroll-anchor-id={entry.item.id}
-                    >
-                      <ToolTimelineNode
-                        item={entry.item}
-                        isLast={isLast}
-                        recovered={recoveredToolIds.has(entry.item.id)}
-                        hideTitle={showClusterChrome}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
+              <ToolClusterNode
+                key={`cluster:${bucket.entries[0].item.id}`}
+                entries={bucket.entries}
+                isLastBucket={isLastBucket}
+                recoveredToolIds={recoveredToolIds}
+              />
             );
           })}
         </div>
@@ -730,7 +876,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
           className="absolute bottom-2 left-1/2 -translate-x-1/2 gap-1.5 border border-border bg-background shadow-sm"
           aria-label={
             newActivityCount > 0
-              ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}. Jump to latest`
+              ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}. Jump to latest`
               : "Jump to latest activity"
           }
           aria-live="polite"
@@ -738,7 +884,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         >
           <ArrowDownIcon data-icon="inline-start" />
           {newActivityCount > 0
-            ? `${newActivityCount} new ${newActivityCount === 1 ? "activity" : "activities"}`
+            ? `${newActivityCount} new ${newActivityCount === 1 ? "update" : "updates"}`
             : "Jump to latest"}
         </Button>
       ) : null}
@@ -829,7 +975,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
     () => summarizeActivityGroup(props.items, props.recoveredToolIds),
     [props.items, props.recoveredToolIds],
   );
+  const contentSummary = useMemo(() => formatActivityContentSummary(props.items), [props.items]);
   const displayStatus = props.live && summary.status === "done" ? "running" : summary.status;
+  // contentSummary is shown only when the timeline is expanded.
   const isComplete = displayStatus === "done";
   const hasUnrecoveredIssue = displayStatus === "issue";
   // Live issue groups stay expanded so unrecovered tool errors remain visible
@@ -942,6 +1090,14 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
           <CollapsibleContent className="activity-trace-content max-w-3xl">
             <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
+              {contentSummary ? (
+                <div
+                  className="mb-2 px-0.5 text-[11px] font-medium uppercase tracking-wide app-text-muted"
+                  data-slot="activity-content-summary"
+                >
+                  {contentSummary}
+                </div>
+              ) : null}
               <ActivityTimeline summary={summary} live={props.live} />
             </div>
           </CollapsibleContent>

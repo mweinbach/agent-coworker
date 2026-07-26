@@ -26,6 +26,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Marker, MarkerContent } from "../../components/ui/marker";
 import { Message, MessageContent } from "../../components/ui/message";
+import { writeClipboardText } from "../../lib/clipboard";
 import {
   encodeDesktopMediaUrl,
   isAbsoluteDesktopPath,
@@ -46,7 +47,12 @@ import {
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
 
-function MessageCopyAction(props: { text: string; className?: string }) {
+function MessageCopyAction(props: {
+  text: string;
+  className?: string;
+  /** Compact pill aligned with the Sources control (always visible). */
+  prominent?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
 
@@ -60,23 +66,49 @@ function MessageCopyAction(props: { text: string; className?: string }) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(props.text);
+      await writeClipboardText(props.text);
       setCopied(true);
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
       }
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Clipboard may be unavailable (permissions, non-secure context). Fail silently.
+      // Clipboard may still be unavailable outside Electron. Fail silently.
     }
   };
+
+  if (props.prominent) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => void handleCopy()}
+        aria-label={copied ? "Copied" : "Copy message"}
+        data-slot="message-copy-action"
+        className={cn(
+          "h-7 gap-1.5 rounded-full border-border/60 bg-background/60 px-2.5 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/50 hover:text-foreground",
+          props.className,
+        )}
+      >
+        {copied ? (
+          <CheckIcon className="size-3.5 text-success" aria-hidden />
+        ) : (
+          <CopyIcon className="size-3.5" aria-hidden />
+        )}
+        <span>{copied ? "Copied" : "Copy"}</span>
+      </Button>
+    );
+  }
+
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-xs"
-      onClick={handleCopy}
+      onClick={() => void handleCopy()}
       aria-label={copied ? "Copied" : "Copy message"}
+      data-slot="message-copy-action"
       className={cn(
         "opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
         props.className,
@@ -107,7 +139,7 @@ function ErrorFeedRow(props: { message: string }) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(props.message);
+      await writeClipboardText(props.message);
       setCopied(true);
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
@@ -364,23 +396,20 @@ export const FeedRow = memo(function FeedRow(props: {
             </Bubble>
           )}
 
-          {hasSources && !hasInlineCitationChip && props.citationSources ? (
-            <CitationSourcesCarousel
-              sources={props.citationSources}
-              onOpenSource={openExternalSource}
-            />
-          ) : null}
-
           <div
             className={cn(
-              "pointer-events-none -mt-2 flex h-6 items-center",
+              "mt-1.5 flex flex-wrap items-center gap-1.5",
               item.role === "user" ? "justify-end" : "justify-start",
             )}
             data-slot="message-actions"
           >
-            <div className="pointer-events-auto">
-              <MessageCopyAction text={copyText} />
-            </div>
+            {hasSources && !hasInlineCitationChip && props.citationSources ? (
+              <CitationSourcesCarousel
+                sources={props.citationSources}
+                onOpenSource={openExternalSource}
+              />
+            ) : null}
+            <MessageCopyAction text={copyText} prominent={item.role === "assistant"} />
           </div>
         </MessageContent>
       </Message>

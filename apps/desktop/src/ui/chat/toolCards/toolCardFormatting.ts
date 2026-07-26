@@ -21,6 +21,65 @@ function truncate(text: string, max = 120): string {
   return `${text.slice(0, max - 1)}…`;
 }
 
+/** Middle-ellipsis path display so the basename stays visible. */
+export function formatDisplayPath(path: string, max = 48): string {
+  const raw = path.trim();
+  if (!raw) return "";
+  if (raw.length <= max) return raw;
+
+  const normalized = raw.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  const basename = parts[parts.length - 1] ?? raw;
+  const drive = raw.match(/^[A-Za-z]:/)?.[0] ?? (raw.startsWith("\\\\") ? "\\\\" : "");
+
+  if (parts.length >= 2) {
+    const parent = parts[parts.length - 2];
+    const tail = `${parent}/${basename}`;
+    if (tail.length + 2 <= max) {
+      const prefix = drive ? `${drive}/…/` : "…/";
+      return `${prefix}${tail}`;
+    }
+  }
+  if (basename.length + 2 <= max) {
+    return `…/${basename}`;
+  }
+  if (basename.length <= max) return basename;
+  const head = Math.max(8, Math.floor((max - 1) / 2));
+  const tail = Math.max(8, max - 1 - head);
+  return `${basename.slice(0, head)}…${basename.slice(-tail)}`;
+}
+
+function isGenericSuccessSummary(summary: string): boolean {
+  return summary === "Completed" || summary === "Completed successfully";
+}
+
+function composeToolSubtitle(
+  argsSummary: string,
+  resultSummary: string,
+  state: ToolFeedState,
+  preferArgsWhileRunning: boolean,
+): string {
+  if (!argsSummary) return resultSummary;
+  if (preferArgsWhileRunning) {
+    if (state === "output-available" || state === "output-error" || state === "output-denied") {
+      return isGenericSuccessSummary(resultSummary)
+        ? argsSummary
+        : `${argsSummary} · ${resultSummary}`;
+    }
+    return argsSummary;
+  }
+  if (state === "output-available" && isGenericSuccessSummary(resultSummary)) {
+    return argsSummary;
+  }
+  if (state === "input-streaming" || state === "input-available") {
+    return argsSummary;
+  }
+  if (state === "output-error" || state === "output-denied" || state === "approval-requested") {
+    return `${argsSummary} • ${resultSummary}`;
+  }
+  return isGenericSuccessSummary(resultSummary) ? argsSummary : `${argsSummary} • ${resultSummary}`;
+}
+
 function toText(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
@@ -153,13 +212,36 @@ function summarizeArgs(name: string, args: unknown): string {
   }
   if (base === "write" || base === "edit" || base === "read") {
     const filePath = getRecordValue(args, ["filePath", "path"]);
-    return filePath ? `File: ${truncate(toText(filePath), 90)}` : "";
+    return filePath ? formatDisplayPath(toText(filePath), 52) : "";
   }
   if (base === "glob") {
     const pattern = getRecordValue(args, ["pattern"]);
     return pattern ? `Pattern: ${truncate(toText(pattern), 90)}` : "";
   }
   if (base === "todowrite") {
+    const todos = getRecordValue(args, ["todos"]);
+    if (Array.isArray(todos) && todos.length > 0) {
+      let completed = 0;
+      let inProgress = 0;
+      let pending = 0;
+      for (const entry of todos) {
+        if (!isRecord(entry)) continue;
+        const status = toText(entry.status).toLowerCase();
+        if (status === "completed") completed += 1;
+        else if (status === "in_progress") inProgress += 1;
+        else pending += 1;
+      }
+      const total = todos.length;
+      if (completed === total) {
+        return total === 1 ? "Completed 1 task" : `Completed ${total} tasks`;
+      }
+      const parts: string[] = [];
+      if (inProgress > 0) parts.push(`${inProgress} active`);
+      if (completed > 0) parts.push(`${completed} complete`);
+      if (pending > 0) parts.push(`${pending} pending`);
+      if (parts.length > 0) return parts.join(" · ");
+      return total === 1 ? "Updated 1 task" : `Updated ${total} tasks`;
+    }
     const count = getRecordValue(args, ["count"]);
     return count !== undefined ? `Updated ${toText(count)} tasks` : "";
   }
@@ -374,10 +456,14 @@ function buildDetailsRows(
 
     if (command) rows.push({ label: "Command", value: truncate(toText(command), 140) });
     if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
-    if (filePath) rows.push({ label: "Path", value: truncate(toText(filePath), 140) });
+    if (filePath) rows.push({ label: "Path", value: toText(filePath) });
     if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
     if (pattern) rows.push({ label: "Pattern", value: truncate(toText(pattern), 140) });
     if (count !== undefined) rows.push({ label: "Count", value: toText(count) });
+    const todos = getRecordValue(args, ["todos"]);
+    if (Array.isArray(todos) && todos.length > 0) {
+      rows.push({ label: "Tasks", value: toText(todos.length) });
+    }
     if (urls.length === 1 && urls[0]) rows.push({ label: "URL", value: truncate(urls[0], 140) });
     if (urls.length > 1) rows.push({ label: "URLs", value: toText(urls.length) });
     if (queries.length === 1 && queries[0])
@@ -439,14 +525,13 @@ export function formatToolCard(
   const resultSummary = summarizeResult(name, state, result);
   // Prefer the distinctive arg line for in-flight agent tools; appending
   // "Running…" makes parallel spawn rows look identical and out of order.
-  const subtitle =
-    (base === "spawnagent" || base === "waitforagent") && argsSummary
-      ? state === "output-available" || state === "output-error" || state === "output-denied"
-        ? `${argsSummary} · ${resultSummary}`
-        : argsSummary
-      : argsSummary
-        ? `${argsSummary} • ${resultSummary}`
-        : resultSummary;
+  // Also drop generic "Completed" when args already describe the call.
+  const subtitle = composeToolSubtitle(
+    argsSummary,
+    resultSummary,
+    state,
+    base === "spawnagent" || base === "waitforagent",
+  );
 
   return {
     title,

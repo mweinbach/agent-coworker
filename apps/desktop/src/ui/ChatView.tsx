@@ -48,6 +48,7 @@ import {
   resolveCurrentReasoningEffort,
 } from "./chat/chatLogic";
 import { HIDDEN_RETRY_TURN_PROMPT } from "./chat/chatRetry";
+import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
 import { buildMentionCatalog, extractReferencesFromText } from "./chat/composerMentions";
 import {
   type FeedDerivationWindowState,
@@ -457,43 +458,40 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     [visibleFeed],
   );
   const citationSourcesByMessageId = useMemo(() => {
-    if (overflowCitationSourcesByMessageId.size === 0) {
-      return inlineCitationSourcesByMessageId;
-    }
     const merged = new Map(inlineCitationSourcesByMessageId);
     for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
       if (sources.length > 0) {
         merged.set(messageId, sources);
       }
     }
-    return merged;
-  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
+    // Sources belong under the final answer of the turn, not mid-trace
+    // progress assistants that may still carry tool citation maps.
+    return promoteCitationSourcesToFinalAssistants(visibleFeed, merged);
+  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId, visibleFeed]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
-  const liveActivityGroupId = useMemo(() => {
-    if (rt?.busy !== true) return null;
-    for (let i = renderItems.length - 1; i >= 0; i--) {
-      const entry = renderItems[i];
-      if (entry?.kind === "activity-group") {
-        return entry.id;
-      }
+  // One visual live owner per busy turn: the latest top-level render item wins
+  // so activity cards and assistant bubbles are never simultaneously "live".
+  const liveOwnership = useMemo(() => {
+    if (rt?.busy !== true) {
+      return { activityGroupId: null as string | null, assistantMessageId: null as string | null };
     }
-    return null;
-  }, [renderItems, rt?.busy]);
-  const streamingAssistantMessageId = useMemo(() => {
-    if (rt?.busy !== true) return null;
     for (let i = renderItems.length - 1; i >= 0; i--) {
       const entry = renderItems[i];
       if (!entry) continue;
-      if (entry.kind === "activity-group") continue;
+      if (entry.kind === "activity-group") {
+        return { activityGroupId: entry.id, assistantMessageId: null };
+      }
       if (entry.item.kind === "message" && entry.item.role === "assistant") {
-        return entry.item.id;
+        return { activityGroupId: null, assistantMessageId: entry.item.id };
       }
       if (entry.item.kind === "message" && entry.item.role === "user") {
-        return null;
+        return { activityGroupId: null, assistantMessageId: null };
       }
     }
-    return null;
+    return { activityGroupId: null, assistantMessageId: null };
   }, [renderItems, rt?.busy]);
+  const liveActivityGroupId = liveOwnership.activityGroupId;
+  const streamingAssistantMessageId = liveOwnership.assistantMessageId;
   const workingPlaceholderVisible = useMemo(
     () =>
       shouldShowWorkingPlaceholder({

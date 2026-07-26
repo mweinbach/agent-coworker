@@ -292,6 +292,7 @@ function TranscriptScroller(props: {
   const programmaticScrollRef = useRef(false);
   const userScrollPendingRef = useRef(false);
   const clearProgrammaticFrameRef = useRef<number | null>(null);
+  const clearPendingScrollFrameRef = useRef<number | null>(null);
   modeRef.current = mode;
   currentItemIdsRef.current = itemIds;
 
@@ -404,6 +405,9 @@ function TranscriptScroller(props: {
       if (clearProgrammaticFrameRef.current !== null) {
         window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
       }
+      if (clearPendingScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(clearPendingScrollFrameRef.current);
+      }
     };
   }, [persistSnapshot]);
 
@@ -504,11 +508,30 @@ function TranscriptScroller(props: {
       window.cancelAnimationFrame(clearProgrammaticFrameRef.current);
       clearProgrammaticFrameRef.current = null;
     }
+    // Nested activity scrolls can set pending intent without an outer scroll
+    // event. Auto-clear after two frames so resize follow is not stuck forever.
+    if (clearPendingScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(clearPendingScrollFrameRef.current);
+    }
+    clearPendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+      clearPendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+        clearPendingScrollFrameRef.current = null;
+        userScrollPendingRef.current = false;
+      });
+    });
     setScrollMode("detached");
   }, [setScrollMode]);
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (target instanceof Element) {
+        const nestedTimeline = target.closest('[data-slot="activity-timeline-viewport"]');
+        if (nestedTimeline && nestedTimeline !== event.currentTarget) {
+          // Nested activity timeline owns its own follow/detach state.
+          return;
+        }
+      }
       if (event.deltaY < 0) {
         detachFromTail();
       }
@@ -556,7 +579,7 @@ function TranscriptScroller(props: {
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
           aria-label={
             newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}. Jump to latest`
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}. Jump to latest`
               : "Jump to latest"
           }
           aria-live="polite"
@@ -565,7 +588,7 @@ function TranscriptScroller(props: {
           <ArrowDownIcon data-icon="inline-start" />
           <span>
             {newMessageCount > 0
-              ? `${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`
+              ? `${newMessageCount} new ${newMessageCount === 1 ? "update" : "updates"}`
               : "Jump to latest"}
           </span>
           {newMessageCount > 0 ? (
@@ -782,7 +805,15 @@ export const ChatFeed = memo(function ChatFeed(props: {
                       <FeedRow
                         item={item.item}
                         citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
-                        citationSources={citationSourcesByMessageId.get(item.item.id)}
+                        citationSources={
+                          // Only the final answer of a turn carries SOURCES, and
+                          // only after that bubble finishes streaming.
+                          item.item.kind === "message" &&
+                          item.item.role === "assistant" &&
+                          item.item.id !== streamingAssistantMessageId
+                            ? citationSourcesByMessageId.get(item.item.id)
+                            : undefined
+                        }
                         desktopBasePath={desktopBasePath}
                         isStreaming={
                           item.item.kind === "message" &&

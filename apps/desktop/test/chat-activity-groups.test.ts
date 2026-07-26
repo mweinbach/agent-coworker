@@ -3,6 +3,7 @@ import { latestTodosFromFeed } from "../src/app/store.helpers/threadEventReducer
 import type { FeedItem } from "../src/app/types";
 import {
   buildChatRenderItems,
+  formatActivityContentSummary,
   latestRetryableActivityGroupId,
   shouldShowWorkingPlaceholder,
   summarizeActivityGroup,
@@ -61,6 +62,105 @@ describe("desktop chat activity groups", () => {
       },
       { kind: "feed-item", item: feed[4] },
     ]);
+  });
+
+  test("merges every mid-turn activity burst and intermediate assistant into one group", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "m1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "research this",
+      },
+      {
+        id: "r1",
+        kind: "reasoning",
+        mode: "summary",
+        ts: "2024-01-01T00:00:00.500Z",
+        text: "Planning the research approach.",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "webSearch",
+        state: "output-available",
+        args: { query: "kimi k3" },
+      },
+      {
+        id: "m2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "I now have extensive research. Let me fetch a couple more pages.",
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "b.md" },
+      },
+      {
+        id: "t3",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.500Z",
+        name: "bash",
+        state: "output-available",
+        args: { command: "ls" },
+      },
+      {
+        id: "m3",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "## Final report\n\nHere is the long-form answer with more substance than a status update, and enough text to stay standalone as the final assistant message for the user.",
+      },
+    ];
+
+    const rendered = buildChatRenderItems(feed);
+    expect(rendered).toHaveLength(3);
+    expect(rendered[0]).toEqual({ kind: "feed-item", item: feed[0] });
+    expect(rendered[1]?.kind).toBe("activity-group");
+    if (rendered[1]?.kind === "activity-group") {
+      expect(rendered[1].items.map((item) => item.id)).toEqual(["r1", "t1", "m2", "t2", "t3"]);
+      expect(rendered[1].items[2]).toMatchObject({
+        kind: "reasoning",
+        mode: "summary",
+        text: "I now have extensive research. Let me fetch a couple more pages.",
+      });
+    }
+    expect(rendered[2]).toEqual({ kind: "feed-item", item: feed[6] });
+  });
+
+  test("formatActivityContentSummary collapses tool counts for compact headers", () => {
+    expect(
+      formatActivityContentSummary([
+        {
+          id: "t1",
+          kind: "tool",
+          ts: "2024-01-01T00:00:01.000Z",
+          name: "read",
+          state: "output-available",
+        },
+        {
+          id: "t2",
+          kind: "tool",
+          ts: "2024-01-01T00:00:02.000Z",
+          name: "read",
+          state: "output-available",
+        },
+        {
+          id: "t3",
+          kind: "tool",
+          ts: "2024-01-01T00:00:03.000Z",
+          name: "todoWrite",
+          state: "output-available",
+        },
+      ]),
+    ).toBe("Read ×2 · Todo Write");
   });
 
   test("keeps todos out of the transcript so the context sidebar owns plan progress", () => {

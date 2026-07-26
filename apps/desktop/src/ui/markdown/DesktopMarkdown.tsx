@@ -35,6 +35,7 @@ import {
 import { useAppStore } from "../../app/store";
 import { AccessibleIconButton, Button } from "../../components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { writeClipboardText } from "../../lib/clipboard";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { useDocumentIsDark } from "../../lib/documentThemeStore";
 import { getFilePreviewKind } from "../../lib/filePreviewKind";
@@ -807,7 +808,6 @@ export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
 }
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const RELATIVE_FILENAME_RE = /^[\w.\-+ ()%,&'!@$=~^]+\.[A-Za-z0-9]{1,12}$/;
 
 function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
   if (!rawHref || rawHref.startsWith("#")) {
@@ -840,22 +840,56 @@ function resolveAbsoluteDesktopFileHref(rawHref: string): string | null {
   return desktopPathToFileUrl(match.path);
 }
 
-/** Resolve a markdown href that looks like a bare filename (no scheme, no slashes) against the active workspace path. */
+/**
+ * Resolve a workspace-relative markdown href against the active workspace path.
+ * Supports bare filenames (`report.pdf`) and nested paths (`tmp/pdfs/page_05-05.png`)
+ * while rejecting base escapes (`../outside/secret.png`).
+ */
 function resolveRelativeFileHref(rawHref: string, basePath: string | null): string | null {
   if (!basePath) return null;
   if (!rawHref || URL_SCHEME_RE.test(rawHref)) return null;
-  if (rawHref.startsWith("/") || rawHref.startsWith("\\") || rawHref.startsWith("#")) {
+  if (
+    rawHref.startsWith("/") ||
+    rawHref.startsWith("\\") ||
+    rawHref.startsWith("#") ||
+    rawHref.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/.test(rawHref)
+  ) {
     return null;
   }
   // Strip a query/fragment so `Foo.docx?x=1` still resolves.
-  const cleaned = rawHref.replace(/[?#].*$/, "");
-  if (!RELATIVE_FILENAME_RE.test(cleaned)) {
+  const cleaned = rawHref
+    .replace(/[?#].*$/, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "");
+  if (!cleaned || cleaned.includes("://") || /[<>:"|?*\0]/.test(cleaned)) {
+    return null;
+  }
+  const lastSegment = cleaned.split("/").filter(Boolean).pop() ?? "";
+  // Require a file-like final segment so plain words don't become file links.
+  if (!/\.[A-Za-z0-9]{1,12}$/.test(lastSegment)) {
     return null;
   }
   const normalizedBase = basePath.replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalizedBase) return null;
-  return desktopPathToFileUrl(`${normalizedBase}/${cleaned}`);
+  const joined = joinImagePathWithinBase(normalizedBase, cleaned);
+  if (!joined) return null;
+  return desktopPathToFileUrl(joined);
 }
+
+/** Absolute native path only — never open a relative path against process cwd. */
+function asAbsoluteDesktopOpenPath(filePath: string | null | undefined): string | null {
+  if (!filePath) return null;
+  const trimmed = filePath.trim();
+  if (!trimmed || !isAbsoluteDesktopPath(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+// Shared with link/image components so workspace-relative hrefs resolve against
+// the same base path used by remark/rehype rewrites.
+const DesktopMarkdownBasePathContext = createContext<string | null>(null);
 
 type DesktopImagePathResolution =
   | { kind: "local"; absPath: string }
@@ -1100,8 +1134,32 @@ function rehypeRewriteDesktopImages(opts?: { basePath?: string | null }) {
   };
 }
 
-async function openDesktopMessageLink(href: string): Promise<void> {
-  const localPath = decodeDesktopLocalFileHref(href);
+function resolveOpenableLocalPath(href: string, basePath: string | null): string | null {
+  const decoded = asAbsoluteDesktopOpenPath(decodeDesktopLocalFileHref(href));
+  if (decoded) {
+    return decoded;
+  }
+
+  // Workspace-relative markdown links that survived without rewriting (or were
+  // pasted as plain relative paths) must be joined to the chat/workspace base
+  // before IPC — otherwise Electron resolves them against process.cwd and the
+  // allowlist rejects them with "path is outside allowed workspace roots".
+  const rebased = resolveRelativeFileHref(href, basePath);
+  if (rebased) {
+    return asAbsoluteDesktopOpenPath(
+      decodeDesktopLocalFileHref(rebased) ?? fileUrlToDesktopPath(rebased),
+    );
+  }
+
+  if (isAbsoluteDesktopPath(href)) {
+    return href;
+  }
+
+  return null;
+}
+
+async function openDesktopMessageLink(href: string, basePath: string | null = null): Promise<void> {
+  const localPath = resolveOpenableLocalPath(href, basePath);
   if (localPath) {
     const kind = getFilePreviewKind(localPath);
     if (kind !== "unsupported" && kind !== "unknown") {
@@ -1154,7 +1212,8 @@ export function DesktopMessageLink({
   target: _target,
   ...props
 }: DesktopMessageLinkProps) {
-  const localPath = decodeDesktopLocalFileHref(href);
+  const basePath = useContext(DesktopMarkdownBasePathContext);
+  const localPath = href ? resolveOpenableLocalPath(href, basePath) : null;
   const forwardedExternalHref = decodeDesktopExternalHref(href);
 
   if (localPath || forwardedExternalHref) {
@@ -1172,7 +1231,7 @@ export function DesktopMessageLink({
           if (!href) {
             return;
           }
-          void openDesktopMessageLink(href);
+          void openDesktopMessageLink(href, basePath);
         }}
       >
         {children}
@@ -1187,11 +1246,21 @@ export function DesktopMessageLink({
       href={href}
       onClick={(event) => {
         onClick?.(event);
-        if (event.defaultPrevented || !href || !isExternalMessageHref(href)) {
+        if (event.defaultPrevented || !href) {
+          return;
+        }
+        // Workspace-relative file links (e.g. tmp/pdfs/page.png) are not
+        // external URLs — resolve and open them in-app instead of navigating.
+        if (resolveOpenableLocalPath(href, basePath)) {
+          event.preventDefault();
+          void openDesktopMessageLink(href, basePath);
+          return;
+        }
+        if (!isExternalMessageHref(href)) {
           return;
         }
         event.preventDefault();
-        void openDesktopMessageLink(href);
+        void openDesktopMessageLink(href, basePath);
       }}
       rel="noreferrer"
       target="_blank"
@@ -1201,11 +1270,6 @@ export function DesktopMessageLink({
     </a>
   );
 }
-
-// Raw HTML <img> tags materialize only after rehype-raw, bypassing the remark
-// image rewrite, so the img component needs the workspace base path to resolve
-// relative sources the same way markdown images are resolved.
-const DesktopMarkdownBasePathContext = createContext<string | null>(null);
 
 type DesktopMarkdownImageProps = ComponentProps<"img"> & { node?: unknown };
 
@@ -1256,14 +1320,16 @@ function DesktopMarkdownImage({
     return null;
   }
 
-  const localPath = decodeDesktopMediaUrl(srcString);
+  const localPath =
+    asAbsoluteDesktopOpenPath(decodeDesktopMediaUrl(srcString)) ??
+    resolveOpenableLocalPath(srcString, basePath);
 
   const handleOpen = () => {
     if (localPath) {
       useAppStore.getState().openFilePreview({ path: localPath });
       return;
     }
-    void openDesktopMessageLink(srcString);
+    void openDesktopMessageLink(srcString, basePath);
   };
 
   if (failed) {
@@ -1344,11 +1410,7 @@ function PreWithCopy({
   const handleCopy = () => {
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    void Promise.resolve(
-      typeof navigator !== "undefined" && navigator.clipboard
-        ? navigator.clipboard.writeText(text)
-        : Promise.reject(new Error("clipboard unavailable")),
-    ).then(
+    void writeClipboardText(text).then(
       () => {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);

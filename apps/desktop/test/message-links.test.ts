@@ -109,6 +109,65 @@ describe("desktop message local file links", () => {
     );
   });
 
+  test("rewrites nested workspace-relative file links against the chat base path", () => {
+    const basePath = "C:\\Users\\maxw6\\.cowork\\chats\\example-chat";
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "tmp/pdfs/page_05-05.png",
+              children: [{ type: "text", value: "Cover Page" }],
+            },
+            {
+              type: "link",
+              url: "report.pdf",
+              children: [{ type: "text", value: "Report" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree, basePath);
+
+    const nestedHref = tree.children[0]?.children[0]?.url;
+    const bareHref = tree.children[0]?.children[1]?.url;
+    expect(nestedHref).toStartWith("cowork-file://open?path=");
+    expect(bareHref).toStartWith("cowork-file://open?path=");
+    expect(decodeDesktopLocalFileHref(nestedHref)).toBe(
+      "C:\\Users\\maxw6\\.cowork\\chats\\example-chat\\tmp\\pdfs\\page_05-05.png",
+    );
+    expect(decodeDesktopLocalFileHref(bareHref)).toBe(
+      "C:\\Users\\maxw6\\.cowork\\chats\\example-chat\\report.pdf",
+    );
+  });
+
+  test("rejects workspace-relative links that escape the base path", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "../outside/secret.png",
+              children: [{ type: "text", value: "Nope" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree, "C:\\Users\\maxw6\\.cowork\\chats\\example-chat");
+
+    expect(tree.children[0]?.children[0]?.url).toBe("../outside/secret.png");
+  });
+
   test("rewrites custom app links into desktop-safe hrefs before sanitize", () => {
     const tree = {
       type: "root",

@@ -102,10 +102,21 @@ describe("FeedRow assistant markdown and sources integration", () => {
       const copyAction = container.querySelector('[aria-label="Copy message"]');
       const messageActions = container.querySelector('[data-slot="message-actions"]');
       expect(copyAction).not.toBeNull();
-      expect(copyAction?.getAttribute("data-size")).toBe("icon-xs");
-      expect(copyAction?.textContent).toBe("Copy");
+      expect(copyAction?.textContent).toContain("Copy");
       expect(messageActions?.className).not.toContain("absolute");
       expect(messageActions?.className).toContain("justify-start");
+      // Sources trigger and copy sit together on the message actions row.
+      expect(container.querySelector('[data-slot="citation-sources-trigger"]')).not.toBeNull();
+      expect(container.querySelector('[data-slot="message-copy-action"]')).not.toBeNull();
+
+      const sourcesTrigger = container.querySelector(
+        '[data-slot="citation-sources-trigger"]',
+      ) as HTMLButtonElement | null;
+      if (!sourcesTrigger) throw new Error("missing sources trigger");
+      await act(async () => {
+        sourcesTrigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
 
       const sourceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Portfolio Methodology"),
@@ -279,6 +290,8 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain('aria-label="Copy message"');
     expect(html).toContain("group-hover/message:opacity-100");
     expect(html).toContain("group-focus-within/message:opacity-100");
+    // User turns keep the compact hover copy control (not the prominent pill).
+    expect(html).toContain('data-size="icon-xs"');
   });
 
   test("renders markdown continuously while the assistant is streaming", () => {

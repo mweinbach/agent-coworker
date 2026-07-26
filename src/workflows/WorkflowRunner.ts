@@ -312,15 +312,19 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
         void handleAgentCall(message.callId, message.payload);
         return;
       }
+      // Progress goes to the workflow_progress event only — deliberately NOT to
+      // ctx.log. A log line prefixed `tool>` is reverse-parsed into a tool card by
+      // the desktop (legacyToolLogs.ts), so emitting one per phase and per log()
+      // would spray the parent transcript with dozens of fake tool cards for work
+      // that belongs in the run panel. Only genuine failures below reach ctx.log.
       case "phase": {
         currentPhase = message.title;
-        opts.ctx.log(`tool> workflow ${JSON.stringify({ runId, phase: message.title })}`);
         emitProgress();
         return;
       }
       case "log": {
         logs.push(message.message);
-        opts.ctx.log(`tool> workflow ${JSON.stringify({ runId, log: message.message })}`);
+        emitProgress();
         return;
       }
       case "done": {

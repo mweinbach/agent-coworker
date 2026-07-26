@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.24 - 2026-07-25
+
+### Fixed
+
+- **Codex app-server no longer clobbers the Windows sandbox** — The managed
+  Codex app-server shared the machine-global `CodexSandboxOffline/Online`
+  accounts with Cowork's own Windows sandbox helper while keeping its setup
+  state in a separate home (`~/.cowork/auth/codex-cli`). Its first sandboxed
+  turn auto-ran an elevated full setup that reset those accounts' passwords,
+  invalidating every other home's stored credentials and kicking off a UAC
+  re-setup loop. Cowork now newest-wins syncs the setup marker and credentials
+  between its two Cowork-owned homes before every app-server spawn (the native
+  `~/.codex` home is never read or written), and the managed install pins
+  version-matched `codex-command-runner`/`codex-windows-sandbox-setup`
+  siblings next to the app-server binary so helper resolution never falls back
+  to a foreign, version-skewed binary via PATH.
+
+### Tests
+
+- Added Windows sandbox setup-state sync coverage (newest-wins, isolation
+  from the native Codex home, version gating, idempotence).
+- Added app-server client sync wiring coverage.
+- Added Windows sandbox helper companion install/repair/pinned-digest coverage.
+
 ## 1.2.23 - 2026-07-22
 
 ### Changed

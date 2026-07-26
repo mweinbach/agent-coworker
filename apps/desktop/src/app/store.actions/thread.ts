@@ -615,6 +615,7 @@ export async function hydrateThreadSelection(
                 sessionUsage: snapshot.sessionUsage,
                 lastTurnUsage: snapshot.lastTurnUsage,
                 agents: snapshot.agents,
+                workflowRuns: snapshot.workflowRuns,
                 feed: snapshot.feed,
                 hydrating: false,
                 transcriptOnly: true,

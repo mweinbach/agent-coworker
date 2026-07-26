@@ -452,6 +452,7 @@ export type CachedSessionSnapshot = {
 };
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
 export type ThreadAgentSummary = Extract<SessionEvent, { type: "agent_status" }>["agent"];
+export type ThreadWorkflowRun = Extract<SessionEvent, { type: "workflow_progress" }>["progress"];
 type ThreadSessionKind = Extract<SessionEvent, { type: "server_hello" }>["sessionKind"];
 type ThreadAgentRole = Extract<SessionEvent, { type: "server_hello" }>["role"];
 type ThreadAgentMode = Extract<SessionEvent, { type: "server_hello" }>["mode"];
@@ -598,6 +599,11 @@ export type ThreadRuntime = {
   executionState: ThreadAgentExecutionState | null;
   lastMessagePreview: string | null;
   agents: ThreadAgentSummary[];
+  /**
+   * Live `workflow` tool runs, newest last, keyed by runId. Superseded in place as
+   * progress arrives; a run stays after it settles so its result remains readable.
+   */
+  workflowRuns: ThreadWorkflowRun[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
   enableMcp: boolean | null;
@@ -620,6 +626,7 @@ export type ThreadRuntime = {
 export type HydratedTranscriptSnapshot = {
   feed: FeedItem[];
   agents: ThreadAgentSummary[];
+  workflowRuns: ThreadWorkflowRun[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
 };

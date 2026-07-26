@@ -20,6 +20,7 @@ export const JSONRPC_THREAD_EVENT_METHODS = new Set([
   "cowork/session/agentSpawned",
   "cowork/session/agentStatus",
   "cowork/session/agentWaitResult",
+  "cowork/session/workflowProgress",
 ]);
 
 export type JsonRpcMessageParams = Record<string, unknown> & {

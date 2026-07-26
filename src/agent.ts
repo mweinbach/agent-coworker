@@ -338,6 +338,41 @@ async function prepareTurnToolEnv(
   });
 }
 
+type TurnMcpLoad = {
+  tools: Record<string, any>;
+  errors: string[];
+  close?: () => Promise<void>;
+};
+
+/**
+ * Loads this turn's MCP tools. Per-server failures degrade gracefully into
+ * `errors`; loader failures themselves reject and abort the turn.
+ */
+async function loadTurnMcpTools(
+  params: RunTurnParams,
+  deps: RunTurnDeps,
+  log: (line: string) => void,
+): Promise<TurnMcpLoad> {
+  const enableMcp = params.enableMcp ?? params.config.enableMcp ?? false;
+  if (!enableMcp) return { tools: {}, errors: [] };
+
+  if (params.sessionId) {
+    // Cached per workspace; the connections are owned by the cache and must
+    // not be closed by the turn.
+    const loaded = await getOrLoadMCPToolsCached(params.config, params.sessionId, {
+      log,
+      loadMCPServers: deps.loadMCPServers,
+      loadMCPTools: deps.loadMCPTools,
+    });
+    return { tools: loaded.tools, errors: loaded.errors };
+  }
+
+  const servers = await deps.loadMCPServers(params.config, { log });
+  if (servers.length === 0) return { tools: {}, errors: [] };
+  const loaded = await deps.loadMCPTools(servers, { log });
+  return { tools: loaded.tools, errors: loaded.errors, close: loaded.close };
+}
+
 function appendRuntimeInstructions(
   system: string,
   env: Record<string, string | undefined> | undefined,
@@ -420,7 +455,34 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       abortSignal,
     } = params;
     let latestTurnMessages = messages;
-    const turnToolEnv = await prepareTurnToolEnv(params);
+    // Cold-start steps with no data dependencies between them — each reads
+    // only `params`/`config`, and none mutates state another one reads
+    // (`prepareCoworkRuntimeToolEnv` copies `process.env` rather than writing
+    // it) — so they run concurrently to cut first-turn latency.
+    const mcpLoadPromise = loadTurnMcpTools(params, deps, log);
+    const [turnToolEnv, mcpLoad, telemetry] = await Promise.all([
+      prepareTurnToolEnv(params),
+      mcpLoadPromise,
+      buildRuntimeTelemetrySettings(config, {
+        functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
+        metadata: {
+          ...(params.telemetryContext?.metadata ?? {}),
+        },
+      }),
+    ]).catch(async (error: unknown): Promise<never> => {
+      // A sibling step failed before the turn could start; sequentially the
+      // MCP connections would never have been opened. Wait for the MCP leg to
+      // settle and close whatever it opened before rethrowing.
+      const settledMcpLoad = await mcpLoadPromise.catch(() => undefined);
+      if (settledMcpLoad?.close) {
+        try {
+          await settledMcpLoad.close();
+        } catch (closeError) {
+          log(`[MCP] Error closing MCP connections: ${String(closeError)}`);
+        }
+      }
+      throw error;
+    });
     const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
     const turnSandboxPolicy = resolveSandboxPolicy({
       config: config.sandbox,
@@ -498,28 +560,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
         })
       : rawBuiltInTools;
 
-    let mcpTools: Record<string, any> = {};
-    const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
-    let closeMcp: undefined | (() => Promise<void>);
-    if (enableMcp) {
-      if (params.sessionId) {
-        const loaded = await getOrLoadMCPToolsCached(config, params.sessionId, {
-          log,
-          loadMCPServers: deps.loadMCPServers,
-          loadMCPTools: deps.loadMCPTools,
-        });
-        mcpTools = loaded.tools;
-        if (loaded.errors.length > 0) params.onMcpLoadErrors?.(loaded.errors);
-      } else {
-        const servers = await deps.loadMCPServers(config, { log });
-        if (servers.length > 0) {
-          const loaded = await deps.loadMCPTools(servers, { log });
-          mcpTools = loaded.tools;
-          closeMcp = loaded.close;
-          if (loaded.errors.length > 0) params.onMcpLoadErrors?.(loaded.errors);
-        }
-      }
-    }
+    const mcpTools: Record<string, any> = mcpLoad.tools;
+    if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
+    const closeMcp = mcpLoad.close;
 
     const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
     const roleFilteredTools = params.agentRole
@@ -575,12 +618,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       };
     }> => {
       try {
-        const telemetry = await buildRuntimeTelemetrySettings(config, {
-          functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
-          metadata: {
-            ...(params.telemetryContext?.metadata ?? {}),
-          },
-        });
         if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
           const stepLimitStop = legacyStepCountIs(params.maxSteps ?? 100);
           const streamTextInput: LegacyStreamTextInput = {

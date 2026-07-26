@@ -137,6 +137,53 @@ describe("desktop activity group card", () => {
     expect(secondSummaryIndex).toBeGreaterThan(globIndex);
   });
 
+  test("clusters consecutive same-name tools and labels live subagents", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        activeAgentLabels: ["ntia-scout", "congress-watch", "agency-policy", "export-controls"],
+        items: [
+          {
+            id: "s1",
+            kind: "tool",
+            ts: "2024-01-01T00:00:01.000Z",
+            name: "webSearch",
+            state: "output-available",
+            args: { query: "NTIA open weights" },
+            result: { count: 10 },
+          },
+          {
+            id: "s2",
+            kind: "tool",
+            ts: "2024-01-01T00:00:02.000Z",
+            name: "webSearch",
+            state: "output-available",
+            args: { query: "EO 14110 open source" },
+            result: { count: 8 },
+          },
+          {
+            id: "s3",
+            kind: "tool",
+            ts: "2024-01-01T00:00:03.000Z",
+            name: "webSearch",
+            state: "input-available",
+            args: { query: "Congress open models bill" },
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain('data-activity-entry-kind="tool-cluster"');
+    expect(html).toContain('data-tool-cluster-size="3"');
+    expect(html).toContain('data-slot="tool-cluster-label"');
+    expect(html).toContain("×3");
+    expect(html).toContain("NTIA open weights");
+    expect(html).toContain("EO 14110 open source");
+    expect(html).toContain("Congress open models bill");
+    // More than 3 active labels collapses to a count suffix on the live header.
+    expect(html).toContain("4 subagents");
+  });
+
   test("renders reasoning summaries once without a nested disclosure", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

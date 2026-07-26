@@ -327,7 +327,10 @@ export const FeedRow = memo(function FeedRow(props: {
                     citationAnnotations={item.annotations}
                     citationSources={props.citationSources}
                     citationUrlsByIndex={props.citationUrlsByIndex}
-                    caret="block"
+                    // Avoid Streamdown's solid `block` glyph (U+258B) — it reads as a
+                    // black box on the line. A thin themed bar is applied via CSS on
+                    // the streamdown root when `streaming-markdown-caret` is present.
+                    className={isStreamingAssistant ? "streaming-markdown-caret" : undefined}
                     desktopBasePath={props.desktopBasePath}
                     normalizeDisplayCitations
                     fallbackToSourcesFooter={!hasSources}

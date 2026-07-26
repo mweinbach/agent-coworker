@@ -588,6 +588,8 @@ export const ChatFeed = memo(function ChatFeed(props: {
   renderItems: ChatRenderItem[];
   liveActivityGroupId: string | null;
   liveStartedAt: string | null;
+  /** Busy subagent nicknames/titles for the live activity header. */
+  activeAgentLabels?: readonly string[];
   showWorkingPlaceholder: boolean;
   streamingAssistantMessageId?: string | null;
   citationUrlsByMessageId: Map<string, Map<number, string>>;
@@ -618,6 +620,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     renderItems,
     liveActivityGroupId,
     liveStartedAt,
+    activeAgentLabels,
     showWorkingPlaceholder,
     streamingAssistantMessageId,
     citationUrlsByMessageId,
@@ -755,6 +758,9 @@ export const ChatFeed = memo(function ChatFeed(props: {
                         recoveredToolIds={item.recoveredToolIds}
                         live={item.id === liveActivityGroupId}
                         liveStartedAt={liveStartedAt}
+                        activeAgentLabels={
+                          item.id === liveActivityGroupId ? activeAgentLabels : undefined
+                        }
                         onRetry={
                           item.id === retryableActivityGroupId && onRetryFailedTurn
                             ? () =>

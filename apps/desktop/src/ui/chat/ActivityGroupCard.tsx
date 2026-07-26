@@ -112,6 +112,26 @@ type ReasoningSection = {
   body: string;
 };
 
+/**
+ * Stable section ids so streaming heading discovery does not remount earlier
+ * sections (array-index keys used to shift and flash/overlap as text grew).
+ */
+function stableReasoningSectionId(
+  title: string,
+  body: string,
+  titleCounts: Map<string, number>,
+): string {
+  if (title) {
+    const next = (titleCounts.get(title) ?? 0) + 1;
+    titleCounts.set(title, next);
+    return `h:${next}:${title}`;
+  }
+  // Untitled leading/body blocks: key off a short prefix of the body so the
+  // first paragraph keeps its identity while trailing tokens stream in.
+  const prefix = body.replace(/\s+/g, " ").trim().slice(0, 48);
+  return `b:${prefix || "empty"}`;
+}
+
 function parseReasoningSections(text: string): ReasoningSection[] {
   const normalized = normalizeReasoningMarkdown(text);
   if (!normalized) return [];
@@ -130,15 +150,27 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     match = headingRegex.exec(normalized);
   }
 
+  const titleCounts = new Map<string, number>();
+
   if (matches.length === 0) {
-    return [{ id: "body:0", title: "", body: normalized }];
+    return [
+      {
+        id: stableReasoningSectionId("", normalized, titleCounts),
+        title: "",
+        body: normalized,
+      },
+    ];
   }
 
   const sections: ReasoningSection[] = [];
   if (matches[0].index > 0) {
     const leadingBody = normalized.slice(0, matches[0].index).trim();
     if (leadingBody) {
-      sections.push({ id: "section:0", title: "", body: leadingBody });
+      sections.push({
+        id: stableReasoningSectionId("", leadingBody, titleCounts),
+        title: "",
+        body: leadingBody,
+      });
     }
   }
 
@@ -151,7 +183,7 @@ function parseReasoningSections(text: string): ReasoningSection[] {
     const body = normalized.slice(contentStart, contentEnd).trim();
 
     sections.push({
-      id: `section:${sections.length}`,
+      id: stableReasoningSectionId(currentMatch.title, body, titleCounts),
       title: currentMatch.title,
       body,
     });
@@ -160,27 +192,54 @@ function parseReasoningSections(text: string): ReasoningSection[] {
   return sections;
 }
 
+function ReasoningMarkdown({
+  body,
+  className,
+  streaming,
+}: {
+  body: string;
+  className?: string;
+  streaming?: boolean;
+}) {
+  return (
+    <DesktopMarkdown
+      normalizeDisplayCitations
+      className={cn(className, streaming && "streaming-markdown-caret")}
+      isAnimating={streaming === true}
+      mode={streaming ? "streaming" : "static"}
+      parseIncompleteMarkdown={streaming === true}
+    >
+      {body}
+    </DesktopMarkdown>
+  );
+}
+
 function ReasoningSectionNode({
   disclosureId,
   title,
   body,
   isMostRecent,
+  streaming,
 }: {
   disclosureId: string;
   title: string;
   body: string;
   isMostRecent: boolean;
+  streaming?: boolean;
 }) {
   const [open, setOpen] = useState(isMostRecent);
+  // Keep the live tail open without fighting a user who collapsed an earlier section.
+  useEffect(() => {
+    if (isMostRecent && streaming) setOpen(true);
+  }, [isMostRecent, streaming]);
 
   if (!title) {
     return (
-      <DesktopMarkdown
-        normalizeDisplayCitations
+      <ReasoningMarkdown
+        body={body}
+        streaming={streaming}
         className="text-[13px] leading-snug app-text-secondary"
-      >
-        {body}
-      </DesktopMarkdown>
+      />
     );
   }
 
@@ -206,9 +265,11 @@ function ReasoningSectionNode({
           id={disclosureId}
           className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed app-text-muted select-text"
         >
-          <DesktopMarkdown normalizeDisplayCitations className="prose-sm leading-relaxed">
-            {body}
-          </DesktopMarkdown>
+          <ReasoningMarkdown
+            body={body}
+            streaming={streaming}
+            className="prose-sm leading-relaxed"
+          />
         </div>
       )}
     </div>
@@ -247,6 +308,9 @@ function ReasoningTimelineNode({
       <div className="flex flex-col gap-1.5 min-w-0">
         {sections.map((section, idx) => {
           const isSectionMostRecent = live ? isMostRecent && idx === sections.length - 1 : true;
+          // Only the live tail uses incomplete-markdown streaming so earlier
+          // sections stay layout-stable while new text arrives.
+          const streaming = live === true && isSectionMostRecent;
           return (
             <ReasoningSectionNode
               key={`${sourceId}:${section.id}`}
@@ -254,6 +318,7 @@ function ReasoningTimelineNode({
               title={section.title}
               body={section.body}
               isMostRecent={isSectionMostRecent}
+              streaming={streaming}
             />
           );
         })}
@@ -276,10 +341,13 @@ function ToolTimelineNode({
   item,
   isLast,
   recovered,
+  hideTitle = false,
 }: {
   item: Extract<ActivityFeedItem, { kind: "tool" }>;
   isLast: boolean;
   recovered: boolean;
+  /** When true, the parent cluster already shows the tool name — only render the row detail. */
+  hideTitle?: boolean;
 }) {
   const formatting = useMemo(
     () => formatToolCard(item.name, item.args, item.result, item.state),
@@ -319,7 +387,15 @@ function ToolTimelineNode({
           <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
+                {hideTitle ? (
+                  <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
+                    {formatting.subtitle || formatting.title}
+                  </span>
+                ) : (
+                  <span className="text-[13px] font-medium text-foreground">
+                    {formatting.title}
+                  </span>
+                )}
                 {recovered ? (
                   <Badge
                     variant="outline"
@@ -332,7 +408,7 @@ function ToolTimelineNode({
                   <ToolStateIndicator state={item.state} />
                 )}
               </div>
-              {formatting.subtitle ? (
+              {!hideTitle && formatting.subtitle ? (
                 <div className="mt-0.5 text-xs leading-snug app-text-muted">
                   {formatting.subtitle}
                 </div>
@@ -394,7 +470,13 @@ function ToolTimelineNode({
       ) : (
         <div className="min-w-0 py-0.5">
           <div className="flex items-center gap-1.5">
-            <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
+            {hideTitle ? (
+              <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
+                {formatting.subtitle || formatting.title}
+              </span>
+            ) : (
+              <span className="text-[13px] font-medium text-foreground">{formatting.title}</span>
+            )}
             {recovered ? (
               <Badge
                 variant="outline"
@@ -407,7 +489,7 @@ function ToolTimelineNode({
               <ToolStateIndicator state={item.state} />
             )}
           </div>
-          {formatting.subtitle ? (
+          {!hideTitle && formatting.subtitle ? (
             <div className="mt-0.5 text-xs leading-snug app-text-muted">{formatting.subtitle}</div>
           ) : null}
           {item.retryOf ? (
@@ -421,6 +503,38 @@ function ToolTimelineNode({
   );
 }
 
+type TimelineRenderBucket =
+  | { kind: "reasoning"; entry: ActivityGroupSummary["entries"][number] & { kind: "reasoning" } }
+  | {
+      kind: "tool-cluster";
+      name: string;
+      entries: Array<ActivityGroupSummary["entries"][number] & { kind: "tool" }>;
+    };
+
+/**
+ * Cluster consecutive same-name tools so parallel bursts (e.g. four webSearch
+ * calls) read as one intentional group instead of a shuffled checklist.
+ */
+function bucketTimelineEntries(entries: ActivityGroupSummary["entries"]): TimelineRenderBucket[] {
+  const buckets: TimelineRenderBucket[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "reasoning") {
+      buckets.push({ kind: "reasoning", entry });
+      continue;
+    }
+    const previous = buckets[buckets.length - 1];
+    if (
+      previous?.kind === "tool-cluster" &&
+      previous.name.toLowerCase() === entry.item.name.toLowerCase()
+    ) {
+      previous.entries.push(entry);
+      continue;
+    }
+    buckets.push({ kind: "tool-cluster", name: entry.item.name, entries: [entry] });
+  }
+  return buckets;
+}
+
 function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; live?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -429,6 +543,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   const followingRef = useRef(following);
   const anchorRef = useRef<ScrollAnchorPosition | null>(null);
   const entryIds = useMemo(() => summary.entries.map((entry) => entry.item.id), [summary.entries]);
+  const timelineBuckets = useMemo(() => bucketTimelineEntries(summary.entries), [summary.entries]);
   const previousEntryIdsRef = useRef(entryIds);
   followingRef.current = following;
 
@@ -534,10 +649,11 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
         onWheel={handleWheel}
       >
         <div ref={contentRef} data-slot="activity-timeline-content">
-          {summary.entries.map((entry, i) => {
-            const isLast = i === summary.entries.length - 1;
+          {timelineBuckets.map((bucket, bucketIndex) => {
+            const isLastBucket = bucketIndex === timelineBuckets.length - 1;
 
-            if (entry.kind === "reasoning") {
+            if (bucket.kind === "reasoning") {
+              const entry = bucket.entry;
               const isMostRecent = entry.item.id === lastReasoningEntryId;
               return (
                 <div
@@ -548,7 +664,7 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
                   <ReasoningTimelineNode
                     sourceId={entry.item.id}
                     text={entry.item.text}
-                    isLast={isLast}
+                    isLast={isLastBucket}
                     live={live}
                     isMostRecent={isMostRecent}
                   />
@@ -556,17 +672,51 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
               );
             }
 
+            const cluster = bucket.entries;
+            const showClusterChrome = cluster.length > 1;
+            const clusterLabel = formatToolCard(
+              cluster[0].item.name,
+              undefined,
+              undefined,
+              "output-available",
+            ).title;
+
             return (
               <div
-                key={entry.item.id}
-                data-activity-entry-kind="tool"
-                data-scroll-anchor-id={entry.item.id}
+                key={`cluster:${cluster[0].item.id}`}
+                data-activity-entry-kind="tool-cluster"
+                data-tool-cluster-size={cluster.length}
+                data-scroll-anchor-id={cluster[0].item.id}
+                className={cn(showClusterChrome && "mb-0.5")}
               >
-                <ToolTimelineNode
-                  item={entry.item}
-                  isLast={isLast}
-                  recovered={recoveredToolIds.has(entry.item.id)}
-                />
+                {showClusterChrome ? (
+                  <div
+                    className="mb-1 ml-[1.625rem] text-[11px] font-medium uppercase tracking-wide app-text-muted"
+                    data-slot="tool-cluster-label"
+                  >
+                    {clusterLabel}
+                    <span className="ml-1 tabular-nums normal-case tracking-normal">
+                      ×{cluster.length}
+                    </span>
+                  </div>
+                ) : null}
+                {cluster.map((entry, toolIndex) => {
+                  const isLast = isLastBucket && toolIndex === cluster.length - 1;
+                  return (
+                    <div
+                      key={entry.item.id}
+                      data-activity-entry-kind="tool"
+                      data-scroll-anchor-id={entry.item.id}
+                    >
+                      <ToolTimelineNode
+                        item={entry.item}
+                        isLast={isLast}
+                        recovered={recoveredToolIds.has(entry.item.id)}
+                        hideTitle={showClusterChrome}
+                      />
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -596,6 +746,13 @@ function ActivityTimeline({ summary, live }: { summary: ActivityGroupSummary; li
   );
 }
 
+function formatActiveAgentsSuffix(labels: readonly string[] | undefined): string {
+  if (!labels || labels.length === 0) return "";
+  if (labels.length === 1) return ` · ${labels[0]}`;
+  if (labels.length <= 3) return ` · ${labels.join(", ")}`;
+  return ` · ${labels.length} subagents`;
+}
+
 const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   items: ActivityFeedItem[];
   live?: boolean;
@@ -603,8 +760,17 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   liveStartedAt?: string | null;
   summaryElapsedLabel: string | null;
   hasUnrecoveredIssue?: boolean;
+  activeAgentLabels?: readonly string[];
 }) {
-  const { items, live, liveNowMs, liveStartedAt, summaryElapsedLabel, hasUnrecoveredIssue } = props;
+  const {
+    items,
+    live,
+    liveNowMs,
+    liveStartedAt,
+    summaryElapsedLabel,
+    hasUnrecoveredIssue,
+    activeAgentLabels,
+  } = props;
 
   const [nowMs, setNowMs] = useState(() => liveNowMs ?? Date.now());
 
@@ -631,13 +797,15 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
       : null;
 
   const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
+  const agentsSuffix = formatActiveAgentsSuffix(activeAgentLabels);
 
   if (hasUnrecoveredIssue) {
     return displayElapsedLabel ? `Couldn't finish after ${displayElapsedLabel}` : "Couldn't finish";
   }
 
   if (live) {
-    return displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
+    const base = displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
+    return `${base}${agentsSuffix}`;
   }
 
   return displayElapsedLabel ? `Worked for ${displayElapsedLabel}` : "Worked";
@@ -651,6 +819,8 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   live?: boolean;
   liveNowMs?: number;
   liveStartedAt?: string | null;
+  /** Short labels for busy subagents shown on the live working header. */
+  activeAgentLabels?: readonly string[];
   onRetry?: () => Promise<boolean>;
   retryDisabled?: boolean;
   retryUnavailableReason?: string;
@@ -736,6 +906,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                     liveStartedAt={props.liveStartedAt}
                     summaryElapsedLabel={summary.elapsedLabel}
                     hasUnrecoveredIssue={hasUnrecoveredIssue}
+                    activeAgentLabels={props.activeAgentLabels}
                   />
                 </MarkerContent>
                 <ChevronRightIcon

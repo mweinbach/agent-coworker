@@ -319,6 +319,9 @@ describe("FeedRow assistant markdown and sources integration", () => {
       ),
     );
     expect(streamingHtml).toContain('data-slot="streaming-markdown"');
+    expect(streamingHtml).toContain("streaming-markdown-caret");
+    // Solid Streamdown block caret (U+258B) must not appear — it reads as a black box.
+    expect(streamingHtml).not.toContain("\u258B");
     expect(streamingHtml).toContain("Hello ");
     expect(streamingHtml).toContain('data-streamdown="strong">world</span>');
     expect(streamingHtml).not.toContain("Hello **world**");

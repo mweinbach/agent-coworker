@@ -91,4 +91,30 @@ describe("tool card formatting ask summaries", () => {
     expect(out.title).toBe("URL Context");
     expect(out.subtitle).toContain("Read: https://example.com/about");
   });
+
+  test("labels spawnAgent rows by nickname and role while running", () => {
+    const out = formatToolCard(
+      "spawnAgent",
+      { nickname: "ntia-scout", role: "research", message: "Find NTIA reports" },
+      undefined,
+      "input-available",
+    );
+    expect(out.title).toBe("Spawn Agent");
+    expect(out.subtitle).toBe("ntia-scout · research");
+    expect(out.subtitle).not.toContain("Running");
+  });
+
+  test("summarizes waitForAgent by agent count", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      {
+        agentIds: ["a", "b", "c", "d"],
+        mode: "all",
+      },
+      undefined,
+      "input-available",
+    );
+    expect(out.title).toBe("Wait for Agents");
+    expect(out.subtitle).toBe("Waiting for 4 agents");
+  });
 });

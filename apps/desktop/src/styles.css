@@ -803,6 +803,39 @@ samp {
   animation: activityThinkingShimmer 1.25s ease-in-out infinite;
 }
 
+/*
+ * Streaming caret for assistant / live reasoning markdown.
+ * Streamdown's built-in `caret="block"` paints U+258B (▋), which looks like a
+ * solid black box at the end of the line. Prefer a thin themed bar instead.
+ * Applied on the Streamdown root (className prop) so `> *:last-child` is the
+ * last markdown block, not an outer wrapper.
+ */
+.streaming-markdown-caret > *:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.125rem;
+  height: 0.95em;
+  margin-left: 0.12em;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.7;
+  animation: streamingMarkdownCaretBlink 1.05s steps(1, end) infinite;
+}
+
+@keyframes streamingMarkdownCaretBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-markdown-caret > *:last-child::after {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
 @keyframes activityThinkingShimmer {
   from {
     background-position: 160% 50%;

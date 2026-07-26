@@ -41,6 +41,7 @@ import { ChatViewContext } from "./chat/ChatViewContext";
 import { isChatProviderName } from "./chat/ComposerModelSelector";
 import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
+  activeChildAgentLabels,
   composerBusyHint,
   countActiveChildAgents,
   getComposerSubmitState,
@@ -506,6 +507,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     () => countActiveChildAgents(rt?.agents ?? []),
     [rt?.agents],
   );
+  const activeAgentLabels = useMemo(() => activeChildAgentLabels(rt?.agents ?? []), [rt?.agents]);
   const contextValue = useMemo(
     () => ({
       developerMode,
@@ -839,6 +841,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           renderItems={renderItems}
           liveActivityGroupId={liveActivityGroupId}
           liveStartedAt={rt?.busySince ?? null}
+          activeAgentLabels={activeAgentLabels}
           showWorkingPlaceholder={workingPlaceholderVisible}
           streamingAssistantMessageId={streamingAssistantMessageId}
           citationUrlsByMessageId={citationUrlsByMessageId}

@@ -167,6 +167,26 @@ function summarizeArgs(name: string, args: unknown): string {
     const question = getRecordValue(args, ["question"]);
     return question ? truncate(toText(question), 90) : "";
   }
+  if (base === "spawnagent") {
+    const nickname = getRecordValue(args, ["nickname", "name"]);
+    const role = getRecordValue(args, ["role"]);
+    const task = getRecordValue(args, ["message", "task", "prompt"]);
+    if (nickname && role) return `${toText(nickname)} · ${toText(role)}`;
+    if (nickname) return toText(nickname);
+    if (role) return `Role: ${toText(role)}`;
+    if (task) return truncate(toText(task), 90);
+    return "";
+  }
+  if (base === "waitforagent") {
+    const agentIds = getRecordValue(args, ["agentIds", "agents"]);
+    if (Array.isArray(agentIds) && agentIds.length > 0) {
+      return agentIds.length === 1
+        ? "Waiting for 1 agent"
+        : `Waiting for ${agentIds.length} agents`;
+    }
+    const mode = getRecordValue(args, ["mode"]);
+    return mode ? `Mode: ${toText(mode)}` : "Waiting for agents";
+  }
 
   const common = getRecordValue(args, [
     "query",
@@ -271,9 +291,24 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
 
   if (!isRecord(result)) return "Completed";
 
-  if (name.toLowerCase() === "ask") {
+  const base = name.toLowerCase();
+  if (base === "ask") {
     const askSummary = summarizeAskResult(result);
     if (askSummary) return askSummary;
+  }
+  if (base === "spawnagent") {
+    const agentId = getRecordValue(result, ["agentId", "id"]);
+    const nickname = getRecordValue(result, ["nickname", "name"]);
+    if (nickname) return `Spawned ${toText(nickname)}`;
+    if (agentId) return `Spawned ${truncate(toText(agentId), 12)}`;
+    return "Agent started";
+  }
+  if (base === "waitforagent") {
+    const status = getRecordValue(result, ["status", "mode"]);
+    const completed = getRecordValue(result, ["completed", "done"]);
+    if (completed !== undefined) return `Done: ${toText(completed)}`;
+    if (status) return truncate(toText(status), 90);
+    return "Agents settled";
   }
 
   const exitCode = getRecordValue(result, ["exitCode"]);
@@ -393,10 +428,25 @@ export function formatToolCard(
   result: unknown,
   state: ToolFeedState,
 ): ToolCardFormatting {
-  const title = humanizeToolName(name);
+  const base = name.toLowerCase();
+  const title =
+    base === "spawnagent"
+      ? "Spawn Agent"
+      : base === "waitforagent"
+        ? "Wait for Agents"
+        : humanizeToolName(name);
   const argsSummary = summarizeArgs(name, args);
   const resultSummary = summarizeResult(name, state, result);
-  const subtitle = argsSummary ? `${argsSummary} • ${resultSummary}` : resultSummary;
+  // Prefer the distinctive arg line for in-flight agent tools; appending
+  // "Running…" makes parallel spawn rows look identical and out of order.
+  const subtitle =
+    (base === "spawnagent" || base === "waitforagent") && argsSummary
+      ? state === "output-available" || state === "output-error" || state === "output-denied"
+        ? `${argsSummary} · ${resultSummary}`
+        : argsSummary
+      : argsSummary
+        ? `${argsSummary} • ${resultSummary}`
+        : resultSummary;
 
   return {
     title,

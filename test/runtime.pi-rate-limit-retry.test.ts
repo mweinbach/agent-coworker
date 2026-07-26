@@ -1,9 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { createRunTurn, type RunTurnParams } from "../src/agent";
+import { scratchRoots } from "../src/platform/sandbox";
 import {
   isRateLimitError,
   isVisibleAssistantStreamPart,
@@ -19,6 +19,12 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 
 const NVIDIA_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b";
 const RATE_LIMIT_MESSAGE = "ResourceExhausted: Worker local total request limit reached (43/32)";
+
+async function makeTestHome(prefix: string): Promise<string> {
+  const [tempRoot] = scratchRoots();
+  if (!tempRoot) throw new Error("No platform scratch root is available");
+  return await fs.mkdtemp(path.join(tempRoot, prefix));
+}
 
 function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -277,7 +283,7 @@ describe("isVisibleAssistantStreamPart", () => {
 
 describe("pi runtime rate-limit retry", () => {
   test("retries rate-limited model calls and completes the turn without phantom error chunks", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-retry-"));
+    const homeDir = await makeTestHome("pi-rate-limit-retry-");
     const harness = createRetryHarness((attempt) =>
       attempt < 3
         ? { events: [rateLimitErrorEvent()], result: rateLimitAssistantRecord }
@@ -298,7 +304,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("retries thrown rate-limit errors from the stream", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-thrown-"));
+    const homeDir = await makeTestHome("pi-rate-limit-thrown-");
     const harness = createRetryHarness((attempt) =>
       attempt === 1
         ? {
@@ -318,7 +324,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("does not retry non-rate-limit errors and emits the buffered error chunk", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-non-rate-limit-"));
+    const homeDir = await makeTestHome("pi-non-rate-limit-");
     const harness = createRetryHarness(() => ({
       events: [{ type: "error", reason: "error", error: { errorMessage: "provider exploded" } }],
       result: () => ({
@@ -342,7 +348,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("does not retry once assistant content has been emitted for the step", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-content-"));
+    const homeDir = await makeTestHome("pi-rate-limit-content-");
     const harness = createRetryHarness(() => ({
       events: [
         { type: "text_start", contentIndex: 0 },
@@ -368,7 +374,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("gives up after the bounded attempts and surfaces the last error", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-exhausted-"));
+    const homeDir = await makeTestHome("pi-rate-limit-exhausted-");
     const harness = createRetryHarness(() => ({
       events: [rateLimitErrorEvent()],
       result: rateLimitAssistantRecord,
@@ -385,7 +391,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("modelSettings.maxRetries=0 disables the rate-limit retry", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-disabled-"));
+    const homeDir = await makeTestHome("pi-rate-limit-disabled-");
     const harness = createRetryHarness(() => ({
       events: [rateLimitErrorEvent()],
       result: rateLimitAssistantRecord,
@@ -402,7 +408,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("a sleeping retry aborts cleanly when the turn is cancelled", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-abort-"));
+    const homeDir = await makeTestHome("pi-rate-limit-abort-");
     const controller = new AbortController();
     const onModelAbort = mock(async () => {});
     const onModelError = mock(async () => {});
@@ -430,7 +436,7 @@ describe("pi runtime rate-limit retry", () => {
   });
 
   test("createRunTurn forwards modelSettings.maxRetries to the pi runtime retry budget", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rate-limit-run-turn-"));
+    const homeDir = await makeTestHome("pi-rate-limit-run-turn-");
     const harness = createRetryHarness(() => ({
       events: [rateLimitErrorEvent()],
       result: rateLimitAssistantRecord,

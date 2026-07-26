@@ -379,7 +379,7 @@ describe("Cowork unified runtime", () => {
     expect(result?.manifest.version).toBe("2026-06-20");
   });
 
-  test("rechecks entrypoints on every call and invalidates recursive dependency trust", async () => {
+  test("detects runtime tampering once trust is invalidated", async () => {
     const root = await tempRoot("tamper");
     const home = path.join(root, "home");
     const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
@@ -399,6 +399,9 @@ describe("Cowork unified runtime", () => {
       path.join(installed.runtimeDir, ...manifest.paths.node.split("/")),
       "replaced node",
     );
+    // Repeat uses in a process trust the earlier verification; a watcher event
+    // (simulated here) clears that trust and the mutation is caught.
+    invalidateRuntimeTrust(installed.runtimeDir, false);
     await expect(
       buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
     ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
@@ -418,6 +421,7 @@ describe("Cowork unified runtime", () => {
       path.join(restored.runtimeDir, "dependencies", "libreoffice", "program", "filter.dll"),
       "mutated filter dll",
     );
+    invalidateRuntimeTrust(restored.runtimeDir, false);
     await expect(
       buildRuntimeEnv(restored.runtimeDir, {}, process.platform, trustedKeys),
     ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
@@ -485,7 +489,7 @@ describe("Cowork unified runtime", () => {
     expect(forced.errors.join("\n")).toMatch(/SHA-256 mismatch/i);
   });
 
-  test("re-collects the tree fingerprint on every runtime use", async () => {
+  test("re-collects the tree fingerprint once trust is invalidated", async () => {
     const root = await tempRoot("per-use-fingerprint");
     const home = path.join(root, "home");
     const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
@@ -499,8 +503,9 @@ describe("Cowork unified runtime", () => {
 
     await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
 
-    // Detected without waiting for a watcher event: the fingerprint is collected
-    // before the cached verification is honoured.
+    // A watcher event invalidates trust; the next use then re-collects the
+    // fingerprint before the cached verification is honoured, and the full
+    // hash catches the mutation.
     invalidateRuntimeTrust(installed.runtimeDir, false);
     await fs.writeFile(
       path.join(installed.runtimeDir, "dependencies", "bin", "runtime-tool"),
@@ -509,6 +514,84 @@ describe("Cowork unified runtime", () => {
     await expect(
       buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
     ).rejects.toThrow(/mismatch/i);
+  });
+
+  test("reuses the in-process verification until trust is invalidated", async () => {
+    const root = await tempRoot("process-trust");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    // Disable the watcher so the test drives invalidation explicitly; the next
+    // use re-verifies via the persisted attestation without restarting it.
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+
+    // The tree verified earlier in this process, so repeat uses skip the
+    // fingerprint walk entirely: this edit goes unnoticed until invalidation.
+    await fs.writeFile(nodePath, "replaced node");
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+
+    // This is what a watcher event does: trust is cleared, the fingerprint is
+    // re-collected, and the full hash catches the mutation.
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("full-verify escape hatch bypasses the in-process verification memo", async () => {
+    const root = await tempRoot("memo-full-verify");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+
+    // Same length, same mtime: neither the in-process memo nor the stat
+    // fingerprint can see this edit; only re-hashing the tree catches it.
+    const original = await fs.readFile(nodePath, "utf8");
+    const stat = await fs.stat(nodePath);
+    await fs.writeFile(nodePath, "X".repeat(original.length));
+    await fs.utimes(nodePath, stat.atime, stat.mtime);
+
+    process.env.COWORK_RUNTIME_FULL_VERIFY = "1";
+    try {
+      await expect(
+        buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+      ).rejects.toThrow(/SHA-256 mismatch/i);
+    } finally {
+      delete process.env.COWORK_RUNTIME_FULL_VERIFY;
+    }
   });
 
   test("re-verifies when the tree fingerprint or signed manifest moves", async () => {

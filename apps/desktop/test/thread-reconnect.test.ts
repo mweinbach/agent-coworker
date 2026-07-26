@@ -596,6 +596,79 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(useAppStore.getState().threadRuntimeById[migratedThreadId]?.connected).toBe(true);
   });
 
+  test("queued first message flushes without waiting for an in-flight defaults apply", async () => {
+    const draftThreadId = "draft-thread-early-flush";
+    seedStore(
+      {
+        id: draftThreadId,
+        sessionId: null,
+        draft: true,
+      },
+      {
+        sessionId: null,
+      },
+    );
+
+    let applyStarted = false;
+    let releaseApply!: () => void;
+    const applyBlocked = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    jsonRpcHandlers.set("cowork/session/defaults/apply", async () => {
+      applyStarted = true;
+      await applyBlocked;
+      return {
+        event: {
+          type: "session_config",
+          sessionId: "session-1",
+          config: {
+            yolo: false,
+            observabilityEnabled: false,
+            backupsEnabled: true,
+            defaultBackupsEnabled: true,
+            enableMemory: true,
+            memoryRequireApproval: false,
+            preferredChildModel: "gpt-5.2",
+            childModelRoutingMode: "same-provider",
+            preferredChildModelRef: "openai:gpt-5.2",
+            allowedChildModelRefs: [],
+            maxSteps: 100,
+            toolOutputOverflowChars: 25000,
+          },
+        },
+      };
+    });
+
+    await useAppStore.getState().reconnectThread(draftThreadId, "hello early flush");
+    for (let attempt = 0; attempt < 50 && !applyStarted; attempt += 1) {
+      await flushAsyncWork();
+    }
+    expect(applyStarted).toBe(true);
+
+    // The queued first message dispatches while the apply is still unresolved;
+    // the server orders the turn behind it via `pendingConfigMutation`.
+    const applyIndex = jsonRpcRequests.findIndex(
+      (entry) => entry.method === "cowork/session/defaults/apply",
+    );
+    const turnStarts = jsonRpcRequests.filter((entry) => entry.method === "turn/start");
+    expect(applyIndex).toBeGreaterThanOrEqual(0);
+    expect(turnStarts).toHaveLength(1);
+    expect(jsonRpcRequests.indexOf(turnStarts[0] as { method: string })).toBeGreaterThan(
+      applyIndex,
+    );
+    expect(turnStarts[0]?.params).toMatchObject({
+      input: [{ type: "text", text: "hello early flush" }],
+    });
+
+    const migratedThreadId = canonicalThreadId("session-1", draftThreadId);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(migratedThreadId)?.inFlight).toBe(true);
+
+    releaseApply();
+    await flushAsyncWork();
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(migratedThreadId)).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[migratedThreadId]?.connected).toBe(true);
+  });
+
   test("selectThread falls back to transcript hydration when thread/read has no snapshot", async () => {
     jsonRpcHandlers.set("thread/read", async () => ({ coworkSnapshot: null }));
     const { threadId } = seedStore({

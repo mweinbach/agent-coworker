@@ -1457,6 +1457,61 @@ describe("runTurn", () => {
     expect(logLines.some((line) => line.includes("close exploded"))).toBe(true);
   });
 
+  test("starts observability init and MCP tool load concurrently", async () => {
+    let resolveMcpServers!: (servers: any[]) => void;
+    mockLoadMCPServers.mockImplementation(
+      () => new Promise<any[]>((resolve) => (resolveMcpServers = resolve)),
+    );
+
+    let observabilityInitStarted = false;
+    let resolveObservability!: (result: any) => void;
+    observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(
+      () =>
+        new Promise<any>((resolve) => {
+          observabilityInitStarted = true;
+          resolveObservability = resolve;
+        }),
+    );
+
+    const turnPromise = runTurn(makeParams({ enableMcp: true }));
+
+    // Give the turn a chance to reach the concurrent cold-start barrier.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The MCP load is still in flight, but observability init has already
+    // started — sequentially it only ran after the MCP load completed.
+    expect(mockLoadMCPServers).toHaveBeenCalledTimes(1);
+    expect(observabilityInitStarted).toBe(true);
+
+    resolveMcpServers([]);
+    resolveObservability({
+      ready: false,
+      health: {
+        status: "disabled",
+        reason: "observability_disabled",
+        updatedAt: new Date(0).toISOString(),
+      },
+      healthChanged: false,
+    });
+    await turnPromise;
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  test("closes MCP connections when a sibling cold-start step fails", async () => {
+    const closeMcp = mock(async () => {});
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({ tools: {}, errors: [], close: closeMcp });
+    observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(async () => {
+      throw new Error("otel exploded");
+    });
+
+    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow("otel exploded");
+    expect(closeMcp).toHaveBeenCalledTimes(1);
+    expect(mockStreamText).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Error propagation
   // -------------------------------------------------------------------------

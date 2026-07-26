@@ -37,12 +37,12 @@ export function createMessagingModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<
     WorkspaceStateHelpers,
-    "workspaceIdForThread" | "forgetThreadForReconnect" | "hasPendingWorkspaceDefaultApply"
+    "workspaceIdForThread" | "forgetThreadForReconnect" | "hasDeferredWorkspaceDefaultApply"
   >,
   feed: Pick<FeedProjectionModule, "pushFeedItem">,
 ) {
   const { pushFeedItem } = feed;
-  const { workspaceIdForThread, forgetThreadForReconnect, hasPendingWorkspaceDefaultApply } =
+  const { workspaceIdForThread, forgetThreadForReconnect, hasDeferredWorkspaceDefaultApply } =
     workspace;
   function surfaceJsonRpcTurnSendFailure(
     set: StoreSet,
@@ -575,7 +575,7 @@ export function createMessagingModule(
   }
 
   function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
-    if (hasPendingWorkspaceDefaultApply(threadId)) {
+    if (hasDeferredWorkspaceDefaultApply(threadId)) {
       return false;
     }
     const next = shiftPendingThreadMessage(threadId);
@@ -607,7 +607,7 @@ export function createMessagingModule(
   }
 
   function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
-    if (get().threadRuntimeById[threadId]?.busy || hasPendingWorkspaceDefaultApply(threadId)) {
+    if (get().threadRuntimeById[threadId]?.busy || hasDeferredWorkspaceDefaultApply(threadId)) {
       return false;
     }
     return flushOneQueuedThreadMessage(get, set, threadId);

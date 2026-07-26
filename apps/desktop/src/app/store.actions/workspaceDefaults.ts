@@ -696,11 +696,17 @@ export function createWorkspaceDefaultsActions(
     }
   };
 
-  const hasPendingWorkspaceDefaultApply = (threadId: string): boolean =>
-    Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
+  // Only a deferred (not yet dispatched) apply blocks the flush. Once the
+  // apply RPC is in flight, the server serializes a following `turn/start`
+  // behind the config mutation (`pendingConfigMutation`), so the queued
+  // message can dispatch back-to-back with it.
+  const hasDeferredWorkspaceDefaultApply = (threadId: string): boolean => {
+    const pending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+    return Boolean(pending && !pending.inFlight);
+  };
 
   const flushQueuedThreadMessageIfReady = (threadId: string): boolean => {
-    if (hasPendingWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
+    if (hasDeferredWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
       return false;
     }
 

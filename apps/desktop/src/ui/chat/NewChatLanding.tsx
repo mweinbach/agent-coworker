@@ -229,7 +229,13 @@ export function NewChatLanding() {
 
   useEffect(
     () => () => {
-      creationAbortRef.current?.abort();
+      const controller = creationAbortRef.current;
+      if (!controller) return;
+      // Unmounting because the send navigated to its new chat must not cancel
+      // the creation — the send is committed once a thread is selected. Only
+      // abort when the landing goes away with no chat to hand off to.
+      if (useAppStore.getState().selectedThreadId) return;
+      controller.abort();
     },
     [],
   );
@@ -497,7 +503,7 @@ export function NewChatLanding() {
                 : readinessBlocked
                   ? "Setup required"
                   : readinessPending
-                    ? "Finishing setup — your message will send automatically"
+                    ? "Finishing setup — you can send in a moment."
                     : readiness.checking && !readiness.result
                       ? "Validating readiness…"
                       : null}

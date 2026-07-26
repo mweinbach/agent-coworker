@@ -60,6 +60,14 @@ type RuntimeTrustState = {
   generation: number;
   /** Stat fingerprint of the tree at its last successful signature verification. */
   trustedTreeDigest: string | null;
+  /**
+   * Signature digest of the signed bundle whose tree verification last
+   * succeeded in this process. While it matches, per-turn uses skip the tree
+   * fingerprint walk entirely; any trust invalidation clears it, and a
+   * different signed manifest (e.g. after an update) fails to match and falls
+   * back to the fingerprint path.
+   */
+  verifiedBundleSignatureSha256: string | null;
   verification: Promise<void> | null;
 };
 
@@ -455,12 +463,17 @@ async function verifyExactTree(
   };
 }
 
+function isFullVerifyForced(env: Record<string, string | undefined>): boolean {
+  return /^(1|true|yes|on)$/i.test(env[FULL_VERIFY_ENV]?.trim() ?? "");
+}
+
 /**
  * Establishes that every signed path under `root` currently matches the
- * signature, then remembers the tree's stat fingerprint. Later calls — the next
- * turn, or the next launch via the persisted attestation — re-collect that
- * fingerprint instead of re-hashing the tree, and fall through to the full hash
- * on any difference in the path set, sizes, link counts, or mtimes.
+ * signature, then remembers the tree's stat fingerprint. The next launch
+ * re-collects that fingerprint (via the persisted attestation) instead of
+ * re-hashing the tree, and later uses within this process skip even the
+ * fingerprint walk via the in-process memo; both fall through to the full
+ * hash on any difference in the path set, sizes, link counts, or mtimes.
  */
 async function trustVerifiedRuntimeTree(
   root: string,
@@ -468,10 +481,11 @@ async function trustVerifiedRuntimeTree(
   state: RuntimeTrustState,
   env: Record<string, string | undefined> = process.env,
 ): Promise<{ fileCount: number; bytes: number }> {
-  const forceFullVerify = /^(1|true|yes|on)$/i.test(env[FULL_VERIFY_ENV]?.trim() ?? "");
+  const forceFullVerify = isFullVerifyForced(env);
   const current = await collectRuntimeTreeState(root);
   if (!forceFullVerify) {
     if (state.trustedTreeDigest === current.digest) {
+      state.verifiedBundleSignatureSha256 = bundle.signatureSha256;
       return { fileCount: current.fileCount, bytes: current.bytes };
     }
     const attestation = await readRuntimeAttestation(root);
@@ -485,6 +499,7 @@ async function trustVerifiedRuntimeTree(
     ) {
       startRuntimeWatcher(root, state);
       state.trustedTreeDigest = current.digest;
+      state.verifiedBundleSignatureSha256 = bundle.signatureSha256;
       return { fileCount: current.fileCount, bytes: current.bytes };
     }
   }
@@ -495,11 +510,13 @@ async function trustVerifiedRuntimeTree(
   const after = await collectRuntimeTreeState(root);
   if (current.digest !== after.digest || after.fileCount !== result.fileCount) {
     state.trustedTreeDigest = null;
+    state.verifiedBundleSignatureSha256 = null;
     await clearRuntimeAttestation(root);
     throw new Error("Runtime changed while it was being verified.");
   }
   startRuntimeWatcher(root, state);
   state.trustedTreeDigest = after.digest;
+  state.verifiedBundleSignatureSha256 = bundle.signatureSha256;
   if (!forceFullVerify) {
     await writeRuntimeAttestation(root, {
       schemaVersion: RUNTIME_ATTESTATION_SCHEMA_VERSION,
@@ -535,6 +552,7 @@ function stateFor(root: string): RuntimeTrustState {
     watcherAvailable: true,
     generation: 0,
     trustedTreeDigest: null,
+    verifiedBundleSignatureSha256: null,
     verification: null,
   };
   trustStates.set(root, state);
@@ -552,8 +570,11 @@ function startRuntimeWatcher(root: string, state: RuntimeTrustState): void {
     });
     state.watcher.unref();
   } catch {
-    // The watcher only invalidates trust early. Correctness does not depend on
-    // it: every use re-collects the tree fingerprint before trusting the cache.
+    // The watcher only invalidates trust early. Cross-launch correctness never
+    // depended on it (the first use in a process re-collects the tree
+    // fingerprint before trusting the cache), but within a process the
+    // in-process memo does: with no watcher, mid-process tree edits go
+    // unnoticed until an explicit invalidation.
     state.watcherAvailable = false;
   }
 }
@@ -564,6 +585,7 @@ export function invalidateRuntimeTrust(runtimeDir: string, watcherHealthy = true
   if (!state) return;
   state.generation += 1;
   state.trustedTreeDigest = null;
+  state.verifiedBundleSignatureSha256 = null;
   if (!watcherHealthy) {
     state.watcherAvailable = false;
     state.watcher?.close();
@@ -600,6 +622,19 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   // Every entrypoint and component closure is a subset of the signed tree, so
   // one fingerprint pass covers all of them — and, unlike a per-closure check,
   // it also catches files added anywhere under the runtime.
+  //
+  // In-process memo: once this exact signed bundle (root + signature) verified
+  // successfully in this process, repeat uses return without re-statting the
+  // ~38k-file tree. First verification is unaffected, a different signed
+  // manifest misses the memo and falls through to the fingerprint path, the
+  // full-verify escape hatch bypasses it, and any watcher event or explicit
+  // invalidation clears it (fail closed).
+  if (
+    !isFullVerifyForced(process.env) &&
+    state.verifiedBundleSignatureSha256 === bundle.signatureSha256
+  ) {
+    return { keyId: bundle.keyId };
+  }
   const generation = state.generation;
   if (!state.verification) {
     state.verification = trustVerifiedRuntimeTree(root, bundle, state)

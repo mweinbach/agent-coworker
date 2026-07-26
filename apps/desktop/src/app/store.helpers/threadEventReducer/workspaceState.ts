@@ -21,8 +21,15 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
     disposedWorkspaces.delete(workspaceId);
   }
 
-  function hasPendingWorkspaceDefaultApply(threadId: string): boolean {
-    return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
+  /**
+   * True only while a workspace-defaults apply is queued but NOT yet
+   * dispatched to the server. An in-flight apply does not block queued sends:
+   * the server serializes a following `turn/start` behind the config mutation
+   * (`pendingConfigMutation`), so the flush can dispatch right after it.
+   */
+  function hasDeferredWorkspaceDefaultApply(threadId: string): boolean {
+    const pending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+    return Boolean(pending && !pending.inFlight);
   }
 
   function resetLiveModelStreamRuntime(threadId: string) {
@@ -125,7 +132,7 @@ export function createWorkspaceStateHelpers(ctx: ThreadEventReducerContext) {
   return {
     isWorkspaceDisposed,
     reactivateWorkspaceThreadEventState,
-    hasPendingWorkspaceDefaultApply,
+    hasDeferredWorkspaceDefaultApply,
     resetLiveModelStreamRuntime,
     workspaceIdForThread,
     rememberThreadStoreGet,

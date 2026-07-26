@@ -698,8 +698,23 @@ export async function loadMCPTools(
     }
   };
 
-  for (const server of servers) {
+  type ServerLoadResult =
+    | {
+        ok: true;
+        server: RuntimeMcpServerConfig;
+        client: RuntimeMcpClient;
+        discovered: Record<string, unknown>;
+      }
+    | { ok: false; server: RuntimeMcpServerConfig; message: string };
+
+  // Servers are independent, and each one pays its own spawn + connect +
+  // listTools latency (slowest on Windows), so they load concurrently. Shared
+  // state — tool-name reservation, the clients list, error collection — is
+  // only touched afterwards, in the original server order, so the returned
+  // shape, collision remapping, and error ordering match a sequential load.
+  const loadServer = async (server: RuntimeMcpServerConfig): Promise<ServerLoadResult> => {
     const retries = retriesFor(server.retries);
+    let lastError: unknown = null;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       let client: RuntimeMcpClient | null = null;
@@ -725,6 +740,7 @@ export async function loadMCPTools(
           server.name === CODEX_APPS_MCP_SERVER_NAME
             ? new Set(server.enabledConnectorIds ?? [])
             : null;
+        const filtered: Record<string, unknown> = {};
         for (const [name, toolDef] of Object.entries(discovered)) {
           if (enabledConnectorIds && enabledConnectorIds.size > 0) {
             const record =
@@ -745,14 +761,11 @@ export async function loadMCPTools(
               continue;
             }
           }
-          const toolKey = reserveMcpToolName(tools, server.name, name, opts.log);
-          tools[toolKey] = toolDef;
+          filtered[name] = toolDef;
         }
 
-        clients.push({ name: server.name, close: client.close.bind(client) });
-
         opts.log?.(`[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`);
-        break;
+        return { ok: true, server, client, discovered: filtered };
       } catch (error) {
         try {
           await client?.close?.();
@@ -760,21 +773,51 @@ export async function loadMCPTools(
           // Intentionally silent: the connection error below is the real
           // failure; a close error during its cleanup is noise.
         }
+        lastError = error;
 
-        if (attempt === retries) {
-          const message = `[MCP] Failed to connect to ${server.name} after ${attempt + 1} attempts: ${String(error)}`;
-          if (server.required) {
-            await close();
-            throw new Error(message);
-          }
-          errors.push(message);
-          opts.log?.(message);
-        } else {
+        if (attempt < retries) {
           opts.log?.(`[MCP] Retrying ${server.name} (attempt ${attempt + 2})...`);
           await sleep(1000 * (attempt + 1));
         }
       }
     }
+
+    return {
+      ok: false,
+      server,
+      message: `[MCP] Failed to connect to ${server.name} after ${retries + 1} attempts: ${String(lastError)}`,
+    };
+  };
+
+  const results = await Promise.all(servers.map(async (server) => await loadServer(server)));
+
+  for (const [index, result] of results.entries()) {
+    if (!result.ok) {
+      if (result.server.required) {
+        // A required failure aborts the whole load. Successful results before
+        // this one are already in `clients`; register the ones after it so
+        // `close` tears down everything that connected, then throw.
+        for (const remaining of results.slice(index + 1)) {
+          if (!remaining.ok) continue;
+          clients.push({
+            name: remaining.server.name,
+            close: remaining.client.close.bind(remaining.client),
+          });
+        }
+        await close();
+        throw new Error(result.message);
+      }
+      errors.push(result.message);
+      opts.log?.(result.message);
+      continue;
+    }
+
+    for (const [name, toolDef] of Object.entries(result.discovered)) {
+      const toolKey = reserveMcpToolName(tools, result.server.name, name, opts.log);
+      tools[toolKey] = toolDef;
+    }
+
+    clients.push({ name: result.server.name, close: result.client.close.bind(result.client) });
   }
 
   return { tools, errors, close };

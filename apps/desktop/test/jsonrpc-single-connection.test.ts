@@ -769,8 +769,8 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/list",
       "thread/start",
       "cowork/session/defaults/apply",
-      "thread/read",
       "turn/start",
+      "thread/read",
     ]);
     const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")
       ?.params as { threadId?: string; clientMessageId?: string } | undefined;
@@ -1460,8 +1460,8 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/list",
       "thread/start",
       "cowork/session/defaults/apply",
-      "thread/read",
       "turn/start",
+      "thread/read",
       "cowork/session/title/set",
       "cowork/session/model/set",
       "cowork/session/config/set",
@@ -1539,8 +1539,8 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/list",
       "thread/start",
       "cowork/session/defaults/apply",
-      "thread/read",
       "turn/start",
+      "thread/read",
     ]);
     expect(jsonRpcRequests.find((entry) => entry.method === "thread/start")?.params).toMatchObject({
       cwd: "/tmp/jsonrpc-workspace",

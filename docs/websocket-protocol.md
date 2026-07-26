@@ -8,7 +8,7 @@ Cowork supports one live WebSocket protocol on `/ws`: JSON-RPC-lite. The canonic
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.47`
+- Current protocol version: `7.48`
 - WebSocket protocol mode: `jsonrpc`
 
 Loopback listeners (`127.0.0.1`, `localhost`, or `::1`) allow local non-browser clients to
@@ -954,6 +954,7 @@ Sockets subscribed with `research/subscribe` can receive:
 - `cowork/session/agentSpawned`
 - `cowork/session/agentStatus`
 - `cowork/session/agentWaitResult`
+- `cowork/session/workflowProgress`
 - `cowork/session/backupState`
 - `cowork/session/harnessContext`
 - `cowork/agentProfiles/catalog`

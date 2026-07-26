@@ -36,6 +36,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "./shared/tasks";
+import type { WorkflowProgressPayload } from "./shared/workflows";
 import type { SkillUsageRecord } from "./skillImprovement/types";
 import type { AgentControl } from "./tools";
 import { createTools, filterToolsForCodexDynamicBoundary } from "./tools";
@@ -153,6 +154,9 @@ export interface RunTurnParams {
 
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
+
+  /** Stream live progress from a running `workflow` tool call. */
+  onWorkflowProgress?: (progress: WorkflowProgressPayload) => void;
 
   /** Server-authoritative write gate for mutating tool side effects. */
   assertCanMutate?: (toolName: string) => void | Promise<void>;
@@ -548,6 +552,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       costTracker: params.costTracker,
       toolEnv: turnToolEnv,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+      onWorkflowProgress: params.onWorkflowProgress,
       onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
       onSkillUsed: params.onSkillUsed,
       assertCanMutate: params.assertCanMutate,

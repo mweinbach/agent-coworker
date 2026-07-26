@@ -19,6 +19,7 @@ import type {
   TaskDirectiveResult,
   TaskReviewMaterialReference,
 } from "../shared/tasks";
+import type { WorkflowProgressPayload } from "../shared/workflows";
 import type { SkillUsageRecord } from "../skillImprovement/types";
 import type { AgentConfig, ApproveCommandOptions, HarnessContextState, TodoItem } from "../types";
 
@@ -136,6 +137,13 @@ export interface ToolContext {
 
   /** Notify the session when a skill is loaded during the active turn. */
   onSkillUsed?: (usage: Omit<SkillUsageRecord, "turnId" | "usedAt">) => void | Promise<void>;
+
+  /**
+   * Stream live progress for a running `workflow` tool call. Projected to clients
+   * as a `workflow_progress` SessionEvent so a run renders as a phase/agent tree
+   * rather than a wall of log lines.
+   */
+  onWorkflowProgress?: (progress: WorkflowProgressPayload) => void;
 
   /**
    * Server-authoritative write gate for tools with side effects. Mutating tools

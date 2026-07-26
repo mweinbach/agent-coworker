@@ -6,6 +6,7 @@ import {
   getGoogleNativeWebSearchFromProviderOptions,
 } from "../shared/openaiCompatibleOptions";
 import type { AgentConfig } from "../types";
+import { resolveWorkflowsFeatureEnabled } from "../workflows/flags";
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
 import type { ToolContext } from "./context";
@@ -34,6 +35,7 @@ import { createThreadManagementTools } from "./threadManagement";
 import { createTodoWriteTool } from "./todoWrite";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
+import { createWorkflowTool } from "./workflow";
 import { createWriteTool } from "./write";
 
 export { filterToolsForCodexDynamicBoundary } from "./codexBoundary";
@@ -69,7 +71,12 @@ type ListSessionToolNameOptions = {
 
 export function listSessionToolNames(
   config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "advancedMemory"> &
-    Partial<Pick<AgentConfig, "featureFlags" | "experimentalFeatures" | "tasksEnabled">>,
+    Partial<
+      Pick<
+        AgentConfig,
+        "featureFlags" | "experimentalFeatures" | "tasksEnabled" | "workflowsEnabled"
+      >
+    >,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const providerIsCodex = config.provider === "codex-cli";
@@ -107,6 +114,7 @@ export function listSessionToolNames(
           "inspectAgent",
           "resumeAgent",
           "closeAgent",
+          ...(resolveWorkflowsFeatureEnabled(config) ? ["workflow"] : []),
         ]
       : []),
     ...(opts.includeThreadControl
@@ -194,8 +202,17 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     return roleFilteredTools;
   }
 
+  // Workflows orchestrate child agents, so they belong to the same tier as the
+  // agent-management tools below. They are additionally withheld from task
+  // sessions and path-scoped roots: reaching this point only rules out child
+  // agents (`ctx.agentRole`) and non-session turns — task sessions DO carry
+  // `agentControl` (see `createTaskReviewTool`, which requires both), and a
+  // scoped root should not be able to spawn unscoped children through a script.
+  const workflowTool = ctx.taskContext || scopedChild ? null : createWorkflowTool(ctx);
+
   return {
     ...roleFilteredTools,
+    ...(workflowTool ? { workflow: workflowTool } : {}),
     listAgents: createListAgentsTool(ctx),
     sendAgentInput: createSendAgentInputTool(ctx),
     waitForAgent: createWaitForAgentTool(ctx),

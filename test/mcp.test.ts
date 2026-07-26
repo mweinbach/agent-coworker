@@ -608,6 +608,65 @@ describe("loadMCPTools", () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("flaky");
   });
+
+  test("loads servers concurrently and reports results in server order", async () => {
+    const release = new Map<string, () => void>();
+    const createClient = mock(async (opts: any) => {
+      if (opts.name === "broken") throw new Error("refused");
+      await new Promise<void>((resolve) => release.set(opts.name, resolve));
+      return {
+        tools: mock(async () => ({ ping: { description: opts.name } })),
+        close: mock(async () => {}),
+      };
+    });
+    const servers: MCPServerConfig[] = [
+      { name: "alpha", transport: { type: "stdio", command: "echo" } },
+      { name: "broken", transport: { type: "stdio", command: "echo" }, retries: 0 },
+      { name: "beta", transport: { type: "stdio", command: "echo" } },
+    ];
+
+    const pending = loadMCPTools(servers, { createClient: createClient as any });
+    // Both healthy servers were spawned before either finished — sequential
+    // loading would not have reached "beta" while "alpha" was still blocked.
+    expect([...release.keys()].sort()).toEqual(["alpha", "beta"]);
+    // Finish out of order on purpose: the merged result must still follow the
+    // configured server order, not the completion order.
+    release.get("beta")?.();
+    release.get("alpha")?.();
+
+    const result = await pending;
+    expect(Object.keys(result.tools)).toEqual(["mcp__alpha__ping", "mcp__beta__ping"]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("broken");
+  });
+
+  test("required server failure closes connected clients and throws", async () => {
+    const close = mock(async () => {});
+    const createClient = mock(async (opts: any) => {
+      if (opts.name === "required-broken") throw new Error("down");
+      return {
+        tools: mock(async () => ({ ping: { description: "t" } })),
+        close,
+      };
+    });
+    const servers: MCPServerConfig[] = [
+      { name: "optional-ok", transport: { type: "stdio", command: "echo" } },
+      {
+        name: "required-broken",
+        transport: { type: "stdio", command: "echo" },
+        retries: 0,
+        required: true,
+      },
+      { name: "also-ok", transport: { type: "stdio", command: "echo" } },
+    ];
+
+    await expect(loadMCPTools(servers, { createClient: createClient as any })).rejects.toThrow(
+      "Failed to connect to required-broken after 1 attempts: Error: down",
+    );
+    // Every client that connected — before and after the required server in
+    // config order — was torn down.
+    expect(close).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("mcp json schema normalization", () => {

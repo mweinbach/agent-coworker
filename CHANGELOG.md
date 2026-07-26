@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.26 - 2026-07-26
+
+### Fixed
+
+- **CI and desktop release validation pass again** — the provider rate-limit
+  retry tests now create temporary homes through the platform scratch-root
+  abstraction instead of calling `os.tmpdir()` directly, preserving the
+  platform-boundary ratchet enforced by both workflows.
+
 ## 1.2.25 - 2026-07-26
 
 ### Changed

@@ -438,6 +438,7 @@ export class SessionAdminManager {
         mode: result.mode,
         agents: result.agents,
         readyAgentIds: result.readyAgentIds,
+        erroredAgentIds: result.erroredAgentIds,
         ...(result.inspections ? { inspections: result.inspections } : {}),
       });
       this.context.queuePersistSessionSnapshot("session.agent_wait_result");

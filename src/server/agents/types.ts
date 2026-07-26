@@ -41,7 +41,13 @@ export type AgentWaitResult = {
   timedOut: boolean;
   mode: AgentWaitMode;
   agents: PersistentAgentSummary[];
+  /** Children that stopped running — whether they succeeded or crashed. */
   readyAgentIds: string[];
+  /**
+   * The subset of `readyAgentIds` that reached a terminal state by ERRORING.
+   * Their latest text is a partial transcript, not a result.
+   */
+  erroredAgentIds: string[];
   inspections?: AgentWaitInspection[];
 };
 

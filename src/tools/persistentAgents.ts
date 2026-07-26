@@ -49,7 +49,7 @@ export function createSendAgentInputTool(ctx: ToolContext) {
 export function createWaitForAgentTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Compact by default: returns latest statuses/previews only. Set includeFinalMessage=true to include each child's full latest assistant text, and includeReport=true to include parsed <agent_report> data plus report diagnostics in the same tool call.",
+      "Wait for child agents to reach terminal states. mode='any' resolves on the first terminal child; mode='all' waits for every requested child. Compact by default: returns latest statuses/previews only. Set includeFinalMessage=true to include each child's full latest assistant text, and includeReport=true to include parsed <agent_report> data plus report diagnostics in the same tool call. IMPORTANT: readyAgentIds means 'stopped running', NOT 'succeeded'. A crashed child is terminal too, so check erroredAgentIds before using any result — those agents' text is a partial transcript, not an answer, and their work must be redone or reported as failed rather than summarized.",
     inputSchema: z.object({
       agentIds: z.array(z.string().trim().min(1)).min(1),
       timeoutMs: z.number().int().min(0).max(300_000).optional(),
@@ -96,6 +96,7 @@ export function createWaitForAgentTool(ctx: ToolContext) {
         `tool< waitForAgent ${JSON.stringify({
           timedOut: result.timedOut,
           readyAgentIds: result.readyAgentIds,
+          erroredAgentIds: result.erroredAgentIds,
           inspectionCount: result.inspections?.length ?? 0,
         })}`,
       );

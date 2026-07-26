@@ -576,6 +576,8 @@ export type SessionEvent =
       mode: AgentWaitMode;
       agents: PersistentAgentSummary[];
       readyAgentIds: string[];
+      /** Subset of readyAgentIds that terminated by erroring. */
+      erroredAgentIds?: string[];
     }
   | { type: "session_deleted"; sessionId: string; targetSessionId: string }
   | {

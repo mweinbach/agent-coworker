@@ -73,6 +73,7 @@ const agentWaitResultEventSchema = z
     mode: agentWaitModeSchema.default("any"),
     agents: z.array(persistentAgentSummarySchema),
     readyAgentIds: z.array(nonEmptyStringSchema).default([]),
+    erroredAgentIds: z.array(nonEmptyStringSchema).default([]),
   })
   .strict();
 

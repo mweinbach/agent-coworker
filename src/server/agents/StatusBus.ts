@@ -11,6 +11,20 @@ function isTerminal(agent: PersistentAgentSummary): boolean {
   );
 }
 
+/**
+ * A child that reached a terminal state WITHOUT succeeding.
+ *
+ * `readyAgentIds` deliberately means "no longer running", not "worked" — a
+ * crashed child is just as done as a finished one. Callers that conflate the two
+ * read a failed agent's partial text as if it were a result, which is how a
+ * context-window blowout across a fan-out surfaces as four plausible-looking
+ * answers instead of four errors. This is reported separately so the distinction
+ * is impossible to miss.
+ */
+function isFailed(agent: PersistentAgentSummary): boolean {
+  return agent.executionState === "errored";
+}
+
 export class StatusBus {
   private readonly latest = new Map<string, PersistentAgentSummary>();
   private readonly listeners = new Set<StatusListener>();
@@ -40,7 +54,7 @@ export class StatusBus {
   ): Promise<AgentWaitResult> {
     const dedupedIds = [...new Set(agentIds)];
     if (dedupedIds.length === 0) {
-      return { timedOut: true, mode, agents: [], readyAgentIds: [] };
+      return { timedOut: true, mode, agents: [], readyAgentIds: [], erroredAgentIds: [] };
     }
 
     const getSnapshot = (): Omit<AgentWaitResult, "timedOut"> => {
@@ -51,7 +65,11 @@ export class StatusBus {
         const agent = this.latest.get(agentId);
         return !!agent && isTerminal(agent);
       });
-      return { mode, agents, readyAgentIds };
+      const erroredAgentIds = dedupedIds.filter((agentId) => {
+        const agent = this.latest.get(agentId);
+        return !!agent && isFailed(agent);
+      });
+      return { mode, agents, readyAgentIds, erroredAgentIds };
     };
 
     const isSatisfied = (readyAgentIds: string[]) =>

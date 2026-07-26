@@ -581,6 +581,25 @@ export function handleLifecycleThreadEvent(
     return true;
   }
 
+  if (evt.type === "workflow_progress") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      const runs = rt.workflowRuns ?? [];
+      const at = runs.findIndex((run) => run.runId === evt.progress.runId);
+      // Each emission is a full snapshot of the run, so replace in place rather
+      // than merging — a later event never carries less than an earlier one.
+      const next = at === -1 ? [...runs, evt.progress] : runs.with(at, evt.progress);
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, workflowRuns: next },
+        },
+      };
+    });
+    return true;
+  }
+
   if (evt.type === "agent_wait_result") {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];

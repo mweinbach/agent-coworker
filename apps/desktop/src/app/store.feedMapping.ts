@@ -20,7 +20,13 @@ import {
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
 } from "./modelStream";
-import type { FeedItem, ThreadAgentSummary, ThreadRuntime, TranscriptEvent } from "./types";
+import type {
+  FeedItem,
+  ThreadAgentSummary,
+  ThreadRuntime,
+  ThreadWorkflowRun,
+  TranscriptEvent,
+} from "./types";
 
 export type ThreadModelStreamRuntime = {
   activeTurnId: string | null;
@@ -1207,6 +1213,9 @@ const transcriptFeedSuppressedTypes = new Set([
   "agent_list",
   "agent_status",
   "agent_wait_result",
+  // Rendered as a live run panel, not a transcript entry — each emission is a
+  // full snapshot, so replaying them into the feed would stack duplicates.
+  "workflow_progress",
   "set_session_usage_budget",
   "turn_usage",
   "session_usage",
@@ -1239,6 +1248,25 @@ export function extractAgentStateFromTranscript(events: TranscriptEvent[]): Thre
   }
 
   return agents;
+}
+
+/**
+ * Rebuild the workflow run panel from a persisted transcript.
+ *
+ * `workflow_progress` is suppressed from the feed but still persisted, and each
+ * emission is a FULL snapshot of the run — so replaying keeps only the last event
+ * per runId rather than merging.
+ */
+export function extractWorkflowRunsFromTranscript(events: TranscriptEvent[]): ThreadWorkflowRun[] {
+  const byRunId = new Map<string, ThreadWorkflowRun>();
+
+  for (const evt of events) {
+    const parsed = safeParseSessionEvent(evt.payload);
+    if (parsed?.type !== "workflow_progress") continue;
+    byRunId.set(parsed.progress.runId, parsed.progress);
+  }
+
+  return [...byRunId.values()];
 }
 
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {

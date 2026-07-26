@@ -19,6 +19,7 @@ import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 import { DesktopMarkdown } from "./markdown";
+import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 
 const taskStatusIconClassName = "mt-0.5 size-3.5 shrink-0";
 
@@ -69,6 +70,7 @@ export const ContextSidebar = memo(function ContextSidebar({
     selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null,
   );
   const agents = threadRuntime?.agents ?? [];
+  const workflowRuns = threadRuntime?.workflowRuns ?? [];
   const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
   const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
@@ -81,6 +83,7 @@ export const ContextSidebar = memo(function ContextSidebar({
   const hasActivity =
     (todos?.length ?? 0) > 0 ||
     agents.length > 0 ||
+    workflowRuns.length > 0 ||
     threadRuntime?.sessionKind === "agent" ||
     Boolean(selectedWorkspaceId);
 
@@ -141,6 +144,14 @@ export const ContextSidebar = memo(function ContextSidebar({
           </ScrollShadow>
         </section>
       ) : null}
+
+      <WorkflowRunsPanel
+        runs={workflowRuns}
+        sectionClassName={compactSectionClassName}
+        headerClassName={compactSectionHeaderClassName}
+        labelClassName={sectionLabelClassName}
+        scrollerClassName={compactSectionScrollerClassName}
+      />
 
       {showAgents || threadRuntime?.sessionKind === "agent" ? (
         <section className={compactSectionClassName} data-sidebar-panel="subagents">

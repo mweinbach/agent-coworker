@@ -412,6 +412,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     executionState: null,
     lastMessagePreview: null,
     agents: [],
+    workflowRuns: [],
     sessionUsage: null,
     lastTurnUsage: null,
     enableMcp: null,

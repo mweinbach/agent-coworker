@@ -76,6 +76,38 @@ const agentWaitResultEventSchema = z
   })
   .strict();
 
+const workflowProgressEventSchema = z
+  .object({
+    type: z.literal("workflow_progress"),
+    sessionId: nonEmptyStringSchema,
+    progress: z
+      .object({
+        runId: nonEmptyStringSchema,
+        name: z.string(),
+        phases: z.array(z.string()).default([]),
+        currentPhase: z.string().nullable().default(null),
+        agents: z
+          .array(
+            z
+              .object({
+                index: z.number().int(),
+                label: z.string(),
+                phase: z.string().nullable().default(null),
+                state: z.enum(["queued", "running", "completed", "errored", "cached"]),
+                agentId: z.string().nullable().default(null),
+                usdCost: z.number().nullable().default(null),
+              })
+              .strict(),
+          )
+          .default([]),
+        logs: z.array(z.string()).default([]),
+        spentUsd: z.number().default(0),
+        outcome: z.enum(["completed", "errored", "cancelled"]).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 const desktopSessionEventSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -107,6 +139,7 @@ const desktopSessionEventSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   agentWaitResultEventSchema,
+  workflowProgressEventSchema,
 ]);
 
 function normalizeLegacySessionSnapshotEvent(raw: unknown): unknown {

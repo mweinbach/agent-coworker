@@ -75,7 +75,11 @@ function executionStateForSession(
   if (session.isBusy) return "running";
   if (session.currentTurnOutcome === "error") return "errored";
   if (info.executionState === "running" || info.executionState === "pending_init") {
-    return session.getLatestAssistantText() !== null ? "completed" : info.executionState;
+    // `getLatestAssistantText()` returns `string | undefined`, never `null`, so a
+    // bare `!== null` reports "completed" for a child that has produced nothing
+    // yet. That under-counts `countActiveChildren` and lets a fan-out
+    // over-subscribe MAX_ACTIVE_CHILDREN_PER_PARENT.
+    return (session.getLatestAssistantText() ?? null) !== null ? "completed" : info.executionState;
   }
   if (info.executionState) return info.executionState;
   return fallback;

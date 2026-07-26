@@ -83,6 +83,7 @@ export type SessionConfigPatch = {
   preferredChildModelRef?: string;
   allowedChildModelRefs?: string[];
   maxSteps?: number;
+  workflowMaxConcurrentAgents?: number;
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
@@ -115,6 +116,7 @@ type SessionConfigState = {
   preferredChildModelRef: string;
   allowedChildModelRefs: string[];
   maxSteps: number;
+  workflowMaxConcurrentAgents: number;
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;

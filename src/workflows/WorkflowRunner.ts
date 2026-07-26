@@ -8,7 +8,7 @@ import type { AgentControl, ToolContext } from "../tools/context";
 import { compileWorkflowSource } from "./compile";
 import { runWorkflowAgent, WorkflowAgentError } from "./hostAgent";
 import { digestAgentCall, hashWorkflowArgs, WorkflowJournal } from "./journal";
-import { AgentScheduler, WORKFLOW_MAX_INFLIGHT_AGENTS } from "./scheduler";
+import { AgentScheduler, resolveWorkflowConcurrency } from "./scheduler";
 import { workflowAgentCallSchema, workflowHostMessageSchema, workflowMetaSchema } from "./schema";
 import type { WorkflowCompileFailure, WorkflowRunSummary } from "./types";
 import { WORKFLOW_WORKER_BOOTSTRAP } from "./workerBootstrap";
@@ -55,7 +55,9 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     ...(opts.resumeFromRunId ? { resumeFromRunId: opts.resumeFromRunId } : {}),
   });
 
-  const scheduler = new AgentScheduler(WORKFLOW_MAX_INFLIGHT_AGENTS);
+  const scheduler = new AgentScheduler(
+    resolveWorkflowConcurrency(opts.ctx.config.workflowMaxConcurrentAgents),
+  );
   const progress: WorkflowProgressAgent[] = [];
   const logs: string[] = [];
   const liveAgentIds = new Set<string>();

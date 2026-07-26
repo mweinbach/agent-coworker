@@ -2,6 +2,7 @@ import { loadConfig } from "../../config";
 import { pickEditableOpenAiCompatibleProviderOptions } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig } from "../../types";
+import { resolveWorkflowConcurrency } from "../../workflows/scheduler";
 import type { SessionEvent } from "../protocol";
 import type { SessionRuntime } from "../session/SessionRuntime";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
@@ -233,6 +234,9 @@ export class WorkspaceControl {
           preferredChildModelRef,
           allowedChildModelRefs: controlConfig.allowedChildModelRefs ?? [],
           maxSteps: 100,
+          workflowMaxConcurrentAgents: resolveWorkflowConcurrency(
+            controlConfig.workflowMaxConcurrentAgents,
+          ),
           toolOutputOverflowChars,
           ...(defaultToolOutputOverflowChars !== undefined
             ? { defaultToolOutputOverflowChars }

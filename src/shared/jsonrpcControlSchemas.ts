@@ -179,6 +179,7 @@ const sessionConfigEventSchema = z
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
         maxSteps: z.number().int().nonnegative().optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         toolOutputOverflowChars: z.number().int().nullable().optional(),
         defaultToolOutputOverflowChars: z.number().int().nullable().optional(),
         providerOptions: editableProviderOptionsSchema.optional(),

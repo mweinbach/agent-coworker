@@ -92,6 +92,7 @@ export type PersistedProjectConfigPatch = Partial<
     | "observabilityEnabled"
     | "backupsEnabled"
     | "toolOutputOverflowChars"
+    | "workflowMaxConcurrentAgents"
     | "userName"
     | "featureFlags"
   >

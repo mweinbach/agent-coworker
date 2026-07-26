@@ -13,6 +13,30 @@
  */
 export const WORKFLOW_MAX_INFLIGHT_AGENTS = 12;
 
+/**
+ * Absolute ceiling, matching AgentControl's MAX_ACTIVE_CHILDREN_PER_PARENT.
+ * Configuring above it cannot help — spawn() rejects past that point.
+ */
+export const WORKFLOW_MAX_CONFIGURABLE_AGENTS = 16;
+
+/**
+ * Resolve the in-flight cap for a run.
+ *
+ * The default suits hosted APIs. Local inference engines (LM Studio and
+ * friends) have much smaller request pools and per-model context budgets, where
+ * a 12-wide fan-out fails outright — "context size has been exceeded", or
+ * "worker local total request limit reached" — rather than queueing. Those
+ * setups need a lower value, so this is user-configurable.
+ */
+export function resolveWorkflowConcurrency(configured: number | undefined): number {
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return WORKFLOW_MAX_INFLIGHT_AGENTS;
+  }
+  const floored = Math.floor(configured);
+  if (floored < 1) return 1;
+  return Math.min(floored, WORKFLOW_MAX_CONFIGURABLE_AGENTS);
+}
+
 export class AgentScheduler {
   private active = 0;
   private readonly queue: Array<() => void> = [];

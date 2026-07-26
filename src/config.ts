@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-
 import { getAiCoworkerPaths } from "./connect";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
@@ -43,6 +42,7 @@ import {
 import { resolveAuthHomeDir } from "./utils/authHome";
 import { getOneOffChatsRoot, isPathInsideOneOffChatsRoot } from "./utils/oneOffChats";
 import { isPathInside } from "./utils/paths";
+import { resolveWorkflowConcurrency } from "./workflows/scheduler";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -643,6 +643,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
       : parsedToolOutputOverflowChars;
 
+  // Workflow fan-out width. Resolved from the config tiers so a project pinned to
+  // a local inference engine can lower it without touching hosted-API workspaces.
+  const workflowMaxConcurrentAgents = resolveWorkflowConcurrency(
+    normalizeNullableNonNegativeInt(
+      (merged as Record<string, unknown>).workflowMaxConcurrentAgents,
+    ) ?? undefined,
+  );
+
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
   // not the (potentially temporary) workingDirectory.
   const outputDirRaw =
@@ -869,6 +877,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
     allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
     toolOutputOverflowChars,
+    workflowMaxConcurrentAgents,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined
       ? {

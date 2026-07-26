@@ -7,6 +7,7 @@ import {
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
+import { resolveWorkflowConcurrency } from "../../workflows/scheduler";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
@@ -118,6 +119,12 @@ export class SessionMetadataManager {
         allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
       };
     }
+    if (patch.workflowMaxConcurrentAgents !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        workflowMaxConcurrentAgents: resolveWorkflowConcurrency(patch.workflowMaxConcurrentAgents),
+      };
+    }
     if (patch.toolOutputOverflowChars !== undefined) {
       nextConfig = {
         ...nextConfig,
@@ -213,6 +220,11 @@ export class SessionMetadataManager {
     }
     if (patch.skillImprovementExcludedSkills !== undefined) {
       persistPatch.skillImprovementExcludedSkills = [...patch.skillImprovementExcludedSkills];
+    }
+    if (patch.workflowMaxConcurrentAgents !== undefined) {
+      persistPatch.workflowMaxConcurrentAgents = resolveWorkflowConcurrency(
+        patch.workflowMaxConcurrentAgents,
+      );
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
@@ -318,6 +330,9 @@ export class SessionMetadataManager {
       sessionId: this.context.id,
       config: {
         yolo: this.context.state.yolo,
+        workflowMaxConcurrentAgents: resolveWorkflowConcurrency(
+          this.context.state.config.workflowMaxConcurrentAgents,
+        ),
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
         enableMemory: this.context.state.config.enableMemory ?? true,

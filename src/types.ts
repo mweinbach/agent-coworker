@@ -183,6 +183,14 @@ export interface AgentConfig {
   allowedChildModelRefs?: string[];
   toolOutputOverflowChars?: number | null;
   /**
+   * How many child agents a single `workflow` run may have in flight at once.
+   * Bounded by AgentControl's MAX_ACTIVE_CHILDREN_PER_PARENT. Lower it for local
+   * inference engines, which have far smaller request pools and context budgets
+   * than hosted APIs — an over-wide fan-out there fails as "context size has been
+   * exceeded" or "worker local total request limit reached" rather than queueing.
+   */
+  workflowMaxConcurrentAgents?: number;
+  /**
    * Effective non-project fallback for tool overflow spilling after built-in
    * and user config layers are merged, before workspace overrides apply.
    */

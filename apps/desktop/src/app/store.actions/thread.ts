@@ -1315,15 +1315,213 @@ export function createThreadActions(
 
       if (!workspaceId) return false;
 
+      const threadId = makeId();
+      let firstMessage = opts?.firstMessage ?? "";
+      let resolvedAttachments = opts?.attachments;
+      const draftAttachments =
+        opts?.draftAttachments ?? opts?.attachmentFiles?.map(createComposerAttachmentFile) ?? [];
+      // Attachment preparation may need the workspace server (large files fall
+      // back to a JSON-RPC upload), so only text-only first messages can be
+      // rendered optimistically before the server start wait.
+      const needsAttachmentPreparation = draftAttachments.length > 0;
+      const previousLandingTarget = get().newChatLandingTarget;
+      let queuedDraftSubmission = opts?.draftSubmission;
+      let rollbackDraftRekey: {
+        previousKey: string;
+        draft: ComposerDraft;
+        submission?: ComposerSubmission;
+      } | null = null;
+
+      // The thread record, navigation, and draft re-key are all local store
+      // operations — no server RPC — so they run before the (potentially slow)
+      // server start to give immediate feedback. Any later failure rolls the
+      // local state back to the exact pre-send draft.
+      const createLocalThreadRecord = async (): Promise<void> => {
+        reportPhase("creating");
+        const createdAt = nowIso();
+        const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
+
+        const thread: ThreadRecord = {
+          id: threadId,
+          workspaceId,
+          title,
+          titleSource: "default",
+          createdAt,
+          lastMessageAt: createdAt,
+          status: "active",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+          draft: !createSessionImmediately,
+          ...(opts?.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+        };
+
+        set((s) => {
+          let composerDraftsByKey = s.composerDraftsByKey;
+          let composerSubmissionsByKey = s.composerSubmissionsByKey;
+          if (queuedDraftSubmission) {
+            const previousKey = queuedDraftSubmission.key;
+            const submittedDraft = composerDraftsByKey[previousKey];
+            if (submittedDraft?.revision === queuedDraftSubmission.revision) {
+              const nextKey = composerDraftKeyForThread(threadId);
+              const nextDrafts = { ...composerDraftsByKey };
+              delete nextDrafts[previousKey];
+              nextDrafts[nextKey] = submittedDraft;
+              composerDraftsByKey = nextDrafts;
+              queuedDraftSubmission = {
+                key: nextKey,
+                revision: queuedDraftSubmission.revision,
+                ...(queuedDraftSubmission.submissionId
+                  ? { submissionId: queuedDraftSubmission.submissionId }
+                  : {}),
+              };
+              const submission = s.composerSubmissionsByKey[previousKey];
+              rollbackDraftRekey = { previousKey, draft: submittedDraft };
+              if (submission?.id === queuedDraftSubmission.submissionId) {
+                rollbackDraftRekey = { previousKey, draft: submittedDraft, submission };
+                composerSubmissionsByKey = { ...s.composerSubmissionsByKey };
+                delete composerSubmissionsByKey[previousKey];
+                composerSubmissionsByKey[nextKey] = {
+                  ...submission,
+                  owner: queuedDraftSubmission,
+                  request: { kind: "thread", threadId },
+                };
+              }
+            }
+          }
+          const next = {
+            threads: [thread, ...s.threads],
+            composerDraftsByKey,
+            composerSubmissionsByKey,
+          };
+          return canNavigate()
+            ? {
+                ...next,
+                selectedWorkspaceId: workspaceId,
+                selectedThreadId: threadId,
+                selectedTaskId: null,
+                view: "chat" as const,
+                newChatLandingTarget: null,
+              }
+            : next;
+        });
+        ensureThreadRuntime(get, set, threadId);
+        set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...s.threadRuntimeById[threadId],
+              transcriptOnly: false,
+              draftComposerProvider: opts?.provider ?? null,
+              draftComposerModel: opts?.model?.trim() || null,
+              composerReasoningEffort: opts?.reasoningEffort ?? null,
+            },
+          },
+        }));
+        await persistNow(get);
+      };
+
+      const rollbackCreatedThread = async (): Promise<void> => {
+        if (!get().threads.some((candidate) => candidate.id === threadId)) return;
+        RUNTIME.optimisticUserMessageIds.delete(threadId);
+        RUNTIME.pendingThreadMessages.delete(threadId);
+        RUNTIME.pendingThreadAttachments.delete(threadId);
+        RUNTIME.pendingThreadReferences.delete(threadId);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        RUNTIME.modelStreamByThread.delete(threadId);
+        const rekey = rollbackDraftRekey;
+        rollbackDraftRekey = null;
+        set((s) => {
+          const threadRuntimeById = { ...s.threadRuntimeById };
+          delete threadRuntimeById[threadId];
+          let composerDraftsByKey = s.composerDraftsByKey;
+          let composerSubmissionsByKey = s.composerSubmissionsByKey;
+          if (rekey) {
+            const threadDraftKey = composerDraftKeyForThread(threadId);
+            const nextDrafts = { ...composerDraftsByKey };
+            delete nextDrafts[threadDraftKey];
+            // Keep any edits made while the send was in flight; otherwise this
+            // is the exact submitted draft object moved back untouched.
+            nextDrafts[rekey.previousKey] = composerDraftsByKey[threadDraftKey] ?? rekey.draft;
+            composerDraftsByKey = nextDrafts;
+            if (rekey.submission) {
+              const nextSubmissions = { ...composerSubmissionsByKey };
+              delete nextSubmissions[threadDraftKey];
+              nextSubmissions[rekey.previousKey] = rekey.submission;
+              composerSubmissionsByKey = nextSubmissions;
+            }
+          }
+          return {
+            threads: s.threads.filter((candidate) => candidate.id !== threadId),
+            threadRuntimeById,
+            composerDraftsByKey,
+            composerSubmissionsByKey,
+            ...(s.selectedThreadId === threadId
+              ? {
+                  selectedThreadId: null,
+                  selectedTaskId: null,
+                  newChatLandingTarget: s.newChatLandingTarget ?? previousLandingTarget,
+                }
+              : {}),
+          };
+        });
+        await persistNow(get);
+      };
+
+      const discardFailedThreadAndWorkspace = async (): Promise<void> => {
+        await rollbackCreatedThread();
+        if (createdOneOffWorkspace) {
+          await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
+        }
+      };
+
+      const queueFirstMessageOptimistically = (): void => {
+        if (queuedDraftSubmission?.submissionId) {
+          const prepared = {
+            text: firstMessage,
+            attachments:
+              resolvedAttachments && resolvedAttachments.length > 0
+                ? resolvedAttachments
+                : undefined,
+          };
+          updateSubmission(queuedDraftSubmission.submissionId, (submission) => ({
+            ...submission,
+            prepared: submission.prepared ?? prepared,
+          }));
+        }
+        markSubmissionSending(queuedDraftSubmission?.submissionId);
+        const hasFirstMessage = Boolean(firstMessage.trim());
+        const hasResolvedAttachments = Boolean(
+          resolvedAttachments && resolvedAttachments.length > 0,
+        );
+        if (hasFirstMessage || hasResolvedAttachments) {
+          queueOptimisticFirstThreadMessage(
+            set,
+            threadId,
+            firstMessage,
+            resolvedAttachments,
+            opts?.references,
+            queuedDraftSubmission,
+            opts?.clientMessageId,
+          );
+          recordThreadNavigationIntent(threadId, operationIntent);
+        }
+      };
+
+      if (createSessionImmediately) {
+        await createLocalThreadRecord();
+        if (!needsAttachmentPreparation) {
+          queueFirstMessageOptimistically();
+        }
+      }
+
       let url: string | null = null;
       if (createSessionImmediately) {
         reportPhase("starting-server");
         try {
           await ensureServerRunning(get, set, workspaceId, { signal: opts?.signal });
         } catch (error) {
-          if (createdOneOffWorkspace) {
-            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
-          }
+          await discardFailedThreadAndWorkspace();
           if (isOperationAbortError(error)) return false;
           throw error;
         }
@@ -1341,19 +1539,12 @@ export function createThreadActions(
               detail: wsRt?.error ?? "Workspace server is not ready.",
             }),
           }));
-          if (createdOneOffWorkspace) {
-            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
-          }
+          await discardFailedThreadAndWorkspace();
           return false;
         }
       }
 
-      const threadId = makeId();
-      let firstMessage = opts?.firstMessage ?? "";
-      let resolvedAttachments = opts?.attachments;
-      const draftAttachments =
-        opts?.draftAttachments ?? opts?.attachmentFiles?.map(createComposerAttachmentFile) ?? [];
-      if (draftAttachments.length > 0) {
+      if (needsAttachmentPreparation) {
         reportPhase("processing-attachments");
         try {
           const prepared = await prepareComposerMessageForWorkspace(
@@ -1367,102 +1558,18 @@ export function createThreadActions(
           resolvedAttachments = prepared.attachments;
           firstMessage = prepared.text;
         } catch (error) {
-          if (createdOneOffWorkspace) {
-            await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
-          }
+          await discardFailedThreadAndWorkspace();
           if (isOperationAbortError(error)) return false;
           throw error;
         }
       }
       if (opts?.signal?.aborted) {
-        if (createdOneOffWorkspace) {
-          await discardCancelledOneOffWorkspace(createdOneOffWorkspace);
-        }
+        await discardFailedThreadAndWorkspace();
         return false;
       }
-      reportPhase("creating");
-      const createdAt = nowIso();
-      const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New chat";
-
-      const thread: ThreadRecord = {
-        id: threadId,
-        workspaceId,
-        title,
-        titleSource: "default",
-        createdAt,
-        lastMessageAt: createdAt,
-        status: "active",
-        sessionId: null,
-        messageCount: 0,
-        lastEventSeq: 0,
-        draft: !createSessionImmediately,
-        ...(opts?.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
-      };
-
-      let queuedDraftSubmission = opts?.draftSubmission;
-      set((s) => {
-        let composerDraftsByKey = s.composerDraftsByKey;
-        let composerSubmissionsByKey = s.composerSubmissionsByKey;
-        if (queuedDraftSubmission) {
-          const previousKey = queuedDraftSubmission.key;
-          const submittedDraft = composerDraftsByKey[previousKey];
-          if (submittedDraft?.revision === queuedDraftSubmission.revision) {
-            const nextKey = composerDraftKeyForThread(threadId);
-            const nextDrafts = { ...composerDraftsByKey };
-            delete nextDrafts[previousKey];
-            nextDrafts[nextKey] = submittedDraft;
-            composerDraftsByKey = nextDrafts;
-            queuedDraftSubmission = {
-              key: nextKey,
-              revision: queuedDraftSubmission.revision,
-              ...(queuedDraftSubmission.submissionId
-                ? { submissionId: queuedDraftSubmission.submissionId }
-                : {}),
-            };
-            const submission = s.composerSubmissionsByKey[previousKey];
-            if (submission?.id === queuedDraftSubmission.submissionId) {
-              composerSubmissionsByKey = { ...s.composerSubmissionsByKey };
-              delete composerSubmissionsByKey[previousKey];
-              composerSubmissionsByKey[nextKey] = {
-                ...submission,
-                owner: queuedDraftSubmission,
-                request: { kind: "thread", threadId },
-              };
-            }
-          }
-        }
-        const next = {
-          threads: [thread, ...s.threads],
-          composerDraftsByKey,
-          composerSubmissionsByKey,
-        };
-        return canNavigate()
-          ? {
-              ...next,
-              selectedWorkspaceId: workspaceId,
-              selectedThreadId: threadId,
-              selectedTaskId: null,
-              view: "chat" as const,
-              newChatLandingTarget: null,
-            }
-          : next;
-      });
-      ensureThreadRuntime(get, set, threadId);
-      set((s) => ({
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...s.threadRuntimeById[threadId],
-            transcriptOnly: false,
-            draftComposerProvider: opts?.provider ?? null,
-            draftComposerModel: opts?.model?.trim() || null,
-            composerReasoningEffort: opts?.reasoningEffort ?? null,
-          },
-        },
-      }));
-      await persistNow(get);
 
       if (!createSessionImmediately) {
+        await createLocalThreadRecord();
         return true;
       }
 
@@ -1470,31 +1577,8 @@ export function createThreadActions(
         return false;
       }
 
-      if (queuedDraftSubmission?.submissionId) {
-        const prepared = {
-          text: firstMessage,
-          attachments:
-            resolvedAttachments && resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
-        };
-        updateSubmission(queuedDraftSubmission.submissionId, (submission) => ({
-          ...submission,
-          prepared: submission.prepared ?? prepared,
-        }));
-      }
-      markSubmissionSending(queuedDraftSubmission?.submissionId);
-      const hasFirstMessage = Boolean(firstMessage.trim());
-      const hasResolvedAttachments = Boolean(resolvedAttachments && resolvedAttachments.length > 0);
-      if (hasFirstMessage || hasResolvedAttachments) {
-        queueOptimisticFirstThreadMessage(
-          set,
-          threadId,
-          firstMessage,
-          resolvedAttachments,
-          opts?.references,
-          queuedDraftSubmission,
-          opts?.clientMessageId,
-        );
-        recordThreadNavigationIntent(threadId, operationIntent);
+      if (needsAttachmentPreparation) {
+        queueFirstMessageOptimistically();
       }
       ensureThreadSocket(
         get,
@@ -1502,7 +1586,7 @@ export function createThreadActions(
         threadId,
         url,
         firstMessage,
-        hasFirstMessage,
+        Boolean(firstMessage.trim()),
         resolvedAttachments,
       );
       return true;

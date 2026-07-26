@@ -14,7 +14,7 @@ export type HandlerModuleContext = {
   sendUserMessageToThread: MessagingModule["sendUserMessageToThread"];
   flushOneQueuedThreadMessage: MessagingModule["flushOneQueuedThreadMessage"];
   flushOneQueuedThreadMessageIfReady: MessagingModule["flushOneQueuedThreadMessageIfReady"];
-  hasPendingWorkspaceDefaultApply: WorkspaceStateHelpers["hasPendingWorkspaceDefaultApply"];
+  hasDeferredWorkspaceDefaultApply: WorkspaceStateHelpers["hasDeferredWorkspaceDefaultApply"];
   resetLiveModelStreamRuntime: WorkspaceStateHelpers["resetLiveModelStreamRuntime"];
 };
 

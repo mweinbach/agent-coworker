@@ -2135,7 +2135,9 @@ describe("workspace startup flow", () => {
     await expect(creation).resolves.toBe(true);
     const state = useAppStore.getState();
     expect(state.view).toBe("settings");
-    expect(state.selectedThreadId).toBeNull();
+    // The chat is created and selected up front now; opening Settings
+    // mid-start keeps the user on Settings instead of yanking them back.
+    expect(state.selectedThreadId).toBe(state.threads[0]?.id);
     expect(state.threads).toHaveLength(1);
     expect(state.threads[0]?.title).toBe("New chat");
   });
@@ -2217,6 +2219,49 @@ describe("workspace startup flow", () => {
     expect(state.view).toBe("chat");
     expect(state.selectedWorkspaceId).toBe(workspace.id);
     expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+  });
+
+  test("newThread shows the first message before the workspace server finishes starting", async () => {
+    const workspace = projectWorkspace("ws-early-feedback");
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: "show this before the server is up",
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const pendingState = useAppStore.getState();
+    const threadId = pendingState.selectedThreadId;
+    expect(threadId).not.toBeNull();
+    expect(pendingState.view).toBe("chat");
+    expect(pendingState.threads).toHaveLength(1);
+    const runtime = pendingState.threadRuntimeById[threadId as string];
+    expect(runtime?.pendingTurnStart?.status).toBe("sending");
+    expect(
+      runtime?.feed.some(
+        (item) =>
+          item.kind === "message" &&
+          item.role === "user" &&
+          item.text === "show this before the server is up",
+      ),
+    ).toBe(true);
+    expect(RUNTIME.pendingThreadMessages.get(threadId as string)).toHaveLength(1);
+
+    startDeferreds[0]?.resolve({ url: "ws://early-feedback" });
+    await expect(creation).resolves.toBe(true);
+    expect(useAppStore.getState().selectedThreadId).toBe(threadId);
   });
 
   test("cancelling delayed startup preserves the exact submitted draft", async () => {
@@ -2355,12 +2400,30 @@ describe("workspace startup flow", () => {
       draftSubmission: { key: draftKey, revision: draft.revision },
     });
     await waitForCondition(() => startCalls.length === 1);
+
+    // The optimistic chat is already visible while the server start is pending.
+    const optimisticThreadId = useAppStore.getState().selectedThreadId;
+    expect(optimisticThreadId).not.toBeNull();
+    expect(useAppStore.getState().threads).toHaveLength(1);
+    expect(
+      useAppStore.getState().threadRuntimeById[optimisticThreadId as string]?.pendingTurnStart
+        ?.status,
+    ).toBe("sending");
+    expect(RUNTIME.pendingThreadMessages.get(optimisticThreadId as string)).toHaveLength(1);
+
     startDeferreds[0]?.reject(new Error("server failed"));
 
     await expect(creation).resolves.toBe(false);
     const state = useAppStore.getState();
     expect(state.threads).toEqual([]);
     expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
+    // Nothing optimistic is left behind: selection, runtime, and queued
+    // messages roll back to the pre-send landing state.
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newChatLandingTarget).toEqual(target);
+    expect(state.threadRuntimeById).toEqual({});
+    expect(RUNTIME.pendingThreadMessages.size).toBe(0);
+    expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
   });
 
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {

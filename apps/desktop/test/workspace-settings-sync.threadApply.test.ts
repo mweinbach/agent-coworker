@@ -210,7 +210,7 @@ describe("workspace settings sync", () => {
         },
       },
     }));
-    seedConnectedThread({
+    const { sessionId } = seedConnectedThread({
       sessionConfig: {
         defaultToolOutputOverflowChars: 12000,
       },
@@ -276,8 +276,20 @@ describe("workspace settings sync", () => {
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
-    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(1);
-    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+    const applyRequests = requestsFor("cowork/session/defaults/apply");
+    // The control-session apply clears the workspace-level override, and the
+    // settings fan-out clears the same override on the live thread session —
+    // the connected thread is no longer pruned by the thread/list reconcile.
+    expect(applyRequests).toHaveLength(2);
+    expect(applyRequests[0]?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: {
+        clearToolOutputOverflowChars: true,
+      },
+    });
+    expect(applyRequests[0]?.params).not.toHaveProperty("threadId");
+    expect(applyRequests[1]?.params).toMatchObject({
+      threadId: sessionId,
       cwd: "/tmp/workspace",
       config: {
         clearToolOutputOverflowChars: true,

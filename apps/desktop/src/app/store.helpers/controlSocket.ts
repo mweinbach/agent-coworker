@@ -146,8 +146,15 @@ export function createControlSocketHelpers(
         }
       }
     }
+    // A live session can be missing from a `thread/list` response that was
+    // generated before the session registered server-side (requests are
+    // handled concurrently), so never prune a thread the client is actively
+    // connected to — a genuine removal surfaces as a disconnect first.
     const clientOwnedThreads = workspaceThreads.filter(
-      (thread) => !thread.sessionId || isTaskOwnedThread(thread),
+      (thread) =>
+        !thread.sessionId ||
+        isTaskOwnedThread(thread) ||
+        threadRuntimeById[thread.id]?.connected === true,
     );
     const nextServerThreads = sessions.map((session) => {
       const existing = serverBackedBySessionId.get(session.sessionId);

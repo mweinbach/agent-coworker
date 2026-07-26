@@ -157,7 +157,7 @@ export function handleLifecycleThreadEvent(
     pushFeedItem,
     sendUserMessageToThread,
     flushOneQueuedThreadMessageIfReady,
-    hasPendingWorkspaceDefaultApply,
+    hasDeferredWorkspaceDefaultApply,
     resetLiveModelStreamRuntime,
   } = module;
   const { get, set, threadId, pendingFirstMessage, pendingFirstMessageQueued = false } = dispatch;
@@ -243,7 +243,10 @@ export function handleLifecycleThreadEvent(
         if (!pendingFirstMessageQueued) {
           prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
         }
-      } else if (hasPendingWorkspaceDefaultApply(threadId)) {
+      } else if (hasDeferredWorkspaceDefaultApply(threadId)) {
+        // A deferred (not yet dispatched) defaults apply must still land before
+        // the first turn. An in-flight apply needs no wait: the server orders
+        // the following `turn/start` behind it via `pendingConfigMutation`.
         if (!pendingFirstMessageQueued) {
           prependPendingThreadMessageWithAttachments(threadId, pendingFirstMessage);
         }

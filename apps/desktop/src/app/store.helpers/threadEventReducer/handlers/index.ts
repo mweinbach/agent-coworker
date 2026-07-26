@@ -14,7 +14,7 @@ export function createHandlersModule(
   ctx: ThreadEventReducerContext,
   workspace: Pick<
     WorkspaceStateHelpers,
-    "hasPendingWorkspaceDefaultApply" | "resetLiveModelStreamRuntime"
+    "hasDeferredWorkspaceDefaultApply" | "resetLiveModelStreamRuntime"
   >,
   feed: FeedProjectionModule,
   messaging: Pick<
@@ -32,7 +32,7 @@ export function createHandlersModule(
     sendUserMessageToThread: messaging.sendUserMessageToThread,
     flushOneQueuedThreadMessage: messaging.flushOneQueuedThreadMessage,
     flushOneQueuedThreadMessageIfReady: messaging.flushOneQueuedThreadMessageIfReady,
-    hasPendingWorkspaceDefaultApply: workspace.hasPendingWorkspaceDefaultApply,
+    hasDeferredWorkspaceDefaultApply: workspace.hasDeferredWorkspaceDefaultApply,
     resetLiveModelStreamRuntime: workspace.resetLiveModelStreamRuntime,
   };
 

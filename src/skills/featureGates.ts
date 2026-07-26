@@ -21,6 +21,7 @@ type FeatureGatedSkillTarget = {
 const FEATURE_GATED_BUILTIN_SKILLS: Record<string, (config: AgentConfig) => boolean> = {
   task: (config) => config.tasksEnabled === true,
   memories: (config) => config.advancedMemory === true,
+  workflow: (config) => config.workflowsEnabled === true,
 };
 
 function isBuiltInSkillRoot(config: AgentConfig, rootDir: string): boolean {

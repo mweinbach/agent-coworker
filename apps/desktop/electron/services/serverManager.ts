@@ -143,7 +143,7 @@ type StartWorkspaceServerOptions = {
   workspacePath: string;
   yolo: boolean;
   forceRestart?: boolean;
-  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean };
+  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean; workflows?: boolean };
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
   productAnalyticsState?: PersistedProductAnalyticsState | null;
   mobileH3?: boolean;
@@ -890,7 +890,7 @@ function resolveSourceStartup(
 }
 
 function buildServerEnv(
-  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean },
+  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean; workflows?: boolean },
   opts: {
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
@@ -923,6 +923,7 @@ function buildServerEnv(
   );
   delete processEnv.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP;
   delete processEnv.COWORK_ENABLE_TASKS;
+  delete processEnv.COWORK_ENABLE_WORKFLOWS;
   delete processEnv.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
   return {
     ...processEnv,
@@ -954,6 +955,7 @@ function buildServerEnv(
       ? { COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS: "1" }
       : {}),
     ...(featureFlags?.tasks ? { COWORK_ENABLE_TASKS: "1" } : {}),
+    ...(featureFlags?.workflows ? { COWORK_ENABLE_WORKFLOWS: "1" } : {}),
     ...(opts.rotateMobileH3Tls ? { COWORK_H3_ROTATE_TLS: "1" } : {}),
     ...buildHarnessTerminalLogsEnv(processEnv),
     ...buildDesktopObservabilityEnv(privacyTelemetrySettings),

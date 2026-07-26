@@ -1039,6 +1039,19 @@ describe("desktop server manager startup mode", () => {
     });
   });
 
+  test("buildServerEnv enables workflows only from the desktop feature flag", async () => {
+    // Without this pass-through the workflow tool is unreachable from the desktop
+    // app entirely: the flag defaults off, so the sidecar never sees it and
+    // `createWorkflowTool` returns null.
+    await withProcessEnv({ COWORK_ENABLE_WORKFLOWS: "1" }, () => {
+      expect(__internal.buildServerEnv().COWORK_ENABLE_WORKFLOWS).toBe(undefined);
+      expect(__internal.buildServerEnv({ workflows: false }).COWORK_ENABLE_WORKFLOWS).toBe(
+        undefined,
+      );
+      expect(__internal.buildServerEnv({ workflows: true }).COWORK_ENABLE_WORKFLOWS).toBe("1");
+    });
+  });
+
   test("only retries source startup automatically on Windows", () => {
     expect(__internal.getSourceStartupAttemptCount(true)).toBe(
       process.platform === "win32" ? 2 : 1,

@@ -119,17 +119,18 @@ function getDeniedTaskPermission(
   return null;
 }
 
-async function requireProjectTaskWorkspacePath(
+/**
+ * Canonical path when `workspacePath` is an authorized project workspace, `null`
+ * otherwise. Shared with `cowork/creation/preflight` so task readiness and
+ * `task/create` cannot disagree about which workspaces can host a task.
+ */
+export async function resolveAuthorizedProjectTaskWorkspacePath(
   context: JsonRpcRouteContext,
   workspacePath: string,
-  method: string,
-): Promise<string> {
+): Promise<string | null> {
   if (!context.desktopService) {
     const workspaceKind = classifyWorkspaceKind({ path: workspacePath }, context.homedir);
-    if (workspaceKind !== "project") {
-      throw new Error(`${method} cwd must match an authorized project workspace`);
-    }
-    return workspacePath;
+    return workspaceKind === "project" ? workspacePath : null;
   }
   const { workspaces } = await listWorkspaceSummaries({
     workingDirectory: context.getConfig().workingDirectory,
@@ -139,10 +140,20 @@ async function requireProjectTaskWorkspacePath(
   const workspace = workspaces.find((entry) => entry.path === workspacePath);
   const workspaceKind =
     workspace?.workspaceKind ?? classifyWorkspaceKind({ path: workspacePath }, context.homedir);
-  if (workspaceKind !== "project") {
+  if (workspaceKind !== "project") return null;
+  return workspace?.path ?? workspacePath;
+}
+
+async function requireProjectTaskWorkspacePath(
+  context: JsonRpcRouteContext,
+  workspacePath: string,
+  method: string,
+): Promise<string> {
+  const resolved = await resolveAuthorizedProjectTaskWorkspacePath(context, workspacePath);
+  if (!resolved) {
     throw new Error(`${method} cwd must match an authorized project workspace`);
   }
-  return workspace?.path ?? workspacePath;
+  return resolved;
 }
 
 export async function resolveTaskWorkspacePath(
@@ -198,6 +209,10 @@ function resolveImmediateTaskWorkspacePath(
 export function createTaskRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "task/create": createTaskHandler(context, "task/create", async (params, { workspacePath }) => {
+      // `cowork/creation/preflight` reports startup bootstrap as `pending`, which
+      // never gates creation because the server queues the work. Tasks have to
+      // honour that promise the same way `turn/start` does.
+      await context.runtime.waitForStartupReady();
       const cwd = workspacePath;
       const { cwd: _cwd, provider, model, ...rawCreation } = params;
       const creation = taskCreationInputSchema.parse(rawCreation);

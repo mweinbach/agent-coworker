@@ -290,3 +290,30 @@ export function modelOptionsFromCatalog(
   if (base.includes(normalized)) return base;
   return [normalized, ...base];
 }
+
+/**
+ * Resolve the subagent model to use when subagents are pinned to the chat
+ * provider.
+ *
+ * A stored preference outlives the provider it was chosen under, so it can name
+ * a model another provider owns. Composing `${provider}:${model}` from one of
+ * those produces a ref the server rejects outright, which used to fail the whole
+ * settings write. An id no catalog claims is kept: that is how a custom or
+ * newly discovered model looks, and only the provider can rule on it.
+ */
+export function childModelForProvider(
+  catalog: readonly ProviderCatalogEntry[],
+  provider: ProviderName,
+  candidate: string | null | undefined,
+  fallback: string,
+  options?: CatalogVisibilityOptions,
+): string {
+  const normalized = typeof candidate === "string" ? candidate.trim() : "";
+  if (!normalized) return fallback;
+  const choices = modelChoicesFromCatalog(catalog, options);
+  if ((choices[provider] ?? []).includes(normalized)) return normalized;
+  const claimedByAnotherProvider = Object.entries(choices).some(
+    ([entry, models]) => entry !== provider && models.includes(normalized),
+  );
+  return claimedByAnotherProvider ? fallback : normalized;
+}

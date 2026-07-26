@@ -229,7 +229,7 @@ function ComparisonContent({ comparison }: { comparison: ArtifactDiff }) {
 }
 
 function ReviewStatus({ detail }: { detail: TaskArtifactDetail | null }) {
-  if (!detail) return <Badge variant="outline">Loading history</Badge>;
+  if (!detail) return <Badge variant="outline">Loading history…</Badge>;
   if (detail.activeRevision) {
     return <Badge variant="secondary">Revision {detail.activeRevision.status}</Badge>;
   }
@@ -482,7 +482,7 @@ export function ArtifactReviewCard({
                   </p>
                   {loadingDetail ? (
                     <div className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-                      <Spinner /> Loading history
+                      <Spinner /> Loading history…
                     </div>
                   ) : sortedVersions.length === 0 ? (
                     <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">

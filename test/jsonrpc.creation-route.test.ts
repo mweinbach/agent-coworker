@@ -137,6 +137,30 @@ describe("creation preflight JSON-RPC route", () => {
     });
   });
 
+  test("applies the task workspace rule so preflight cannot promise what task/create refuses", async () => {
+    const harness = createCreationRouteHarness();
+
+    await invokeCreationPreflight(
+      harness.context,
+      {
+        kind: "task",
+        cwd: "/workspace/jsonrpc-creation-route-home/.cowork/chats/quick-chat",
+      },
+      "task-preflight",
+    );
+
+    expect(harness.errors).toEqual([]);
+    const result = jsonRpcCreationResultSchemas[METHOD].parse(harness.results[0]?.result);
+    expect(result.ready).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        id: "project_access",
+        status: "blocked",
+        message: "Tasks run inside a project workspace. Choose a project instead of a quick chat.",
+      },
+    ]);
+  });
+
   test("maps unexpected preflight failures to JSON-RPC internal errors", async () => {
     const harness = createCreationRouteHarness({
       getDiagnostics: () => {

@@ -176,7 +176,7 @@ export function AdvancedMemoryEditorDialog({
             onClick={onSave}
             disabled={!draft.name.trim() || !draft.body.trim() || saving}
           >
-            {saving ? "Saving..." : editingSlug ? "Save changes" : "Add memory"}
+            {saving ? "Saving…" : editingSlug ? "Save changes" : "Add memory"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -295,7 +295,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {folder ? <Badge variant="secondary">{folder}</Badge> : null}
           <Button variant="outline" size="sm" type="button" disabled={loading} onClick={refresh}>
-            {loading ? "Loading..." : "Refresh"}
+            {loading ? "Loading…" : "Refresh"}
           </Button>
         </div>
         <Button
@@ -312,8 +312,9 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
       {memories.length === 0 ? (
         <SettingsEmptyState
           icon={<BrainIcon />}
-          title={
-            loading ? "Loading..." : "No memories yet. They are written automatically as you work."
+          title={loading ? "Loading…" : "No memories yet"}
+          description={
+            loading ? undefined : "They are written automatically as you work, or add one yourself."
           }
         />
       ) : (

@@ -294,13 +294,27 @@ export const MessageComposerFooter = forwardRef<HTMLDivElement, ComponentProps<"
 
 export const MessageComposerStatus = forwardRef<HTMLDivElement, ComponentProps<"div">>(
   function MessageComposerStatus({ className, children, ...props }, ref) {
-    if (!children) return null;
+    // Callers mark this element aria-live. A live region has to already exist in
+    // the accessibility tree when its text arrives — regions inserted together
+    // with their first content are the case screen readers announce least
+    // reliably. So the node is always rendered and React keeps the same DOM
+    // element across the idle → announcing transition.
+    //
+    // Idle still has to cost nothing visually: the composer has no blank row
+    // under it today and must not grow one. `sr-only` takes the element out of
+    // flow entirely (absolute positioning means it is not a flex item, so it
+    // contributes no gap either) while leaving it in the accessibility tree.
+    const idle =
+      children === null || children === undefined || children === false || children === "";
     return (
       <div
         ref={ref}
         data-slot="message-composer-status"
+        data-idle={idle ? "" : undefined}
         className={cn(
-          "flex h-6 min-w-0 shrink-0 items-center px-1 text-xs leading-none text-muted-foreground",
+          idle
+            ? "sr-only"
+            : "flex h-6 min-w-0 shrink-0 items-center px-1 text-xs leading-none text-muted-foreground",
           className,
         )}
         {...props}

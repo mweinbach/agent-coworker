@@ -23,6 +23,13 @@ export type CreationPreflightDependencies = {
   getLmStudioStatus?: () => Promise<LmStudioLocalStatus>;
   getCodexAppServerStatus?: () => Promise<CodexAppServerInstallStatus>;
   hasResearchCredentials?: () => boolean;
+  /**
+   * Only consulted for `kind: "task"`. `task/create` accepts an authorized
+   * *project* workspace and rejects everything else (quick chats included), so
+   * preflight has to apply the same rule or it would report `ready: true` for a
+   * request the server is going to refuse.
+   */
+  isProjectWorkspace?: (workspacePath: string) => Promise<boolean>;
 };
 
 /**
@@ -125,6 +132,19 @@ export async function runCreationPreflight(
 
   try {
     const workspace = deps.resolveWorkspace(params.cwd);
+    if (params.kind === "task" && deps.isProjectWorkspace) {
+      const projectWorkspace = await deps.isProjectWorkspace(workspace);
+      if (!projectWorkspace) {
+        checks.push(
+          check(
+            "project_access",
+            "blocked",
+            "Tasks run inside a project workspace. Choose a project instead of a quick chat.",
+          ),
+        );
+        return { ready: false, checks };
+      }
+    }
     checks.push(check("project_access", "ok", `Workspace is accessible: ${workspace}`));
   } catch (error) {
     checks.push(
@@ -190,7 +210,7 @@ export async function runCreationPreflight(
       : check(
           "credentials",
           "blocked",
-          `Connect ${providerEntry?.name ?? provider} before starting this chat.`,
+          `Connect ${providerEntry?.name ?? provider} before starting this ${params.kind}.`,
           { type: "connectProvider", provider },
         ),
   );

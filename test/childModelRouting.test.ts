@@ -28,18 +28,119 @@ describe("normalizeChildRoutingConfig", () => {
     expect(normalized.allowedChildModelRefs).toEqual(["google:gemini-3.1-pro-preview"]);
   });
 
-  test("same-provider routing still rejects foreign legacy preferred child model ids", () => {
+  // Throwing here used to strand the user: the offending value lives in the very
+  // settings a config write would have corrected, so the desktop's settings apply
+  // failed on every retry until the config was hand-edited.
+  test("same-provider routing resets a foreign legacy preferred child model id", () => {
+    const normalized = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModel: "gemini-3.1-pro-preview",
+      source: "test",
+    });
+
+    expect(normalized.preferredChildModelRef).toBe("openai:gpt-5.2");
+    expect(normalized.preferredChildModel).toBe("gpt-5.2");
+    expect(normalized.preferredTargetReset).toMatchObject({
+      requested: "gemini-3.1-pro-preview",
+      resetTo: "openai:gpt-5.2",
+    });
+    // The reset carries the provider's own diagnosis, so a caller can log why.
+    expect(normalized.preferredTargetReset?.reason).toContain(
+      'Unsupported test preferred child target "gemini-3.1-pro-preview" for provider openai',
+    );
+  });
+
+  test("same-provider routing resets a target that names another provider", () => {
+    const normalized = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "google:gemini-3.1-pro-preview",
+      source: "test",
+    });
+
+    expect(normalized.preferredChildModelRef).toBe("openai:gpt-5.2");
+    expect(normalized.preferredTargetReset).toMatchObject({
+      requested: "google:gemini-3.1-pro-preview",
+      resetTo: "openai:gpt-5.2",
+    });
+  });
+
+  // The reported failure. Re-pinning a stale model id to the current provider is
+  // exactly what the desktop does when subagents go back to "same provider as
+  // chat", so the ref names a provider that is right and a model that is not —
+  // which is the one shape that reached `normalizeModelIdForProvider` and threw.
+  test("same-provider routing resets a ref pairing this provider with a foreign model", () => {
+    const normalized = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gemini-3.1-pro-preview",
+      source: "test",
+    });
+
+    expect(normalized.preferredChildModelRef).toBe("openai:gpt-5.2");
+    expect(normalized.preferredTargetReset).toMatchObject({
+      requested: "openai:gemini-3.1-pro-preview",
+      resetTo: "openai:gpt-5.2",
+    });
+  });
+
+  test("an honoured preferred target reports no reset", () => {
+    const normalized = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2-mini",
+      source: "test",
+    });
+
+    expect(normalized.preferredChildModelRef).toBe("openai:gpt-5.2-mini");
+    expect(normalized.preferredTargetReset).toBeUndefined();
+  });
+
+  // Narrowing an unset preference to the first allowed entry is routine, so it
+  // must not read as a reset — callers log resets, and this one fires on every
+  // load of a perfectly valid allowlist config.
+  test("cross-provider routing reports narrowing only for an explicit target", () => {
+    const implicit = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "cross-provider-allowlist",
+      allowedChildModelRefs: ["google:gemini-3.1-pro-preview"],
+      source: "test",
+    });
+    expect(implicit.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
+    expect(implicit.preferredTargetReset).toBeUndefined();
+
+    const explicit = normalizeChildRoutingConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "openai:gpt-5.2-mini",
+      allowedChildModelRefs: ["google:gemini-3.1-pro-preview"],
+      source: "test",
+    });
+    expect(explicit.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
+    expect(explicit.preferredTargetReset).toMatchObject({
+      requested: "openai:gpt-5.2-mini",
+      resetTo: "google:gemini-3.1-pro-preview",
+    });
+  });
+
+  // The parent model is a different class of failure: nothing can route without
+  // it, so it must still throw rather than silently pick something else.
+  test("an unusable parent model still throws", () => {
     expect(() =>
       normalizeChildRoutingConfig({
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gemini-3.1-pro-preview",
         childModelRoutingMode: "same-provider",
-        preferredChildModel: "gemini-3.1-pro-preview",
         source: "test",
       }),
-    ).toThrow(
-      'Unsupported test preferred child target "gemini-3.1-pro-preview" for provider openai',
-    );
+    ).toThrow(/Unsupported model/);
   });
 
   test("cross-provider routing falls back deterministically when the canonical ref is invalid", () => {

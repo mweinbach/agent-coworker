@@ -123,6 +123,25 @@ function normalizeLegacyPreferredChildModel(
   }
 }
 
+/**
+ * Reported when an explicitly configured preferred child target could not be
+ * honoured and was replaced by a safe one.
+ *
+ * A stale target is normal, not exceptional: it is what a config carries the
+ * moment the provider changes, the routing mode flips, or a model leaves a
+ * provider's catalog. Every caller wants the surrounding config to keep
+ * applying, so the reset is the return value rather than a thrown error — this
+ * record is how a caller logs or surfaces it.
+ */
+export type ChildRoutingTargetReset = {
+  /** The configured target that could not be honoured, verbatim. */
+  requested: string;
+  /** The ref it was reset to. */
+  resetTo: string;
+  /** Human-readable explanation, safe to log. */
+  reason: string;
+};
+
 export function normalizeChildRoutingConfig(opts: {
   provider: ProviderName;
   model: string;
@@ -137,6 +156,7 @@ export function normalizeChildRoutingConfig(opts: {
   preferredChildModel: string;
   preferredChildModelRef: string;
   allowedChildModelRefs: string[];
+  preferredTargetReset?: ChildRoutingTargetReset;
 } {
   const source = opts.source ?? "child model routing";
   // Custom cross-registry ids are validated against the custom-model store,
@@ -162,6 +182,11 @@ export function normalizeChildRoutingConfig(opts: {
   );
 
   let preferredRef = fallbackRef;
+  let preferredTargetReset: ChildRoutingTargetReset | undefined;
+  const resetPreferredTarget = (requested: string, resetTo: string, reason: string): string => {
+    preferredTargetReset = { requested, resetTo, reason };
+    return resetTo;
+  };
   const rawPreferredRef =
     typeof opts.preferredChildModelRef === "string" && opts.preferredChildModelRef.trim()
       ? opts.preferredChildModelRef.trim()
@@ -176,16 +201,28 @@ export function normalizeChildRoutingConfig(opts: {
           `${source} preferred child target`,
           homeOpts,
         ).ref;
-      } catch {
-        preferredRef = fallbackRef;
+      } catch (err) {
+        preferredRef = resetPreferredTarget(
+          rawPreferredRef,
+          fallbackRef,
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
     if (allowedChildModelRefs.length > 0) {
       const firstAllowedRef = allowedChildModelRefs[0];
-      if (firstAllowedRef) {
-        preferredRef = allowedChildModelRefs.includes(preferredRef)
-          ? preferredRef
-          : firstAllowedRef;
+      if (firstAllowedRef && !allowedChildModelRefs.includes(preferredRef)) {
+        // Narrowing an unset preference to the first allowed entry is routine, so
+        // only an explicitly configured target that the allowlist excludes counts
+        // as a reset worth reporting.
+        preferredRef =
+          rawPreferredRef && !preferredTargetReset
+            ? resetPreferredTarget(
+                rawPreferredRef,
+                firstAllowedRef,
+                `${source} preferred child target "${rawPreferredRef}" is not in the subagent model allowlist.`,
+              )
+            : firstAllowedRef;
       }
     } else {
       preferredRef = fallbackRef;
@@ -197,23 +234,37 @@ export function normalizeChildRoutingConfig(opts: {
         ? opts.preferredChildModel.trim()
         : undefined);
     if (rawPreferredTarget) {
-      preferredRef = parseChildModelRef(
-        rawPreferredTarget,
-        opts.provider,
-        `${source} preferred child target`,
-        homeOpts,
-      ).ref;
+      try {
+        const parsed = parseChildModelRef(
+          rawPreferredTarget,
+          opts.provider,
+          `${source} preferred child target`,
+          homeOpts,
+        );
+        preferredRef =
+          parsed.provider === opts.provider
+            ? parsed.ref
+            : resetPreferredTarget(
+                rawPreferredTarget,
+                fallbackRef,
+                `${source} preferred child target "${rawPreferredTarget}" belongs to provider ${parsed.provider}, but subagents are pinned to the chat provider ${opts.provider}.`,
+              );
+      } catch (err) {
+        // Reached whenever the target outlives the config it was valid for — a
+        // provider switch, a routing-mode flip, or a model dropping out of the
+        // catalog. Falling back to the parent model keeps the rest of the config
+        // applying; the caller reports the reset.
+        preferredRef = resetPreferredTarget(
+          rawPreferredTarget,
+          fallbackRef,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     }
-    const parsedPreferred = parseChildModelRef(
-      preferredRef,
-      opts.provider,
-      `${source} preferred child target`,
-      homeOpts,
-    );
-    preferredRef = parsedPreferred.provider === opts.provider ? parsedPreferred.ref : fallbackRef;
   }
 
   return {
+    ...(preferredTargetReset ? { preferredTargetReset } : {}),
     childModelRoutingMode: mode,
     preferredChildModel:
       mode === "cross-provider-allowlist"

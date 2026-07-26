@@ -591,7 +591,7 @@ export function SubagentsPage() {
 
         {profilesLoading && !catalog ? (
           <SettingsEmptyState
-            title="Loading subagents"
+            title="Loading subagents…"
             description="Refreshing the subagent catalog."
           />
         ) : profileRows.length === 0 ? (
@@ -1133,7 +1133,7 @@ export function ProfileDialog({
               title="MCP servers"
               values={mcpServerNames}
               selected={draft.allowedMcpServers}
-              emptyLabel="No MCP servers configured."
+              emptyLabel="No MCP servers configured. Add one under Tool Access → Connectors."
               onChange={(item, checked) =>
                 setDraft({
                   ...draft,
@@ -1145,7 +1145,7 @@ export function ProfileDialog({
               title="Skills"
               values={skillNames}
               selected={draft.skillNames}
-              emptyLabel="No enabled skills available."
+              emptyLabel="No enabled skills yet. Install or enable one under Tool Access → Skills."
               onChange={(item, checked) =>
                 setDraft({
                   ...draft,
@@ -1161,7 +1161,7 @@ export function ProfileDialog({
             Cancel
           </Button>
           <Button onClick={onSave} disabled={!canSave || saving}>
-            {saving ? "Saving..." : "Save"}
+            {saving ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

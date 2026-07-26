@@ -1260,6 +1260,141 @@ describe("desktop workspaces page", () => {
     }
   });
 
+  // The stored subagent model outlives the provider it was chosen under, and
+  // every same-provider write composes `${provider}:${model}` from it. Emptying
+  // the allowlist takes that path, and it used to produce
+  // `codex-cli:gemini-3.1-pro-preview` — a ref the server rejects outright,
+  // failing the whole settings write with "Cowork could not apply these settings
+  // to the running workspace".
+  test("never pins another provider's model to the chat provider", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: true,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-16T00:00:00.000Z",
+          lastOpenedAt: "2026-03-16T00:00:00.000Z",
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          // Left behind by an earlier switch away from Google.
+          defaultPreferredChildModel: "gemini-3.1-pro-preview",
+          defaultChildModelRoutingMode: "cross-provider-allowlist",
+          defaultPreferredChildModelRef: "opencode-zen:glm-5",
+          defaultAllowedChildModelRefs: ["opencode-zen:glm-5"],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      providerCatalog: [
+        {
+          id: "codex-cli",
+          name: "Codex CLI",
+          defaultModel: "gpt-5.4",
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "google",
+          name: "Google",
+          defaultModel: "gemini-3.1-pro-preview",
+          models: [
+            {
+              id: "gemini-3.1-pro-preview",
+              displayName: "Gemini 3.1 Pro Preview",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+        {
+          id: "opencode-zen",
+          name: "OpenCode Zen",
+          defaultModel: "glm-5",
+          models: [
+            {
+              id: "glm-5",
+              displayName: "GLM-5",
+              knowledgeCutoff: "unknown",
+              supportsImageInput: false,
+            },
+          ],
+        },
+      ],
+      providerConnected: ["codex-cli", "google", "opencode-zen"],
+      providerDefaultModelByProvider: {
+        "codex-cli": "gpt-5.4",
+        google: "gemini-3.1-pro-preview",
+        "opencode-zen": "glm-5",
+      },
+      providerStatusByName: {
+        "codex-cli": { authorized: true, verified: true },
+        google: { authorized: true, verified: true },
+        "opencode-zen": { authorized: true, verified: true },
+      },
+    }));
+
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage, { surface: "models" }));
+      });
+
+      const subagentModelsToggle = [...container.querySelectorAll("button")].find(
+        (button) =>
+          button.textContent?.trim() === "Show" &&
+          button
+            .closest('[data-slot="collapsible"], .app-shadow-surface')
+            ?.textContent?.includes("Subagent Models"),
+      );
+      if (!(subagentModelsToggle instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Subagent Models toggle");
+      }
+      await act(async () => {
+        subagentModelsToggle.click();
+      });
+
+      const allowedCheckbox = container.querySelector(
+        '[aria-label="Allow subagent model opencode-zen:glm-5"]',
+      );
+      if (!(allowedCheckbox instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing subagent model checkbox");
+      }
+
+      // Clearing the last allowed model forces the same-provider fallback.
+      await act(async () => {
+        allowedCheckbox.click();
+      });
+
+      const saved = useAppStore.getState().workspaces[0];
+      expect(saved?.defaultAllowedChildModelRefs).toEqual([]);
+      expect(saved?.defaultPreferredChildModelRef).toBe("codex-cli:gpt-5.4");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("typing into workspace profile fields does not trigger a render loop", async () => {
     const harness = setupWorkspacePageJsdom();
     const realError = console.error;

@@ -38,6 +38,27 @@ const ACCEPTED_SUBMISSION: ComposerSubmission = {
   error: null,
 };
 
+let setStatusHint: ((hint: string | null) => void) | null = null;
+
+function StatusHarness() {
+  const [hint, setHint] = useState<string | null>(null);
+  setStatusHint = setHint;
+  return createElement(
+    MessageComposerRoot,
+    null,
+    createElement(
+      MessageComposerForm,
+      null,
+      createElement(
+        MessageComposerStatus,
+        { role: "status", "aria-live": "polite", "aria-atomic": "true" },
+        hint,
+      ),
+      createElement(MessageComposerTextarea, { "aria-label": "Draft" }),
+    ),
+  );
+}
+
 function AttachmentHarness({ onRemove }: { onRemove: (index: number) => void }) {
   const [attachments, setAttachments] = useState<readonly MessageComposerAttachmentItem[]>([
     IMAGE_ATTACHMENT,
@@ -82,6 +103,60 @@ describe("message composer", () => {
     expect(html).toContain('aria-label="Draft"');
     expect(html).toContain('aria-label="Send message"');
     expect(html).not.toContain("focus-within:");
+  });
+
+  test("keeps the composer status live region mounted before it has anything to say", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StatusHarness));
+      });
+
+      const idleRegion = container.querySelector('[data-slot="message-composer-status"]');
+      // The region exists ahead of its first announcement, which is what makes
+      // the announcement reliable.
+      expect(idleRegion).not.toBeNull();
+      expect(idleRegion?.getAttribute("aria-live")).toBe("polite");
+      expect(idleRegion?.textContent).toBe("");
+      // ...and it costs no layout while idle: no reserved 24px row.
+      expect(idleRegion?.className).toContain("sr-only");
+      expect(idleRegion?.className).not.toContain("h-6");
+      expect(idleRegion?.hasAttribute("data-idle")).toBe(true);
+
+      await act(async () => {
+        setStatusHint?.("Validating readiness…");
+      });
+
+      const filledRegion = container.querySelector('[data-slot="message-composer-status"]');
+      // Same DOM node: the text landed in a region that was already there
+      // rather than arriving with a freshly inserted one.
+      expect(filledRegion).toBe(idleRegion);
+      expect(filledRegion?.textContent).toBe("Validating readiness…");
+      expect(filledRegion?.className).toContain("h-6");
+      expect(filledRegion?.className).not.toContain("sr-only");
+      expect(filledRegion?.hasAttribute("data-idle")).toBe(false);
+
+      await act(async () => {
+        setStatusHint?.(null);
+      });
+
+      const clearedRegion = container.querySelector('[data-slot="message-composer-status"]');
+      expect(clearedRegion).toBe(idleRegion);
+      expect(clearedRegion?.textContent).toBe("");
+      expect(clearedRegion?.className).toContain("sr-only");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      setStatusHint = null;
+      harness.restore();
+    }
   });
 
   test("renders shadcn attachment parts and removes an attachment", async () => {

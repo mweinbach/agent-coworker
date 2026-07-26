@@ -776,7 +776,7 @@ describe("desktop backup page", () => {
       expect(deltaRequests).toEqual([
         { workspaceId: "ws-1", targetSessionId: "session-2", checkpointId: "cp-0001" },
       ]);
-      expect(container.textContent).toContain("Loading file changes...");
+      expect(container.textContent).toContain("Loading file changes…");
       expect(container.textContent).not.toContain("stale.txt");
     } finally {
       await act(async () => {

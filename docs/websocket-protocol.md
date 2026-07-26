@@ -713,7 +713,7 @@ Every mutation after creation carries `expectedRevision`. A stale revision fails
 
 Requests:
 
-- `task/create` — params `{ cwd?, idempotencyKey, title, objective, context, requirements, workItems, decisions?, reviewRequired?, reviewRounds?, provider?, model? }`; creates a validated full plan directly in `working` state and returns `{ task, thread }`. `reviewRounds` is the required minimum, accepts integers from 0–10, and defaults to 3. `requirements` must include an `acceptance_criterion`; work-item keys must be unique, dependencies must be acyclic, and at least one work item must declare an expected output.
+- `task/create` — params `{ cwd?, idempotencyKey, title, objective, context, requirements, workItems, decisions?, reviewRequired?, reviewRounds?, provider?, model? }`; creates a validated full plan directly in `working` state and returns `{ task, thread }`. `reviewRounds` is the required minimum, accepts integers from 0–10, and defaults to 3. `requirements` must include an `acceptance_criterion`; work-item keys must be unique, dependencies must be acyclic, and at least one work item must declare an expected output. `cwd` must resolve to an authorized project workspace, and the request awaits startup readiness before creating anything — call `cowork/creation/preflight` with `kind: "task"` first to surface both as fixable preconditions.
 - `task/list` — params `{ cwd? }`; result `{ tasks, total }`
 - `task/read` — params `{ cwd?, taskId }`; result `{ task }`
 - `task/updateBrief` — params `{ cwd?, taskId, expectedRevision, title?, objective?, requirements? }`; result `{ task }`
@@ -773,11 +773,11 @@ subscription remains scoped to the latest requested workspace.
 
 ### Creation readiness
 
-Clients should call `cowork/creation/preflight` before creating a chat thread or research run. The
-method validates the selected workspace and the dependencies required to start work without mutating
-thread or research state.
+Clients should call `cowork/creation/preflight` before creating a chat thread, a task, or a research
+run. The method validates the selected workspace and the dependencies required to start work without
+mutating thread, task, or research state.
 
-- params: `{ kind: "chat" | "research", cwd?, provider?, model? }`
+- params: `{ kind: "chat" | "research" | "task", cwd?, provider?, model? }`
 - result: `{ ready, checks }`
 - each check is `{ id, status: "ok" | "pending" | "blocked", message, repairAction? }`
 - check ids are `project_access`, `provider_connected`, `model_available`, `credentials`,
@@ -791,16 +791,23 @@ runtime state are evaluated together. For research preflight, Google Deep Resear
 accepted from the saved Google API-key connection or the server's
 `GOOGLE_GENERATIVE_AI_API_KEY`/`GOOGLE_API_KEY` environment.
 
+Task preflight runs the same checks as chat — a task turn executes through the same provider, model,
+and runtime — and adds no task-only check id. It differs in one place: `project_access` applies the
+same authorization `task/create` applies, so a `cwd` that is not an authorized *project* workspace
+(a one-off quick chat workspace, for example) is reported as `blocked` here instead of failing at
+`task/create`. Pass the same `provider`/`model` you intend to pass to `task/create`; omit both when
+you intend to let the server defaults apply.
+
 `ready` is true when no returned check is `blocked`. A blocked result is an expected, actionable
 product state and is returned as a successful JSON-RPC result rather than an error.
 
 `pending` is reserved for work the server finishes on its own, and never gates creation. Today the
 only pending check is `runtime_ready` while the server's startup bootstrap (Cowork runtime download
 and install, default skills, system prompt preload) is still running; its `message` names the
-current step, for example `Downloading the Cowork runtime — 62%.`. `turn/start`, `turn/steer`, and
-`command/execute` already await startup readiness before touching a session, so a client may start
-a chat during this window and the server queues the turn. Clients should present pending checks as
-progress rather than as a failure, and re-poll until the check clears.
+current step, for example `Downloading the Cowork runtime — 62%.`. `turn/start`, `turn/steer`,
+`command/execute`, and `task/create` already await startup readiness before touching a session, so a
+client may start a chat or a task during this window and the server queues the work. Clients should
+present pending checks as progress rather than as a failure, and re-poll until the check clears.
 
 ### Research JSON-RPC methods
 

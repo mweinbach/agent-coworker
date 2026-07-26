@@ -787,7 +787,7 @@ export function ProvidersPage({
                       void setLmStudioEnabled(!lmStudioEnabled);
                     }}
                   >
-                    {enabledPending ? "Saving..." : lmStudioEnabled ? "Disable" : "Connect"}
+                    {enabledPending ? "Saving…" : lmStudioEnabled ? "Disable" : "Connect"}
                   </Button>
                   <Button
                     variant="outline"
@@ -795,7 +795,7 @@ export function ProvidersPage({
                     onClick={() => void refreshProviderStatus()}
                     disabled={providerStatusRefreshing}
                   >
-                    {providerStatusRefreshing ? "Refreshing..." : "Refresh"}
+                    {providerStatusRefreshing ? "Refreshing…" : "Refresh"}
                   </Button>
                 </div>
                 <OperationFeedback operation={enabledOperation} />
@@ -1120,7 +1120,7 @@ export function ProvidersPage({
                       onClick={() => void checkCodexAppServerStatus({ checkLatest: true })}
                     >
                       <RefreshCcwIcon data-icon="inline-start" />
-                      {codexAppServerChecking ? "Checking..." : "Check"}
+                      {codexAppServerChecking ? "Checking…" : "Check"}
                     </Button>
                   </div>
                 </div>
@@ -1389,7 +1389,8 @@ export function ProvidersPage({
               connectedModelProviders.map(renderProviderCard)
             ) : (
               <SettingsEmptyState
-                title="No providers connected yet. Connect one to start chatting."
+                title="No providers connected yet"
+                description="Connect one to start chatting."
                 action={
                   <Button type="button" size="sm" onClick={() => setNewProviderOpen(true)}>
                     <PlusIcon data-icon="inline-start" />

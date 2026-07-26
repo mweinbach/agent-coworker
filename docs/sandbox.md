@@ -174,6 +174,26 @@ cannot widen those floors.
   free-form shell execution still requires the explicit sandbox-escape approval
   where policy permits it.
 
+  The managed Codex app-server drives the *same* upstream engine with the same
+  machine-global `CodexSandboxOffline/Online` accounts, but keys its setup
+  state off its own `CODEX_HOME` (`~/.cowork/auth/codex-cli`). Because every
+  full setup resets those shared accounts' passwords, independent provisioning
+  from two homes invalidates the other home's stored credentials (each side
+  then re-runs an elevated setup — a clobber loop). Cowork prevents this two
+  ways (`src/platform/sandbox/windowsSetupSync.ts`): the pooled app-server
+  client newest-wins syncs the setup marker + DPAPI credentials between
+  `~/.cowork` and the app-server home before spawn, so neither Cowork-spawned
+  engine ever sees a stale marker and triggers a full re-setup over the
+  other; and the managed install pins version-matched
+  `codex-command-runner`/`codex-windows-sandbox-setup` siblings next to the
+  app-server binary (`src/providers/codexAppServerResolver.ts`), so helper
+  resolution never falls back to a foreign, version-skewed binary via PATH.
+  The native Codex home (`~/.codex`) is never read or written by this sync —
+  foreign setup state must not leak into the Cowork-managed runtime (a
+  version- or proxy-skewed marker would trigger the very full setup it
+  prevents); when a native Codex install re-provisions the shared accounts,
+  Cowork's own one-time setup repair is the intended recovery.
+
 ## Verification
 
 - Unit: `test/platform/sandbox.test.ts` asserts exact argv / policy text per

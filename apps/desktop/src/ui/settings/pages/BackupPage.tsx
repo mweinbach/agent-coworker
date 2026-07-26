@@ -520,7 +520,7 @@ function CheckpointDeltaView({
           <span className="text-muted-foreground flex items-center gap-2">
             Compared to baseline:
             <Badge variant="secondary" className="font-mono text-xs">
-              {delta?.baselineLabel || "..."}
+              {delta?.baselineLabel || "…"}
             </Badge>
           </span>
           {delta && (
@@ -535,7 +535,7 @@ function CheckpointDeltaView({
         <div className="flex-1 overflow-y-auto">
           {deltaLoading && !delta ? (
             <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
-              Loading file changes...
+              Loading file changes…
             </div>
           ) : deltaError ? (
             <div className="m-6 p-4 text-sm text-destructive bg-destructive/10 rounded-md border border-destructive/20">

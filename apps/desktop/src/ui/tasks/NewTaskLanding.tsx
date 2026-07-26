@@ -1,5 +1,5 @@
 import { ArrowRightIcon, ClipboardListIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type TaskCreationInput, taskCreationInputSchema } from "../../../../../src/shared/tasks";
 import type { TaskCreationDraftWorkItem } from "../../app/creationDrafts";
@@ -33,6 +33,8 @@ import { Separator } from "../../components/ui/separator";
 import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
+import { CreationReadinessNotice } from "../creation/CreationReadinessNotice";
+import { useCreationReadiness } from "../creation/useCreationReadiness";
 import { OperationFeedback } from "../OperationFeedback";
 import { formatTaskStatus, taskStatusBadgeClassName } from "./taskPresentation";
 
@@ -99,6 +101,7 @@ export function NewTaskLanding() {
   const setTaskCreationDraft = useAppStore((state) => state.setTaskCreationDraft);
   const setTaskCreationError = useAppStore((state) => state.setTaskCreationError);
   const startTask = useAppStore((state) => state.startTask);
+  const repairCreationReadiness = useAppStore((state) => state.repairCreationReadiness);
   const selectTask = useAppStore((state) => state.selectTask);
   const refreshTasks = useAppStore((state) => state.refreshTasks);
   const projects = useMemo(
@@ -130,6 +133,8 @@ export function NewTaskLanding() {
   const createOperation =
     operationsByKey[operationKey("task", "create", workspaceId, idempotencyKey)];
   const [creationPhase, setCreationPhase] = useState<CreationOperationPhase | null>(null);
+  const [repairingReadiness, setRepairingReadiness] = useState(false);
+  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null);
   const submissionControllerRef = useRef<AbortController | null>(null);
   const previousNewTaskWorkspaceId = useRef(newTaskWorkspaceId);
   const previousNewTaskWorkspaceRequestId = useRef(newTaskWorkspaceRequestId);
@@ -185,15 +190,45 @@ export function NewTaskLanding() {
   const hasExpectedOutput = effectiveWorkItems.some(
     (item) => lines(item.expectedOutputs).length > 0,
   );
+  const selectedProject = projects.find((workspace) => workspace.id === workspaceId) ?? null;
+  // A task is the longest-running thing Cowork starts, so its dependencies are
+  // validated up front instead of surfacing as a downstream failure mid-run.
+  const readiness = useCreationReadiness({
+    kind: "task",
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(selectedProject ? { cwd: selectedProject.path } : {}),
+  });
+  const readinessBlocked = Boolean(readiness.error) || readiness.result?.ready === false;
   // Minimal path: project + title + objective. Context/acceptance/work-graph
   // seed with sensible defaults when left empty (advanced expands full form).
+  // `ready` is "nothing blocked": startup work the server finishes on its own is
+  // reported as `pending` and never gates creation, because `task/create` queues
+  // behind startup readiness the same way `turn/start` does.
   const canSubmit =
     workspaceId.length > 0 &&
     title.trim().length > 0 &&
     objective.trim().length > 0 &&
     effectiveWorkItems.every((item) => item.title.trim().length > 0) &&
     hasExpectedOutput &&
+    readiness.result?.ready === true &&
     !submitting;
+
+  const repairReadiness = useCallback(
+    async (action: Parameters<typeof repairCreationReadiness>[0]) => {
+      if (repairingReadiness) return;
+      setRepairingReadiness(true);
+      setReadinessRepairError(null);
+      try {
+        await repairCreationReadiness(action, workspaceId || undefined);
+        readiness.refresh();
+      } catch (error) {
+        setReadinessRepairError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setRepairingReadiness(false);
+      }
+    },
+    [readiness, repairCreationReadiness, repairingReadiness, workspaceId],
+  );
 
   const updateWorkItem = (id: string, patch: Partial<TaskCreationDraftWorkItem>) => {
     const currentWorkItems = useAppStore.getState().taskCreationDraft.workItems;
@@ -632,6 +667,14 @@ export function NewTaskLanding() {
                     <FieldError>{validationError ?? taskError}</FieldError>
                   ) : null}
                   <OperationFeedback operation={createOperation} />
+                  <CreationReadinessNotice
+                    checking={readiness.checking}
+                    error={readinessRepairError ?? readiness.error}
+                    result={readiness.result}
+                    repairing={repairingReadiness}
+                    onRepair={(action) => void repairReadiness(action)}
+                    onRetry={readiness.refresh}
+                  />
                   <div className="flex gap-2">
                     {submitting ? (
                       <Button
@@ -643,8 +686,14 @@ export function NewTaskLanding() {
                       </Button>
                     ) : null}
                     <Button type="submit" className="flex-1" disabled={!canSubmit}>
-                      {taskCreationPhaseLabel(creationPhase)}
-                      {!submitting ? <ArrowRightIcon data-icon="inline-end" /> : null}
+                      {/* Name the reason the control is disabled at the control; the
+                          notice above carries the detail and the repair action. */}
+                      {readinessBlocked && !submitting
+                        ? "Setup required"
+                        : taskCreationPhaseLabel(creationPhase)}
+                      {!submitting && !readinessBlocked ? (
+                        <ArrowRightIcon data-icon="inline-end" />
+                      ) : null}
                     </Button>
                   </div>
                 </FieldGroup>

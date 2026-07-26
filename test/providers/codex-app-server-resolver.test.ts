@@ -19,12 +19,18 @@ function testTempRoot(): string {
 }
 
 // fakeReleaseFetch serves the literal bytes "managed app-server" for app-server
-// downloads and "managed code-mode host" for codex-code-mode-host downloads.
-// The resolver now verifies downloaded assets against a pinned SHA-256, so the
-// install plumbing tests inject the matching checksum via the expectedChecksums
-// override (production verifies against the repo-pinned map instead).
+// downloads, "managed code-mode host" for codex-code-mode-host downloads, and
+// "managed command runner" / "managed sandbox setup" for the Windows sandbox
+// helper companions. The resolver now verifies downloaded assets against a
+// pinned SHA-256, so the install plumbing tests inject the matching checksum
+// via the expectedChecksums override (production verifies against the
+// repo-pinned map instead).
 const FAKE_ASSET_SHA256 = createHash("sha256").update("managed app-server").digest("hex");
 const FAKE_HOST_ASSET_SHA256 = createHash("sha256").update("managed code-mode host").digest("hex");
+const FAKE_RUNNER_ASSET_SHA256 = createHash("sha256")
+  .update("managed command runner")
+  .digest("hex");
+const FAKE_SETUP_ASSET_SHA256 = createHash("sha256").update("managed sandbox setup").digest("hex");
 const FAKE_ASSET_CHECKSUMS: Record<string, string> = {
   "codex-app-server-x86_64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
   "codex-app-server-aarch64-pc-windows-msvc.exe": FAKE_ASSET_SHA256,
@@ -32,6 +38,10 @@ const FAKE_ASSET_CHECKSUMS: Record<string, string> = {
   "codex-app-server-aarch64-apple-darwin.tar.gz": FAKE_ASSET_SHA256,
   "codex-code-mode-host-x86_64-pc-windows-msvc.exe": FAKE_HOST_ASSET_SHA256,
   "codex-code-mode-host-aarch64-pc-windows-msvc.exe": FAKE_HOST_ASSET_SHA256,
+  "codex-command-runner-x86_64-pc-windows-msvc.exe": FAKE_RUNNER_ASSET_SHA256,
+  "codex-command-runner-aarch64-pc-windows-msvc.exe": FAKE_RUNNER_ASSET_SHA256,
+  "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe": FAKE_SETUP_ASSET_SHA256,
+  "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe": FAKE_SETUP_ASSET_SHA256,
 };
 
 const previousCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
@@ -78,6 +88,14 @@ function fakeReleaseFetch(
               name: "codex-code-mode-host-x86_64-pc-windows-msvc.exe",
               browser_download_url: "https://example.test/codex-code-mode-host.exe",
             },
+            {
+              name: "codex-command-runner-x86_64-pc-windows-msvc.exe",
+              browser_download_url: "https://example.test/codex-command-runner.exe",
+            },
+            {
+              name: "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe",
+              browser_download_url: "https://example.test/codex-windows-sandbox-setup.exe",
+            },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -85,6 +103,12 @@ function fakeReleaseFetch(
     }
     if (url.includes("code-mode-host")) {
       return new Response("managed code-mode host", { status: 200 });
+    }
+    if (url.includes("command-runner")) {
+      return new Response("managed command runner", { status: 200 });
+    }
+    if (url.includes("sandbox-setup")) {
+      return new Response("managed sandbox setup", { status: 200 });
     }
     return new Response("managed app-server", { status: 200 });
   }) as typeof fetch;
@@ -165,6 +189,35 @@ describe("codex app-server resolver", () => {
       const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
       expect(__internal.resolveCodeModeHostAssetName({ platform, arch })).toBe(assetName);
       expect(__internal.expectedCodexAssetChecksum("0.144.0", assetName, {})).toBe(digest);
+    }
+
+    // The managed app-server must ship its Windows sandbox helpers (pinned,
+    // version-matched) so it never resolves foreign helpers via PATH.
+    expect(__internal.codexCompanionBinaries).toEqual([
+      { basename: "codex-code-mode-host" },
+      { basename: "codex-command-runner", platforms: ["win32"] },
+      { basename: "codex-windows-sandbox-setup", platforms: ["win32"] },
+    ]);
+    const expectedWindowsSandboxHelpers = {
+      "win32-arm64": {
+        "codex-command-runner": "159045fdc61dff7b34788a702591b9b71018c8cbd20278df39ba47019f6edc50",
+        "codex-windows-sandbox-setup":
+          "4414fa48c34dd720cb1d8c9fb3c703d2dc2b4245640ce50b82f0bb4d4caad817",
+      },
+      "win32-x64": {
+        "codex-command-runner": "a4767cca02e3059a829b15afb27294d395ef9140299131f2c03231063d0563b0",
+        "codex-windows-sandbox-setup":
+          "5e7c3d8b176fe8009b19d4185245b3850e5402c5b6010b93b126849925b7281a",
+      },
+    } as const;
+    for (const [targetKey, companions] of Object.entries(expectedWindowsSandboxHelpers)) {
+      const [platform, arch] = targetKey.split("-") as [NodeJS.Platform, string];
+      const triple = `${arch === "x64" ? "x86_64" : "aarch64"}-pc-windows-msvc`;
+      for (const [basename, digest] of Object.entries(companions)) {
+        const assetName = __internal.resolveCompanionAssetName(basename, { platform, arch });
+        expect(assetName).toBe(`${basename}-${triple}.exe`);
+        expect(__internal.expectedCodexAssetChecksum("0.144.0", assetName, {})).toBe(digest);
+      }
     }
   });
 
@@ -616,6 +669,53 @@ describe("codex app-server resolver", () => {
     expect(await fs.readFile(currentHostPath, "utf8")).toBe("managed code-mode host");
   });
 
+  test.serial("installs the Windows sandbox helper companions next to the app-server", async () => {
+    const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-sbx-helpers-"));
+    const target = { platform: "win32" as const, arch: "x64" };
+
+    const command = await resolveCodexAppServerCommand({
+      homeDir,
+      platform: "win32",
+      arch: "x64",
+      fetchImpl: fakeReleaseFetch(CODEX_APP_SERVER_MANAGED_VERSION),
+      expectedChecksums: FAKE_ASSET_CHECKSUMS,
+    });
+
+    // The app-server resolves helpers sibling-first; the versioned spawn path
+    // must carry both, so no PATH fallback can pick up a foreign helper.
+    for (const [basename, bytes] of [
+      ["codex-command-runner", "managed command runner"],
+      ["codex-windows-sandbox-setup", "managed sandbox setup"],
+    ] as const) {
+      const versionedPath = __internal.companionSiblingPath(command.command, basename, target);
+      expect(path.basename(versionedPath)).toBe(`${basename}.exe`);
+      expect(await fs.readFile(versionedPath, "utf8")).toBe(bytes);
+
+      const currentPath = __internal.companionSiblingPath(
+        __internal.managedCurrentPath(homeDir, target),
+        basename,
+        target,
+      );
+      expect(await fs.readFile(currentPath, "utf8")).toBe(bytes);
+    }
+  });
+
+  test.serial("skips Windows-only sandbox helpers on non-Windows installs", async () => {
+    // Platform gating is table-driven: non-win32 targets only ever resolve the
+    // code-mode host companion, so no Windows helper asset is ever downloaded.
+    const { codexCompanionBinaries } = __internal;
+    const nonWindowsTargets = [
+      { platform: "darwin" as const, arch: "arm64" },
+      { platform: "linux" as const, arch: "x64" },
+    ];
+    for (const target of nonWindowsTargets) {
+      const applicable = codexCompanionBinaries.filter(
+        (companion) => !companion.platforms || companion.platforms.includes(target.platform),
+      );
+      expect(applicable).toEqual([{ basename: "codex-code-mode-host" }]);
+    }
+  });
+
   test.serial(
     "repairs an existing managed install that is missing the code-mode host",
     async () => {
@@ -645,6 +745,19 @@ describe("codex app-server resolver", () => {
       expect(command.command).toBe(versionedPath);
       const hostPath = __internal.codeModeHostSiblingPath(versionedPath, target);
       expect(await fs.readFile(hostPath, "utf8")).toBe("managed code-mode host");
+      // The same repair backfills the Windows sandbox helper companions the
+      // app-server needs next to itself for sandboxed execution.
+      for (const [basename, bytes] of [
+        ["codex-command-runner", "managed command runner"],
+        ["codex-windows-sandbox-setup", "managed sandbox setup"],
+      ] as const) {
+        expect(
+          await fs.readFile(
+            __internal.companionSiblingPath(versionedPath, basename, target),
+            "utf8",
+          ),
+        ).toBe(bytes);
+      }
     },
   );
 

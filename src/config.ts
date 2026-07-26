@@ -560,11 +560,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.subAgentModel) ||
     asNonEmptyString(builtInDefaults.subAgentModel) ||
     supportedModel.id;
-  let normalizedChildRouting = {
+  let normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> = {
     childModelRoutingMode,
     preferredChildModel: supportedModel.id,
     preferredChildModelRef: `${provider}:${supportedModel.id}`,
-    allowedChildModelRefs: [] as string[],
+    allowedChildModelRefs: [],
   };
   try {
     normalizedChildRouting = normalizeChildRoutingConfig({
@@ -578,6 +578,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       source: "config",
       home: homedir,
     });
+    if (normalizedChildRouting.preferredTargetReset) {
+      // The rest of the routing config (mode, allowlist) still applies — only the
+      // unusable target is replaced, so a hand-edited typo no longer discards a
+      // perfectly good allowlist alongside it.
+      console.warn(
+        `[config] ${normalizedChildRouting.preferredTargetReset.reason} Using ${normalizedChildRouting.preferredTargetReset.resetTo} instead.`,
+      );
+    }
   } catch (error) {
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
   }

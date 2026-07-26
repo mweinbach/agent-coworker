@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {
+  type CodexWindowsSandboxSetupSyncOptions,
+  syncCodexWindowsSandboxSetupState,
+} from "../platform/sandbox/windowsSetupSync";
 import { asRecord, asString } from "../shared/recordParsing";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { type StreamingSubprocess, subscribeLines } from "../utils/subprocess";
@@ -84,6 +88,11 @@ export type CodexAppServerClientOptions = {
 let clientFactoryForTests:
   | ((opts: CodexAppServerClientOptions) => Promise<CodexAppServerClient>)
   | undefined;
+
+let sandboxSetupStateSync: (
+  codexHome: string,
+  opts?: CodexWindowsSandboxSetupSyncOptions,
+) => Promise<unknown> = syncCodexWindowsSandboxSetupState;
 
 function resolveCodexHome(authHomeDir = resolveAuthHomeDir()): string {
   return path.join(authHomeDir, ".cowork", "auth", "codex-cli");
@@ -458,6 +467,16 @@ export async function getPooledCodexAppServerClient(
   opts: CodexAppServerClientOptions = {},
 ): Promise<CodexAppServerClient> {
   const codexHome = opts.codexHome ?? resolveCodexHome();
+  // On Windows the app-server shares the machine-global CodexSandbox accounts
+  // with Cowork's own sandbox helper. Keep the two Cowork-owned homes' setup
+  // state in sync so neither ever triggers a full (password-resetting,
+  // elevated) re-setup that would clobber the other's stored credentials.
+  // Best-effort: a sync failure must not block the client.
+  try {
+    await sandboxSetupStateSync(codexHome, { log: opts.log });
+  } catch (error) {
+    opts.log?.(`[codex-app-server] windows sandbox setup sync failed: ${String(error)}`);
+  }
   const key = pooledClientKey(opts.cwd, codexHome, opts.env);
   const existing = pooledClients.get(key);
   if (existing) {
@@ -572,6 +591,13 @@ export const __internal = {
     factory: ((opts: CodexAppServerClientOptions) => Promise<CodexAppServerClient>) | undefined,
   ): void {
     clientFactoryForTests = factory;
+  },
+  setSandboxSetupStateSyncForTests(
+    sync:
+      | ((codexHome: string, opts?: CodexWindowsSandboxSetupSyncOptions) => Promise<unknown>)
+      | undefined,
+  ): void {
+    sandboxSetupStateSync = sync ?? syncCodexWindowsSandboxSetupState;
   },
   pooledEnvFingerprint,
 } as const;

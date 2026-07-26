@@ -1,336 +1,70 @@
-# Repository Guidelines
+# agent-coworker
 
-agent-coworker is a coworker agent built on Bun + TypeScript (ESM) with a WebSocket server and CLI REPL.
+A local-first AI coworker agent: Bun + TypeScript (ESM) harness with a JSON-RPC WebSocket server, a CLI REPL, and thin UI clients (Electron desktop, Expo mobile).
 
-All logic for the application should be done in the harness itself, consider the desktop app just a UI layer. The only things that should be specific to that are things that are relevant, like UI layout or platform-specific behavior. All logic on how the agent works on the users system, saves files, etc should be done in the harness THEN exposed and connected to the UI layers via the websocket.
+## Core architecture rule: WebSocket-first
 
-When you run into an issue, create tests to target the error. Then work on that error until the test passes. Make sure we have tests for all error cases to prevent regressions.
+All product logic lives in the harness/server (`src/`). UIs are thin clients that send typed JSON-RPC requests and consume typed notifications — never put business logic in a UI layer. Implement it in the harness, then expose it over the WebSocket.
+
+When adding a JSON-RPC method or notification:
+
+1. Add schema + validation in `src/server/jsonrpc/schema.ts` and the relevant module under `src/server/jsonrpc/`.
+2. Wire the handler in `src/server/jsonrpc/routes/` and/or the manager under `src/server/session/`.
+3. Document it in `docs/websocket-protocol.md` — the source of truth for alternative UI builders.
+
+## Layout
+
+- `src/` — harness: agent loop (`src/agent.ts`), server (`src/server/`), tools (`src/tools/`), providers (`src/providers/`), runtime adapters (`src/runtime/`), CLI (`src/cli/`)
+- `apps/desktop/` — Electron app, UI layer only (see `apps/desktop/AGENTS.md`)
+- `apps/mobile/` — Expo mobile app (React Native)
+- `packages/harness/` — dev harness, docs generation and checks
+- `test/`, `apps/desktop/test/` — Bun tests (`*.test.ts`)
+- `config/` — built-in defaults; model registry lives in `config/models/<provider>/`
+- `prompts/`, `skills/` — system + sub-agent prompts, bundled skills
+- `docs/` — architecture and protocol docs; `docs/harness/index.md` is the harness docs map
+
+## Commands
+
+Use Bun, not npm. Biome is the linter/formatter — run it, don't hand-maintain style.
+
+- `bun install` — install dependencies
+- `bun run start` / `bun run cli` / `bun run serve` — desktop app / CLI REPL / standalone server (`ws://127.0.0.1:7337/ws`)
+- `bun run desktop:dev` — Electron dev mode
+- `bun run test` — full suite via the project runner (`scripts/run_tests.ts`). Do not substitute bare `bun test`; the runner isolates test files in fresh processes where required.
+- `bun run typecheck` — TypeScript strict, root + `packages/harness` + `apps/desktop`
+- `bun run lint` / `bun run check:write` — Biome lint / lint+format fix
+- `bun run docs:check` — protocol/docs consistency (runs in CI)
+- `bun run knip` — dead-export check
+
+Before committing, run the CI lane: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run docs:check`.
+
+## Testing
+
+- `import { describe, test, expect } from "bun:test"`; files are `*.test.ts`.
+- Deterministic only: no network calls; isolate the filesystem in temp dirs; use the DI factories (`createRunTurn()`, `createTools()`, tool factories) or `mock.module()` instead of live calls.
+- Bug fixes: reproduce the issue, write a failing regression test, fix the root cause until it passes. Keep the diff minimal — no opportunistic refactors.
+
+## Conventions
+
+- Commits: [Conventional Commits](https://www.conventionalcommits.org/) (`fix:`, `feat:`, `refactor:`, `chore:`, `test:`, `docs:`), short imperative subjects. Commit logical slices as you go.
+- Never commit secrets or local state; `.env`, `.agent/`, `.cowork/`, `output/`, `uploads/` are gitignored. Runtime config/auth/MCP state lives in `.cowork/` and `~/.cowork/` — `~/.cowork` is the only auth home.
+- `--yolo` disables approval prompts and the OS sandbox; local experiments only.
+- TypeScript is `strict`. Match existing code patterns; let Biome own formatting.
+
+## Read when relevant
+
+Task-specific docs — load the one that matches your task before starting:
+
+- `agent_docs/engineering-rules.md` — durable rules from past corrections: PR review workflow, scope discipline, verification gates
+- `agent_docs/repo-contracts.md` — repo-specific invariants (auth, config tiers, JSON-RPC projector, tools, runtime)
+- `agent_docs/code-review-rules.md` — review checklist for contract, authority-boundary, and IPC diffs
+- `agent_docs/desktop-ui.md` — shadcn/ui + Electron patterns, desktop verification workflow
+- `agent_docs/mobile-ui.md` — Expo/mobile patterns and verification
+- `agent_docs/model-selection.md` — which models to use for which work
+- `agent_docs/adding-models.md` — model registry metadata rules
+- `agent_docs/cursor-cloud.md` — Cursor Cloud environment specifics
+- `docs/websocket-protocol.md` — WebSocket protocol source of truth
+- `docs/harness/index.md` — harness context/observability/SLO docs map
+- `CONTRIBUTING.md` — architecture deep-dive: adding tools, skills, MCP servers
 
 [Ask DeepWiki](https://deepwiki.com/mweinbach/agent-coworker)
-
-
-## Project Structure & Module Organization
-
-- `src/`: application code
-- `src/server/`: WebSocket server, protocol, and session state
-- `src/cli/`: CLI REPL and argument parsing
-- `src/providers/`: model/provider integrations (Google, OpenAI, Anthropic, Bedrock, Together, Fireworks, NVIDIA, LM Studio, Baseten, and `codex-cli`)
-- `src/tools/`: built-in tools (`bash`, `read`, `write`, `webSearch`, etc.)
-- `src/runtime/`: runtime adapters (`google-interactions`, `pi`, `openai-responses`)
-- `apps/desktop/`: Electron desktop application
-- `apps/mobile/`: Expo mobile app (React Native)
-- `test/`: Bun tests (`*.test.ts`)
-- `config/`: built-in defaults and MCP server defaults
-- `prompts/`: system + sub-agent prompts
-- `skills/`: bundled skill docs/assets used by the agent
-- `docs/harness/index.md`: harness context/observability/SLO system-of-record map
-
-## Build, Test, and Development Commands
-
-- `bun install`: install dependencies.
-- `bun run start`: run the desktop app (starts the server automatically).
-- `bun run cli`: run the plain CLI REPL.
-- `bun run serve`: run the server only.
-- `bun run dev`: watch mode for CLI entry (`src/index.ts`).
-- `bun run test`: run the full test suite through the cross-platform project runner.
-
-Example (CLI with initial workspace): `bun run cli -- --dir /path/to/project`. Desktop `bun run start` does not forward `--dir` (use in-app workspace selection).
-
-Always run tests while doing work, make sure you run these tests.
-
-While debugging an issue, make sure to recreate the issue, figure out why it's happening, then fix it. Try not to write extra code for simple fixes. Simplicity is key!
-
-## Coding Style & Naming Conventions
-
-- TypeScript is `strict` (see `tsconfig.json`); prefer `async/await` and explicit types at module boundaries.
-- Indentation is 2 spaces. Keep imports grouped (Node built-ins, deps, local).
-- Naming: `camelCase` for values, `PascalCase` for types. Tests are `*.test.ts` and may add qualifiers (e.g. `agent.remote-mcp.grep.test.ts`).
-
-## Testing Guidelines
-
-- Use Bun’s runner (`import { describe, test, expect } from "bun:test"`).
-- Keep tests deterministic: avoid network calls; isolate filesystem via temp dirs and use DI hooks/mocks where available (e.g. `__internal` shims, `mock.module()`).
-
-## Commit & Pull Request Guidelines
-
-- Commit messages must use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix: …`, `feat: …`, `refactor: …`, `chore: …`, `test: …`, `docs: …`). Keep subjects short and imperative.
-- PRs should include: what/why, how to test (`bun run test`), and screenshots or a short recording for desktop app changes. Keep changes focused and add tests for fixes/features.
-
-## WebSocket-First Development
-
-All new features MUST be built on top of the CLI/core logic and exposed via JSON-RPC WebSocket controls. UIs are thin clients that send typed JSON-RPC requests and consume typed JSON-RPC notifications — never put business logic directly in a UI layer.
-
-When adding a new WebSocket message or event:
-
-1. Add JSON-RPC request/result/notification schemas under `src/server/jsonrpc/schema.ts` and the relevant module in `src/server/jsonrpc/` for supported live traffic.
-2. Add validation in the relevant JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
-3. Wire the handler in `src/server/jsonrpc/routes/` and/or the appropriate manager under `src/server/session/`.
-4. **Document it in `docs/websocket-protocol.md`** — this is the source of truth for alternative UI builders.
-
-## Security & Configuration Tips
-
-- Don’t commit secrets or local state. `.env`, `.agent/`, `.cowork/`, `output/`, and `uploads/` are gitignored.
-- Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.cowork/config.json` / `.cowork/mcp-servers.json` for developer setup. MCP server configs, auth, and session backups also live in `.cowork/` (project-level or `~/.cowork/`).
-- `--yolo` enables YOLO mode: no approval prompts and shell commands run outside the OS sandbox; use only for local experiments.
-- Make commits liberally as you go with meaningful detailed messages.
-
-## Model Metadata Rules
-
-When adding a new supported model:
-
-- Add a dedicated config file under `config/models/<provider>/` and make that file the source of truth for the model.
-- Include, at minimum: canonical `id`, `displayName`, `knowledgeCutoff`, `supportsImageInput`, `promptTemplate`, `providerOptionsDefaults`, and `isDefault` when applicable.
-- Verify published model metadata against current vendor docs before landing it. If an exact cutoff or capability is not currently published, use an explicit conservative value like `Unknown` instead of guessing.
-- Keep prompt/runtime behavior aligned with the registry entry. `supportsImageInput` must match both prompt instructions and runtime/tool payload handling.
-- Update any related pricing/catalog tests and docs when model metadata changes.
-- Do not add unsupported/custom model IDs as passthroughs. New models must be added to the registry explicitly before they are selectable.
-
-## Electron Desktop App
-
-For the Electron desktop app (`apps/desktop`):
-
-- Start app in dev mode: `bun run desktop:dev`
-- Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
-- Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9322` (the default) is already in use. The default avoids `9222` because Chrome's own remote-debugging endpoint conventionally binds it.
-
-When available, use Computer Use tools and skills, not Playwright, especially while in Codex. Computer Use is more efficient and more accurate than Playwright or equal. If that's not available, use Chrome Dev Tools MCP. Playwright should be the last option.
-
-### Desktop UI and shadcn/ui
-
-- The desktop renderer uses shadcn/ui as the component system. Do not add HeroUI or custom component libraries for new desktop UI.
-- The shadcn project root is `apps/desktop`; its registry config is `apps/desktop/components.json`, with Tailwind v4 CSS in `apps/desktop/src/styles.css`, imports from `@/components/ui/*`, utilities from `@/lib/utils`, and lucide icons.
-- Before adding or changing a shadcn component, run `bunx --bun shadcn@latest info --json` from `apps/desktop` and use that output as the source of truth for aliases, base (`radix`), icon library, and installed components.
-- Use the CLI for registry work: `bunx --bun shadcn@latest add <component>` from `apps/desktop`. For existing components, preview first with `--dry-run` or `--diff` and do not overwrite local wrappers without checking their desktop-specific behavior and tests.
-- Compose existing shadcn primitives first: `Button`, `Card`, `Dialog`, `Sheet`, `Tabs`, `Select`, `Switch`, `Checkbox`, `Tooltip`, `DropdownMenu`, `Command`, `Field`, `InputGroup`, `Separator`, `Skeleton`, `Badge`, etc. The full shadcn component set should live under `apps/desktop/src/components/ui`.
-- Follow shadcn composition rules: use variants before custom styling, semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`) instead of raw colors, `gap-*` instead of `space-*`, `size-*` for square icons/controls, and `cn()` for conditional classes.
-- Buttons with icons should use lucide icons with `data-icon="inline-start"` or `data-icon="inline-end"` and let the `Button` component own icon sizing. For binary settings use the shared `Switch`; reserve `Checkbox` for checklist selection.
-- Keep desktop UI thin. Business logic still belongs in the harness/server and must be exposed through JSON-RPC/WebSocket controls.
-
-## Cursor Cloud specific instructions
-
-### Runtime
-
-Bun is installed at `~/.bun/bin/bun`. Ensure `$BUN_INSTALL/bin` is on `PATH` (the update script handles this). No Docker or external services are required.
-
-### Services
-
-
-| Service          | Command         | Notes                                                                                  |
-| ---------------- | --------------- | -------------------------------------------------------------------------------------- |
-| WebSocket server | `bun run serve` | Listens on `ws://127.0.0.1:7337/ws`. Add `--json` for machine-readable startup output. |
-| Desktop app      | `bun run start` | Starts the server automatically.                                                       |
-| CLI REPL         | `bun run cli`   | Also auto-starts the server. Needs TTY input.                                          |
-
-
-For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (see `docs/websocket-protocol.md`).
-
-### Testing
-
-- `bun run test` runs the full suite. All tests are deterministic and require no network or API keys. Test files live in `test/` (~~156 files) and `apps/desktop/test/` (~~66 files).
-- A small number of tests are skipped by default (remote MCP integration tests requiring network).
-- Biome is configured for linting and formatting (`bun lint`, `bun format:write`, `bun check:write`). `bun run typecheck` is the primary code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`).
-- **Lint philosophy**: `biome.json` is tuned to catch LLM-generated code failure modes. Type-safety erosion (`noExplicitAny`, `noNonNullAssertion`, `noBannedTypes`), React lifecycle bugs (`useExhaustiveDependencies`, `noAssignInExpressions`, `noArrayIndexKey`), and error-handling camouflage (`noUselessCatch`, `noEmptyBlock`) are all surfaced. New code should not introduce new violations.
-
-### Desktop App
-
-`bun run desktop:dev` (from repo root) launches the Electron desktop app. It first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. The app starts its own server process per workspace. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. Set `COWORK_ELECTRON_REMOTE_DEBUG=1` if you need to attach external UI automation or inspection over CDP.
-
-## Workflow Orchestration
-
-### 1. Plan Node Default
-
-Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-If something goes sideways, STOP and re-plan immediately don't keep pushing
-Use plan mode for verification steps, not just building
-Write detailed specs upfront to reduce ambiguity
-
-### 2. Self-Improvement
-
-After ANY correction from the user, distill the pattern into a durable rule and add it to the Engineering Rules section below.
-Apply existing rules before editing, not after.
-Review the rules at session start.
-
-### 3. Verification Before Done
-
-Never mark a task complete without proving it works
-Diff behavior between main and your changes when relevant
-Ask yourself: "Would a staff engineer approve this?"
-Run tests, check logs, demonstrate correctness
-
-### 4. Demand Elegance (Balanced)
-
-For non-trivial changes: pause and ask "is there a more elegant way?"
-If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-Skip this for simple, obvious fixes don't over-engineer
-Challenge your own work before presenting it
-
-### 5. Autonomous Bug Fixing
-
-When given a bug report: just fix it. Don't ask for hand-holding Point at logs, errors, failing tests then resolve them
-Zero context switching required from the user
-Go fix failing CI tests without being told how
-
-## Task Management
-
-1. **Plan First**: Write a plan with checkable items, use your todo or tasks tool if available.
-2. **Verify Plan**: Check in before starting implementation.
-3. **Track Progress**: Mark items complete as you go.
-4. **Explain Changes**: High-level summary at each step.
-
-## Core Principles
-
-**Simplicity First**: Make every change as simple as possible. Impact minimal code.
-**No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-**Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
-
-## Code Review Rules
-
-Apply these rules only when the changed code touches the named contract. Report a
-finding only for a concrete violation introduced by the diff; do not restate a
-rule as general advice on an otherwise safe change.
-
-### External and persisted contracts
-
-- Search for changes that remove, rename, or reinterpret an existing JSON-RPC
-  method, field, notification, projected item identity, model ID, config key, or
-  persisted value without a compatibility path. These surfaces may have desktop,
-  mobile, CLI, or third-party consumers even when they are marked internal or
-  experimental. Preserve the existing contract, add a backward-compatible
-  extension, or provide an explicit migration; keep schemas, protocol docs, and
-  regression tests aligned.
-
-### Authority boundaries
-
-- Search for privileged tools, task/thread operations, filesystem access, or
-  Electron IPC whose authorization is enforced only by a UI/client check or
-  after dispatch. Enforce least privilege at the server, tool factory, route, or
-  IPC boundary before the operation executes, and add a regression covering the
-  disallowed session or sender as well as the allowed path.
-
-### Harness-owned behavior
-
-- Search for product behavior implemented only in a desktop or mobile client
-  when the capability must also work from the CLI or another UI. Put state,
-  policy, persistence, and agent behavior in the harness/server, expose it
-  through typed JSON-RPC, and keep each UI as a thin adapter. Pure presentation
-  and platform-native window behavior may remain client-specific.
-
-## Engineering Rules
-
-Durable rules distilled from prior corrections. Apply before editing, not after. When the user corrects you, add the new rule here.
-
-### PR Review Workflow
-
-- Re-fetch unresolved review threads and verify each comment against current `HEAD` before editing — don't assume an open thread is still real.
-- After fixing locally, reply on each addressed GitHub thread and resolve it in the same pass.
-- Re-scan the latest SHA for both unresolved threads AND newer top-level review bodies before declaring PR feedback handled.
-- When the user asks for subagent verification, spawn one targeted subagent per reported issue before editing — never batch.
-- When the user explicitly stops automation or delegation, delete the automation, stop delegated work, and finish in the current primary thread without spawning or resuming agents.
-- Before claiming a comment is fixed, re-check the exact current branch path it points at.
-- Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
-- Cap review at one independent pass plus one verification pass; once findings are fixed and CI is green, merge instead of repeatedly re-reviewing unchanged code.
-
-### Scope & Plan Discipline
-
-- For screenshot-driven visual bugs, identify the exact affected control before changing adjacent app chrome or behavior.
-- Keep Task mode explicit and separate from standard chat: never auto-promote chats into tasks, auto-wrap chats in task state, or expose task-owned sessions in ordinary chat listings.
-- When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
-- When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.
-- When the user excludes screenshots or recordings from a PR, keep the PR body text-only and summarize verification in prose.
-- When the user expands scope mid-task ("include the failures you found"), treat every surfaced error as in-scope.
-- When cleaning unrelated local diffs, never revert adjacent user-wanted changes without confirming intent.
-- Carry user-added requirements (commit trailers, contract changes) forward into the plan and the eventual commit message.
-- When the user requests commit-and-push cadence, commit each verified logical slice with a Conventional Commit and push it before starting the next slice.
-- When the user explicitly accepts a change ("delete the workflow"), execute that — don't keep refining the prior approach.
-- Confirm the active branch is rebased on current `origin/main` before stacking multi-commit work; if `main` moved mid-feature, rebase before more branch work.
-- When the user says a surface is "retired" or "archived", do the full deletion in one pass: code, tests, docs, entrypoints, now-unused deps. No dormant compatibility shells.
-- When the user asks to push a new build for this repo, treat it as a version bump plus release tag unless they explicitly ask for a no-op CI trigger.
-
-### Verification Before Done
-
-- Run the same lane CI runs (`bun run test` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite. Always run the full project test command, not just specific tests.
-- For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
-- For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
-- For mobile navigation and accessibility changes, render real iOS and Android component/router trees; source-string assertions are not proof. Commit deterministic platform snapshots when simulators are unavailable, and never claim manual VoiceOver/TalkBack coverage that was not run.
-- Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
-- Before commiting, always run "bun run check", "bun run test", "bun run lint".
-- Treat Bun's default 5-second test timeout as a profiling signal, not a value to raise globally. Remove synchronous whole-heap or blocking cleanup work from normal lifecycle paths, explicitly release native resources, and split parameterized integration scenarios into independently reported tests without dropping recovery coverage.
-- When a repair flow opens Settings from a creation-readiness alert, invalidate and rerun the preflight after the underlying provider status changes; do not leave a cached blocked result visible after authentication succeeds.
-
-
-### Repo-Specific Contracts
-
-- **Contrast consumer paths**: when adding accessible foreground/background tokens, trace them through each platform theme adapter into rendered controls and test that consumer path; token-pair contrast tests alone are insufficient. Use explicit arbitrary Tailwind values for nonstandard ring widths, and map high-contrast selected/focus states to the system `Highlight`/`HighlightText` pair.
-
-- **Platform boundary ratchet**: new code and tests must not introduce raw
-  `process.platform`, `os.homedir()`, `os.tmpdir()`, `Bun.which`, or equivalent
-  platform branching outside `src/platform/` and its sanctioned test helpers.
-  Use the helpers in `src/platform/`, run `bun run test -- test/platform-boundary.test.ts`,
-  and only regenerate `test/platform-boundary.baseline.json` when counts shrink;
-  never expand the baseline to admit a new offender.
-- **Bun channel and macOS test bootstrap**: `.bun-version` tracks Bun's rolling
-  `canary` channel. Run tests through `bun run test` (or `bun run test -- <paths>`)
-  so complete macOS runs execute each test file in a fresh process, isolating
-  module mocks and native-addon lifetimes that Bun canary otherwise retains.
-  Keep Windows and Linux on the direct `bun test` invocation inside the wrapper,
-  and route CI/release lanes through the project command.
-- **Thread-tool and H3 permissions**: enforce H3 permissions before dispatch and
-  keep the permission table plus `test/h3.mobile-http-jsonrpc.test.ts` aligned.
-  Thread-management tools are root-session capabilities by default; do not
-  expose them to worker, scoped-path, child-agent, or task sessions. Preserve
-  the required `conversations` and `turns` gates and cover eligibility changes in
-  `test/tools/tools.createTools.test.ts`.
-- **Runtime and skill ownership**: marketplace-installed project/user skills are the authoritative skill content. The unified runtime is a separately downloaded executable/library layer and must never be registered as a plugin or skill discovery root; the application updates both layers independently.
-- **Productivity skill parity**: retiring bundled productivity skills requires migrating the complete documents, PDF, presentations, and spreadsheets set into the authoritative marketplace plugin; never drop PDF as an incidental part of a runtime cutover.
-- **Unified runtime completeness**: before deleting a legacy runtime manager, inventory and migrate every executable it owns—especially LibreOffice/`soffice` and companion files—and prove the installed unified runtime can execute the real workflow. Do not silently leave a second lazy-download cache behind.
-- **Managed soffice boundary**: ship LibreOffice inside the unified runtime, keep its private program directory off `PATH`, and expose only Cowork's headless policy launcher. The launcher must reject UI/printing modes, disable printer detection, use disposable profiles, and pass a real conversion test; never fall back to host `soffice`.
-- **Chat plans vs Task mode**: never present a standard-chat `todoWrite` checklist as durable task state or expand it into a second task system. Label it as a plan/checklist; keep durable IDs, transitions, ownership, blockers, artifacts, and user editing in `TaskCoordinator` and Task mode.
-- **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
-- **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
-- **Codex app-server verification**: app-server supports multiple simultaneous instances; parallelize independent app-server checks instead of serializing model/status/title probes by default.
-- **Canonical config roots**: `.cowork/` and `~/.cowork/` are the only runtime config/skills/memory/MCP namespaces; support legacy `.agent` only through an explicit one-time migration command, not permanent dual lookups.
-- **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
-- **Workspace settings target**: settings controls must render and mutate the same workspace class; hidden `oneOffChat` records should not back project default controls.
-- **Chat target pickers**: settings and memory target pickers should collapse all non-project `oneOffChat` records into one `Chats` target, while project workspaces still appear individually.
-- **Chat target labels**: apply the same `Chats` grouping to every settings/metadata workspace picker or label that represents hidden one-off chat workspaces; do not fix only the currently visible page.
-- **Checkpoints/backups**: keep backups and checkpoints opt-in; prefer git-native worktrees/stash/diffs for git workspaces and manual snapshots for non-git workspaces over auto-wired core backup flows.
-- **Skill refreshes**: avoid background polling for skill metadata; refresh on explicit UI/server actions, `fs.watch` notifications, or before turns when skill directory mtimes changed.
-- **Tool prompt guidance**: use actual callable tool IDs (`bash`, `glob`, `grep`); generic names like `shell`/`search` route the model into nonexistent calls.
-- **JSON-RPC projector**: item IDs must be occurrence-stable within a turn. Always forward `itemId` on `item/agentMessage/delta`. Close the current assistant item before reasoning/tool phases. Don't key assistant items only by `turnId`.
-- **New provider**: audit every provider-gated tool factory in `src/tools/` and add a `createTools(...)` regression — missing branches crash PI tool mapping before the turn starts.
-- **MCP tool schemas**: normalize tuple-style JSON Schema arrays (`items: [{...}, {...}]`) to provider-safe object/boolean nodes before registration; OpenAI-compatible runtimes reject otherwise.
-- **Settings toggles**: shared `Switch` for binary on/off; reserve `Checkbox` for checklist selection.
-- **Optimistic chat sends**: preserve `clientMessageId` through `turn/start`/`turn/steer` and the projected `item/userMessage` notifications, or duplicate user bubbles render.
-- **OAuth**: never share one constant between listener bind host and advertised redirect host. Bind both `::1` and `127.0.0.1` when using `localhost`. Pin the production redirect URI to the provider-accepted host and cover the advertised URL in tests.
-- **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
-- **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
-- **Tool output overflow**: spill-to-workspace truncation is the default; the `skill` tool and every `read` result are exempt so complete `SKILL.md` instructions, references, and script source stay inline.
-- **Model tool defaults**: normalize provider-emitted `null` for optional/defaulted tool fields before validation; a recoverable tool-input mismatch must not cascade into an unrecoverable provider continuation.
-- **Thread reasoning state**: reasoning-effort changes in an existing chat are thread-owned preferences. Persist them on the thread, preserve them across navigation/reconciliation/restart, and clear them only when the thread's model changes to a potentially incompatible reasoning contract.
-- **Chat-to-task promotion**: task mode is a one-shot harness tool and `/task` skill handoff from ordinary chat. Require a complete brief and dependency-aware initial plan before creation, lock the source chat while the task is active, and keep lifecycle/state enforcement in the coordinator rather than the desktop UI.
-- **Task review rounds**: treat `reviewRounds` as the required minimum, never as a hard stop. Let the task agent request additional fresh independent rounds when risk or uncertainty warrants them, subject only to the explicit safety cap.
-- **Generic plumbing, host-specific adapters**: when building plumbing for a model, provider, tool, capability, or service integration, abstract it generically so every host can reuse it — never hand-roll a one-off path tied to a single host that we then have to recreate for the next one. Keep a host-agnostic core that each host pipes into, and isolate only the genuinely host-specific bits (auth shape, wire format, transport) behind a thin adapter. If the next host needs a copy-paste of the whole pipeline, the abstraction is wrong. Example: model caching for reasoning tiers on Codex CLI should be a generic `ModelCache` service that the app server reads once for all hosts, with each host contributing a small cache-key/serialization adapter — not a Codex-CLI-only cache we then have to re-implement for OpenAI, Anthropic, Bedrock, etc. Same rule applies to tool registration, token counting, image-input handling, provider options, rate-limiting, retries, and prompt-template resolution: build the generic pipeline once, plug each host in behind an interface.
-- **Exec-wrapped tool metadata**: treat `exec` as a generic nested-tool envelope. Preserve and normalize citation/source metadata from every nested tool and supported output wrapper; never special-case one nested tool such as `web.run` when the payload contract is shared.
-
-### Mobile UI Patterns
-
-- For iOS list reordering, do not force permanent SwiftUI edit mode just to expose move handles; it shows delete controls and reads like a broken settings screen. Use a scoped reorder mode or explicit drag gesture that preserves the intended visual hierarchy.
-- Avoid card-on-card mobile layouts for grouped lists; use one grouped container with separators and inline disclosure content unless nested content truly needs a separate surface.
-
-### Desktop UI Patterns
-
-- For a truly solid desktop surface, use `app-surface-opaque`; `bg-background` maps to `--surface-window`, which can be intentionally translucent even without opacity or backdrop-blur classes.
-- When removing a composer's typing focus frame, remove and test every root `focus-within` treatment, including both shadow and border-color classes; checking only the shadow can leave the visible outline intact.
-- Treat Settings as a full-window shell: its navigation replaces the chat sidebar and its page chrome replaces the thread top bar. Never mount `SettingsShell` inside `ChatShell`.
-- For long first-run downloads, do not strand a small progress row in a large otherwise-interactive shell. Use an intentional setup state with clear hierarchy, phase context, and unavailable regions visually de-emphasized.
-- Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
-- For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
-- When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
-- When a tray/menu-bar utility window and a quick chat window both exist, treat them as separate surfaces: tray clicks should open the explicitly requested utility popup instead of reusing quick chat.
-- For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-`* than the dialog body.
-- For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/`* aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
-- For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.
-- For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
-- For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.
-- Make sure all platform-specific desktop behavior is properly handled and tested for that platform. When making changes with native elements, do not rely on platform defaults or implicit behavior — always specify explicit styles and behaviors.
-- For sidebar project new-chat affordances, open the new-chat landing with the clicked project preselected; do not immediately create a project draft unless the user explicitly asks for instant draft creation.

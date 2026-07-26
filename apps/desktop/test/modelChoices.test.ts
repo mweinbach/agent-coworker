@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   availableProvidersFromCatalog,
+  childModelForProvider,
   configuredProvidersForModelChoices,
   decodeProviderModelSelection,
   encodeProviderModelSelection,
@@ -491,5 +492,45 @@ describe("staticCatalogModelsForProvider", () => {
     for (const model of models) {
       expect(model.displayName.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("childModelForProvider", () => {
+  // A subagent model chosen under one provider survives the switch to another,
+  // and the workspace settings then compose `${provider}:${model}` from it. The
+  // server rejected the resulting ref outright, failing the whole settings write
+  // with "Unsupported session config preferred child target".
+  const catalog = [
+    {
+      id: "codex-cli" as ProviderName,
+      models: [{ id: "gpt-5.5" }, { id: "gpt-5.4" }],
+    },
+    {
+      id: "google" as ProviderName,
+      models: [{ id: "gemini-3.1-pro-preview" }],
+    },
+  ] as Parameters<typeof childModelForProvider>[0];
+
+  test("drops a model another provider owns", () => {
+    expect(childModelForProvider(catalog, "codex-cli", "gemini-3.1-pro-preview", "gpt-5.5")).toBe(
+      "gpt-5.5",
+    );
+  });
+
+  test("keeps a model the provider owns", () => {
+    expect(childModelForProvider(catalog, "codex-cli", "gpt-5.4", "gpt-5.5")).toBe("gpt-5.4");
+  });
+
+  // Custom and newly discovered ids are absent from every catalog, so absence
+  // cannot mean invalid — only the provider can rule on those.
+  test("keeps an id no catalog claims", () => {
+    expect(childModelForProvider(catalog, "codex-cli", "some-custom-build", "gpt-5.5")).toBe(
+      "some-custom-build",
+    );
+  });
+
+  test("falls back when there is no candidate", () => {
+    expect(childModelForProvider(catalog, "codex-cli", "  ", "gpt-5.5")).toBe("gpt-5.5");
+    expect(childModelForProvider(catalog, "codex-cli", undefined, "gpt-5.5")).toBe("gpt-5.5");
   });
 });

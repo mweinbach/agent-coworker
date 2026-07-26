@@ -336,7 +336,10 @@ export function DeveloperPage() {
         <SettingsRow
           title="Last bundle"
           description={
-            <span className="break-all">{diagnosticsBundle?.path ?? "No bundle created yet."}</span>
+            <span className="break-all">
+              {diagnosticsBundle?.path ??
+                "No bundle created yet. Use Create Diagnostics Bundle above."}
+            </span>
           }
           meta={diagnosticsStatus}
         />

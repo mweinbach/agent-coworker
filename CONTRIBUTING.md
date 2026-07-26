@@ -237,11 +237,11 @@ Key testing patterns:
 - **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
 - **Always run tests** before pushing: `bun run test`
 - **Focused PRs**: Keep pull requests small and focused on a single concern.
-- **TypeScript strict mode** is the primary code quality check (`tsc --noEmit` via tsconfig). There is no linter or formatter configured.
+- **Code quality**: `bun run typecheck` (TypeScript strict, root + harness + desktop), `bun run lint` / `bun run check:write` (Biome), and `bun run docs:check` all run in CI.
 
 ## Useful References
 
 - [`docs/websocket-protocol.md`](docs/websocket-protocol.md) -- WebSocket message format and flow
 - [`docs/harness/index.md`](docs/harness/index.md) -- Harness docs map
 - [`docs/session-storage-architecture.md`](docs/session-storage-architecture.md) -- Session persistence design
-- [`CLAUDE.md`](CLAUDE.md) -- Repository assistant notes and architecture context
+- [`AGENTS.md`](AGENTS.md) -- Agent onboarding doc; index of `agent_docs/` task-specific guides

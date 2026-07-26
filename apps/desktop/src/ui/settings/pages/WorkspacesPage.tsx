@@ -65,6 +65,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   type CatalogVisibilityOptions,
+  childModelForProvider,
   isUiDisabledProvider,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
@@ -919,7 +920,7 @@ export function WorkspaceUserProfileCard({
 
         <div className="flex items-center gap-3 pt-2">
           <Button onClick={handleSave} disabled={!isDirty || saving || operationPending}>
-            {saving || operationPending ? "Saving..." : "Save changes"}
+            {saving || operationPending ? "Saving…" : "Save changes"}
           </Button>
           {saveSuccess && (
             <span className="text-sm text-success" role="status" aria-live="polite">
@@ -1023,10 +1024,14 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
-  const preferredChildModel = (ws?.defaultPreferredChildModel ?? ws?.defaultModel ?? "").trim();
+  const storedPreferredChildModel = (
+    ws?.defaultPreferredChildModel ??
+    ws?.defaultModel ??
+    ""
+  ).trim();
   const childModelRoutingMode = ws?.defaultChildModelRoutingMode ?? "same-provider";
   const preferredChildModelRef = (
-    ws?.defaultPreferredChildModelRef ?? `${provider}:${preferredChildModel || model}`
+    ws?.defaultPreferredChildModelRef ?? `${provider}:${storedPreferredChildModel || model}`
   ).trim();
   const allowedChildModelRefs = ws?.defaultAllowedChildModelRefs ?? [];
   const enableMcp = ws?.defaultEnableMcp ?? true;
@@ -1066,6 +1071,17 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
     ? provider
     : (availableProviders[0] ?? provider);
   const modelControlsDisabled = !currentProviderIsConfigured;
+  // When subagents are pinned to the chat provider, every write below composes
+  // `${effectiveProvider}:${preferredChildModel}`. A stored preference that
+  // outlived a provider switch would make that ref name a model the provider
+  // does not have, and the server rejected the entire settings write for it.
+  const preferredChildModel = childModelForProvider(
+    providerCatalog,
+    effectiveProvider,
+    storedPreferredChildModel,
+    model,
+    modelSelectorVisibility,
+  );
   const configuredProviderSet = useMemo(() => new Set(availableProviders), [availableProviders]);
   const curatedModels = modelChoices[effectiveProvider] ?? [];
   const modelOptions = modelOptionsFromCatalog(
@@ -1475,11 +1491,16 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                           value={model}
                           onValueChange={(value) => {
                             if (!ws) return;
+                            const childModel = preferredChildModel || value;
                             void updateWorkspaceDefaults(ws.id, {
                               defaultModel: value,
                               ...(childModelRoutingMode === "same-provider"
                                 ? {
-                                    defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || value}`,
+                                    // Both fields move together; a ref that
+                                    // disagrees with the bare id is what the
+                                    // server has to reconcile later.
+                                    defaultPreferredChildModel: childModel,
+                                    defaultPreferredChildModelRef: `${effectiveProvider}:${childModel}`,
                                   }
                                 : {}),
                             });
@@ -1533,11 +1554,16 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                               const nextMode = value as
                                 | "same-provider"
                                 | "cross-provider-allowlist";
+                              const childModel = preferredChildModel || model;
                               void updateWorkspaceDefaults(ws.id, {
                                 defaultChildModelRoutingMode: nextMode,
                                 ...(nextMode === "same-provider"
                                   ? {
-                                      defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || model}`,
+                                      // Coming back from "any connected
+                                      // provider", the stored preference is
+                                      // routinely another provider's model.
+                                      defaultPreferredChildModel: childModel,
+                                      defaultPreferredChildModelRef: `${effectiveProvider}:${childModel}`,
                                     }
                                   : {}),
                               });
@@ -1605,10 +1631,14 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                               Preferred subagent model
                             </div>
                             <Select
+                              // Emptying the allowlist drops the selection. `""`
+                              // keeps the field controlled and shows the
+                              // placeholder; `undefined` makes Radix switch the
+                              // select to uncontrolled mid-life.
                               value={
                                 preferredChildTargetOptions.includes(preferredChildModelRef)
                                   ? preferredChildModelRef
-                                  : undefined
+                                  : ""
                               }
                               onValueChange={(value) => {
                                 if (!ws) return;

@@ -500,6 +500,15 @@ describe("desktop message local file links", () => {
         throw new Error("missing grouped citation chip button");
       }
       expect(chipButton.getAttribute("data-slot")).toBe("popover-trigger");
+      // The chip leads with the site mark, which identifies the source faster
+      // than its name does at this size. It stays on the primary source while
+      // the popover pages through the rest, so the chip cannot shift under the
+      // pointer that opened it.
+      const chipFavicon = chipButton.querySelector("img");
+      expect(chipFavicon?.getAttribute("src")).toContain(
+        "google.com/s2/favicons?domain=example.com",
+      );
+      expect(chipFavicon?.getAttribute("alt")).toBe("");
 
       await act(async () => {
         chipButton.dispatchEvent(
@@ -522,7 +531,14 @@ describe("desktop message local file links", () => {
       );
       expect(popup?.getAttribute("class")).toContain("w-[min(23rem,calc(100vw-2rem))]");
       expect(popup?.textContent).toContain("Safety Memo");
-      expect(popup?.textContent).toContain("https://example.com/killed");
+      // The card shows the site name, not the URL — the URL is mostly opaque
+      // path noise that crowds out the title. It stays reachable on hover.
+      expect(popup?.textContent).toContain("example.com");
+      expect(popup?.textContent).not.toContain("https://example.com/killed");
+      const popupUrlLine = popup?.querySelector('[title="https://example.com/killed"]');
+      expect(popupUrlLine?.textContent).toBe("example.com");
+      // The title carries real information here, so both lines earn their place.
+      expect(popup?.textContent).toContain("Safety Memo");
 
       const nextButton = harness.dom.window.document.querySelector(
         'button[aria-label="Next source"]',
@@ -538,6 +554,80 @@ describe("desktop message local file links", () => {
       expect(harness.dom.window.document.body.textContent).toContain("2/2");
       expect(harness.dom.window.document.body.textContent).toContain("Hospital Update");
       expect(popup?.textContent).toContain("Hospital Update");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  // Search-grounding redirects carry an opaque URL and use the hostname as their
+  // title, so the card had nothing to put on its second line but a copy of the
+  // first — "ntia.gov" over "ntia.gov" reads as a rendering bug.
+  test("citation card states the site name once when there is nothing else to show", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      const groundingUrl =
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZ";
+      const text = "The report recommended active monitoring of risks.";
+
+      await act(async () => {
+        root.render(
+          createElement(
+            OverlayStackProvider,
+            null,
+            createElement(
+              DesktopMarkdown,
+              {
+                normalizeDisplayCitations: true,
+                citationSources: [{ title: "ntia.gov", url: groundingUrl }],
+                citationAnnotations: [
+                  {
+                    type: "url_citation",
+                    start_index: 0,
+                    end_index: text.length - 1,
+                    url: groundingUrl,
+                  },
+                ],
+                citationUrlsByIndex: new Map([[1, groundingUrl]]),
+              },
+              text,
+            ),
+          ),
+        );
+      });
+
+      const chipButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.getAttribute("data-slot") === "popover-trigger",
+      );
+      if (!chipButton) throw new Error("missing citation chip button");
+
+      await act(async () => {
+        chipButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+        await new Promise<void>((resolve) =>
+          harness.dom.window.requestAnimationFrame(() => resolve()),
+        );
+      });
+
+      const popup = harness.dom.window.document.querySelector(
+        '[data-slot="popover-content"][aria-label="Citation sources"]',
+      );
+      const cardLines = Array.from(popup?.querySelectorAll("p") ?? []).map((line) =>
+        line.textContent?.trim(),
+      );
+      expect(cardLines).toEqual(["ntia.gov"]);
 
       await act(async () => {
         root.unmount();

@@ -155,37 +155,25 @@ export class ProviderAuthManager {
       );
       return null;
     }
-    let normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig>;
-    try {
-      normalizedChildRouting = normalizeChildRoutingConfig({
-        provider: nextProvider,
-        model: resolvedModel.id,
-        childModelRoutingMode: currentConfig.childModelRoutingMode,
-        preferredChildModelRef:
-          currentConfig.childModelRoutingMode === "cross-provider-allowlist"
-            ? currentConfig.preferredChildModelRef
-            : currentConfig.provider !== nextProvider ||
-                currentConfig.preferredChildModel === currentConfig.model
-              ? `${nextProvider}:${resolvedModel.id}`
-              : (currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel),
-        preferredChildModel: currentConfig.preferredChildModel,
-        allowedChildModelRefs: currentConfig.allowedChildModelRefs,
-        source: "model selection",
-        home,
-      });
-    } catch {
-      // A stale preferred child target (e.g. persisted before a provider switch)
-      // must not block model selection; fall back to the selected model itself.
-      normalizedChildRouting = normalizeChildRoutingConfig({
-        provider: nextProvider,
-        model: resolvedModel.id,
-        childModelRoutingMode: currentConfig.childModelRoutingMode,
-        preferredChildModelRef: `${nextProvider}:${resolvedModel.id}`,
-        allowedChildModelRefs: currentConfig.allowedChildModelRefs,
-        source: "model selection",
-        home,
-      });
-    }
+    // A stale preferred child target (e.g. persisted before a provider switch)
+    // must not block model selection; `normalizeChildRoutingConfig` resets it to
+    // the selected model itself.
+    const normalizedChildRouting = normalizeChildRoutingConfig({
+      provider: nextProvider,
+      model: resolvedModel.id,
+      childModelRoutingMode: currentConfig.childModelRoutingMode,
+      preferredChildModelRef:
+        currentConfig.childModelRoutingMode === "cross-provider-allowlist"
+          ? currentConfig.preferredChildModelRef
+          : currentConfig.provider !== nextProvider ||
+              currentConfig.preferredChildModel === currentConfig.model
+            ? `${nextProvider}:${resolvedModel.id}`
+            : (currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel),
+      preferredChildModel: currentConfig.preferredChildModel,
+      allowedChildModelRefs: currentConfig.allowedChildModelRefs,
+      source: "model selection",
+      home,
+    });
     const nextRuntime =
       currentConfig.provider === nextProvider
         ? currentConfig.runtime

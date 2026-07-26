@@ -39,6 +39,7 @@ describe("codex app-server client", () => {
   afterEach(async () => {
     await closePooledCodexAppServerClients();
     __internal.setClientFactoryForTests(undefined);
+    __internal.setSandboxSetupStateSyncForTests(undefined);
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -235,5 +236,51 @@ setInterval(() => {}, 1000);
         message: { id: "srv-parent", result: { handledBy: "parent" } },
       },
     ]);
+  });
+
+  function makeStubClient(): CodexAppServerClient {
+    return {
+      command: { command: "mock-codex-app-server", args: [], source: "override" },
+      isClosed: () => false,
+      request: async () => ({ userAgent: "mock" }),
+      notify: () => {},
+      interruptTurn: async () => {},
+      onNotification: () => () => {},
+      onServerRequest: () => () => {},
+      onJsonRpcMessage: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+    };
+  }
+
+  test("pooled client startup syncs the Windows sandbox setup state for its CODEX_HOME", async () => {
+    const home = await makeTmpHome();
+    process.env.HOME = home;
+    const codexHome = path.join(home, "custom-codex-home");
+    const syncCalls: string[] = [];
+    __internal.setSandboxSetupStateSyncForTests(async (homeArg) => {
+      syncCalls.push(homeArg);
+    });
+    __internal.setClientFactoryForTests(async () => makeStubClient());
+
+    const client = await getPooledCodexAppServerClient({ codexHome });
+
+    expect(client.isClosed()).toBe(false);
+    expect(syncCalls).toEqual([codexHome]);
+  });
+
+  test("a failing sandbox setup sync does not block the pooled client", async () => {
+    const home = await makeTmpHome();
+    process.env.HOME = home;
+    __internal.setSandboxSetupStateSyncForTests(async () => {
+      throw new Error("sync broke");
+    });
+    __internal.setClientFactoryForTests(async () => makeStubClient());
+
+    const client = await getPooledCodexAppServerClient({
+      codexHome: path.join(home, "custom-codex-home"),
+    });
+
+    expect(client.isClosed()).toBe(false);
   });
 });

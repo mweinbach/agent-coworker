@@ -726,4 +726,10 @@ export type Notification = {
    * values are treated as foreground so old callers fail closed.
    */
   audience?: "foreground" | "background";
+  /**
+   * Set when the outcome belongs to an acknowledged operation. The in-app toast
+   * surface suppresses the toast while an inline `OperationFeedback` for this
+   * key is mounted, so one failure is reported once, where the action happened.
+   */
+  operationKey?: string;
 };

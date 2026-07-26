@@ -262,9 +262,65 @@ describe("display citation markers", () => {
     expect(describeCitationSource(source)).toEqual({
       titleLabel: "cbsnews.com",
       hostLabel: "cbsnews.com",
+      // The redirect path is an opaque token, not a slug, so a card falls back
+      // to the host rather than inventing a title out of it.
+      descriptiveTitle: "cbsnews.com",
       displayUrl: null,
       faviconHostname: "cbsnews.com",
       opaqueRedirect: true,
+    });
+  });
+
+  // Cards pair the title with the host underneath, so a title that is just the
+  // host renders as "ntia.gov" over "ntia.gov".
+  describe("descriptiveTitle", () => {
+    test("prefers a real title", () => {
+      expect(
+        describeCitationSource({
+          title: "Spectrum Policy Report",
+          url: "https://www.ntia.gov/publications/spectrum-policy-report",
+        }).descriptiveTitle,
+      ).toBe("Spectrum Policy Report");
+    });
+
+    test("recovers a title from the URL slug when the source is untitled", () => {
+      expect(
+        describeCitationSource({
+          url: "https://www.ntia.gov/publications/national-spectrum-strategy.pdf",
+        }).descriptiveTitle,
+      ).toBe("National Spectrum Strategy");
+    });
+
+    test("recovers a title when the title only repeats the host", () => {
+      const display = describeCitationSource({
+        title: "ntia.gov",
+        url: "https://www.ntia.gov/publications/national-spectrum-strategy",
+      });
+      expect(display.descriptiveTitle).toBe("National Spectrum Strategy");
+      // The inline chip keeps the short host label — it has no second line.
+      expect(display.titleLabel).toBe("ntia.gov");
+    });
+
+    test("falls back to the host rather than inventing a title from a thin slug", () => {
+      for (const url of [
+        "https://ntia.gov/",
+        "https://ntia.gov/about",
+        "https://ntia.gov/api/v2",
+        "https://ntia.gov/reports/2026",
+      ]) {
+        expect(describeCitationSource({ url }).descriptiveTitle).toBe("ntia.gov");
+      }
+    });
+
+    // Session tokens, base64 blobs and content hashes carry separators too, and
+    // rendering one as a title is worse than showing no title at all.
+    test("rejects opaque identifiers that happen to contain separators", () => {
+      for (const url of [
+        "https://ntia.gov/r/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZ_3-kZ7dCNL",
+        "https://ntia.gov/dl/9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a-report_v1",
+      ]) {
+        expect(describeCitationSource({ url }).descriptiveTitle).toBe("ntia.gov");
+      }
     });
   });
 

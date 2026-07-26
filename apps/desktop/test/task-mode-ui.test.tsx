@@ -205,6 +205,23 @@ function taskThreadSummary(task: TaskRecord, threadIndex = 0) {
   };
 }
 
+/** Lets the injected `preflightCreation` promise land before asserting on the form. */
+async function settleReadiness(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+function readyTaskPreflight() {
+  return {
+    ready: true,
+    checks: [
+      { id: "project_access" as const, status: "ok" as const, message: "Workspace is accessible." },
+      { id: "runtime_ready" as const, status: "ok" as const, message: "Runtime is ready." },
+    ],
+  };
+}
+
 function resetStore(task: TaskRecord | null) {
   const current = useAppStore.getState();
   useAppStore.setState({
@@ -257,6 +274,8 @@ function resetStore(task: TaskRecord | null) {
     taskError: null,
     operationsByKey: {},
     refreshTasks: async () => {},
+    preflightCreation: async () => readyTaskPreflight(),
+    repairCreationReadiness: async () => {},
     startTask: async () => ({ ok: true, value: task ?? taskRecord() }),
     selectTask: async () => {},
     updateTaskBrief: async () => ({ ok: true, value: undefined }),
@@ -435,6 +454,121 @@ describe("desktop task mode UI", () => {
       expect(container.textContent).toContain("Existing task");
       expect(container.querySelector("#new-task-objective")).not.toBeNull();
       expect(container.querySelector("#new-task-context")).not.toBeNull();
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("blocks task creation on a blocked readiness check", async () => {
+    const harness = setupJsdom();
+    const startTask = mock(async () => ({ ok: true as const, value: taskRecord() }));
+    const repairCreationReadiness = mock(async () => {});
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+      const root = createRoot(container);
+      resetStore(null);
+      useAppStore.setState({
+        taskCreationDraft: {
+          ...createEmptyTaskCreationDraft(7, "ws-1"),
+          title: "Ship the task readiness preflight",
+          objective: "Never start a long task against a disconnected provider.",
+        },
+        taskCreationError: null,
+        preflightCreation: async () => ({
+          ready: false,
+          checks: [
+            { id: "project_access", status: "ok", message: "Workspace is accessible." },
+            {
+              id: "credentials",
+              status: "blocked",
+              message: "Connect Google before starting this task.",
+              repairAction: { type: "connectProvider", provider: "google" },
+            },
+          ],
+        }),
+        repairCreationReadiness,
+        startTask,
+      } as never);
+
+      await act(async () => root.render(createElement(NewTaskLanding)));
+      await settleReadiness();
+
+      const submit = container.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+      expect(submit?.disabled).toBe(true);
+      expect(submit?.textContent).toContain("Setup required");
+      expect(container.textContent).toContain("Connect Google before starting this task.");
+
+      await act(async () => {
+        submitForm(harness, container.querySelector("form"));
+        await Promise.resolve();
+      });
+      expect(startTask).not.toHaveBeenCalled();
+
+      const connect = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Connect Google",
+      );
+      expect(connect).toBeDefined();
+      await act(async () => {
+        connect?.click();
+        await Promise.resolve();
+      });
+      expect(repairCreationReadiness).toHaveBeenCalledWith(
+        { type: "connectProvider", provider: "google" },
+        "ws-1",
+      );
+
+      await act(async () => root.unmount());
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("still starts a task while startup readiness is pending", async () => {
+    const harness = setupJsdom();
+    const startTask = mock(async () => ({ ok: true as const, value: taskRecord() }));
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const { NewTaskLanding } = await import("../src/ui/tasks/NewTaskLanding");
+      const root = createRoot(container);
+      resetStore(null);
+      useAppStore.setState({
+        taskCreationDraft: {
+          ...createEmptyTaskCreationDraft(8, "ws-1"),
+          title: "Start during first-launch setup",
+          objective: "Queue the task behind the runtime bootstrap instead of refusing it.",
+        },
+        taskCreationError: null,
+        preflightCreation: async () => ({
+          ready: true,
+          checks: [
+            { id: "project_access", status: "ok", message: "Workspace is accessible." },
+            {
+              id: "runtime_ready",
+              status: "pending",
+              message: "Downloading the Cowork runtime — 62%.",
+            },
+          ],
+        }),
+        startTask,
+      } as never);
+
+      await act(async () => root.render(createElement(NewTaskLanding)));
+      await settleReadiness();
+
+      expect(container.textContent).toContain("Finishing setup");
+      const submit = container.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+      expect(submit?.disabled).toBe(false);
+
+      await act(async () => {
+        submitForm(harness, container.querySelector("form"));
+        await Promise.resolve();
+      });
+      expect(startTask).toHaveBeenCalledTimes(1);
 
       await act(async () => root.unmount());
     } finally {

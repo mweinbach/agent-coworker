@@ -508,30 +508,35 @@ export class SessionMetadataManager {
       patch.preferredChildModelRef !== undefined ||
       patch.allowedChildModelRefs !== undefined
     ) {
-      try {
-        normalizedChildRouting = normalizeChildRoutingConfig({
-          provider: baseConfig.provider,
-          model: baseConfig.model,
-          childModelRoutingMode: patch.childModelRoutingMode ?? baseConfig.childModelRoutingMode,
-          preferredChildModel: patch.preferredChildModel ?? baseConfig.preferredChildModel,
-          preferredChildModelRef:
-            patch.preferredChildModelRef !== undefined
-              ? patch.preferredChildModelRef
-              : patch.preferredChildModel !== undefined
-                ? undefined
-                : baseConfig.preferredChildModelRef,
-          allowedChildModelRefs: patch.allowedChildModelRefs ?? baseConfig.allowedChildModelRefs,
-          source: "session config",
-          // Validate custom cross-registry ids against this session's auth home.
-          home: resolveAuthHomeDir(baseConfig),
+      normalizedChildRouting = normalizeChildRoutingConfig({
+        provider: baseConfig.provider,
+        model: baseConfig.model,
+        childModelRoutingMode: patch.childModelRoutingMode ?? baseConfig.childModelRoutingMode,
+        preferredChildModel: patch.preferredChildModel ?? baseConfig.preferredChildModel,
+        preferredChildModelRef:
+          patch.preferredChildModelRef !== undefined
+            ? patch.preferredChildModelRef
+            : patch.preferredChildModel !== undefined
+              ? undefined
+              : baseConfig.preferredChildModelRef,
+        allowedChildModelRefs: patch.allowedChildModelRefs ?? baseConfig.allowedChildModelRefs,
+        source: "session config",
+        // Validate custom cross-registry ids against this session's auth home.
+        home: resolveAuthHomeDir(baseConfig),
+      });
+      // A subagent model that no longer fits the session (provider switched, the
+      // routing mode flipped, the model left the catalog) is stale state, not a
+      // bad request. Rejecting the patch stranded the user: the offending value
+      // lives in the very settings the rejected patch would have corrected, so
+      // every retry failed the same way. Reset it to the parent model and let
+      // the rest of the patch through — the normalized value is persisted and
+      // echoed back by `config_updated`, so the UI self-corrects.
+      if (normalizedChildRouting.preferredTargetReset) {
+        this.context.emitTelemetry("session.config.childTargetReset", "ok", {
+          sessionId: this.context.id,
+          requested: normalizedChildRouting.preferredTargetReset.requested,
+          resetTo: normalizedChildRouting.preferredTargetReset.resetTo,
         });
-      } catch (err) {
-        this.context.emitError(
-          "validation_failed",
-          "session",
-          err instanceof Error ? err.message : String(err),
-        );
-        return null;
       }
     }
 

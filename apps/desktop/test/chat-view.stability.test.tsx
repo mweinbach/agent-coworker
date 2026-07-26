@@ -229,7 +229,11 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).not.toContain("Let's build");
       expect(container.textContent).not.toContain("New thread");
-      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
+      // The live region is mounted ahead of its first announcement, but idle it
+      // stays empty and out of flow so the composer reserves no blank row.
+      const idleStatus = container.querySelector('[data-slot="message-composer-status"]');
+      expect(idleStatus?.textContent).toBe("");
+      expect(idleStatus?.className).toContain("sr-only");
       expect(container.querySelector('[data-slot="composer-model-selector"]')).not.toBeNull();
       const reasoningSelector = container.querySelector<HTMLButtonElement>(
         '[data-slot="composer-reasoning-selector"]',
@@ -461,7 +465,9 @@ describe("desktop chat view stability", () => {
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
         false,
       );
-      expect(container.querySelector('[data-slot="message-composer-status"]')).toBeNull();
+      const idleStatusRegion = container.querySelector('[data-slot="message-composer-status"]');
+      expect(idleStatusRegion?.textContent).toBe("");
+      expect(idleStatusRegion?.className).toContain("sr-only");
       expect(container.querySelector('[data-slot="message-composer"]')?.className).toContain(
         "app-surface-opaque",
       );

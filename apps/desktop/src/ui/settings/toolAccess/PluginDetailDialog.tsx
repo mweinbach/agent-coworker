@@ -164,7 +164,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
         {isLoading ? (
           <div className="flex items-center justify-center p-12 text-center">
             <DialogHeader>
-              <DialogTitle>Loading plugin</DialogTitle>
+              <DialogTitle>Loading plugin…</DialogTitle>
               <DialogDescription>Fetching plugin details.</DialogDescription>
             </DialogHeader>
           </div>
@@ -354,7 +354,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                       void handleInstallPlugin(plugin.installSource ?? "", plugin.scope)
                     }
                   >
-                    {installPending ? "Installing..." : "Install plugin"}
+                    {installPending ? "Installing…" : "Install plugin"}
                   </Button>
                 ) : installedPlugin?.enabled ? (
                   <Button
@@ -363,7 +363,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={disablePending}
                     onClick={() => void disablePlugin(plugin.id, plugin.scope)}
                   >
-                    {disablePending ? "Disabling..." : "Disable plugin"}
+                    {disablePending ? "Disabling…" : "Disable plugin"}
                   </Button>
                 ) : installedPlugin ? (
                   <Button
@@ -372,7 +372,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={enablePending}
                     onClick={() => void enablePlugin(plugin.id, plugin.scope)}
                   >
-                    {enablePending ? "Enabling..." : "Enable plugin"}
+                    {enablePending ? "Enabling…" : "Enable plugin"}
                   </Button>
                 ) : null}
                 {installedPlugin?.installSource ? (
@@ -382,7 +382,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={checkUpdatePending}
                     onClick={() => void handleCheckPluginUpdate(plugin.id, plugin.scope)}
                   >
-                    {checkUpdatePending ? "Checking..." : "Check for updates"}
+                    {checkUpdatePending ? "Checking…" : "Check for updates"}
                   </Button>
                 ) : null}
                 {installedPlugin?.installSource && installedPlugin.updateAvailable ? (
@@ -392,7 +392,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     disabled={installPending || updatePending}
                     onClick={() => void handleUpdatePlugin(plugin.id, plugin.scope)}
                   >
-                    {updatePending ? "Updating..." : "Update plugin"}
+                    {updatePending ? "Updating…" : "Update plugin"}
                   </Button>
                 ) : null}
                 {installedPlugin ? (
@@ -414,7 +414,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                       void deletePlugin(plugin.id, plugin.scope);
                     }}
                   >
-                    {deletePending ? "Removing..." : "Remove plugin"}
+                    {deletePending ? "Removing…" : "Remove plugin"}
                   </Button>
                 ) : null}
               </div>

@@ -231,7 +231,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
                           disabled={installPending}
                           onClick={() => void handleInstallPlugin(plugin)}
                         >
-                          {installingKey === `plugin:${plugin.name}` ? "Installing..." : "Install"}
+                          {installingKey === `plugin:${plugin.name}` ? "Installing…" : "Install"}
                         </Button>
                       ) : null}
                     </div>
@@ -265,7 +265,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
                           disabled={installPending}
                           onClick={() => void handleInstallSkill(skill)}
                         >
-                          {installingKey === `skill:${skill.name}` ? "Installing..." : "Install"}
+                          {installingKey === `skill:${skill.name}` ? "Installing…" : "Install"}
                         </Button>
                       ) : null}
                     </div>
@@ -311,7 +311,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
                 disabled={removePending}
                 onClick={() => void handleRemove()}
               >
-                {removePending ? "Removing..." : "Remove marketplace"}
+                {removePending ? "Removing…" : "Remove marketplace"}
               </Button>
             ) : null}
           </div>

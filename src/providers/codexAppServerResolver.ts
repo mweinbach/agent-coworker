@@ -91,9 +91,13 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *
  * Keyed by release version, then by exact platform asset name. When bumping
  * {@link CODEX_APP_SERVER_MANAGED_VERSION}, add the new version's asset checksums
- * here — both the app-server binary and its codex-code-mode-host companion,
- * which the app-server spawns from its own directory for code-mode tool
- * routing. They are the GitHub release asset `digest` values, obtainable with:
+ * here — the app-server binary and its companions: the codex-code-mode-host
+ * (all platforms; the app-server spawns it from its own directory for
+ * code-mode tool routing) and, on Windows, the codex-command-runner and
+ * codex-windows-sandbox-setup helpers the app-server needs next to itself for
+ * sandboxed execution and setup refreshes (without siblings it falls back to
+ * a PATH search that can pick up a foreign, version-skewed helper). They are
+ * the GitHub release asset `digest` values, obtainable with:
  *   gh api repos/openai/codex/releases/tags/rust-v<version> \
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
@@ -123,6 +127,14 @@ const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>>
       "21d78b37b846ef2557bd4eb2e73ee48daf9fdea71cf2a7c41c048ff2064631a7",
     "codex-code-mode-host-x86_64-pc-windows-msvc.exe":
       "66c351f09fb6a28d71c3186252293e2e410820f07d38bfbdc9e6bf6e2c47c510",
+    "codex-command-runner-aarch64-pc-windows-msvc.exe":
+      "159045fdc61dff7b34788a702591b9b71018c8cbd20278df39ba47019f6edc50",
+    "codex-command-runner-x86_64-pc-windows-msvc.exe":
+      "a4767cca02e3059a829b15afb27294d395ef9140299131f2c03231063d0563b0",
+    "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe":
+      "4414fa48c34dd720cb1d8c9fb3c703d2dc2b4245640ce50b82f0bb4d4caad817",
+    "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe":
+      "5e7c3d8b176fe8009b19d4185245b3850e5402c5b6010b93b126849925b7281a",
   },
   "0.142.3": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
@@ -222,22 +234,62 @@ function resolveCodexAppServerAssetName(target: BuildTarget): string {
 }
 
 const CODE_MODE_HOST_BASENAME = "codex-code-mode-host";
+const CODEX_COMMAND_RUNNER_BASENAME = "codex-command-runner";
+const CODEX_WINDOWS_SANDBOX_SETUP_BASENAME = "codex-windows-sandbox-setup";
+
+type CodexCompanionBinary = {
+  /** File name the app-server looks for next to its own executable. */
+  basename: string;
+  /** Platforms that ship this companion asset (undefined = every platform). */
+  platforms?: readonly NodeJS.Platform[];
+};
+
+/**
+ * Binaries the app-server expects to find next to itself (or under its
+ * package resources dir) at runtime. The code-mode host is needed on every
+ * platform; the command-runner and sandbox-setup helpers are Windows-only —
+ * they back sandboxed command execution and the non-elevated setup refresh
+ * that runs before every sandboxed command. Without pinned siblings the
+ * app-server falls back to resolving bare helper names via PATH, which can
+ * execute a foreign install's version-skewed (or missing) helpers.
+ */
+const CODEX_COMPANION_BINARIES: readonly CodexCompanionBinary[] = [
+  { basename: CODE_MODE_HOST_BASENAME },
+  { basename: CODEX_COMMAND_RUNNER_BASENAME, platforms: ["win32"] },
+  { basename: CODEX_WINDOWS_SANDBOX_SETUP_BASENAME, platforms: ["win32"] },
+];
+
+function companionsForTarget(target: BuildTarget): readonly CodexCompanionBinary[] {
+  return CODEX_COMPANION_BINARIES.filter(
+    (companion) => !companion.platforms || companion.platforms.includes(target.platform),
+  );
+}
+
+function resolveCompanionAssetName(basename: string, target: BuildTarget): string {
+  const triple = resolveTargetTriple(target);
+  return target.platform === "win32" ? `${basename}-${triple}.exe` : `${basename}-${triple}.tar.gz`;
+}
 
 function resolveCodeModeHostAssetName(target: BuildTarget): string {
-  const triple = resolveTargetTriple(target);
-  return target.platform === "win32"
-    ? `${CODE_MODE_HOST_BASENAME}-${triple}.exe`
-    : `${CODE_MODE_HOST_BASENAME}-${triple}.tar.gz`;
+  return resolveCompanionAssetName(CODE_MODE_HOST_BASENAME, target);
 }
 
 /**
- * The app-server spawns codex-code-mode-host from its own directory, so the
- * host binary must live next to whichever app-server executable gets spawned
- * (the versioned path on win32, the promoted current path elsewhere).
+ * The app-server resolves companion binaries from its own directory, so they
+ * must live next to whichever app-server executable gets spawned (the
+ * versioned path on win32, the promoted current path elsewhere).
  */
-function codeModeHostSiblingPath(appServerExecutablePath: string, target: BuildTarget): string {
+function companionSiblingPath(
+  appServerExecutablePath: string,
+  basename: string,
+  target: BuildTarget,
+): string {
   const ext = target.platform === "win32" ? ".exe" : "";
-  return path.join(path.dirname(appServerExecutablePath), `${CODE_MODE_HOST_BASENAME}${ext}`);
+  return path.join(path.dirname(appServerExecutablePath), `${basename}${ext}`);
+}
+
+function codeModeHostSiblingPath(appServerExecutablePath: string, target: BuildTarget): string {
+  return companionSiblingPath(appServerExecutablePath, CODE_MODE_HOST_BASENAME, target);
 }
 
 function normalizeCodexReleaseVersion(tagName: string): string {
@@ -479,11 +531,11 @@ async function resolvePinnedManagedCommand(
   const existing = await resolveInstalledManagedVersionCommand(normalizedVersion, overrides);
   if (!existing) return await installCodexAppServer({ version: normalizedVersion }, overrides);
 
-  if (await codeModeHostNeedsInstall(existing.command, normalizedVersion, target, overrides)) {
+  if (await companionsNeedInstall(existing.command, normalizedVersion, target, overrides)) {
     try {
       return await installCodexAppServer({ version: normalizedVersion }, overrides);
     } catch {
-      // Repairing the missing code-mode host needs release metadata; when that
+      // Repairing the missing companions needs release metadata; when that
       // fetch fails (e.g. offline), fall back to the verified app-server
       // install rather than blocking runtime startup.
     }
@@ -629,40 +681,48 @@ async function installReleaseExecutable(opts: {
 }
 
 /**
- * Installs the codex-code-mode-host companion next to the app-server binary.
- * Skipped for release versions with no pinned host checksum (older releases
- * did not ship or need the host); a mismatch on a pinned version fails closed.
+ * Installs every companion binary for the target next to the app-server
+ * binary. Each companion is skipped for release versions with no pinned
+ * checksum for its asset (older releases did not ship or need it); a mismatch
+ * on a pinned version fails closed.
  */
-async function installCodeModeHost(opts: {
+async function installCompanionBinaries(opts: {
   release: { version: string; assets: GitHubReleaseAsset[] };
   appServerExecutablePath: string;
   tempRoot: string;
   target: BuildTarget;
   overrides: CodexAppServerResolverOverrides;
 }): Promise<void> {
-  const assetName = resolveCodeModeHostAssetName(opts.target);
-  if (!expectedCodexAssetChecksum(opts.release.version, assetName, opts.overrides)) return;
-  const destPath = codeModeHostSiblingPath(opts.appServerExecutablePath, opts.target);
-  if (await pathExists(destPath)) return;
-  await installReleaseExecutable({
-    assets: opts.release.assets,
-    assetName,
-    wantedBasename: CODE_MODE_HOST_BASENAME,
-    destPath,
-    version: opts.release.version,
-    tempRoot: opts.tempRoot,
-    target: opts.target,
-    overrides: opts.overrides,
-  });
+  for (const companion of companionsForTarget(opts.target)) {
+    const assetName = resolveCompanionAssetName(companion.basename, opts.target);
+    if (!expectedCodexAssetChecksum(opts.release.version, assetName, opts.overrides)) continue;
+    const destPath = companionSiblingPath(
+      opts.appServerExecutablePath,
+      companion.basename,
+      opts.target,
+    );
+    if (await pathExists(destPath)) continue;
+    await installReleaseExecutable({
+      assets: opts.release.assets,
+      assetName,
+      wantedBasename: companion.basename,
+      destPath,
+      version: opts.release.version,
+      tempRoot: opts.tempRoot,
+      target: opts.target,
+      overrides: opts.overrides,
+    });
+  }
 }
 
 /**
- * Repairs an already-installed managed version that predates the code-mode
- * host requirement. Best-effort: the app-server binary was already verified
- * and works without the host (code-mode tools degrade), so a failed repair
- * download must not break runtime startup.
+ * Repairs an already-installed managed version that predates a companion
+ * requirement. Best-effort: the app-server binary was already verified and
+ * works without its companions (code-mode tools and Windows sandboxed
+ * execution degrade), so a failed repair download must not break runtime
+ * startup.
  */
-async function repairCodeModeHostBestEffort(opts: {
+async function repairCompanionsBestEffort(opts: {
   release: { version: string; assets: GitHubReleaseAsset[] };
   appServerExecutablePath: string;
   target: BuildTarget;
@@ -670,29 +730,36 @@ async function repairCodeModeHostBestEffort(opts: {
 }): Promise<void> {
   const tempRoot = path.join(
     scratchRoots(opts.target.platform)[0] ?? resolveAuthHomeDir(),
-    `cowork-codex-code-mode-host-${process.pid}-${++installTmpCounter}`,
+    `cowork-codex-companions-${process.pid}-${++installTmpCounter}`,
   );
   try {
     await fs.mkdir(tempRoot, { recursive: true });
-    await installCodeModeHost({ ...opts, tempRoot });
+    await installCompanionBinaries({ ...opts, tempRoot });
   } catch {
     // Best-effort repair only; a checksum mismatch or download failure leaves
-    // the host uninstalled (fail closed) without blocking the verified
+    // the companions uninstalled (fail closed) without blocking the verified
     // app-server install.
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-async function codeModeHostNeedsInstall(
+async function companionsNeedInstall(
   appServerExecutablePath: string,
   version: string,
   target: BuildTarget,
   overrides: CodexAppServerResolverOverrides,
 ): Promise<boolean> {
-  const assetName = resolveCodeModeHostAssetName(target);
-  if (!expectedCodexAssetChecksum(version, assetName, overrides)) return false;
-  return !(await pathExists(codeModeHostSiblingPath(appServerExecutablePath, target)));
+  for (const companion of companionsForTarget(target)) {
+    const assetName = resolveCompanionAssetName(companion.basename, target);
+    if (!expectedCodexAssetChecksum(version, assetName, overrides)) continue;
+    if (
+      !(await pathExists(companionSiblingPath(appServerExecutablePath, companion.basename, target)))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function findFileRecursive(dir: string, wantedBasename: string): Promise<string | null> {
@@ -764,9 +831,13 @@ async function promoteManagedInstallBestEffort(
     if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
     await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
     await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
-    await fs
-      .rm(`${codeModeHostSiblingPath(currentPath, target)}.tmp`, { force: true })
-      .catch(() => {});
+    for (const companion of companionsForTarget(target)) {
+      await fs
+        .rm(`${companionSiblingPath(currentPath, companion.basename, target)}.tmp`, {
+          force: true,
+        })
+        .catch(() => {});
+    }
   }
 }
 
@@ -785,7 +856,7 @@ async function installCodexAppServer(
   const key = `${homeDir}-${target.platform}-${target.arch}-${release.version}`;
   const existing = await pathExists(executablePath);
   if (existing && !opts.force) {
-    await repairCodeModeHostBestEffort({
+    await repairCompanionsBestEffort({
       release,
       appServerExecutablePath: executablePath,
       target,
@@ -817,10 +888,11 @@ async function installCodexAppServer(
     await fs.mkdir(parent, { recursive: true });
     await fs.mkdir(tempRoot, { recursive: true });
     try {
-      // Install the code-mode host companion first so a failure never leaves a
-      // resolvable app-server binary without its host: if the host install
-      // throws, the whole install fails and retries from scratch next time.
-      await installCodeModeHost({
+      // Install the companion binaries first so a failure never leaves a
+      // resolvable app-server binary without its companions: if a companion
+      // install throws, the whole install fails and retries from scratch
+      // next time.
+      await installCompanionBinaries({
         release,
         appServerExecutablePath: executablePath,
         tempRoot,
@@ -877,13 +949,14 @@ async function promoteManagedInstall(
   const tmpVersionPath = `${currentPath}.version.tmp`;
   await fs.writeFile(tmpVersionPath, `${version}\n`, "utf8");
   await fs.rename(tmpVersionPath, `${currentPath}.version`);
-  const hostSourcePath = codeModeHostSiblingPath(executablePath, target);
-  if (await pathExists(hostSourcePath)) {
-    const hostCurrentPath = codeModeHostSiblingPath(currentPath, target);
-    const hostTmpPath = `${hostCurrentPath}.tmp`;
-    await fs.copyFile(hostSourcePath, hostTmpPath);
-    if (target.platform !== "win32") await fs.chmod(hostTmpPath, 0o755);
-    await fs.rename(hostTmpPath, hostCurrentPath);
+  for (const companion of companionsForTarget(target)) {
+    const companionSourcePath = companionSiblingPath(executablePath, companion.basename, target);
+    if (!(await pathExists(companionSourcePath))) continue;
+    const companionCurrentPath = companionSiblingPath(currentPath, companion.basename, target);
+    const companionTmpPath = `${companionCurrentPath}.tmp`;
+    await fs.copyFile(companionSourcePath, companionTmpPath);
+    if (target.platform !== "win32") await fs.chmod(companionTmpPath, 0o755);
+    await fs.rename(companionTmpPath, companionCurrentPath);
   }
 }
 
@@ -972,7 +1045,10 @@ export const __internal = {
   compareVersions,
   resolveCodexAppServerAssetName,
   resolveCodeModeHostAssetName,
+  resolveCompanionAssetName,
+  companionSiblingPath,
   codeModeHostSiblingPath,
+  codexCompanionBinaries: CODEX_COMPANION_BINARIES,
   expectedCodexAssetChecksum,
   managedExecutablePath,
   managedCurrentPath,

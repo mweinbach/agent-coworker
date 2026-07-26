@@ -103,8 +103,11 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0">
         {isLoading ? (
-          <div className="flex items-center justify-center p-12 text-muted-foreground">
-            Loading...
+          <div className="flex items-center justify-center p-12 text-center">
+            <DialogHeader>
+              <DialogTitle>Loading skill…</DialogTitle>
+              <DialogDescription>Fetching skill details.</DialogDescription>
+            </DialogHeader>
           </div>
         ) : (
           <>
@@ -215,7 +218,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                 ) : (
                   <div className="text-muted-foreground">
                     {selectedInstallation?.skillPath
-                      ? "Loading skill documentation..."
+                      ? "Loading skill documentation…"
                       : "This installation does not have readable skill content."}
                   </div>
                 )}

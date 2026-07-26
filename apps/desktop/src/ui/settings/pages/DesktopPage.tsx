@@ -154,7 +154,7 @@ export function DesktopPage() {
                 readOnly
                 value={
                   recordingShortcut
-                    ? "Press the new shortcut..."
+                    ? "Press the new shortcut…"
                     : formatQuickChatShortcutLabel(quickChatShortcutAccelerator)
                 }
                 className="font-mono"
@@ -176,7 +176,7 @@ export function DesktopPage() {
                     }
                   }}
                 >
-                  {recordingShortcut ? "Recording shortcut..." : "Record shortcut"}
+                  {recordingShortcut ? "Recording shortcut…" : "Record shortcut"}
                 </Button>
                 <Button
                   type="button"

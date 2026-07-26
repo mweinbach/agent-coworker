@@ -1051,7 +1051,7 @@ export function MemoryPage({
                   disabled={showMemoryLoading}
                   onClick={() => activeTarget && requestMemories(activeTarget)}
                 >
-                  {showMemoryLoading ? "Loading..." : "Refresh"}
+                  {showMemoryLoading ? "Loading…" : "Refresh"}
                 </Button>
 
                 {activeTarget ? (

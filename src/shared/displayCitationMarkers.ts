@@ -740,6 +740,16 @@ export type CitationSourceDisplayInfo = {
   hostLabel: string;
   opaqueRedirect: boolean;
   titleLabel: string;
+  /**
+   * Title for card-shaped surfaces, which pair it with `hostLabel` underneath.
+   *
+   * `titleLabel` falls back to the hostname, which reads as a duplicate there
+   * ("ntia.gov" over "ntia.gov"). An untitled source usually still carries a
+   * readable slug in its URL, so prefer that before giving up and repeating the
+   * host. Inline chips keep using `titleLabel`: they have no second line, and a
+   * bare host is the shorter, more recognizable thing to put in running prose.
+   */
+  descriptiveTitle: string;
 };
 
 const opaqueCitationRedirectHosts = new Set(["vertexaisearch.cloud.google.com"]);
@@ -781,6 +791,42 @@ export function isOpaqueCitationRedirectUrl(url: string): boolean {
   }
 }
 
+/** Longer than any real word, and shorter than any opaque token. */
+const MAX_CITATION_SLUG_WORD_LENGTH = 24;
+
+/**
+ * Recover a human-readable title from a URL's last path segment.
+ *
+ * Only slugs that actually read as prose earn this. They need a word separator
+ * and enough length that "api" or "v2" can't slip through, and every word has
+ * to be word-sized — opaque identifiers (session tokens, base64 blobs, content
+ * hashes) carry separators too, and rendering one as a title is worse than
+ * showing no title at all.
+ */
+function citationTitleFromUrlSlug(url: string): string | null {
+  try {
+    const segments = new URL(url).pathname.split("/").filter(Boolean);
+    const lastSegment = segments.at(-1);
+    if (!lastSegment) return null;
+
+    const slug = decodeURIComponent(lastSegment)
+      .replace(/\.\w{2,5}$/, "")
+      .replace(/\?.*$/, "");
+    if (!/[-_]/.test(slug) || slug.length < 8) return null;
+
+    const words = slug.split(/[-_]+/).filter(Boolean);
+    if (words.length < 2) return null;
+    if (words.some((word) => word.length > MAX_CITATION_SLUG_WORD_LENGTH)) return null;
+
+    return words
+      .join(" ")
+      .replace(/\b\w/g, (character) => character.toUpperCase())
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
 export function describeCitationSource(source: CitationSource): CitationSourceDisplayInfo {
   const titleLabel = source.title?.trim() || citationSourceHostname(source.url) || source.url;
   const opaqueRedirect = isOpaqueCitationRedirectUrl(source.url);
@@ -789,10 +835,14 @@ export function describeCitationSource(source: CitationSource): CitationSourceDi
   const hostLabel = opaqueRedirect
     ? (titleHostname ?? urlHostname ?? "Source")
     : (urlHostname ?? titleHostname ?? source.url);
+  // A title that is just the hostname carries no more information than the host
+  // line a card already shows, so it does not count as a real title here.
+  const realTitle = titleHostname ? null : source.title?.trim() || null;
 
   return {
     titleLabel,
     hostLabel,
+    descriptiveTitle: realTitle ?? citationTitleFromUrlSlug(source.url) ?? hostLabel,
     displayUrl: opaqueRedirect ? null : source.url,
     faviconHostname: titleHostname ?? urlHostname,
     opaqueRedirect,

@@ -127,7 +127,12 @@ export function PrivacyTelemetryPage() {
           <SettingsRow
             title="Global kill switch"
             description="COWORK_DISABLE_NETWORK_TELEMETRY is active. Network telemetry is disabled."
-            control={<Badge variant="destructive">Disabled</Badge>}
+            // The kill switch being on is the protective, deliberately chosen
+            // outcome, so it takes the same "active" badge the page uses for
+            // every other live state — not the red it reserves for failures.
+            // The badge also describes the switch, which is active; "Disabled"
+            // described telemetry and read as the exact opposite here.
+            control={<Badge variant="secondary">Active</Badge>}
           />
         ) : null}
         <SettingsRow

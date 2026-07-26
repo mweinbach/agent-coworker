@@ -98,6 +98,7 @@ function makeHarness(
     ...summary
   } = task;
   let waited = false;
+  let startupAwaited = false;
   const runtime = {
     id: "session-1",
     lifecycle: {
@@ -110,6 +111,11 @@ function makeHarness(
     },
   };
   const context = {
+    runtime: {
+      waitForStartupReady: async () => {
+        startupAwaited = true;
+      },
+    },
     tasks: {
       getByCreationKey: () => null,
       createPlanned: async (input: unknown) => {
@@ -169,6 +175,9 @@ function makeHarness(
     task,
     get waited() {
       return waited;
+    },
+    get startupAwaited() {
+      return startupAwaited;
     },
   };
 }
@@ -320,6 +329,9 @@ describe("task JSON-RPC routes", () => {
     });
 
     expect(harness.waited).toBe(true);
+    // Preflight reports startup bootstrap as `pending`, which never gates
+    // creation, so `task/create` has to queue behind startup readiness.
+    expect(harness.startupAwaited).toBe(true);
     expect(harness.createCalls).toHaveLength(1);
     expect(harness.errors).toEqual([]);
     expect(

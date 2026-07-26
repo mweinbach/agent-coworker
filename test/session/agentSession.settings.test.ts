@@ -664,6 +664,53 @@ describe("AgentSession", () => {
       expect(events.some((evt) => evt.type === "error")).toBe(false);
     });
 
+    // A subagent model chosen under one provider outlives the switch to another.
+    // Rejecting the write stranded the user, because the stale value lives in the
+    // very settings the rejected write would have corrected — the desktop showed
+    // "Cowork could not apply these settings to the running workspace" and rolled
+    // every unrelated toggle back, on every retry.
+    test("setConfig resets a stale preferred child model instead of rejecting the write", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          childModelRoutingMode: "cross-provider-allowlist",
+          preferredChildModel: "gemini-3.1-pro-preview",
+          preferredChildModelRef: "google:gemini-3.1-pro-preview",
+          allowedChildModelRefs: ["google:gemini-3.1-pro-preview"],
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      // Verbatim the payload the desktop sends when subagents are switched back
+      // to "same provider as chat": it re-pins the stale model id to the session
+      // provider, producing a ref whose provider is right and whose model is not.
+      await session.setConfig({
+        childModelRoutingMode: "same-provider",
+        preferredChildModel: "gemini-3.1-pro-preview",
+        preferredChildModelRef: "codex-cli:gemini-3.1-pro-preview",
+        observabilityEnabled: true,
+      });
+
+      expect(events.some((evt) => evt.type === "error")).toBe(false);
+      const cfg = session.getSessionConfigEvent().config;
+      expect(cfg.childModelRoutingMode).toBe("same-provider");
+      expect(cfg.preferredChildModelRef).toBe("codex-cli:gpt-5.5");
+      expect(cfg.preferredChildModel).toBe("gpt-5.5");
+      // The unrelated half of the patch is the point: it used to be discarded.
+      expect(cfg.observabilityEnabled).toBe(true);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childModelRoutingMode: "same-provider",
+          preferredChildModel: "gpt-5.5",
+          preferredChildModelRef: "codex-cli:gpt-5.5",
+          observabilityEnabled: true,
+        }),
+      );
+    });
+
     test("setConfig can clear the persisted toolOutputOverflowChars override and restore inheritance", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({

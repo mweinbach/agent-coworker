@@ -258,9 +258,9 @@ describe("research view layout", () => {
       }
 
       const root = createRoot(container);
-      // Pin the readiness check to in-flight. Leaving it to whatever
-      // preflightCreation the ambient store carries made this order-dependent:
-      // the composer only renders a status region when it has something to say.
+      // Pin the readiness check to in-flight so the status text below is
+      // deterministic. The region itself is always mounted now, so only the
+      // copy assertion depends on this — not the region's existence.
       resetAppStore({ preflightCreation: () => new Promise(() => {}) });
 
       await act(async () => {

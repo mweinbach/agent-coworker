@@ -5,6 +5,7 @@ import { runCreationPreflight } from "../../readiness/creationPreflight";
 import { hasGoogleResearchApiKey } from "../../research/googleApiKey";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcCreationRequestSchemas } from "../schema.creation";
+import { resolveAuthorizedProjectTaskWorkspacePath } from "./tasks";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createCreationRouteHandlers(
@@ -49,6 +50,8 @@ export function createCreationRouteHandlers(
             : {}),
           getCodexAppServerStatus: async () => await getCodexAppServerInstallStatus(),
           hasResearchCredentials: () => hasGoogleResearchApiKey(config),
+          isProjectWorkspace: async (workspacePath) =>
+            (await resolveAuthorizedProjectTaskWorkspacePath(context, workspacePath)) !== null,
         });
         context.jsonrpc.sendResult(ws, message.id, result);
       } catch (error) {

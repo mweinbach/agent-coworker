@@ -151,7 +151,7 @@ describe("desktop memory page", () => {
 
       // Assert the pre-stall loading state right after mount, before the
       // injected stall window can elapse.
-      expect(container.textContent).toContain("Loading...");
+      expect(container.textContent).toContain("Loading…");
       expect(container.textContent).not.toContain("No remembered facts yet");
 
       const skillMaintenanceTitle = Array.from(container.querySelectorAll("div")).find(
@@ -180,7 +180,7 @@ describe("desktop memory page", () => {
       expect(container.textContent).toContain("Still loading…");
       expect(container.textContent).not.toContain("No remembered facts yet");
       expect(container.textContent).toContain("Retry");
-      expect(container.textContent).not.toContain("Loading...");
+      expect(container.textContent).not.toContain("Loading…");
 
       await act(async () => {
         root.unmount();

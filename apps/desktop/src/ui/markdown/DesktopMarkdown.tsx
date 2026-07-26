@@ -198,13 +198,14 @@ function citationFaviconSrc(source: CitationSource): string {
 function CitationFavicon({ source, className }: { source: CitationSource; className?: string }) {
   const display = useMemo(() => describeCitationSource(source), [source]);
   const src = useMemo(() => citationFaviconSrc(source), [source]);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setLoaded(false);
-    setFailed(false);
-  }, [src]);
+  // Reset during render rather than in an effect. Paging the popover between
+  // citations swaps `source` under this component, and an effect lands a frame
+  // late — long enough to paint the previous site's mark against the new host.
+  const [status, setStatus] = useState({ src, loaded: false, failed: false });
+  if (status.src !== src) {
+    setStatus({ src, loaded: false, failed: false });
+  }
+  const { loaded, failed } = status;
 
   return (
     <div
@@ -223,8 +224,8 @@ function CitationFavicon({ source, className }: { source: CitationSource; classN
             loaded ? "opacity-100" : "opacity-0",
           )}
           decoding="async"
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          onLoad={() => setStatus((current) => ({ ...current, loaded: true }))}
+          onError={() => setStatus((current) => ({ ...current, failed: true }))}
         />
       ) : null}
     </div>
@@ -299,6 +300,7 @@ function DesktopCitationChip({
     const text = flattenReactText(children).trim();
     return text.length > 0 ? text : "Source";
   }, [children]);
+  const primarySource = sources[0] ?? null;
   const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
   const currentSourceDisplay = useMemo(
     () => (currentSource ? describeCitationSource(currentSource) : null),
@@ -417,9 +419,17 @@ function DesktopCitationChip({
             type="button"
             variant="outline"
             size="sm"
-            className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
+            className="h-auto min-w-0 gap-1 rounded-full border-border/70 bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
             onPointerDown={cancelScheduledHoverClose}
           >
+            {/* The site mark identifies the source faster than its name does at
+                this size, and it costs no extra request: every chip already
+                preloads the favicons for all of its sources on mount. It stays
+                on the primary source while the popover pages through the rest,
+                so the chip does not shift under the pointer. */}
+            {primarySource ? (
+              <CitationFavicon source={primarySource} className="size-4 text-[0.55rem]" />
+            ) : null}
             {label}
           </Button>
         </PopoverTrigger>
@@ -491,11 +501,25 @@ function DesktopCitationChip({
                     ref={citationTitleTextRef}
                     className="block overflow-hidden text-[0.92rem] font-semibold leading-snug text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
                   >
-                    {currentSourceDisplay.titleLabel}
+                    {currentSourceDisplay.descriptiveTitle}
                   </p>
-                  <p className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground">
-                    {currentSourceDisplay.displayUrl ?? currentSourceDisplay.hostLabel}
-                  </p>
+                  {/* The site name, not the URL. A citation URL is mostly opaque
+                      path and query noise that crowds out the one part a reader
+                      judges the source by; the full URL stays on hover and in
+                      the open-link confirmation.
+
+                      Search-grounding redirects carry an opaque URL and use the
+                      hostname as their title, so there is nothing to put here
+                      but the line above. Printing "ntia.gov" over "ntia.gov"
+                      looks like a rendering bug; say it once. */}
+                  {currentSourceDisplay.descriptiveTitle !== currentSourceDisplay.hostLabel ? (
+                    <p
+                      className="mt-1 truncate text-[0.72rem] font-medium leading-snug text-muted-foreground"
+                      title={currentSourceDisplay.displayUrl ?? undefined}
+                    >
+                      {currentSourceDisplay.hostLabel}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </Button>

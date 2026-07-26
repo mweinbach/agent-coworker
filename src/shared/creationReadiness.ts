@@ -4,7 +4,10 @@ import { PROVIDER_NAMES } from "../types";
 
 export const COWORK_RUNTIME_STARTING_MESSAGE = "Cowork is finishing setup in the background.";
 
-export const creationKindSchema = z.enum(["chat", "research"]);
+// `task` runs the same dependency checks as `chat` — a task turn executes through
+// the same provider, model, and runtime — plus the one precondition that is
+// stricter for tasks: the workspace must be an authorized project workspace.
+export const creationKindSchema = z.enum(["chat", "research", "task"]);
 
 export const creationRepairActionSchema = z.discriminatedUnion("type", [
   z

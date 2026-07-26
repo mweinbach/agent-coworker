@@ -221,6 +221,13 @@ describe("privacy telemetry settings page", () => {
 
       expect(container.textContent).toContain("Global kill switch");
       expect(container.textContent).toContain("COWORK_DISABLE_NETWORK_TELEMETRY is active");
+      // The kill switch is the protective state, so it must not wear the red
+      // this product reserves for failures.
+      const killSwitchBadge = Array.from(container.querySelectorAll('[data-slot="badge"]')).find(
+        (badge) => badge.textContent === "Active",
+      );
+      expect(killSwitchBadge?.getAttribute("data-variant")).toBe("secondary");
+      expect(Array.from(container.querySelectorAll('[data-variant="destructive"]')).length).toBe(0);
       expect(container.textContent).toContain("Enabled");
       expect(container.textContent).toContain("Not configured");
       expect(container.textContent).toContain("Full payload");

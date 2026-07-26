@@ -220,14 +220,18 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
             disabled={modelMutationPending || resetPending}
             onClick={resetToDefaults}
           >
-            {resetPending ? "Resetting..." : "Reset to defaults"}
+            {resetPending ? "Resetting…" : "Reset to defaults"}
           </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-3">
           {visibleModels.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              {models.length === 0 ? "No models discovered yet." : "No models match your search."}
+              {models.length === 0
+                ? canUseCustomModels
+                  ? "No models discovered yet. Add a model ID below to use one anyway."
+                  : "No models discovered yet."
+                : "No models match your search."}
             </div>
           ) : (
             <div className="space-y-0.5">
@@ -309,7 +313,7 @@ export function ManageModelsDialog({ provider, onOpenChange }: ManageModelsDialo
               onClick={() => void submitCustomModel()}
             >
               <PlusIcon data-icon="inline-start" />
-              {addPending ? "Adding..." : "Add"}
+              {addPending ? "Adding…" : "Add"}
             </Button>
             <OperationFeedback operation={addOperation} className="basis-full" />
           </div>

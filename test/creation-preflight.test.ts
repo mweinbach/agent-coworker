@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
 import type { ProviderCatalogPayload } from "../src/providers/connectionCatalog";
 import { runCreationPreflight } from "../src/server/readiness/creationPreflight";
@@ -164,6 +164,81 @@ describe("creation readiness preflight", () => {
         canAutoStart: true,
       },
     });
+  });
+
+  test("runs the same dependency set for a task as for a chat", async () => {
+    const result = await preflight(
+      { kind: "task", provider: "google", model: "gemini-2.5-flash" },
+      { isProjectWorkspace: async () => true },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.checks.map((entry) => entry.id)).toEqual([
+      "project_access",
+      "provider_connected",
+      "credentials",
+      "model_available",
+      "runtime_ready",
+    ]);
+  });
+
+  test("blocks a task in a workspace that cannot host one", async () => {
+    const result = await preflight(
+      { kind: "task", provider: "google", model: "gemini-2.5-flash" },
+      { isProjectWorkspace: async () => false },
+    );
+
+    expect(result.ready).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        id: "project_access",
+        status: "blocked",
+        message: "Tasks run inside a project workspace. Choose a project instead of a quick chat.",
+      },
+    ]);
+  });
+
+  test("names the task, not a chat, in a blocked task credentials check", async () => {
+    const result = await preflight(
+      { kind: "task", provider: "google", model: "gemini-2.5-flash" },
+      {
+        isProjectWorkspace: async () => true,
+        getProviderCatalog: async () => ({ ...readyCatalog, connected: [] }),
+      },
+    );
+
+    expect(result.checks.find((entry) => entry.id === "credentials")).toEqual({
+      id: "credentials",
+      status: "blocked",
+      message: "Connect Google before starting this task.",
+      repairAction: { type: "connectProvider", provider: "google" },
+    });
+  });
+
+  test("keeps a task startable while the startup bootstrap is still pending", async () => {
+    const result = await preflight(
+      { kind: "task", provider: "google", model: "gemini-2.5-flash" },
+      {
+        isProjectWorkspace: async () => true,
+        getRuntimeStartup: () => ({ ready: false }),
+      },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toMatchObject({
+      status: "pending",
+    });
+  });
+
+  test("leaves chat readiness free of the task project-workspace rule", async () => {
+    const isProjectWorkspace = mock(async () => false);
+    const result = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      { isProjectWorkspace },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(isProjectWorkspace).not.toHaveBeenCalled();
   });
 
   test("keeps Research discoverable but blocked without Google credentials", async () => {

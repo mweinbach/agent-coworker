@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.25 - 2026-07-26
+
+### Changed
+
+- **The first message of a session starts dramatically faster** — the first
+  turn no longer pays its cold-start costs serially before the model is
+  called. MCP servers now spawn, handshake, and list their tools concurrently
+  instead of one at a time; the cowork runtime's integrity check is verified
+  once per process instead of re-statting the ~38k-file runtime tree on every
+  turn (fail-closed on any manifest change, with `COWORK_RUNTIME_FULL_VERIFY=1`
+  still forcing full hashing); and the tool environment prep, MCP tool load,
+  and telemetry init now run concurrently behind a single barrier. Failure,
+  cleanup, and tool-naming semantics are unchanged.
+
+### Fixed
+
+- **The desktop first message no longer disappears into a multi-second dead
+  zone** — the chat view, the optimistic user bubble, and the sending state
+  now appear immediately on send, before the workspace server finishes
+  starting, with a full rollback to the exact pre-send draft if startup
+  fails. The first turn no longer waits behind the workspace-defaults apply
+  round trip (the server orders it via `pendingConfigMutation`), a stale
+  `thread/list` response can no longer prune a just-connected thread, and
+  leaving the new-chat landing no longer aborts an in-flight first send.
+- **Turns survive provider rate limits instead of dying** — transient
+  HTTP 429 / `ResourceExhausted` failures (e.g. NVIDIA's concurrent-request
+  gateway limit) now retry the model call with bounded, jittered backoff
+  (up to 4 attempts, abort-aware) instead of aborting the turn with a raw
+  `internal_error`. A retry only happens before any assistant content was
+  emitted, so output can never duplicate, and `modelSettings.maxRetries`
+  now bounds the retry budget (`0` disables).
+
+### Tests
+
+- Added rate-limit classifier/backoff/retry coverage (mid-stream 429,
+  no retry after visible content, abort during backoff, `maxRetries` budget).
+- Added concurrent MCP load ordering/cleanup coverage and in-process runtime
+  integrity memo coverage.
+- Added optimistic first-message ordering/rollback and non-blocking
+  defaults-apply coverage.
+
 ## 1.2.24 - 2026-07-25
 
 ### Fixed

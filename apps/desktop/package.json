@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "1.2.24",
+  "version": "1.2.25",
   "description": "Cowork desktop app",
   "author": {
     "name": "Max Weinbach",

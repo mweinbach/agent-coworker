@@ -1,16 +1,16 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { removeWithRetry } from "../src/platform/fs";
+import { scratchRoots } from "../src/platform/sandbox";
 import { TranscriptInbox, TranscriptInboxError } from "../src/server/transcriptInbox";
 
 const cleanupPaths = new Set<string>();
 
 async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
   cleanupPaths.add(dir);
   return dir;
 }

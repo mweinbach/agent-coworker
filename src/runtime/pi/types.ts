@@ -48,4 +48,6 @@ export type PiStreamFunction = <TApi extends PiApi>(
 
 export type PiRuntimeOverrides = {
   piStreamImpl?: PiStreamFunction;
+  /** Test hook: replaces the backoff sleep between rate-limited model-call retries. */
+  retrySleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };

@@ -171,6 +171,7 @@ export function createWorkspaceActions(
         defaultPreferredChildModelRef,
         defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
         defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
+        defaultWorkflowMaxConcurrentAgents: source?.defaultWorkflowMaxConcurrentAgents,
         providerOptions: source?.providerOptions,
         userName: source?.userName,
         userProfile: source?.userProfile,

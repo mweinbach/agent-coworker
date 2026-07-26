@@ -111,6 +111,8 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
+  /** Max child agents a `workflow` run may have in flight. Unset = harness default. */
+  defaultWorkflowMaxConcurrentAgents?: number;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;

@@ -200,6 +200,7 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       toolOutputOverflowChars?: number | null;
+      workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
       preferredChildModelRef?: string;
@@ -220,6 +221,7 @@ export function createWorkspaceDefaultsActions(
       skillImprovementScope?: WorkspaceRecord["defaultSkillImprovementScope"];
       skillImprovementExcludedSkills?: string[];
       defaultToolOutputOverflowChars?: number | null;
+      workflowMaxConcurrentAgents?: number;
       preferredChildModel?: string;
       childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
       preferredChildModelRef?: string;
@@ -311,6 +313,13 @@ export function createWorkspaceDefaultsActions(
       ) {
         configPatch.skillImprovementExcludedSkills = desiredExcludedSkills;
       }
+    }
+
+    if (
+      opts.desired.workflowMaxConcurrentAgents !== undefined &&
+      opts.desired.workflowMaxConcurrentAgents !== currentSessionConfig.workflowMaxConcurrentAgents
+    ) {
+      configPatch.workflowMaxConcurrentAgents = opts.desired.workflowMaxConcurrentAgents;
     }
 
     const currentDefaultToolOutputOverflow = currentSessionConfig.defaultToolOutputOverflowChars;
@@ -603,6 +612,7 @@ export function createWorkspaceDefaultsActions(
               skillImprovementScope: memoryDefaults.skillImprovementScope,
               skillImprovementExcludedSkills: memoryDefaults.skillImprovementExcludedSkills,
               toolOutputOverflowChars: nextWorkspace.defaultToolOutputOverflowChars,
+              workflowMaxConcurrentAgents: nextWorkspace.defaultWorkflowMaxConcurrentAgents,
               yolo: nextWorkspace.yolo,
               ...(preferredChildModel ? { preferredChildModel } : {}),
               childModelRoutingMode,

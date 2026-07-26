@@ -68,6 +68,7 @@ import {
   EntityIcon,
   SettingsEmptyState,
   SettingsPage,
+  SettingsRow,
   SettingsSection,
   SettingsStatusPill,
 } from "../SettingsPrimitives";
@@ -347,6 +348,70 @@ export async function saveAgentProfileDraft(
   return saved.ok ? "saved" : "failed";
 }
 
+const WORKFLOW_CONCURRENCY_MIN = 1;
+const WORKFLOW_CONCURRENCY_MAX = 16;
+const WORKFLOW_CONCURRENCY_DEFAULT = 12;
+
+/**
+ * Fan-out width for `workflow` runs.
+ *
+ * The default suits hosted APIs. Local inference engines have far smaller
+ * request pools and per-model context budgets, where a wide fan-out fails
+ * outright — "context size has been exceeded", or "worker local total request
+ * limit reached" — rather than queueing.
+ */
+function WorkflowConcurrencyRow({ workspace }: { workspace: WorkspaceRecord }) {
+  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
+  const runtime = workspaceRuntimeById[workspace.id] ?? null;
+
+  const effective =
+    workspace.defaultWorkflowMaxConcurrentAgents ??
+    runtime?.controlSessionConfig?.workflowMaxConcurrentAgents ??
+    WORKFLOW_CONCURRENCY_DEFAULT;
+
+  const [draft, setDraft] = useState(String(effective));
+  useEffect(() => {
+    setDraft(String(effective));
+  }, [effective]);
+
+  const commit = (raw: string) => {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(effective));
+      return;
+    }
+    const clamped = Math.min(WORKFLOW_CONCURRENCY_MAX, Math.max(WORKFLOW_CONCURRENCY_MIN, parsed));
+    setDraft(String(clamped));
+    if (clamped === effective) return;
+    void updateWorkspaceDefaults(workspace.id, {
+      defaultWorkflowMaxConcurrentAgents: clamped,
+    });
+  };
+
+  return (
+    <SettingsRow
+      title="Concurrent workflow agents"
+      description="How many child agents one workflow run may have in flight. Lower this for local models — a wide fan-out exhausts their request pool and context window instead of queueing."
+      control={
+        <Input
+          type="number"
+          min={WORKFLOW_CONCURRENCY_MIN}
+          max={WORKFLOW_CONCURRENCY_MAX}
+          value={draft}
+          aria-label="Concurrent workflow agents"
+          className="w-24"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={(event) => commit(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+        />
+      }
+    />
+  );
+}
+
 export function SubagentsPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -540,6 +605,13 @@ export function SubagentsPage() {
 
   return (
     <SettingsPage>
+      <SettingsSection
+        title="Multi-agent limits"
+        description="Applies to every workflow run in this workspace."
+      >
+        <WorkflowConcurrencyRow workspace={workspace} />
+      </SettingsSection>
+
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <div className="grid w-full max-w-xs grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">

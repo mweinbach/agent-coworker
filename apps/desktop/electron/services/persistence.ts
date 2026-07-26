@@ -206,6 +206,15 @@ function asOptionalNullableNonNegativeInteger(value: unknown): number | null | u
   return Math.max(0, Math.floor(value));
 }
 
+/**
+ * Workflow fan-out width. Clamped to [1, 16]: below 1 a run cannot progress, and
+ * AgentControl rejects spawns past MAX_ACTIVE_CHILDREN_PER_PARENT anyway.
+ */
+function asOptionalWorkflowConcurrency(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(16, Math.max(1, Math.floor(value)));
+}
+
 function asThreadStatus(value: unknown): ThreadRecord["status"] {
   return value === "active" || value === "disconnected" ? value : "disconnected";
 }
@@ -311,6 +320,9 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultAllowedChildModelRefs: asOptionalStringArray(item.defaultAllowedChildModelRefs),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(
         item.defaultToolOutputOverflowChars,
+      ),
+      defaultWorkflowMaxConcurrentAgents: asOptionalWorkflowConcurrency(
+        item.defaultWorkflowMaxConcurrentAgents,
       ),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),

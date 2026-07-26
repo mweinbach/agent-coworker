@@ -71,6 +71,7 @@ export async function createOneOffWorkspaceRecord(
     defaultPreferredChildModelRef,
     defaultAllowedChildModelRefs: [...(source?.defaultAllowedChildModelRefs ?? [])],
     defaultToolOutputOverflowChars: source?.defaultToolOutputOverflowChars,
+    defaultWorkflowMaxConcurrentAgents: source?.defaultWorkflowMaxConcurrentAgents,
     providerOptions: source?.providerOptions,
     defaultEnableMcp: source?.defaultEnableMcp ?? true,
     defaultBackupsEnabled: source?.defaultBackupsEnabled ?? false,

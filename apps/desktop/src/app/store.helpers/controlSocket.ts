@@ -1142,6 +1142,11 @@ export function createControlSocketHelpers(
                     }
                   : {}),
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
+                ...(sessionConfigHas("workflowMaxConcurrentAgents")
+                  ? {
+                      defaultWorkflowMaxConcurrentAgents: evt.config.workflowMaxConcurrentAgents,
+                    }
+                  : {}),
                 ...(sessionConfigHasProviderOptions
                   ? {
                       providerOptions: mergeWorkspaceProviderOptionsPreservingSearchSettings(

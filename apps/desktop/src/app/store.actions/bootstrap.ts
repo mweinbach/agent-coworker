@@ -244,6 +244,13 @@ const persistedWorkspaceSchema = z
       }
       return undefined;
     }, z.number().int().nonnegative().nullable().optional()),
+    defaultWorkflowMaxConcurrentAgents: z.preprocess((value) => {
+      if (value === undefined) return undefined;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return Math.min(16, Math.max(1, Math.floor(value)));
+      }
+      return undefined;
+    }, z.number().int().min(1).max(16).optional()),
     providerOptions: z.unknown().optional(),
     userName: optionalStringSchema,
     userProfile: z
@@ -308,6 +315,7 @@ const persistedWorkspaceSchema = z
       defaultPreferredChildModelRef: preferredChildModelRef,
       defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
       defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
+      defaultWorkflowMaxConcurrentAgents: workspace.defaultWorkflowMaxConcurrentAgents,
       providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
       userName: workspace.userName,
       userProfile: workspace.userProfile
@@ -1303,6 +1311,7 @@ export function createBootstrapActions(
             "defaultPreferredChildModelRef",
             "defaultAllowedChildModelRefs",
             "defaultToolOutputOverflowChars",
+            "defaultWorkflowMaxConcurrentAgents",
             "providerOptions",
             "userName",
             "userProfile",

@@ -42,6 +42,7 @@ import {
   waitForOperation,
 } from "../store.helpers/operationIntent";
 import { persist } from "../store.helpers/persistence";
+import { isResearchAvailable } from "../researchAvailability";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
@@ -887,6 +888,7 @@ export function createResearchActions(
     },
 
     openResearch: async () => {
+      if (!isResearchAvailable(get().providerConnected)) return;
       invalidateNavigationIntent();
       set({
         view: "research",

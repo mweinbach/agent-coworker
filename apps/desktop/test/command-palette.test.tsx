@@ -132,6 +132,25 @@ describe("CommandPalette", () => {
     expect(items.some((t) => t?.includes("Browse skills"))).toBe(true);
   });
 
+  test("shows Research only when Google is connected", () => {
+    resetAppStore({ providerConnected: [] });
+    act(() => {
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
+    });
+    let items = Array.from(
+      harness.dom.window.document.body.querySelectorAll("[data-slot='command-item']"),
+    ).map((node) => node.textContent?.replace(/\s+/g, " ").trim());
+    expect(items.some((text) => text?.includes("Research"))).toBe(false);
+
+    act(() => {
+      resetAppStore({ providerConnected: ["google"] });
+    });
+    items = Array.from(
+      harness.dom.window.document.body.querySelectorAll("[data-slot='command-item']"),
+    ).map((node) => node.textContent?.replace(/\s+/g, " ").trim());
+    expect(items.some((text) => text?.includes("Research"))).toBe(true);
+  });
+
   test("excludes draft and archived threads from recent", () => {
     resetAppStore({
       threads: [

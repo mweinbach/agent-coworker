@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "./app/store";
+import { resolveResearchAwareView } from "./app/researchAvailability";
 import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
 import { isOneOffChatWorkspace } from "./app/types";
@@ -191,6 +192,7 @@ const ChatShell = memo(function ChatShell({
   bootstrapStage: BootstrapStage | null;
 }) {
   const view = useAppStore((s) => s.view);
+  const providerConnected = useAppStore((s) => s.providerConnected);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -269,7 +271,7 @@ const ChatShell = memo(function ChatShell({
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
   const busy = selectedThreadBusy;
-  const effectiveView = view;
+  const effectiveView = resolveResearchAwareView(view, providerConnected);
   const isConversationView = effectiveView === "chat" || effectiveView === "task";
   const showContextSidebar =
     (effectiveView === "chat" && activeThread !== null) ||

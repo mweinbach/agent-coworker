@@ -128,4 +128,18 @@ describe("desktop application menu", () => {
     palette?.click?.();
     expect(commands).toContain("openCommandPalette");
   });
+
+  test("does not advertise Research in the native menu", () => {
+    const template = buildDesktopMenuTemplate(
+      {
+        includeDevTools: false,
+        openExternal: () => {},
+        openQuickChat: () => {},
+        sendCommand: () => {},
+      },
+      "darwin",
+    );
+    const fileMenu = template.find((item: any) => item.label === "File");
+    expect(fileMenu?.submenu?.some((entry: any) => entry.label === "Research")).toBe(false);
+  });
 });

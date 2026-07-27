@@ -13,6 +13,7 @@ import { memo, useCallback, useMemo } from "react";
 
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
+import { isResearchAvailable } from "../app/researchAvailability";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
 import {
   CommandDialog,
@@ -64,6 +65,7 @@ export const CommandPalette = memo(function CommandPalette({
   const developerMode = useAppStore((s) => s.developerMode);
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
+  const providerConnected = useAppStore((s) => s.providerConnected);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
 
   const selectThread = useAppStore((s) => s.selectThread);
@@ -120,6 +122,7 @@ export const CommandPalette = memo(function CommandPalette({
       ),
     [remoteAccessAvailable, developerMode],
   );
+  const researchAvailable = isResearchAvailable(providerConnected);
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -200,11 +203,13 @@ export const CommandPalette = memo(function CommandPalette({
               <span>New task</span>
             </CommandItem>
           ) : null}
-          <CommandItem onSelect={handleResearchClick} value="research open">
-            <BookOpenIcon />
-            <span>Research</span>
-            <CommandKbd keys={[MOD, SHIFT, "R"]} />
-          </CommandItem>
+          {researchAvailable ? (
+            <CommandItem onSelect={handleResearchClick} value="research open">
+              <BookOpenIcon />
+              <span>Research</span>
+              <CommandKbd keys={[MOD, SHIFT, "R"]} />
+            </CommandItem>
+          ) : null}
           {selectedThreadBusy ? (
             <CommandItem onSelect={handleStopTurnClick} value="stop current turn">
               <SquareIcon />

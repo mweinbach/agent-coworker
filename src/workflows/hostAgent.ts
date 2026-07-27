@@ -23,6 +23,7 @@ export class WorkflowAgentError extends Error {
     message: string,
     readonly agentId: string | null,
     readonly fatal: boolean = false,
+    readonly usdCost: number | null = null,
   ) {
     super(message);
     this.name = "WorkflowAgentError";
@@ -43,6 +44,8 @@ function isKnownRole(value: string): value is AgentRole {
 export async function runWorkflowAgent(opts: {
   ctx: ToolContext;
   control: AgentControl;
+  abortSignal?: AbortSignal;
+  closeAgent?: (agentId: string) => Promise<void>;
   prompt: string;
   options: WorkflowAgentOptions;
   label: string;
@@ -56,25 +59,36 @@ export async function runWorkflowAgent(opts: {
   const role = agentType && isKnownRole(agentType) ? agentType : undefined;
   const profileRef = agentType && !isKnownRole(agentType) ? agentType : undefined;
 
-  const spawned = await control.spawn({
-    message,
-    ...(role ? { role } : {}),
-    ...(profileRef ? { profileRef } : {}),
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.effort ? { reasoningEffort: options.effort } : {}),
-    nickname: opts.label.slice(0, 120),
-    ...(options.targetPaths?.length ? { targetPaths: [...options.targetPaths] } : {}),
-    contextMode: options.isolation ?? "none",
-    ...(options.briefing ? { briefing: options.briefing } : {}),
-  });
+  let spawned: Awaited<ReturnType<AgentControl["spawn"]>>;
+  try {
+    spawned = await control.spawn({
+      message,
+      ...(role ? { role } : {}),
+      ...(profileRef ? { profileRef } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.effort ? { reasoningEffort: options.effort } : {}),
+      nickname: opts.label.slice(0, 120),
+      ...(options.targetPaths?.length ? { targetPaths: [...options.targetPaths] } : {}),
+      contextMode: options.isolation ?? "none",
+      ...(options.briefing ? { briefing: options.briefing } : {}),
+    });
+  } catch (error) {
+    throw new WorkflowAgentError(
+      error instanceof Error ? error.message : String(error),
+      null,
+      isAgentControlTaskLockError(error),
+    );
+  }
   opts.onAgentId(spawned.agentId);
 
+  let usdCost: number | null = null;
   try {
     const finalText = await waitSliced({
       ctx,
       control,
       agentId: spawned.agentId,
       timeoutMs: options.timeoutMs ?? 600_000,
+      abortSignal: opts.abortSignal,
     });
 
     let value: unknown = finalText;
@@ -94,6 +108,7 @@ export async function runWorkflowAgent(opts: {
           control,
           agentId: spawned.agentId,
           timeoutMs: options.timeoutMs ?? 600_000,
+          abortSignal: opts.abortSignal,
         });
         validation = validateAgainstJsonSchema(schema, extractResultEnvelope(repaired));
       }
@@ -109,18 +124,33 @@ export async function runWorkflowAgent(opts: {
 
     // CORRECTION 3: `AgentWaitInspection` carries no usage fields, so `wait()`
     // alone cannot fund `budget.spent()`. Inspect once, here, before close().
-    let usdCost: number | null = null;
-    try {
-      const inspected = await control.inspect({ agentId: spawned.agentId });
-      usdCost = inspected.sessionUsage?.estimatedTotalCostUsd ?? null;
-    } catch {
-      // Usage is advisory; never fail a completed agent over accounting.
-    }
-
+    usdCost = await readAgentUsdCost(control, spawned.agentId);
     return { value, agentId: spawned.agentId, usdCost };
+  } catch (error) {
+    // Errored agents still spent tokens — capture cost so the host budget can
+    // hard-stop instead of treating failures as free.
+    if (usdCost === null) {
+      usdCost = await readAgentUsdCost(control, spawned.agentId);
+    }
+    if (isAgentControlTaskLockError(error)) {
+      throw new WorkflowAgentError(error.message, spawned.agentId, true, usdCost);
+    }
+    if (error instanceof WorkflowAgentError) {
+      throw new WorkflowAgentError(error.message, error.agentId, error.fatal, usdCost);
+    }
+    throw new WorkflowAgentError(
+      error instanceof Error ? error.message : String(error),
+      spawned.agentId,
+      false,
+      usdCost,
+    );
   } finally {
     try {
-      await control.close({ agentId: spawned.agentId });
+      if (opts.closeAgent) {
+        await opts.closeAgent(spawned.agentId);
+      } else {
+        await control.close({ agentId: spawned.agentId });
+      }
     } catch (error) {
       ctx.log(
         `tool! workflow agent cleanup failed: ${
@@ -128,6 +158,16 @@ export async function runWorkflowAgent(opts: {
         }`,
       );
     }
+  }
+}
+
+async function readAgentUsdCost(control: AgentControl, agentId: string): Promise<number | null> {
+  try {
+    const inspected = await control.inspect({ agentId });
+    return inspected.sessionUsage?.estimatedTotalCostUsd ?? null;
+  } catch {
+    // Usage is advisory; never fail a completed agent over accounting.
+    return null;
   }
 }
 
@@ -150,11 +190,12 @@ async function waitSliced(opts: {
   control: AgentControl;
   agentId: string;
   timeoutMs: number;
+  abortSignal?: AbortSignal;
 }): Promise<string> {
   const deadline = Date.now() + opts.timeoutMs;
 
   for (;;) {
-    if (opts.ctx.abortSignal?.aborted) {
+    if (opts.abortSignal?.aborted || opts.ctx.abortSignal?.aborted) {
       throw new WorkflowAgentError("workflow cancelled", opts.agentId, true);
     }
     const remaining = deadline - Date.now();
@@ -164,12 +205,16 @@ async function waitSliced(opts: {
 
     let waited: Awaited<ReturnType<AgentControl["wait"]>>;
     try {
-      waited = await opts.control.wait({
-        agentIds: [opts.agentId],
-        timeoutMs: Math.min(WAIT_SLICE_MS, remaining),
-        mode: "all",
-        includeFinalMessage: true,
-      });
+      waited = await raceWithAbort(
+        opts.control.wait({
+          agentIds: [opts.agentId],
+          timeoutMs: Math.min(WAIT_SLICE_MS, remaining),
+          mode: "all",
+          includeFinalMessage: true,
+        }),
+        opts.abortSignal ?? opts.ctx.abortSignal,
+        opts.agentId,
+      );
     } catch (error) {
       // A task lock means the parent became unwritable. That is systemic, so it
       // aborts the whole run regardless of the call's `onError` policy —
@@ -202,5 +247,27 @@ async function waitSliced(opts: {
     }
 
     return text;
+  }
+}
+
+async function raceWithAbort<T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+  agentId: string,
+): Promise<T> {
+  if (!signal) return await pending;
+  if (signal.aborted) {
+    throw new WorkflowAgentError("workflow cancelled", agentId, true);
+  }
+
+  let onAbort: (() => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new WorkflowAgentError("workflow cancelled", agentId, true));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }

@@ -187,6 +187,7 @@ describe("raw loop child-agent control", () => {
         }),
       ],
       readyAgentIds: ["child-1"],
+      erroredAgentIds: [],
     });
   });
 
@@ -415,6 +416,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
 
     expect(gctPrompt).toContain('role="worker" and message:');
     expect(gctPrompt).toContain("waitForAgent");
+    expect(gctPrompt).toContain("erroredAgentIds");
     expect(gctPrompt).toContain("lastMessagePreview");
     expect(gctPrompt).not.toContain('role="general"');
     expect(gctPrompt).not.toContain(" task:");
@@ -422,6 +424,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
 
     expect(mixedPrompt).toContain('role="research" and message:');
     expect(mixedPrompt).toContain("waitForAgent");
+    expect(mixedPrompt).toContain("erroredAgentIds");
     expect(mixedPrompt).toContain("lastMessagePreview JSON");
     expect(mixedPrompt).not.toContain(" task:");
   });

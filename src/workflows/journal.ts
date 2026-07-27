@@ -13,12 +13,43 @@ import type { WorkflowAgentOptions, WorkflowJournalEntry } from "./types";
  * does NOT hold under `--yolo`/`danger-full-access`, where `resolveSandboxPolicy`
  * grants full access; resume is best-effort in that configuration.
  */
+
+/** Run ids are host-minted (`wf_` + 12 hex chars) or caller-supplied resume keys. */
+const WORKFLOW_RUN_ID_RE = /^wf_[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+export function assertSafeWorkflowRunId(runId: string): string {
+  const trimmed = runId.trim();
+  if (!WORKFLOW_RUN_ID_RE.test(trimmed)) {
+    throw new Error(
+      `invalid workflow run id "${runId}": expected wf_ followed by letters, digits, _ or -`,
+    );
+  }
+  return trimmed;
+}
+
 function workflowRunsDir(projectCoworkDir: string): string {
   return path.join(projectCoworkDir, "workflows", "runs");
 }
 
-function workflowRunDir(projectCoworkDir: string, runId: string): string {
-  return path.join(workflowRunsDir(projectCoworkDir), runId);
+/**
+ * Resolve `<runs>/<runId>` and refuse anything that escapes the runs root
+ * (path separators, `..`, alternate roots). Defense in depth on top of the
+ * run-id charset check.
+ */
+export function workflowRunDir(projectCoworkDir: string, runId: string): string {
+  const safeId = assertSafeWorkflowRunId(runId);
+  const root = path.resolve(workflowRunsDir(projectCoworkDir));
+  const resolved = path.resolve(root, safeId);
+  const relative = path.relative(root, resolved);
+  if (
+    relative.length === 0 ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    relative.includes("..")
+  ) {
+    throw new Error(`workflow run id escapes the runs directory: ${runId}`);
+  }
+  return resolved;
 }
 
 /**

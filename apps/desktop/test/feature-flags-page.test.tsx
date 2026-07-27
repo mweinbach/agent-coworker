@@ -52,6 +52,7 @@ describe("feature flags settings page", () => {
             openAiNativeConnectors: false,
             canvas: false,
             tasks: false,
+            workflows: false,
           },
           updateState: {
             ...useAppStore.getState().updateState,
@@ -99,6 +100,7 @@ describe("feature flags settings page", () => {
             openAiNativeConnectors: false,
             canvas: false,
             tasks: false,
+            workflows: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -145,6 +147,7 @@ describe("feature flags settings page", () => {
             openAiNativeConnectors: false,
             canvas: false,
             tasks: false,
+            workflows: false,
           },
           setDesktopFeatureFlagOverride,
         });
@@ -164,6 +167,53 @@ describe("feature flags settings page", () => {
       });
 
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("canvas", true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("workflows toggle applies the persisted global desktop override", async () => {
+    const setDesktopFeatureFlagOverride = mock(async () => {});
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          desktopFeatureFlags: {
+            menuBar: true,
+            remoteAccess: true,
+            workspacePicker: true,
+            workspaceLifecycle: true,
+            openAiNativeConnectors: false,
+            canvas: false,
+            tasks: false,
+            workflows: false,
+          },
+          setDesktopFeatureFlagOverride,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(FeatureFlagsPage));
+      });
+
+      const workflowsSwitch = container.querySelector('[aria-label="Workflows"]');
+      if (!(workflowsSwitch instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing workflows feature switch");
+      }
+
+      await act(async () => {
+        workflowsSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("workflows", true);
 
       await act(async () => {
         root.unmount();
@@ -194,6 +244,7 @@ describe("feature flags settings page", () => {
             openAiNativeConnectors: false,
             canvas: false,
             tasks: false,
+            workflows: false,
           },
           setDesktopFeatureFlagOverride,
         });

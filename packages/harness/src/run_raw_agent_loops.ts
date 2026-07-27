@@ -1588,7 +1588,7 @@ Task: Exercise spawnAgent + grep + edit deterministically.
 
 Steps (must use tools):
 1) Use spawnAgent with role="worker" and message: "Reply with exactly SUBAGENT_OK".
-2) Use waitForAgent with the returned agentId and timeoutMs=5000. Use the completed agent's lastMessagePreview as the sub-agent output.
+2) Use waitForAgent with the returned agentId and timeoutMs=5000. Check erroredAgentIds first — if the agentId is listed there, treat it as failed and do not use its text. Only when it is absent from erroredAgentIds, use the completed agent's lastMessagePreview as the sub-agent output.
 3) Use write to create "gct04_source.txt" containing lines:
 - alpha
 - beta
@@ -1881,7 +1881,7 @@ Task: Use a research sub-agent, then write and lightly edit a short report.
 Steps (must use tools):
 1) Use spawnAgent with role="research" and message:
 "Find the latest stable Bun release version (as of today) and one authoritative URL. Return JSON only: {\\"version\\":\\"...\\",\\"url\\":\\"...\\"}."
-2) Use waitForAgent with the returned agentId and timeoutMs=10000. Extract version and URL from the completed agent's lastMessagePreview JSON.
+2) Use waitForAgent with the returned agentId and timeoutMs=10000. Check erroredAgentIds first — if the agentId is listed there, treat it as failed and do not use its text. Only when it is absent from erroredAgentIds, extract version and URL from the completed agent's lastMessagePreview JSON.
 3) Use webFetch on the returned URL (maxLength=6000).
 4) Use write to create "bun_release_report.md" with:
 - version and URL

@@ -67,22 +67,32 @@ reference them.
 
 | Function | Notes |
 |---|---|
-| `agent(prompt, opts?)` | One child agent. Returns final text, or a validated object when `opts.schema` is set. |
+| `agent(prompt, opts?)` | One child agent. Returns final text, or a validated object when `opts.schema` is set. Prompts are limited to 20,000 characters. |
 | `parallel(thunks)` | **Barrier** — awaits every thunk. A rejected thunk yields `null`. |
 | `pipeline(items, ...stages)` | Per-item stages with **no barrier between them**. Stages receive `(prev, originalItem, index)`. |
 | `judge(candidate, opts)` | `n` independent judges; `aggregate` is `majority`/`unanimous`/`meanScore`/`worst`. |
 | `compact(items)` | Drops nulls. |
 | `phase(title)` / `log(msg)` | Progress. Titles must appear in `meta.phases`. |
-| `args`, `budget` | Frozen tool input; `{ total, spent(), remaining() }` in USD. |
+| `args`, `budget` | Frozen tool input; `{ total, spent(), remaining() }` in USD. `total` is the session hard-cap amount still available when the run starts. |
 
 `agent()` options: `label`, `phase`, `schema` (JSON Schema literal), `model`,
 `effort`, `agentType` (role id or profile ref), `targetPaths`, `isolation`
 (`"none"`/`"brief"`) + `briefing`, `onError` (`"fail"` default, or `"null"`),
 `timeoutMs`.
 
+When a session hard cap is configured, workflow agent admission is serialized. The current child is
+allowed to finish, then no later child starts after cumulative session + workflow spend reaches the
+cap. This matches the session budget contract: it stops accepting new turns rather than interrupting
+an already-running model request whose final cost is not yet known.
+
 Prefer `pipeline` over `parallel`. A barrier is only correct when a stage
 genuinely needs every prior result at once — deduping across the whole set, or an
 early exit on zero results.
+
+Do not concatenate full raw outputs from a broad fan-out into a single downstream
+`agent()` prompt. Ask upstream agents for compact structured results, reduce results
+in bounded batches, or return them for the parent to synthesize. Dynamic prompts
+must remain below the 20,000-character limit.
 
 ## Execution model
 
@@ -173,4 +183,5 @@ agents cannot forge a cached result. That does not hold under
 
 `dryRun: true` executes the script with `agent()` stubbed and nothing spawned.
 Because scripts are deterministic by construction, this yields the exact call
-graph, fan-out count and phase list before any spend.
+graph, fan-out count and phase list before any spend. Dry-run progress is not
+emitted into session snapshots or displayed in workflow history.

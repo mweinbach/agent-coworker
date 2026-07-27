@@ -1255,6 +1255,7 @@ describe("desktop server manager bun crash detection", () => {
       child: createFakeChild(),
       url: "ws://127.0.0.1:7337/ws",
       mobileH3: null,
+      featureFlagFingerprint: __internal.featureFlagFingerprint(),
       cleanup: () => {},
     };
 
@@ -1262,6 +1263,30 @@ describe("desktop server manager bun crash detection", () => {
     expect(
       __internal.shouldReuseExistingWorkspaceServer({ forceRestart: true }, existing as never),
     ).toBe(false);
+  });
+
+  test("changed feature flags skip the existing workspace server reuse branch", () => {
+    const existing = {
+      child: createFakeChild(),
+      url: "ws://127.0.0.1:7337/ws",
+      mobileH3: null,
+      featureFlagFingerprint: __internal.featureFlagFingerprint(),
+      cleanup: () => {},
+    };
+
+    expect(__internal.shouldReuseExistingWorkspaceServer({}, existing as never)).toBe(true);
+    expect(
+      __internal.shouldReuseExistingWorkspaceServer(
+        { featureFlags: { workflows: true } },
+        existing as never,
+      ),
+    ).toBe(false);
+    expect(
+      __internal.shouldReuseExistingWorkspaceServer({ featureFlags: { workflows: true } }, {
+        ...existing,
+        featureFlagFingerprint: __internal.featureFlagFingerprint({ workflows: true }),
+      } as never),
+    ).toBe(true);
   });
 
   test("reusing a healthy workspace server does not increment restart diagnostics", async () => {
@@ -1272,6 +1297,7 @@ describe("desktop server manager bun crash detection", () => {
         child: createFakeChild(),
         url: "ws://127.0.0.1:7337/ws",
         mobileH3: null,
+        featureFlagFingerprint: __internal.featureFlagFingerprint(),
         cleanup: () => {},
       });
       (manager as any).startCountsByWorkspace.set("ws-reuse", 1);

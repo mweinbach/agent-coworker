@@ -527,6 +527,9 @@ const persistedStateSchema = z
           workspacePicker: z.boolean().optional(),
           workspaceLifecycle: z.boolean().optional(),
           openAiNativeConnectors: z.boolean().optional(),
+          canvas: z.boolean().optional(),
+          tasks: z.boolean().optional(),
+          workflows: z.boolean().optional(),
         })
         .passthrough()
         .optional(),

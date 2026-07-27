@@ -131,6 +131,20 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
+  test("saveState round-trips the workflows experiment override", async () => {
+    const persistence = new PersistenceService();
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: { workflows: true },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.desktopFeatureFlagOverrides).toEqual({ workflows: true });
+  });
+
   test("saveState round-trips complete composer drafts and drops malformed attachments", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-drafts");

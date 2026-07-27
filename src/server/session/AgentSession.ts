@@ -1490,7 +1490,7 @@ export class AgentSession {
       }
 
       const combinedPersistPatch: PersistedProjectConfigPatch = {};
-      if (preparedModel?.changed) {
+      if (preparedModel) {
         Object.assign(combinedPersistPatch, preparedModel.persistSelection);
       }
       if (preparedConfig?.changed) {

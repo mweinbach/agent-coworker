@@ -512,5 +512,41 @@ describe("AgentSession", () => {
       expect(events.some((evt) => evt.type === "session_config")).toBe(true);
       expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
     });
+
+    test("applySessionDefaults persists an unchanged model with dependent defaults", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const model = "gemini-3-flash-preview";
+      const { session } = makeSession({
+        persistProjectConfigPatchImpl,
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "google",
+          model,
+          preferredChildModel: model,
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: `google:${model}`,
+          allowedChildModelRefs: [],
+          knowledgeCutoff: getSupportedModel("google", model)?.knowledgeCutoff ?? "unknown",
+          backupsEnabled: false,
+        },
+      });
+
+      await session.applySessionDefaults({
+        provider: "google",
+        model,
+        config: { backupsEnabled: true },
+      });
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        provider: "google",
+        model,
+        preferredChildModel: model,
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: `google:${model}`,
+        allowedChildModelRefs: [],
+        backupsEnabled: true,
+      });
+    });
   });
 });

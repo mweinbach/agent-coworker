@@ -59,6 +59,38 @@ describe("loadConfig", () => {
     expect(cfgFallback.model).toBe(defaultModelForProvider("google"));
   });
 
+  test("reports incomplete legacy child routing once without claiming a model fallback", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      preferredChildModel: "deepseek-v4-pro",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "opencode-go:deepseek-v4-pro",
+      allowedChildModelRefs: [],
+    });
+    const realWarn = console.warn;
+    const warn = mock(() => {});
+    console.warn = warn as typeof console.warn;
+
+    try {
+      const options = {
+        cwd,
+        homedir: home,
+        builtInDir: repoRoot(),
+        env: { AGENT_PROVIDER: "google" },
+      };
+      await loadConfig(options);
+      await loadConfig(options);
+    } finally {
+      console.warn = realWarn;
+    }
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const warning = String(warn.mock.calls[0]?.[0]);
+    expect(warning).toContain("Incomplete persisted child routing");
+    expect(warning).toContain("without a complete provider/model selection");
+    expect(warning).not.toContain("Using google:");
+  });
+
   test("advanced memory defaults are global and ignore project overrides", async () => {
     const { cwd, home } = await makeTmpDirs();
 

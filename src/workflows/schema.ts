@@ -67,8 +67,14 @@ export const workflowHostMessageSchema = z.discriminatedUnion("t", [
       payload: z.string(),
     })
     .strict(),
-  z.object({ t: z.literal("phase"), title: z.string() }).strict(),
-  z.object({ t: z.literal("log"), message: z.string() }).strict(),
+  z.object({ t: z.literal("phase"), title: z.string().max(200) }).strict(),
+  z.object({ t: z.literal("log"), message: z.string().max(2_000) }).strict(),
   z.object({ t: z.literal("done"), result: z.unknown() }).strict(),
-  z.object({ t: z.literal("error"), message: z.string(), stack: z.string().optional() }).strict(),
+  z
+    .object({
+      t: z.literal("error"),
+      message: z.string().max(4_000),
+      stack: z.string().max(8_000).optional(),
+    })
+    .strict(),
 ]);

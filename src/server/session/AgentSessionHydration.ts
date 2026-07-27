@@ -141,6 +141,7 @@ export function buildInitialSessionSnapshot(opts: {
     lastEventSeq: opts.lastEventSeq,
     feed: [],
     agents: [],
+    workflowRuns: [],
     todos: structuredClone(opts.state.todos),
     sessionUsage: opts.state.costTracker?.getSnapshot() ?? null,
     lastTurnUsage: null,

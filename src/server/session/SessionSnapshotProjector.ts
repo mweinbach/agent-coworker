@@ -12,6 +12,7 @@ import type {
   SessionLastTurnUsage,
   SessionSnapshot,
 } from "../../shared/sessionSnapshot";
+import { upsertRetainedWorkflowRun } from "../../shared/workflows";
 import type { ModelMessage, TodoItem } from "../../types";
 import { createConversationProjection } from "../projection/conversationProjection";
 import type { SessionEvent } from "../protocol";
@@ -145,6 +146,7 @@ export function createLegacySessionSnapshot(record: PersistedSessionRecord): Ses
     lastEventSeq: record.lastEventSeq,
     feed: createLegacyFeedFromMessages(record.messages, record.todos, record.updatedAt),
     agents: [],
+    workflowRuns: [],
     todos: structuredClone(record.todos),
     sessionUsage,
     lastTurnUsage: deriveLastTurnUsageFromSnapshot(sessionUsage),
@@ -172,7 +174,10 @@ export class SessionSnapshotProjector {
 
   syncSessionState(
     patch: Partial<
-      Omit<SessionSnapshot, "feed" | "agents" | "todos" | "sessionUsage" | "lastTurnUsage">
+      Omit<
+        SessionSnapshot,
+        "feed" | "agents" | "workflowRuns" | "todos" | "sessionUsage" | "lastTurnUsage"
+      >
     >,
   ): void {
     this.snapshot = {
@@ -254,6 +259,17 @@ export class SessionSnapshotProjector {
       return;
     }
 
+    if (evt.type === "workflow_progress") {
+      this.snapshot = {
+        ...this.snapshot,
+        workflowRuns: upsertRetainedWorkflowRun(
+          this.snapshot.workflowRuns ?? [],
+          structuredClone(evt.progress),
+        ),
+      };
+      return;
+    }
+
     if (evt.type === "agent_spawned" || evt.type === "agent_status") {
       this.snapshot = {
         ...this.snapshot,
@@ -302,6 +318,7 @@ export class SessionSnapshotProjector {
         ...this.snapshot,
         feed: [],
         agents: [],
+        workflowRuns: [],
         todos: [],
         sessionUsage: null,
         lastTurnUsage: null,

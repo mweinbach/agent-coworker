@@ -80,10 +80,27 @@ const TELEMETRY_CONSENT_ENV_KEYS = [
   "COWORK_CLOUD_SYNC_ENABLED",
 ] as const;
 
+type WorkspaceServerFeatureFlags = {
+  openAiNativeConnectors?: boolean;
+  tasks?: boolean;
+  workflows?: boolean;
+};
+
+/** Stable fingerprint of env flags baked into a sidecar at spawn time. */
+function featureFlagFingerprint(flags?: WorkspaceServerFeatureFlags): string {
+  return [
+    `connectors=${flags?.openAiNativeConnectors === true ? "1" : "0"}`,
+    `tasks=${flags?.tasks === true ? "1" : "0"}`,
+    `workflows=${flags?.workflows === true ? "1" : "0"}`,
+  ].join("|");
+}
+
 type ServerHandle = {
   child: ServerChildProcess;
   url: string;
   mobileH3: ServerListening["mobileH3"];
+  /** Env feature flags this child was spawned with. */
+  featureFlagFingerprint: string;
   cleanup: () => void;
 };
 
@@ -890,7 +907,7 @@ function resolveSourceStartup(
 }
 
 function buildServerEnv(
-  featureFlags?: { openAiNativeConnectors?: boolean; tasks?: boolean; workflows?: boolean },
+  featureFlags?: WorkspaceServerFeatureFlags,
   opts: {
     includeBundledFoundationModelsSdk?: boolean;
     includeBundledWindowsAiElectron?: boolean;
@@ -1184,12 +1201,17 @@ function shouldReplaceForMobileH3Request(
 }
 
 function shouldReuseExistingWorkspaceServer(
-  opts: Pick<StartWorkspaceServerOptions, "forceRestart" | "mobileH3">,
+  opts: Pick<StartWorkspaceServerOptions, "forceRestart" | "mobileH3" | "featureFlags">,
   existing: ServerHandle,
 ): boolean {
-  return (
-    opts.forceRestart !== true && !shouldReplaceForMobileH3Request(opts.mobileH3, existing.mobileH3)
-  );
+  if (opts.forceRestart === true) return false;
+  if (shouldReplaceForMobileH3Request(opts.mobileH3, existing.mobileH3)) return false;
+  // Feature-flag toggles are env-baked at spawn. Reusing a live sidecar after the
+  // UI flips workflows/tasks/connectors leaves the server on the old flags.
+  if (featureFlagFingerprint(opts.featureFlags) !== existing.featureFlagFingerprint) {
+    return false;
+  }
+  return true;
 }
 
 export class ServerManager {
@@ -1463,6 +1485,7 @@ export class ServerManager {
           child,
           url,
           mobileH3: listening.mobileH3 ?? null,
+          featureFlagFingerprint: featureFlagFingerprint(opts.featureFlags),
           cleanup: cleanupOnce,
         });
 
@@ -1759,6 +1782,7 @@ export const __internal = {
   buildDesktopCrashReportingEnv,
   buildServerEnv,
   buildSourceEnvForAttempt,
+  featureFlagFingerprint,
   findBundledFoundationModelsSdkDir,
   findBundledWindowsSandboxBundle,
   findBundledWindowsSandboxHelper,

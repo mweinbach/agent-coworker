@@ -2,9 +2,27 @@ import { z } from "zod";
 
 import { WORKFLOW_TOOL_DESCRIPTION } from "../workflows/authoringPrompt";
 import { resolveWorkflowsFeatureEnabled } from "../workflows/flags";
+import { assertSafeWorkflowRunId } from "../workflows/journal";
 import { runWorkflow } from "../workflows/WorkflowRunner";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+
+const workflowRunIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .refine((value) => {
+    try {
+      assertSafeWorkflowRunId(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "resumeFromRunId must look like a host run id (wf_…) and cannot contain path separators")
+  .describe(
+    "Replay a prior run's journal: unchanged agent() calls return cached results instantly.",
+  );
 
 const inputSchema = z
   .object({
@@ -18,20 +36,22 @@ const inputSchema = z
       .unknown()
       .optional()
       .describe("Value exposed to the script as `args`. Pass real JSON, not a JSON string."),
-    resumeFromRunId: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe(
-        "Replay a prior run's journal: unchanged agent() calls return cached results instantly.",
-      ),
+    resumeFromRunId: workflowRunIdSchema.optional(),
     dryRun: z
       .boolean()
       .optional()
       .describe("Execute the script with agent() stubbed. Spawns nothing; reports the call graph."),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.dryRun === true && value.resumeFromRunId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["resumeFromRunId"],
+        message: "dryRun cannot resume from a prior journal",
+      });
+    }
+  });
 
 export function createWorkflowTool(ctx: ToolContext) {
   if (!resolveWorkflowsFeatureEnabled(ctx.config)) return null;

@@ -602,8 +602,9 @@ export type ThreadRuntime = {
   lastMessagePreview: string | null;
   agents: ThreadAgentSummary[];
   /**
-   * Live `workflow` tool runs, newest last, keyed by runId. Superseded in place as
-   * progress arrives; a run stays after it settles so its result remains readable.
+   * Live `workflow` tool runs, newest last in storage (sidebar renders newest first).
+   * Superseded in place as progress arrives; active runs are retained alongside
+   * the bounded newest terminal history.
    */
   workflowRuns: ThreadWorkflowRun[];
   sessionUsage: SessionUsageSnapshot | null;

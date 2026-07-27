@@ -239,6 +239,18 @@ const desktopFeatureFlagOverridesSchema = z
       (value) => (typeof value === "boolean" ? value : undefined),
       z.boolean().optional(),
     ),
+    canvas: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    tasks: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
+    workflows: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
   })
   .passthrough()
   .optional();

@@ -1,4 +1,5 @@
 import type { SessionEvent } from "../../../../lib/wsProtocol";
+import { upsertRetainedWorkflowRun } from "../../../../../../../src/shared/workflows";
 import { findComposerSubmissionById } from "../../../composerSubmission";
 import {
   getWorkspaceGoogleReasoningEffort,
@@ -585,11 +586,9 @@ export function handleLifecycleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
-      const runs = rt.workflowRuns ?? [];
-      const at = runs.findIndex((run) => run.runId === evt.progress.runId);
       // Each emission is a full snapshot of the run, so replace in place rather
       // than merging — a later event never carries less than an earlier one.
-      const next = at === -1 ? [...runs, evt.progress] : runs.with(at, evt.progress);
+      const next = upsertRetainedWorkflowRun(rt.workflowRuns ?? [], evt.progress);
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,

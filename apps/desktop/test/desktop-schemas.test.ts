@@ -49,6 +49,24 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.desktopSettings).toBeUndefined();
   });
 
+  test("preserves explicit workflow feature flags through persisted and startup schemas", () => {
+    const persisted = persistedStateInputSchema.parse({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: { workflows: true },
+    });
+    const startup = startWorkspaceServerInputSchema.parse({
+      workspaceId: "workspace-1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+      featureFlags: { workflows: true },
+    });
+
+    expect(persisted.desktopFeatureFlagOverrides?.workflows).toBe(true);
+    expect(startup.featureFlags?.workflows).toBe(true);
+  });
+
   test("normalizes legacy workspace protocol values to jsonrpc", () => {
     const parsed = persistedStateInputSchema.parse({
       version: 2,

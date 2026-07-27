@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { getAiCoworkerPaths } from "./connect";
 import { isOpenAiNativeConnectorsExperimentEnabled } from "./experimental/openaiNativeConnectors/flags";
-import { normalizeChildRoutingConfig } from "./models/childModelRouting";
+import { normalizeChildRoutingConfig, parseChildModelRef } from "./models/childModelRouting";
 import {
   getCustomModelMetadata,
   getDiscoveredModelMetadata,
@@ -105,9 +105,53 @@ const nonNegativeIntegerLikeSchema = numberLikeSchema
   .transform((value) => Math.floor(value))
   .refine((value) => value >= 0, { message: "invalid_non_negative_integer" });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const emittedIncompleteChildRoutingWarnings = new Set<string>();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
+}
+
+function isIncompleteProjectChildRoutingReset(opts: {
+  projectConfig: Record<string, unknown>;
+  childModelRoutingMode: AgentConfig["childModelRoutingMode"];
+  requested: string;
+  provider: ProviderName;
+  home: string;
+}): boolean {
+  if (opts.childModelRoutingMode !== "same-provider") return false;
+  if (
+    asProviderName(opts.projectConfig.provider) !== undefined &&
+    asNonEmptyString(opts.projectConfig.model) !== undefined
+  ) {
+    return false;
+  }
+
+  const projectPreferredChildModelRef = asNonEmptyString(
+    opts.projectConfig.preferredChildModelRef,
+  );
+  if (projectPreferredChildModelRef !== opts.requested) return false;
+
+  try {
+    const parsed = parseChildModelRef(
+      projectPreferredChildModelRef,
+      undefined,
+      "project config preferred child target",
+      { home: opts.home },
+    );
+    return parsed.explicitProvider && parsed.provider !== opts.provider;
+  } catch {
+    return false;
+  }
+}
+
+function warnIncompleteProjectChildRoutingOnce(cwd: string, requested: string): void {
+  const configPath = path.join(cwd, ".cowork", "config.json");
+  const warningKey = `${configPath}\0${requested}`;
+  if (emittedIncompleteChildRoutingWarnings.has(warningKey)) return;
+  emittedIncompleteChildRoutingWarnings.add(warningKey);
+  console.warn(
+    `[config] Incomplete persisted child routing in ${configPath}: target "${requested}" was saved without a complete provider/model selection. Ignoring it during bootstrap; re-save workspace defaults to repair it.`,
+  );
 }
 
 const SANDBOX_MODE_VALUES: readonly SandboxMode[] = [
@@ -579,12 +623,27 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       home: homedir,
     });
     if (normalizedChildRouting.preferredTargetReset) {
-      // The rest of the routing config (mode, allowlist) still applies — only the
-      // unusable target is replaced, so a hand-edited typo no longer discards a
-      // perfectly good allowlist alongside it.
-      console.warn(
-        `[config] ${normalizedChildRouting.preferredTargetReset.reason} Using ${normalizedChildRouting.preferredTargetReset.resetTo} instead.`,
-      );
+      if (
+        isIncompleteProjectChildRoutingReset({
+          projectConfig,
+          childModelRoutingMode,
+          requested: normalizedChildRouting.preferredTargetReset.requested,
+          provider,
+          home: homedir,
+        })
+      ) {
+        warnIncompleteProjectChildRoutingOnce(
+          cwd,
+          normalizedChildRouting.preferredTargetReset.requested,
+        );
+      } else {
+        // The rest of the routing config (mode, allowlist) still applies — only the
+        // unusable target is replaced, so a hand-edited typo no longer discards a
+        // perfectly good allowlist alongside it.
+        console.warn(
+          `[config] ${normalizedChildRouting.preferredTargetReset.reason} Using ${normalizedChildRouting.preferredTargetReset.resetTo} instead.`,
+        );
+      }
     }
   } catch (error) {
     console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);

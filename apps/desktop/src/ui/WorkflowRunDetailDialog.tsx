@@ -38,13 +38,32 @@ const STATE_TONE: Record<WorkflowAgentRow["state"], string> = {
   queued: "text-muted-foreground",
 };
 
-function AgentStateIcon({ state }: { state: WorkflowAgentRow["state"] }) {
+function AgentStateIcon({
+  state,
+  runCancelled,
+}: {
+  state: WorkflowAgentRow["state"];
+  runCancelled: boolean;
+}) {
+  if (runCancelled && (state === "running" || state === "queued")) {
+    return (
+      <MinusCircleIcon
+        aria-hidden="true"
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+    );
+  }
   const Icon = STATE_ICON[state];
   return (
     <Icon
+      aria-hidden="true"
       className={cn("size-3.5 shrink-0", STATE_TONE[state], state === "running" && "animate-spin")}
     />
   );
+}
+
+function agentStateLabel(state: WorkflowAgentRow["state"], runCancelled: boolean): string {
+  return runCancelled && (state === "running" || state === "queued") ? "cancelled" : state;
 }
 
 /** Counts by state, used for the summary strip and the per-phase rollups. */
@@ -63,9 +82,7 @@ function tally(agents: WorkflowAgentRow[]) {
 function StatChip({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-1.5">
-      <div className="app-type-label text-[10px] uppercase tracking-[0.14em] app-text-muted">
-        {label}
-      </div>
+      <div className="app-type-label uppercase tracking-[0.14em] app-text-muted">{label}</div>
       <div className={cn("mt-0.5 text-sm font-medium tabular-nums", tone ?? "text-foreground")}>
         {value}
       </div>
@@ -95,7 +112,9 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
       if (bucket) bucket.push(agent);
       else groups.set(key, [agent]);
     }
-    return [...groups.entries()].filter(([, agents]) => agents.length > 0);
+    return [...groups.entries()].filter(
+      ([phase, agents]) => agents.length > 0 || phase === run.currentPhase,
+    );
   }, [run]);
 
   // `logs` is append-only, so a line's absolute position is a stable key. Carry it
@@ -109,7 +128,14 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
 
   const total = run.agents.length;
   const settled = run.outcome !== undefined;
-  const statusLabel = settled ? (run.outcome ?? "") : (run.currentPhase ?? "running");
+  const runCancelled = run.outcome === "cancelled";
+  const completedWithFailures =
+    run.outcome === "completed" && run.agents.some((agent) => agent.state === "errored");
+  const statusLabel = settled
+    ? completedWithFailures
+      ? "completed with failures"
+      : (run.outcome ?? "")
+    : (run.currentPhase ?? "running");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -117,9 +143,9 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {settled ? (
-              run.outcome === "completed" ? (
+              run.outcome === "completed" && !completedWithFailures ? (
                 <CheckCircle2Icon className="size-4 shrink-0 text-success" />
-              ) : run.outcome === "errored" ? (
+              ) : run.outcome === "errored" || completedWithFailures ? (
                 <AlertCircleIcon className="size-4 shrink-0 text-warning" />
               ) : (
                 <MinusCircleIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -149,6 +175,17 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
           <StatChip label="Cost" value={run.spentUsd > 0 ? formatCost(run.spentUsd) : "—"} />
         </div>
 
+        {run.error ? (
+          <div className="rounded-[10px] border border-warning/30 bg-warning/5 px-3 py-2">
+            <div className="app-type-label uppercase tracking-[0.14em] text-warning">
+              Failure reason
+            </div>
+            <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-foreground">
+              {run.error}
+            </p>
+          </div>
+        ) : null}
+
         {counts.cached > 0 ? (
           <p className="app-type-caption app-text-muted">
             {counts.cached} of {total} replayed from a previous run's journal at no cost.
@@ -165,44 +202,65 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
                   <div className="flex items-baseline justify-between gap-2">
                     <span
                       className={cn(
-                        "app-type-label text-[10px] uppercase tracking-[0.16em]",
+                        "app-type-label uppercase tracking-[0.16em]",
                         active ? "text-foreground" : "app-text-muted",
                       )}
                     >
                       {phase}
                       {active ? " · running" : ""}
                     </span>
-                    <span className="text-[10px] tabular-nums app-text-muted">
+                    <span className="app-type-caption tabular-nums app-text-muted">
                       {phaseCounts.completed + phaseCounts.cached}/{agents.length}
                     </span>
                   </div>
                   <div className="mt-1 space-y-0.5">
-                    {agents.map((agent) => (
-                      <div
-                        key={agent.index}
-                        className="flex items-center gap-2 rounded-[8px] px-1.5 py-1 text-xs hover:bg-muted/40"
-                      >
-                        <AgentStateIcon state={agent.state} />
-                        <span className="min-w-0 flex-1 truncate text-foreground">
-                          {agent.label}
-                        </span>
-                        {agent.state === "cached" ? (
-                          <span className="shrink-0 text-[10px] app-text-muted">cached</span>
-                        ) : agent.usdCost !== null && agent.usdCost > 0 ? (
-                          <span className="shrink-0 text-[10px] tabular-nums app-text-muted">
-                            {formatCost(agent.usdCost)}
-                          </span>
-                        ) : null}
-                        {agent.agentId ? (
-                          <span
-                            className="w-16 shrink-0 truncate font-mono text-[10px] app-text-muted"
-                            title={agent.agentId}
-                          >
-                            {agent.agentId.slice(0, 8)}
-                          </span>
-                        ) : null}
+                    {agents.length === 0 ? (
+                      <div className="rounded-[8px] px-1.5 py-1 text-xs text-warning">
+                        No agent started in this phase.
                       </div>
-                    ))}
+                    ) : (
+                      agents.map((agent) => (
+                        <div
+                          key={agent.index}
+                          className="rounded-[8px] px-1.5 py-1 text-xs hover:bg-muted/40"
+                        >
+                          <div className="flex items-center gap-2">
+                            <AgentStateIcon state={agent.state} runCancelled={runCancelled} />
+                            <span className="sr-only">
+                              {agent.label}: {agentStateLabel(agent.state, runCancelled)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-foreground">
+                              {agent.label}
+                            </span>
+                            {agent.state === "cached" ? (
+                              <span
+                                aria-hidden="true"
+                                className="app-type-caption shrink-0 app-text-muted"
+                              >
+                                cached
+                              </span>
+                            ) : agent.usdCost !== null && agent.usdCost > 0 ? (
+                              <span className="app-type-caption shrink-0 tabular-nums app-text-muted">
+                                {formatCost(agent.usdCost)}
+                              </span>
+                            ) : null}
+                            {agent.agentId ? (
+                              <span
+                                className="app-type-caption w-16 shrink-0 truncate font-mono app-text-muted"
+                                title={agent.agentId}
+                              >
+                                {agent.agentId.slice(0, 8)}
+                              </span>
+                            ) : null}
+                          </div>
+                          {agent.error ? (
+                            <p className="mt-1 whitespace-pre-wrap break-words pl-[1.375rem] leading-5 text-warning">
+                              {agent.error}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))
+                    )}
                   </div>
                 </section>
               );
@@ -212,15 +270,13 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
 
         {run.logs.length > 0 ? (
           <div className="border-t pt-2">
-            <div className="app-type-label text-[10px] uppercase tracking-[0.16em] app-text-muted">
-              Log
-            </div>
+            <div className="app-type-label uppercase tracking-[0.16em] app-text-muted">Log</div>
             <ScrollShadow className="mt-1 max-h-24 overflow-y-auto overscroll-contain">
               <div className="space-y-0.5">
                 {logLines.map(({ line, position }) => (
                   <div
                     key={`${run.runId}-log-${position}`}
-                    className="text-[11px] leading-4 app-text-muted"
+                    className="app-type-caption leading-4 app-text-muted"
                   >
                     {line}
                   </div>

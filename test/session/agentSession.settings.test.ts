@@ -504,6 +504,8 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        provider: "google",
+        model: "gemini-3-flash-preview",
         preferredChildModel: "gemini-3.1-pro-preview",
         childModelRoutingMode: "same-provider",
         preferredChildModelRef: "google:gemini-3.1-pro-preview",
@@ -646,6 +648,8 @@ describe("AgentSession", () => {
 
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        provider: "openai",
+        model: "gpt-5.2",
         preferredChildModel: "gpt-5.2",
         childModelRoutingMode: "cross-provider-allowlist",
         preferredChildModelRef: "google:gemini-3.1-pro-preview",

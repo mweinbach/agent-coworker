@@ -653,6 +653,11 @@ One-off chat thread workspaces must live under the global `~/.cowork/chats` dire
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, explicit report status/diagnostic fields, and compact session/last-turn usage snapshots for the child.
 
+`cowork/session/workflowProgress` is a session notification emitted while a live `workflow` tool run is active. Dry runs do not emit progress. Each emission is a full snapshot for one `runId` (phases, agents, logs, spend, and optional agent diagnostics). The final emission for a failed or cancelled run includes durable `error` text alongside `outcome` (`completed` | `errored` | `cancelled`). See [workflow_progress](#workflow_progress).
+
+Authoritative session snapshots retain every active workflow plus the 20 newest terminal runs,
+ordered oldest to newest. Clients should replace a run by `runId` and apply the same retention rule.
+
 ### OpenAI Native Connector JSON-RPC Methods
 
 OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-server`. They are experimental and disabled by default; set `COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS=1` to expose the desktop settings page and read the app-server-backed connector state. They also require an existing Codex app-server login. The connector controls below return an `openai_native_connectors` event inside `{ "event": ... }`.
@@ -4020,6 +4025,60 @@ Result event emitted after an `agent_wait` request resolves or times out.
 | `agents` | `PersistentAgentSummary[]` | Latest known child summaries for the requested ids, returned in request order even on timeout |
 | `readyAgentIds` | `string[]` | Requested child ids currently in a terminal state (`completed`, `errored`, or `closed`) |
 | `inspections` | `AgentWaitInspection[]` | Optional rich results for ready child agents, present only when `includeFinalMessage` or `includeReport` was requested |
+
+---
+
+### workflow_progress
+
+Live progress for a `workflow` tool run. Dry runs do not emit this event. Projected to JSON-RPC as `cowork/session/workflowProgress`. Each notification replaces the prior snapshot for the same `runId`; the final emission carries `outcome` and, on failure or cancellation, durable `error` text.
+
+```json
+{
+  "type": "workflow_progress",
+  "sessionId": "root-123",
+  "progress": {
+    "runId": "wf_a1b2c3d4e5f6",
+    "name": "triage-flaky-tests",
+    "phases": ["collect", "diagnose"],
+    "currentPhase": "diagnose",
+    "agents": [
+      {
+        "index": 0,
+        "label": "inventory",
+        "phase": "collect",
+        "state": "completed",
+        "agentId": "child-456",
+        "usdCost": 0.02
+      },
+      {
+        "index": 1,
+        "label": "diagnose:foo.test.ts",
+        "phase": "diagnose",
+        "state": "running",
+        "agentId": "child-789",
+        "usdCost": null
+      }
+    ],
+    "logs": ["collected 12 files"],
+    "spentUsd": 0.02,
+    "outcome": "completed"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"workflow_progress"` | — |
+| `sessionId` | `string` | Root session identifier |
+| `progress.runId` | `string` | Host-minted run id (`wf_…`) |
+| `progress.name` | `string` | From script `meta.name` (falls back to `"workflow"`) |
+| `progress.phases` | `string[]` | Declared `meta.phases`, in order |
+| `progress.currentPhase` | `string \| null` | Active phase title, or `null` before the first `phase()` |
+| `progress.agents` | `object[]` | One row per attempted `agent()` call: `index`, `label`, `phase`, `state` (`queued`/`running`/`completed`/`errored`/`cached`), `agentId`, `usdCost`, and optional `error`. Calls rejected before spawn still receive an errored row. |
+| `progress.logs` | `string[]` | Lines the script emitted via `log()` |
+| `progress.spentUsd` | `number` | Cumulative USD spend across agents in this run |
+| `progress.error` | `string` | Optional terminal diagnostic for an errored or cancelled run |
+| `progress.outcome` | `"completed" \| "errored" \| "cancelled"` | Present only on the final emission for the run |
 
 ---
 

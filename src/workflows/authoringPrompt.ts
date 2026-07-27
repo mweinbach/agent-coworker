@@ -51,7 +51,8 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
   object when \`opts.schema\` is set. Options: \`label\`, \`phase\`, \`schema\` (a JSON Schema
   literal), \`model\`, \`effort\`, \`agentType\` (a role: default/explorer/research/worker/reviewer,
   or a profile ref), \`targetPaths\`, \`isolation\` ("none" | "brief") + \`briefing\`,
-  \`onError\` ("fail" — default — or "null"), \`timeoutMs\`.
+  \`onError\` ("fail" — default — or "null"), \`timeoutMs\`. The prompt is limited to
+  20,000 characters.
 - \`parallel(thunks)\` — BARRIER: awaits every thunk. A rejected thunk becomes null.
 - \`pipeline(items, ...stages)\` — per-item staged execution with NO barrier between stages:
   item 2 can reach stage 3 while item 5 is still in stage 1. Prefer this over parallel().
@@ -60,7 +61,9 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
   "majority" | "unanimous" | "meanScore" | "worst".
 - \`compact(items)\` — drop nulls left by failed agents.
 - \`phase(title)\` / \`log(message)\` — progress. Titles must be members of \`meta.phases\`.
-- \`args\` — the \`args\` tool input, frozen. \`budget\` — \`{ total, spent(), remaining() }\` in USD.
+- \`args\` — the \`args\` tool input, frozen. \`budget\` — \`{ total, spent(), remaining() }\` in USD,
+  where \`total\` is the session hard-cap amount still available when the workflow starts. A configured
+  hard cap serializes agent admission so later calls stop after the threshold is crossed.
 
 ## Rules
 
@@ -70,4 +73,7 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
   \`new Date(0)\` and the rest of Math work fine.
 - Prefer \`pipeline\` over \`parallel\`. Only use a barrier when a stage genuinely needs
   every prior result at once (dedup across the whole set, an early exit on zero results).
+- Never concatenate full raw outputs from a wide fan-out into one later \`agent()\` prompt.
+  Request compact structured results, reduce them in bounded batches, or return them for the
+  parent to synthesize; every dynamically constructed prompt must stay under 20,000 characters.
 - Return a compact summary. Do not return raw agent transcripts.`;

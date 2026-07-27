@@ -56,6 +56,7 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
       },
     ],
     agents: [],
+    workflowRuns: [],
     todos: [],
     sessionUsage: null,
     lastTurnUsage: null,

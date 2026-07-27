@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
-import { digestAgentCall } from "../../src/workflows/journal";
+import {
+  assertSafeWorkflowRunId,
+  digestAgentCall,
+  workflowRunDir,
+} from "../../src/workflows/journal";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
 import { makeFakeControl, makeWorkflowCtx, metaHeader, workflowTmpDir } from "./harness";
 
@@ -167,5 +173,76 @@ describe("resume", () => {
     if (!outcome.ok) return;
     expect(outcome.summary.cachedCount).toBe(0);
     expect(control.spawnCount()).toBe(3);
+  });
+
+  test("rejects path-traversal resume ids before touching the filesystem", () => {
+    expect(() => assertSafeWorkflowRunId("../../../attacker")).toThrow(/invalid workflow run id/);
+    expect(() => assertSafeWorkflowRunId("wf_../escape")).toThrow(/invalid workflow run id/);
+    expect(() => workflowRunDir("/tmp/cowork", "../../../attacker")).toThrow();
+  });
+
+  test("dry-run results are not resumable", async () => {
+    const dir = await workflowTmpDir();
+    const script =
+      `${metaHeader("dry", ["a"])}` +
+      `export default async function run({ agent }) {\n` +
+      `  return await agent("only");\n}`;
+
+    const dry = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl(),
+      script,
+      dryRun: true,
+    });
+    expect(dry.ok).toBe(true);
+    if (!dry.ok) return;
+
+    // Even if a forged journal.jsonl appears under the dry-run id, the dry run
+    // itself must not have written stub results. Resume from it must spawn live.
+    const journalPath = path.join(dir, "workflows", "runs", dry.summary.runId, "journal.jsonl");
+    await expect(fs.access(journalPath)).rejects.toThrow();
+
+    const live = makeFakeControl({ reply: () => "live-value" });
+    const resumed = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: live,
+      script,
+      resumeFromRunId: dry.summary.runId,
+    });
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) return;
+    expect(live.spawnCount()).toBe(1);
+    expect(resumed.summary.cachedCount).toBe(0);
+    expect(resumed.summary.result).toBe("live-value");
+  });
+
+  test('onError:"null" results are journaled and replay without re-spawning', async () => {
+    const dir = await workflowTmpDir();
+    const script =
+      `${metaHeader("nullable", ["main"])}` +
+      `export default async function run({ agent }) {\n` +
+      `  return await agent("may fail", { onError: "null" });\n}`;
+
+    const first = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl({ state: () => "errored" }),
+      script,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.summary.result).toBeNull();
+
+    const resumedControl = makeFakeControl({ reply: () => "should-not-run" });
+    const resumed = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: resumedControl,
+      script,
+      resumeFromRunId: first.summary.runId,
+    });
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) return;
+    expect(resumed.summary.result).toBeNull();
+    expect(resumed.summary.cachedCount).toBe(1);
+    expect(resumedControl.spawnCount()).toBe(0);
   });
 });

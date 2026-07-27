@@ -301,14 +301,35 @@ import vm from "node:vm";
 
 const post = (msg) => postMessage(msg);
 const pending = new Map();
+const activeRpcs = new Set();
 let nextCallId = 0;
 
-const rpc = (make) =>
-  new Promise((resolve, reject) => {
+const rpc = (make) => {
+  const call = new Promise((resolve, reject) => {
     const callId = nextCallId++;
     pending.set(callId, { resolve, reject });
     post(make(callId));
   });
+  let tracked;
+  tracked = call.finally(() => activeRpcs.delete(tracked));
+  activeRpcs.add(tracked);
+  return tracked;
+};
+
+const drainRpcs = async () => {
+  for (;;) {
+    // Flush promise continuations first: a detached chain may enqueue its next
+    // agent() only after the previous RPC resolves.
+    await Promise.resolve();
+    const active = Array.from(activeRpcs);
+    if (active.length === 0) {
+      await Promise.resolve();
+      if (activeRpcs.size === 0) return;
+      continue;
+    }
+    await Promise.allSettled(active);
+  }
+};
 
 let onBudgetUpdate = null;
 
@@ -376,6 +397,7 @@ self.onmessage = async (ev) => {
     }
 
     const result = await run(host);
+    await drainRpcs();
     post({ t: "done", result: JSON.parse(JSON.stringify(result === undefined ? null : result)) });
   } catch (error) {
     post({

@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../src/platform/sandbox";
 import type { AgentControl, ToolContext } from "../../src/tools/context";
 
 export async function workflowTmpDir(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "cowork-workflows-test-"));
+  return fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-workflows-test-"));
 }
 
 export type FakeAgent = {

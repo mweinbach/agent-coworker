@@ -111,6 +111,7 @@ export function createDesktopCommandsMock(
     openAiNativeConnectors?: boolean;
     canvas?: boolean;
     tasks?: boolean;
+    workflows?: boolean;
   }) => ({
     menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
     remoteAccess:
@@ -129,6 +130,8 @@ export function createDesktopCommandsMock(
         : false,
     canvas: typeof featureOverrides?.canvas === "boolean" ? featureOverrides.canvas : false,
     tasks: typeof featureOverrides?.tasks === "boolean" ? featureOverrides.tasks : false,
+    workflows:
+      typeof featureOverrides?.workflows === "boolean" ? featureOverrides.workflows : false,
   });
 
   return {

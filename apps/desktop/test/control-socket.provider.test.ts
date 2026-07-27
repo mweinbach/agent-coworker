@@ -470,4 +470,86 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
     expect(state.notifications).toHaveLength(1);
   });
+
+  test("identical provider_status events do not restamp the update timestamp or persist", async () => {
+    // Repeated refreshes used to rewrite providerStatusLastUpdatedAt even when
+    // the payload was byte-identical, which re-armed desktop persistence and
+    // re-ran creation-readiness consumers several times a second while idle.
+    const workspaceId = "ws-provider-status-dedupe";
+    const { state, get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+    const providerStatus = {
+      type: "provider_status" as const,
+      sessionId: "jsonrpc-control",
+      providers: [
+        {
+          provider: "openai" as const,
+          authorized: true,
+          verified: true,
+          mode: "api_key" as const,
+          account: null,
+          message: "ready",
+          checkedAt: "2026-07-25T00:00:00.000Z",
+        },
+      ],
+    };
+
+    installFakeSocket(workspaceId, async () => ({ event: providerStatus }));
+
+    expect(
+      await helpers.requestJsonRpcControlEvent(
+        get as any,
+        set as any,
+        workspaceId,
+        "cowork/provider/status/refresh",
+        { cwd: "/tmp/workspace" },
+      ),
+    ).toBe(true);
+    expect(state.providerStatusByName.openai).toMatchObject({
+      provider: "openai",
+      authorized: true,
+      verified: true,
+    });
+    expect(state.providerConnected).toEqual(["openai"]);
+    expect(state.providerStatusLastUpdatedAt).toBe("2026-03-20T00:00:00.000Z");
+    expect(persistCalls).toBe(1);
+
+    const stampedAt = state.providerStatusLastUpdatedAt;
+    expect(
+      await helpers.requestJsonRpcControlEvent(
+        get as any,
+        set as any,
+        workspaceId,
+        "cowork/provider/status/refresh",
+        { cwd: "/tmp/workspace" },
+      ),
+    ).toBe(true);
+    expect(state.providerStatusLastUpdatedAt).toBe(stampedAt);
+    expect(persistCalls).toBe(1);
+
+    installFakeSocket(workspaceId, async () => ({
+      event: {
+        ...providerStatus,
+        providers: [
+          {
+            ...providerStatus.providers[0]!,
+            message: "still ready, but different",
+            checkedAt: "2026-07-25T00:00:01.000Z",
+          },
+        ],
+      },
+    }));
+    expect(
+      await helpers.requestJsonRpcControlEvent(
+        get as any,
+        set as any,
+        workspaceId,
+        "cowork/provider/status/refresh",
+        { cwd: "/tmp/workspace" },
+      ),
+    ).toBe(true);
+    expect(state.providerStatusByName.openai?.message).toBe("still ready, but different");
+    expect(state.providerStatusLastUpdatedAt).toBe("2026-03-20T00:00:00.000Z");
+    expect(persistCalls).toBe(2);
+  });
 });

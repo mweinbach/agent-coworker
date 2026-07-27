@@ -319,6 +319,67 @@ describe("Cowork unified runtime", () => {
     );
   });
 
+  test("clears fingerprint attestations when a runtime is pruned or replaced", async () => {
+    // `<runtime-dir>.verified.json` is a trust cache. Leaving it beside a
+    // pruned/replaced tree would let a later install at the same path skip
+    // re-hashing against a stale fingerprint until full verify caught up.
+    const root = await tempRoot("attestation-prune");
+    const home = path.join(root, "home");
+    const firstArchive = await runtimeArchive(path.join(root, "archives"), "2026-06-19");
+    const first = await installRuntimeArchive({
+      archivePath: firstArchive.archivePath,
+      expectedSha256: firstArchive.sha256,
+      expectedVersion: "2026-06-19",
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const prunedAttestation = runtimeAttestationPath(first.runtimeDir);
+    expect(JSON.parse(await fs.readFile(prunedAttestation, "utf8"))).toMatchObject({
+      runtimeVersion: "2026-06-19",
+    });
+
+    for (const version of ["2026-06-20", "2026-06-21"] as const) {
+      const archive = await runtimeArchive(path.join(root, "archives"), version);
+      await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        expectedVersion: version,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+    }
+    await expect(fs.stat(prunedAttestation)).rejects.toThrow();
+    expect((await listInstalledRuntimes(home)).map((runtime) => runtime.version)).toEqual([
+      "2026-06-21",
+      "2026-06-20",
+    ]);
+
+    const currentDir = path.join(home, ".cowork", "runtime", "2026-06-21");
+    const currentAttestation = runtimeAttestationPath(currentDir);
+    await fs.writeFile(
+      currentAttestation,
+      `${JSON.stringify({ schemaVersion: 1, runtimeVersion: "stale-marker" }, null, 2)}\n`,
+    );
+    // Same version destination: install clears the old attestation, then writes a fresh one.
+    const replacement = await runtimeArchive(path.join(root, "archives-replace"), "2026-06-21");
+    const replaced = await installRuntimeArchive({
+      archivePath: replacement.archivePath,
+      expectedSha256: replacement.sha256,
+      expectedVersion: "2026-06-21",
+      home,
+      execute: false,
+      force: true,
+      trustedKeys,
+    });
+    expect(replaced.runtimeDir).toBe(currentDir);
+    const afterReplace = JSON.parse(await fs.readFile(currentAttestation, "utf8")) as {
+      runtimeVersion?: string;
+    };
+    expect(afterReplace.runtimeVersion).toBe("2026-06-21");
+  });
+
   test("serializes concurrent runtime bootstrap attempts", async () => {
     const root = await tempRoot("concurrent-bootstrap");
     const home = path.join(root, "home");

@@ -92,6 +92,8 @@ mock.module("../src/lib/desktopCommands", () =>
           : false,
       canvas: typeof featureOverrides?.canvas === "boolean" ? featureOverrides.canvas : false,
       tasks: typeof featureOverrides?.tasks === "boolean" ? featureOverrides.tasks : false,
+      workflows:
+        typeof featureOverrides?.workflows === "boolean" ? featureOverrides.workflows : false,
     }),
     isPackagedDesktopApp: () => packagedApp,
     onSystemAppearanceChanged: () => () => {},

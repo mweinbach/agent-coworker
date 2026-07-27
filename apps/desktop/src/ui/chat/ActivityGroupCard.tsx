@@ -1092,7 +1092,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
             <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
               {contentSummary ? (
                 <div
-                  className="mb-2 px-0.5 text-[11px] font-medium uppercase tracking-wide app-text-muted"
+                  className="app-type-label mb-2 px-0.5 font-medium uppercase tracking-wide app-text-muted"
                   data-slot="activity-content-summary"
                 >
                   {contentSummary}

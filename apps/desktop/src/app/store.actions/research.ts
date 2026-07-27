@@ -13,6 +13,7 @@ import {
   createEmptyComposerDraft,
   revokeComposerDraftAttachmentPreviews,
 } from "../composerDrafts";
+import { isResearchAvailable } from "../researchAvailability";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
   ensureControlSocket,
@@ -42,7 +43,6 @@ import {
   waitForOperation,
 } from "../store.helpers/operationIntent";
 import { persist } from "../store.helpers/persistence";
-import { isResearchAvailable } from "../researchAvailability";
 import type { ResearchSettingsState } from "../types";
 
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();

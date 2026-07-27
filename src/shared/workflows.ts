@@ -69,8 +69,7 @@ export function upsertRetainedWorkflowRun(
       : [...runs, progress];
   let terminalToDrop = Math.max(
     0,
-    next.filter((run) => run.outcome !== undefined).length -
-      MAX_RETAINED_TERMINAL_WORKFLOW_RUNS,
+    next.filter((run) => run.outcome !== undefined).length - MAX_RETAINED_TERMINAL_WORKFLOW_RUNS,
   );
   if (terminalToDrop === 0) return next;
   return next.filter((run) => {

@@ -210,7 +210,9 @@ describe("feature flags settings page", () => {
       }
 
       await act(async () => {
-        workflowsSwitch.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        workflowsSwitch.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
       expect(setDesktopFeatureFlagOverride).toHaveBeenCalledWith("workflows", true);

@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-import { useAppStore } from "./app/store";
 import { resolveResearchAwareView } from "./app/researchAvailability";
+import { useAppStore } from "./app/store";
 import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
 import { isOneOffChatWorkspace } from "./app/types";

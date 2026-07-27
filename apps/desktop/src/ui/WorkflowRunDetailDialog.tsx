@@ -47,10 +47,7 @@ function AgentStateIcon({
 }) {
   if (runCancelled && (state === "running" || state === "queued")) {
     return (
-      <MinusCircleIcon
-        aria-hidden="true"
-        className="size-3.5 shrink-0 text-muted-foreground"
-      />
+      <MinusCircleIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
     );
   }
   const Icon = STATE_ICON[state];

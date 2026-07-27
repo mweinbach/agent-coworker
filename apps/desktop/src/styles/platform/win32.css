@@ -344,19 +344,19 @@
  * Modal surfaces are deliberately NOT in this list — see the rule below.
  */
 :root[data-platform="win32"]:not([data-reduced-transparency="true"])
-  :is(
-    [data-slot="context-menu-content"],
-    [data-slot="context-menu-sub-content"],
-    [data-slot="dropdown-menu-content"],
-    [data-slot="dropdown-menu-sub-content"],
-    [data-slot="hover-card-content"],
-    [data-slot="menubar-content"],
-    [data-slot="menubar-sub-content"],
-    [data-slot="popover-content"],
-    [data-slot="select-content"],
-    [data-slot="tooltip-content"],
-    .app-topbar__thread-popover
-  ) {
+:is(
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="menubar-content"],
+  [data-slot="menubar-sub-content"],
+  [data-slot="popover-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"],
+  .app-topbar__thread-popover
+) {
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
 }
@@ -378,14 +378,14 @@
  * keep resolving --surface-overlay through their own fallbacks.
  */
 :root[data-platform="win32"]:not([data-reduced-transparency="true"]):not(
-    [data-high-contrast="true"]
-  )
-  :is(
-    [data-slot="alert-dialog-content"],
-    [data-slot="dialog-content"],
-    [data-slot="drawer-content"],
-    [data-slot="sheet-content"]
-  ) {
+  [data-high-contrast="true"]
+)
+:is(
+  [data-slot="alert-dialog-content"],
+  [data-slot="dialog-content"],
+  [data-slot="drawer-content"],
+  [data-slot="sheet-content"]
+) {
   --surface-overlay: var(--surface-opaque);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

@@ -27,9 +27,7 @@ function agentStateLabel(state: WorkflowAgentRow["state"], runCancelled: boolean
 
 function agentStateIcon(state: WorkflowAgentRow["state"], runCancelled: boolean) {
   if (runCancelled && !isTerminalAgentState(state)) {
-    return (
-      <MinusCircleIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-    );
+    return <MinusCircleIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />;
   }
   switch (state) {
     case "running":
@@ -195,7 +193,10 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
                         ) : null}
                       </div>
                       {agent.error ? (
-                        <div className="ml-[1.125rem] line-clamp-2 text-warning" title={agent.error}>
+                        <div
+                          className="ml-[1.125rem] line-clamp-2 text-warning"
+                          title={agent.error}
+                        >
                           {agent.error}
                         </div>
                       ) : null}

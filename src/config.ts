@@ -126,9 +126,7 @@ function isIncompleteProjectChildRoutingReset(opts: {
     return false;
   }
 
-  const projectPreferredChildModelRef = asNonEmptyString(
-    opts.projectConfig.preferredChildModelRef,
-  );
+  const projectPreferredChildModelRef = asNonEmptyString(opts.projectConfig.preferredChildModelRef);
   if (projectPreferredChildModelRef !== opts.requested) return false;
 
   try {

@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  isResearchAvailable,
-  resolveResearchAwareView,
-} from "../src/app/researchAvailability";
+import { isResearchAvailable, resolveResearchAwareView } from "../src/app/researchAvailability";
 
 describe("research availability", () => {
   test("requires Google to be connected", () => {

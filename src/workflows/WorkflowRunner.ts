@@ -131,8 +131,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   let callIndex = 0;
   let meta: { name: string; description: string; phases: string[] } | null = null;
   /** Once true, no further real agents may be admitted. */
-  let budgetStopped =
-    budgetStatus?.stopTriggered === true || workflowBudgetLimitUsd === 0;
+  let budgetStopped = budgetStatus?.stopTriggered === true || workflowBudgetLimitUsd === 0;
 
   const argsHash = hashWorkflowArgs(opts.args);
 
@@ -284,8 +283,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   };
 
   const budgetBlocksNewAgents = () =>
-    budgetStopped ||
-    (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd);
+    budgetStopped || (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd);
 
   const handleAgentCall = async (callId: number, payload: unknown) => {
     if (terminalClaimed) return;

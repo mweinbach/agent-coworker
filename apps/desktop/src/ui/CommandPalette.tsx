@@ -10,10 +10,9 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
-
+import { isResearchAvailable } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
-import { isResearchAvailable } from "../app/researchAvailability";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
 import {
   CommandDialog,

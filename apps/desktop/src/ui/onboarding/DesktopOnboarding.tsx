@@ -1029,6 +1029,11 @@ function AnimatedStepContainer({
 export function DesktopOnboarding() {
   const visible = useAppStore((s) => s.onboardingVisible);
   const step = useAppStore((s) => s.onboardingStep);
+  const runtimeSetupInProgress = useAppStore((s) => {
+    if (!s.selectedWorkspaceId) return false;
+    const runtime = s.workspaceRuntimeById[s.selectedWorkspaceId];
+    return runtime?.starting === true && !runtime.serverUrl && runtime.startupProgress !== null;
+  });
   const setStep = useAppStore((s) => s.setOnboardingStep);
   const dismiss = useAppStore((s) => s.dismissOnboarding);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -1105,7 +1110,7 @@ export function DesktopOnboarding() {
     [complete, newThread],
   );
 
-  if (!visible) return null;
+  if (!visible || runtimeSetupInProgress) return null;
 
   return (
     <Dialog

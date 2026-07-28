@@ -1,9 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { SessionBackupManager } from "../src/server/sessionBackup";
+import { __internal, SessionBackupManager } from "../src/server/sessionBackup";
 import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
 import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
 import { extractTarGz } from "../src/server/sessionBackup/tar";
@@ -657,5 +657,90 @@ describe("SessionBackupManager", () => {
     expect(await fileExists(leakedStage)).toBe(false);
     expect(await fileExists(freshStage)).toBe(true);
     expect(await fileExists(sessionDir)).toBe(true);
+  });
+
+  describe("pruneBackupsRoot chaining", () => {
+    afterEach(() => {
+      __internal.setPruneBackupsRootOnceForTests(undefined);
+      __internal.clearPruneChainsForTests();
+    });
+
+    test("serializes concurrent prunes for the same backups root", async () => {
+      const { home } = await makeTmpWorkspace();
+      const backupsRoot = path.join(home, ".cowork", "session-backups");
+      await fs.mkdir(backupsRoot, { recursive: true });
+
+      let active = 0;
+      let maxActive = 0;
+      const started: number[] = [];
+      const finished: number[] = [];
+      let nextId = 0;
+      const releaseGates: Array<() => void> = [];
+      const startedSignals: Array<() => void> = [];
+      const waitForStart = (index: number) =>
+        new Promise<void>((resolve) => {
+          if (started.includes(index)) {
+            resolve();
+            return;
+          }
+          startedSignals[index] = resolve;
+        });
+
+      __internal.setPruneBackupsRootOnceForTests(async () => {
+        const id = nextId++;
+        started.push(id);
+        startedSignals[id]?.();
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => {
+          releaseGates.push(resolve);
+        });
+        active -= 1;
+        finished.push(id);
+      });
+
+      const first = SessionBackupManager.pruneBackupsRoot(backupsRoot);
+      const second = SessionBackupManager.pruneBackupsRoot(backupsRoot);
+
+      await waitForStart(0);
+      expect(started).toEqual([0]);
+      expect(maxActive).toBe(1);
+
+      releaseGates[0]?.();
+      await waitForStart(1);
+      expect(started).toEqual([0, 1]);
+      expect(maxActive).toBe(1);
+
+      releaseGates[1]?.();
+      await Promise.all([first, second]);
+      expect(finished).toEqual([0, 1]);
+      expect(maxActive).toBe(1);
+    });
+
+    test("a failed prune does not poison the next queued prune", async () => {
+      const { home } = await makeTmpWorkspace();
+      const backupsRoot = path.join(home, ".cowork", "session-backups");
+      await fs.mkdir(backupsRoot, { recursive: true });
+
+      const calls: string[] = [];
+      __internal.setPruneBackupsRootOnceForTests(async (_root, opts) => {
+        const label = opts?.skipSessionId ?? "default";
+        calls.push(label);
+        if (label === "fail") {
+          throw new Error("simulated prune failure");
+        }
+      });
+
+      const failing = SessionBackupManager.pruneBackupsRoot(backupsRoot, {
+        skipSessionId: "fail",
+      });
+      const succeeding = SessionBackupManager.pruneBackupsRoot(backupsRoot, {
+        skipSessionId: "ok",
+      });
+
+      await expect(failing).rejects.toThrow("simulated prune failure");
+      await expect(succeeding).resolves.toBeUndefined();
+      expect(calls).toEqual(["fail", "ok"]);
+    });
   });
 });

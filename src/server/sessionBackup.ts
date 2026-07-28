@@ -252,6 +252,13 @@ export type PruneBackupsRootOptions = {
  */
 const pruneChainsByRoot = new Map<string, Promise<void>>();
 
+type PruneBackupsRootOnce = (
+  backupsRootDir: string,
+  opts?: PruneBackupsRootOptions,
+) => Promise<void>;
+
+let pruneBackupsRootOnceForTests: PruneBackupsRootOnce | undefined;
+
 export class SessionBackupManager implements SessionBackupHandle {
   static async pruneBackupsRoot(
     backupsRootDir: string,
@@ -259,10 +266,15 @@ export class SessionBackupManager implements SessionBackupHandle {
   ): Promise<void> {
     const key = path.resolve(backupsRootDir);
     const previous = pruneChainsByRoot.get(key) ?? Promise.resolve();
+    const runOnce = (): Promise<void> =>
+      (pruneBackupsRootOnceForTests ?? SessionBackupManager.pruneBackupsRootOnce)(
+        backupsRootDir,
+        opts,
+      );
     const run = previous.then(
-      () => SessionBackupManager.pruneBackupsRootOnce(backupsRootDir, opts),
+      () => runOnce(),
       // A failed prune must not poison the ones queued behind it.
-      () => SessionBackupManager.pruneBackupsRootOnce(backupsRootDir, opts),
+      () => runOnce(),
     );
     const tail = run.catch(() => undefined);
     pruneChainsByRoot.set(key, tail);
@@ -677,3 +689,12 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
   }
 }
+
+export const __internal = {
+  setPruneBackupsRootOnceForTests(impl: PruneBackupsRootOnce | undefined): void {
+    pruneBackupsRootOnceForTests = impl;
+  },
+  clearPruneChainsForTests(): void {
+    pruneChainsByRoot.clear();
+  },
+} as const;

@@ -79,12 +79,12 @@
     "knip": "knip --no-config-hints"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock": "^3.1095.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1095.0",
+    "@aws-sdk/client-bedrock": "^3.1097.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1097.0",
     "@earendil-works/pi-ai": "0.80.7",
     "@google/genai": "2.13.0",
     "@langfuse/otel": "^5.9.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.220.0",
@@ -116,10 +116,10 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@biomejs/biome": "^2.5.5",
+    "@biomejs/biome": "^2.5.6",
     "@playwright/test": "^1.62.0",
     "@types/jsdom": "^28.0.3",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/turndown": "^5.0.6",

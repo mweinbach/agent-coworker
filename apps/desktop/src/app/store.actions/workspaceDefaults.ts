@@ -55,9 +55,22 @@ import {
  * 3s default: on a cold start the control bootstrap fans out a dozen RPCs
  * (including network provider refreshes) before the session id lands.
  */
-const CONTROL_SESSION_APPLY_TIMEOUT_MS = 10_000;
+const DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS = 10_000;
 /** Upper bound on the background catch-up push after a cold start. */
-const DEFERRED_CONTROL_SYNC_TIMEOUT_MS = 120_000;
+const DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS = 120_000;
+
+let controlSessionApplyTimeoutMs = DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS;
+let deferredControlSyncTimeoutMs = DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS;
+
+/** Test-only timeout overrides for cold-start catch-up coverage. */
+export const __internalWorkspaceDefaults = {
+  setControlSessionApplyTimeoutMsForTests(ms: number | null): void {
+    controlSessionApplyTimeoutMs = ms ?? DEFAULT_CONTROL_SESSION_APPLY_TIMEOUT_MS;
+  },
+  setDeferredControlSyncTimeoutMsForTests(ms: number | null): void {
+    deferredControlSyncTimeoutMs = ms ?? DEFAULT_DEFERRED_CONTROL_SYNC_TIMEOUT_MS;
+  },
+} as const;
 
 export function createWorkspaceDefaultsActions(
   set: StoreSet,
@@ -524,7 +537,7 @@ export function createWorkspaceDefaultsActions(
           get,
           set,
           workspaceId,
-          DEFERRED_CONTROL_SYNC_TIMEOUT_MS,
+          deferredControlSyncTimeoutMs,
         );
         if (!ready) return;
         // Re-reads the store, so it pushes whatever the settings are by then.
@@ -552,7 +565,7 @@ export function createWorkspaceDefaultsActions(
     }
 
     const controlReady = opts.ensureControl
-      ? await waitForControlSession(get, set, workspaceId, CONTROL_SESSION_APPLY_TIMEOUT_MS)
+      ? await waitForControlSession(get, set, workspaceId, controlSessionApplyTimeoutMs)
       : Boolean(get().workspaceRuntimeById[workspaceId]?.controlSessionId);
     set((state) => ({
       workspaces: state.workspaces.map((workspace) =>

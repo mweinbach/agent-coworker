@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { __internalWorkspaceDefaults } from "../src/app/store.actions/workspaceDefaults";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -32,8 +33,28 @@ import {
   workspaceId,
 } from "./workspace-settings-sync.harness";
 
+async function waitForCondition(
+  predicate: () => boolean,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 1_000;
+  const intervalMs = opts.intervalMs ?? 5;
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for test condition`);
+    }
+    await Bun.sleep(intervalMs);
+  }
+}
+
 describe("workspace settings sync", () => {
   registerWorkspaceSettingsSyncLifecycleHooks();
+
+  afterEach(() => {
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(null);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(null);
+  });
 
   test("updateWorkspaceDefaults syncs control defaults over the shared JsonRpcSocket", async () => {
     jsonRpcRequests.length = 0;
@@ -494,6 +515,58 @@ describe("workspace settings sync", () => {
       useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.defaultModel,
     ).toBe("gpt-5.4");
     expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+    expect(
+      useAppStore
+        .getState()
+        .notifications.filter((entry) => entry.title === "Workspace settings not updated"),
+    ).toHaveLength(0);
+  });
+
+  test("updateWorkspaceDefaults catch-up applies defaults once the control session becomes ready", async () => {
+    // Cold start: the first apply times out while the socket is still connecting,
+    // then the deferred catch-up must push the latest persisted defaults.
+    __internalWorkspaceDefaults.setControlSessionApplyTimeoutMsForTests(25);
+    __internalWorkspaceDefaults.setDeferredControlSyncTimeoutMsForTests(2_000);
+
+    const ready = createDeferred<void>();
+    let openHandler: (() => void) | undefined;
+    class LaterReadyJsonRpcSocket extends MockJsonRpcSocket {
+      readonly readyPromise = ready.promise;
+      override connect() {
+        openHandler = () => this.opts.onOpen?.();
+      }
+      markReady() {
+        ready.resolve();
+        openHandler?.();
+      }
+    }
+
+    setJsonRpcSocketOverride(LaterReadyJsonRpcSocket);
+    RUNTIME.jsonRpcSockets.clear();
+    __controlSocketInternal.reset();
+    jsonRpcRequests.length = 0;
+    useAppStore.setState((state) => ({ ...state, notifications: [] }));
+    primeWorkspaceConnection();
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "gpt-5.4",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)?.defaultModel,
+    ).toBe("gpt-5.4");
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
+
+    const socket = MockJsonRpcSocket.instances.at(-1) as LaterReadyJsonRpcSocket | undefined;
+    expect(socket).toBeInstanceOf(LaterReadyJsonRpcSocket);
+    socket?.markReady();
+
+    await waitForCondition(() => requestsFor("cowork/session/defaults/apply").length === 1);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      model: "gpt-5.4",
+    });
     expect(
       useAppStore
         .getState()

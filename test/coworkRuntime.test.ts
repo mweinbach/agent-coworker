@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { loadConfig } from "../src/config";
 import {
+  __internal as runtimeIntegrityInternal,
   buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
@@ -166,6 +167,7 @@ async function runtimeArchive(
 }
 
 afterEach(async () => {
+  runtimeIntegrityInternal.setTrustVerifiedRuntimeTreeHookForTests(null);
   releaseAllRuntimeTrust();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -317,6 +319,67 @@ describe("Cowork unified runtime", () => {
     expect(await resolveCurrentRuntime(home)).toBe(
       path.join(home, ".cowork", "runtime", "2026-06-21"),
     );
+  });
+
+  test("clears fingerprint attestations when a runtime is pruned or replaced", async () => {
+    // `<runtime-dir>.verified.json` is a trust cache. Leaving it beside a
+    // pruned/replaced tree would let a later install at the same path skip
+    // re-hashing against a stale fingerprint until full verify caught up.
+    const root = await tempRoot("attestation-prune");
+    const home = path.join(root, "home");
+    const firstArchive = await runtimeArchive(path.join(root, "archives"), "2026-06-19");
+    const first = await installRuntimeArchive({
+      archivePath: firstArchive.archivePath,
+      expectedSha256: firstArchive.sha256,
+      expectedVersion: "2026-06-19",
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const prunedAttestation = runtimeAttestationPath(first.runtimeDir);
+    expect(JSON.parse(await fs.readFile(prunedAttestation, "utf8"))).toMatchObject({
+      runtimeVersion: "2026-06-19",
+    });
+
+    for (const version of ["2026-06-20", "2026-06-21"] as const) {
+      const archive = await runtimeArchive(path.join(root, "archives"), version);
+      await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        expectedVersion: version,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+    }
+    await expect(fs.stat(prunedAttestation)).rejects.toThrow();
+    expect((await listInstalledRuntimes(home)).map((runtime) => runtime.version)).toEqual([
+      "2026-06-21",
+      "2026-06-20",
+    ]);
+
+    const currentDir = path.join(home, ".cowork", "runtime", "2026-06-21");
+    const currentAttestation = runtimeAttestationPath(currentDir);
+    await fs.writeFile(
+      currentAttestation,
+      `${JSON.stringify({ schemaVersion: 1, runtimeVersion: "stale-marker" }, null, 2)}\n`,
+    );
+    // Same version destination: install clears the old attestation, then writes a fresh one.
+    const replacement = await runtimeArchive(path.join(root, "archives-replace"), "2026-06-21");
+    const replaced = await installRuntimeArchive({
+      archivePath: replacement.archivePath,
+      expectedSha256: replacement.sha256,
+      expectedVersion: "2026-06-21",
+      home,
+      execute: false,
+      force: true,
+      trustedKeys,
+    });
+    expect(replaced.runtimeDir).toBe(currentDir);
+    const afterReplace = JSON.parse(await fs.readFile(currentAttestation, "utf8")) as {
+      runtimeVersion?: string;
+    };
+    expect(afterReplace.runtimeVersion).toBe("2026-06-21");
   });
 
   test("serializes concurrent runtime bootstrap attempts", async () => {
@@ -640,6 +703,54 @@ describe("Cowork unified runtime", () => {
     });
     expect(planted.ok).toBe(false);
     expect(planted.errors.join("\n")).toMatch(/Unexpected runtime file/i);
+  });
+
+  test("fails closed when trust is invalidated mid-entrypoint verification", async () => {
+    const root = await tempRoot("mid-verify-race");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    releaseAllRuntimeTrust();
+
+    const gate = (() => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    })();
+    let verificationStarted = false;
+    runtimeIntegrityInternal.setTrustVerifiedRuntimeTreeHookForTests(async (run) => {
+      verificationStarted = true;
+      await gate.promise;
+      return run();
+    });
+
+    const verifyPromise = buildRuntimeEnv(
+      installed.runtimeDir,
+      {},
+      hostPlatform(),
+      trustedKeys,
+    );
+    const deadline = Date.now() + 2_000;
+    while (!verificationStarted) {
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for mid-verify hook");
+      }
+      await Bun.sleep(5);
+    }
+
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    gate.resolve();
+    await expect(verifyPromise).rejects.toThrow(
+      "Runtime changed while an entrypoint was being verified.",
+    );
   });
 
   test("blocks signature tampering and unexpected files before managed execution", async () => {

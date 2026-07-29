@@ -276,6 +276,71 @@ describe("creation readiness preflight", () => {
     });
   });
 
+  test("names waiting and installing bootstrap phases in the pending message", async () => {
+    const waiting = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      {
+        getRuntimeStartup: () => ({
+          ready: false,
+          progress: {
+            phase: "waiting",
+            version: "1.2.3",
+            transferredBytes: 0,
+            totalBytes: null,
+            percent: null,
+          },
+        }),
+      },
+    );
+    expect(waiting.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "pending",
+      message: "Another Cowork window is finishing the one-time setup.",
+    });
+
+    const installing = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      {
+        getRuntimeStartup: () => ({
+          ready: false,
+          progress: {
+            phase: "installing",
+            version: "1.2.3",
+            transferredBytes: 100,
+            totalBytes: 100,
+            percent: 100,
+          },
+        }),
+      },
+    );
+    expect(installing.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "pending",
+      message: "Verifying and installing the Cowork runtime.",
+    });
+
+    const downloadWithoutPercent = await preflight(
+      { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
+      {
+        getRuntimeStartup: () => ({
+          ready: false,
+          progress: {
+            phase: "downloading",
+            version: "1.2.3",
+            transferredBytes: 10,
+            totalBytes: null,
+            percent: null,
+          },
+        }),
+      },
+    );
+    expect(downloadWithoutPercent.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "pending",
+      message: "Downloading the Cowork runtime.",
+    });
+  });
+
   test("falls back to a generic pending message without bootstrap progress", async () => {
     const result = await preflight(
       { kind: "chat", provider: "google", model: "gemini-2.5-flash" },

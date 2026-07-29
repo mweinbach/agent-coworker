@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   composerDraftKeyForNewChatTarget,
+  composerDraftKeyForThread,
   createEmptyComposerDraft,
 } from "../src/app/composerDrafts";
 import type { SessionSnapshot } from "../src/app/types";
@@ -61,6 +62,9 @@ const startCalls: Array<{
 }> = [];
 const stopCalls: string[] = [];
 const statusCalls: string[] = [];
+const trashPathCalls: string[] = [];
+const oneOffWorkspaceCalls: Array<{ titleHint?: string }> = [];
+let oneOffWorkspaceCounter = 0;
 const savedStates: any[] = [];
 let pickedWorkspaceDirectory: string | null = null;
 let workspaceServerStatusById = new Map<string, WorkspaceServerStatus>();
@@ -172,7 +176,17 @@ const desktopApiMock = createDesktopApiMock({
   copyPath: async () => {},
   createDirectory: async () => {},
   renamePath: async () => {},
-  trashPath: async () => {},
+  trashPath: async ({ path }: { path: string }) => {
+    trashPathCalls.push(path);
+  },
+  createOneOffChatWorkspace: async (opts?: { titleHint?: string }) => {
+    oneOffWorkspaceCalls.push(opts ?? {});
+    oneOffWorkspaceCounter += 1;
+    return {
+      name: "New chat",
+      path: `/tmp/cowork-one-off-${oneOffWorkspaceCounter}`,
+    };
+  },
   confirmAction: async () => true,
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
@@ -190,6 +204,9 @@ const { isInteractionThreadVisible } = await import("../src/app/interactionVisib
 const { persistNow, RUNTIME } = await import("../src/app/store.helpers");
 const { hydrateThreadSelection } = await import("../src/app/store.actions/thread");
 const { __internalOperationIntent } = await import("../src/app/store.helpers/operationIntent");
+const { __internalOneOffWorkspaceRecord } = await import(
+  "../src/app/store.helpers/oneOffWorkspaceRecord"
+);
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
@@ -272,11 +289,17 @@ function projectWorkspace(id: string) {
 describe("workspace startup flow", () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(
+      desktopApiMock.createOneOffChatWorkspace,
+    );
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     startDeferreds.length = 0;
     startCalls.length = 0;
     stopCalls.length = 0;
     statusCalls.length = 0;
+    trashPathCalls.length = 0;
+    oneOffWorkspaceCalls.length = 0;
+    oneOffWorkspaceCounter = 0;
     savedStates.length = 0;
     workspaceServerStatusById = new Map();
     pickedWorkspaceDirectory = null;
@@ -368,6 +391,7 @@ describe("workspace startup flow", () => {
     // Flush any debounced persist scheduled by store actions while the mock
     // desktop API is still installed, so no timer fires into a later file.
     await persistNow(useAppStore.getState);
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(null);
     clearJsonRpcSocketOverride();
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
@@ -2424,6 +2448,117 @@ describe("workspace startup flow", () => {
     expect(state.threadRuntimeById).toEqual({});
     expect(RUNTIME.pendingThreadMessages.size).toBe(0);
     expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+  });
+
+  test("one-off startup failure discards the hidden workspace and trashes its path", async () => {
+    const project = projectWorkspace("ws-project-keep");
+    const target = { kind: "oneOff" as const };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 13,
+      text: "One-off must not leave a workspace behind",
+    };
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [project],
+      threads: [],
+      selectedWorkspaceId: project.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "oneOff",
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const optimistic = useAppStore.getState();
+    const oneOffWorkspace = optimistic.workspaces.find(
+      (workspace) => workspace.workspaceKind === "oneOffChat",
+    );
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(oneOffWorkspace).toBeDefined();
+    expect(optimistic.selectedWorkspaceId).toBe(oneOffWorkspace?.id);
+    expect(optimistic.threads).toHaveLength(1);
+    expect(startCalls[0]?.workspaceId).toBe(oneOffWorkspace?.id);
+
+    startDeferreds[0]?.reject(new Error("one-off server failed"));
+    await expect(creation).resolves.toBe(false);
+
+    const state = useAppStore.getState();
+    expect(state.workspaces.map((workspace) => workspace.id)).toEqual([project.id]);
+    expect(state.selectedWorkspaceId).toBe(project.id);
+    expect(state.threads).toEqual([]);
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newChatLandingTarget).toEqual(target);
+    expect(state.composerDraftsByKey[draftKey]).toEqual(draft);
+    expect(state.threadRuntimeById).toEqual({});
+    expect(RUNTIME.pendingThreadMessages.size).toBe(0);
+    expect(trashPathCalls).toEqual([oneOffWorkspace?.path as string]);
+    expect(stopCalls).toContain(oneOffWorkspace?.id as string);
+  });
+
+  test("startup failure keeps mid-flight draft edits on the landing key", async () => {
+    const workspace = projectWorkspace("ws-mid-flight-edit");
+    const target = { kind: "project" as const, workspaceId: workspace.id };
+    const draftKey = composerDraftKeyForNewChatTarget(target);
+    const draft = {
+      ...createEmptyComposerDraft("2026-03-08T09:00:00.000Z"),
+      revision: 15,
+      text: "Original submitted draft",
+    };
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      newChatLandingTarget: target,
+      composerDraftsByKey: { [draftKey]: draft },
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: draft.text,
+      draftSubmission: { key: draftKey, revision: draft.revision },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const optimisticThreadId = useAppStore.getState().selectedThreadId;
+    expect(optimisticThreadId).not.toBeNull();
+    const threadDraftKey = composerDraftKeyForThread(optimisticThreadId as string);
+    const editedDraft = {
+      ...draft,
+      revision: 16,
+      text: "Edited while the server was still starting",
+    };
+    useAppStore.setState((state) => ({
+      composerDraftsByKey: {
+        ...state.composerDraftsByKey,
+        [threadDraftKey]: editedDraft,
+      },
+    }));
+
+    startDeferreds[0]?.reject(new Error("server failed after edit"));
+    await expect(creation).resolves.toBe(false);
+
+    const state = useAppStore.getState();
+    expect(state.threads).toEqual([]);
+    expect(state.composerDraftsByKey[draftKey]).toEqual(editedDraft);
+    expect(state.composerDraftsByKey[threadDraftKey]).toBeUndefined();
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.newChatLandingTarget).toEqual(target);
   });
 
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {

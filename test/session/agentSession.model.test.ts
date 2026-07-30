@@ -320,6 +320,42 @@ describe("AgentSession", () => {
       });
     });
 
+    test("setModel resets a stale same-provider preferred child instead of rejecting", async () => {
+      const persistModelSelectionImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          childModelRoutingMode: "same-provider",
+          // Persisted before routing mode flipped back to same-provider: the
+          // preferred child id is not a Codex model and must not block selection.
+          preferredChildModel: "gemini-3.1-pro-preview",
+          preferredChildModelRef: "codex-cli:gemini-3.1-pro-preview",
+          allowedChildModelRefs: [],
+        },
+        persistModelSelectionImpl,
+      });
+
+      await session.setModel("gpt-5.4", "codex-cli");
+
+      expect(events.some((evt) => evt.type === "error")).toBe(false);
+      expect(session.getPublicConfig().provider).toBe("codex-cli");
+      expect(session.getPublicConfig().model).toBe("gpt-5.4");
+      const config = session.getSessionConfigEvent().config;
+      expect(config.childModelRoutingMode).toBe("same-provider");
+      expect(config.preferredChildModel).toBe("gpt-5.4");
+      expect(config.preferredChildModelRef).toBe("codex-cli:gpt-5.4");
+      expect(persistModelSelectionImpl).toHaveBeenCalledWith({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "codex-cli:gpt-5.4",
+        allowedChildModelRefs: [],
+      });
+    });
+
     test("suppresses no-op model updates when provider and model are unchanged", async () => {
       const persistModelSelectionImpl = mock(async () => {});
       const { session, events } = makeSession({

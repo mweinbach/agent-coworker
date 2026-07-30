@@ -653,9 +653,7 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   if (!state.verification) {
     const run = () => trustVerifiedRuntimeTree(root, bundle, state);
     state.verification = (
-      trustVerifiedRuntimeTreeHookForTests
-        ? trustVerifiedRuntimeTreeHookForTests(run)
-        : run()
+      trustVerifiedRuntimeTreeHookForTests ? trustVerifiedRuntimeTreeHookForTests(run) : run()
     )
       .then(() => undefined)
       .finally(() => {

@@ -396,9 +396,7 @@ describe("pi runtime rate-limit retry", () => {
     expect(harness.streamCount()).toBe(1);
     expect(harness.sleeps).toHaveLength(0);
     expect(
-      harness.emitted.some(
-        (part) => part.type === "tool-input-start" && part.toolName === "bash",
-      ),
+      harness.emitted.some((part) => part.type === "tool-input-start" && part.toolName === "bash"),
     ).toBe(true);
     expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(1);
   });

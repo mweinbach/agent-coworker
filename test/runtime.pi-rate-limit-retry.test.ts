@@ -373,6 +373,61 @@ describe("pi runtime rate-limit retry", () => {
     expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(1);
   });
 
+  test("does not retry once a mapped toolcall part is visible", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-toolcall-");
+    const harness = createRetryHarness(() => ({
+      events: [
+        {
+          type: "toolcall_start",
+          contentIndex: 0,
+          partial: {
+            content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: {} }],
+          },
+        },
+        rateLimitErrorEvent(),
+      ],
+      result: rateLimitAssistantRecord,
+    }));
+
+    await expect(
+      harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness)),
+    ).rejects.toThrow(RATE_LIMIT_MESSAGE);
+
+    expect(harness.streamCount()).toBe(1);
+    expect(harness.sleeps).toHaveLength(0);
+    expect(
+      harness.emitted.some(
+        (part) => part.type === "tool-input-start" && part.toolName === "bash",
+      ),
+    ).toBe(true);
+    expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(1);
+  });
+
+  test("does not retry once a mapped thinking/reasoning part is visible", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-thinking-");
+    const harness = createRetryHarness(() => ({
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_delta", contentIndex: 0, delta: "considering tools" },
+        rateLimitErrorEvent(),
+      ],
+      result: rateLimitAssistantRecord,
+    }));
+
+    await expect(
+      harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness)),
+    ).rejects.toThrow(RATE_LIMIT_MESSAGE);
+
+    expect(harness.streamCount()).toBe(1);
+    expect(harness.sleeps).toHaveLength(0);
+    expect(
+      harness.emitted.some(
+        (part) => part.type === "reasoning-delta" && part.text === "considering tools",
+      ),
+    ).toBe(true);
+    expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(1);
+  });
+
   test("gives up after the bounded attempts and surfaces the last error", async () => {
     const homeDir = await makeTestHome("pi-rate-limit-exhausted-");
     const harness = createRetryHarness(() => ({

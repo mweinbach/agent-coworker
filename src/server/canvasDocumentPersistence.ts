@@ -917,3 +917,9 @@ class CanvasDocumentConflictError extends Error {
 }
 
 export const canvasDocumentPersistence = new CanvasDocumentPersistenceService();
+
+/** Test-only seam for soft revision / inode identity helpers. */
+export const __internal = {
+  revisionMetadataMatches,
+  fileIdentityMatches,
+} as const;

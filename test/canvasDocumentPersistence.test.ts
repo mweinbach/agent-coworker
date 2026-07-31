@@ -6,7 +6,10 @@ import path from "node:path";
 import { removeWithRetry } from "../src/platform/fs";
 import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
-import { CanvasDocumentPersistenceService } from "../src/server/canvasDocumentPersistence";
+import {
+  __internal as canvasDocumentInternal,
+  CanvasDocumentPersistenceService,
+} from "../src/server/canvasDocumentPersistence";
 import { pinHome, symlinkOrJunction } from "./helpers/platform";
 
 type Deferred<T> = {
@@ -614,5 +617,50 @@ describe("CanvasDocumentPersistenceService", () => {
       generation: 1,
     });
     expect(recovered.ok).toBe(true);
+  });
+});
+
+describe("canvas soft revision and file identity helpers", () => {
+  test("revisionMetadataMatches tolerates sub-second mtime/ctime skew", () => {
+    const base = { size: 12, mtimeMs: 1_000_000, ctimeMs: 2_000_000 };
+    expect(
+      canvasDocumentInternal.revisionMetadataMatches(base, {
+        size: 12,
+        mtimeMs: 1_000_999,
+        ctimeMs: 2_000_500,
+      }),
+    ).toBe(true);
+    expect(
+      canvasDocumentInternal.revisionMetadataMatches(base, {
+        size: 12,
+        mtimeMs: 1_001_000,
+        ctimeMs: 2_000_000,
+      }),
+    ).toBe(false);
+    expect(
+      canvasDocumentInternal.revisionMetadataMatches(base, {
+        size: 13,
+        mtimeMs: 1_000_000,
+        ctimeMs: 2_000_000,
+      }),
+    ).toBe(false);
+  });
+
+  test("fileIdentityMatches treats zero inodes as soft matches", () => {
+    expect(
+      canvasDocumentInternal.fileIdentityMatches({ dev: 1, ino: 0 }, { dev: 99, ino: 42 }),
+    ).toBe(true);
+    expect(
+      canvasDocumentInternal.fileIdentityMatches({ dev: 1, ino: 10 }, { dev: 1, ino: 0 }),
+    ).toBe(true);
+    expect(
+      canvasDocumentInternal.fileIdentityMatches({ dev: 1, ino: 10 }, { dev: 1, ino: 10 }),
+    ).toBe(true);
+    expect(
+      canvasDocumentInternal.fileIdentityMatches({ dev: 1, ino: 10 }, { dev: 2, ino: 10 }),
+    ).toBe(false);
+    expect(
+      canvasDocumentInternal.fileIdentityMatches({ dev: 1, ino: 10 }, { dev: 1, ino: 11 }),
+    ).toBe(false);
   });
 });

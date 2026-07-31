@@ -7,8 +7,8 @@ import { removeWithRetry } from "../src/platform/fs";
 import { canonicalizeSync } from "../src/platform/paths";
 import { scratchRoots } from "../src/platform/sandbox";
 import {
-  __internal as canvasDocumentInternal,
   CanvasDocumentPersistenceService,
+  __internal as canvasDocumentInternal,
 } from "../src/server/canvasDocumentPersistence";
 import { pinHome, symlinkOrJunction } from "./helpers/platform";
 

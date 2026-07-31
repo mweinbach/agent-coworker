@@ -2288,6 +2288,169 @@ describe("workspace startup flow", () => {
     expect(useAppStore.getState().selectedThreadId).toBe(threadId);
   });
 
+  test("newThread with draft attachments defers optimistic first message until after prep", async () => {
+    const workspace = projectWorkspace("ws-attach-defer");
+    const phases: string[] = [];
+    const attachmentRead = createDeferred<ArrayBuffer>();
+    let attachmentReadStarted = false;
+    const file = {
+      name: "notes.txt",
+      type: "text/plain",
+      size: 5,
+      lastModified: 1,
+      arrayBuffer: async () => {
+        attachmentReadStarted = true;
+        return await attachmentRead.promise;
+      },
+    } as File;
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: "wait for attachments",
+      attachmentFiles: [file],
+      onPhase: (phase) => {
+        phases.push(phase);
+      },
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const pendingState = useAppStore.getState();
+    const threadId = pendingState.selectedThreadId;
+    expect(threadId).not.toBeNull();
+    expect(pendingState.threads).toHaveLength(1);
+    expect(phases).toContain("starting-server");
+    expect(phases).not.toContain("processing-attachments");
+    expect(
+      pendingState.threadRuntimeById[threadId as string]?.feed.some(
+        (item) => item.kind === "message" && item.role === "user",
+      ),
+    ).toBe(false);
+    expect(RUNTIME.pendingThreadMessages.get(threadId as string) ?? []).toHaveLength(0);
+    expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+
+    startDeferreds[0]?.resolve({ url: "ws://attach-defer" });
+    await waitForCondition(() => attachmentReadStarted);
+    expect(phases).toContain("processing-attachments");
+    expect(RUNTIME.pendingThreadMessages.get(threadId as string) ?? []).toHaveLength(0);
+
+    attachmentRead.resolve(new TextEncoder().encode("hello").buffer);
+    await expect(creation).resolves.toBe(true);
+
+    const finalRuntime = useAppStore.getState().threadRuntimeById[threadId as string];
+    expect(
+      finalRuntime?.feed.some(
+        (item) =>
+          item.kind === "message" &&
+          item.role === "user" &&
+          item.text === "wait for attachments",
+      ),
+    ).toBe(true);
+    expect(RUNTIME.pendingThreadMessages.get(threadId as string)).toHaveLength(1);
+  });
+
+  test("pre-resolved attachments still show the first message before server start", async () => {
+    const workspace = projectWorkspace("ws-resolved-attach-early");
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: "already prepared",
+      attachments: [
+        {
+          filename: "notes.txt",
+          contentBase64: "aGVsbG8=",
+          mimeType: "text/plain",
+        },
+      ],
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const pendingState = useAppStore.getState();
+    const threadId = pendingState.selectedThreadId;
+    expect(threadId).not.toBeNull();
+    expect(
+      pendingState.threadRuntimeById[threadId as string]?.feed.some(
+        (item) =>
+          item.kind === "message" &&
+          item.role === "user" &&
+          item.text === "already prepared",
+      ),
+    ).toBe(true);
+    expect(RUNTIME.pendingThreadMessages.get(threadId as string)).toHaveLength(1);
+
+    startDeferreds[0]?.resolve({ url: "ws://resolved-attach-early" });
+    await expect(creation).resolves.toBe(true);
+  });
+
+  test("attachment-bearing newThread never queues optimistic state when server start fails", async () => {
+    const workspace = projectWorkspace("ws-attach-start-fail");
+    const file = {
+      name: "notes.txt",
+      type: "text/plain",
+      size: 5,
+      lastModified: 1,
+      arrayBuffer: async () => new TextEncoder().encode("hello").buffer,
+    } as File;
+    useAppStore.setState({
+      view: "chat",
+      workspaces: [workspace],
+      threads: [],
+      selectedWorkspaceId: workspace.id,
+      selectedThreadId: null,
+      selectedTaskId: null,
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+    });
+
+    const creation = useAppStore.getState().newThread({
+      scope: "project",
+      workspaceId: workspace.id,
+      mode: "session",
+      firstMessage: "do not optimistic yet",
+      attachmentFiles: [file],
+    });
+    await waitForCondition(() => startCalls.length === 1);
+
+    const optimisticThreadId = useAppStore.getState().selectedThreadId;
+    expect(optimisticThreadId).not.toBeNull();
+    expect(useAppStore.getState().threads).toHaveLength(1);
+    expect(RUNTIME.pendingThreadMessages.size).toBe(0);
+    expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+
+    startDeferreds[0]?.reject(new Error("server failed"));
+    await expect(creation).resolves.toBe(false);
+
+    const state = useAppStore.getState();
+    expect(state.threads).toEqual([]);
+    expect(state.selectedThreadId).toBeNull();
+    expect(state.threadRuntimeById).toEqual({});
+    expect(RUNTIME.pendingThreadMessages.size).toBe(0);
+    expect(RUNTIME.optimisticUserMessageIds.size).toBe(0);
+  });
+
   test("cancelling delayed startup preserves the exact submitted draft", async () => {
     const workspace = projectWorkspace("ws-cancel-start");
     const target = { kind: "project" as const, workspaceId: workspace.id };

@@ -2325,14 +2325,12 @@ describe("workspace startup flow", () => {
     await expect(creation).resolves.toBe(true);
 
     const finalRuntime = useAppStore.getState().threadRuntimeById[threadId as string];
-    expect(
-      finalRuntime?.feed.some(
-        (item) =>
-          item.kind === "message" &&
-          item.role === "user" &&
-          item.text === "wait for attachments",
-      ),
-    ).toBe(true);
+    const optimisticUser = finalRuntime?.feed.find(
+      (item) => item.kind === "message" && item.role === "user",
+    );
+    expect(optimisticUser).toBeDefined();
+    expect(optimisticUser?.text ?? "").toContain("wait for attachments");
+    expect(optimisticUser?.text ?? "").toContain("notes.txt");
     expect(RUNTIME.pendingThreadMessages.get(threadId as string)).toHaveLength(1);
   });
 
@@ -2367,14 +2365,14 @@ describe("workspace startup flow", () => {
     const pendingState = useAppStore.getState();
     const threadId = pendingState.selectedThreadId;
     expect(threadId).not.toBeNull();
-    expect(
-      pendingState.threadRuntimeById[threadId as string]?.feed.some(
-        (item) =>
-          item.kind === "message" &&
-          item.role === "user" &&
-          item.text === "already prepared",
-      ),
-    ).toBe(true);
+    const optimisticUser = pendingState.threadRuntimeById[threadId as string]?.feed.find(
+      (item) => item.kind === "message" && item.role === "user",
+    );
+    // Pre-resolved attachments skip preparation, so the optimistic bubble can
+    // appear before the server start wait (unlike draft attachmentFiles).
+    expect(optimisticUser).toBeDefined();
+    expect(optimisticUser?.text ?? "").toContain("already prepared");
+    expect(optimisticUser?.text ?? "").toContain("notes.txt");
     expect(RUNTIME.pendingThreadMessages.get(threadId as string)).toHaveLength(1);
 
     startDeferreds[0]?.resolve({ url: "ws://resolved-attach-early" });

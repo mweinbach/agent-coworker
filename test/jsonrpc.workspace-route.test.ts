@@ -441,6 +441,72 @@ describe("workspace JSON-RPC route", () => {
     ).toBe(true);
   });
 
+  test("Canvas save and saveAs do not broadcast fileChanged on conflict or superseded", async () => {
+    const revision = {
+      modifiedAtMs: 1_700_000_000_000,
+      changeTimeMs: 1_700_000_000_000,
+      size: 12,
+      fingerprint: "sha256:conflict-or-superseded",
+    };
+    const harness = createWorkspaceRouteHarness();
+    harness.context.getConfig = () => ({ workingDirectory: "/workspace/project" }) as never;
+    harness.context.canvasDocuments = {
+      save: async () => ({
+        ok: false,
+        documentId: "canvas-route-test",
+        generation: 1,
+        editRevision: 1,
+        path: "/workspace/project/notes.md",
+        currentRevision: revision,
+        error: { kind: "conflict", message: "disk moved" },
+      }),
+      saveAs: async () => ({
+        ok: true,
+        documentId: "canvas-route-test",
+        generation: 1,
+        editRevision: 2,
+        path: "/workspace/project/notes-copy.md",
+        revision,
+        status: "superseded",
+      }),
+    } as never;
+    const handlers = createWorkspaceRouteHandlers(harness.context);
+
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/save", {
+      documentId: "canvas-route-test",
+      generation: 1,
+      editRevision: 1,
+      content: "stale write",
+    });
+    await invokeWorkspaceDocument(handlers, "cowork/workspace/document/saveAs", {
+      documentId: "canvas-route-test",
+      generation: 1,
+      editRevision: 2,
+      content: "superseded write",
+      path: "/workspace/project/notes-copy.md",
+    });
+
+    expect(harness.errors).toEqual([]);
+    expect(harness.notifications).toEqual([]);
+    expect(harness.emissions).toEqual(["result", "result"]);
+
+    const conflict = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/save"].parse(
+      harness.results[0]?.result,
+    );
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: { kind: "conflict" },
+    });
+
+    const superseded = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/saveAs"].parse(
+      harness.results[1]?.result,
+    );
+    expect(superseded).toMatchObject({
+      ok: true,
+      status: "superseded",
+    });
+  });
+
   test("spreadsheet/patch writes a cell and returns ok", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-edit-route-"));
     try {

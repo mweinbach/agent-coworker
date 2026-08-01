@@ -71,6 +71,46 @@ describe("WebSocket backpressure queue", () => {
     q.flush(ws);
     expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
   });
+
+  test("shouldSendNotification honors per-connection opt-outs", () => {
+    const q = new SocketSendQueue(500);
+    const optedOut = fakeSocket(() => 1);
+    optedOut.data.rpc = {
+      capabilities: { optOutNotificationMethods: ["cowork/control/event"] },
+    };
+    const open = fakeSocket(() => 1);
+
+    expect(q.shouldSendNotification(optedOut, "cowork/control/event")).toBe(false);
+    expect(q.shouldSendNotification(optedOut, "thread/started")).toBe(true);
+    expect(q.shouldSendNotification(open, "cowork/control/event")).toBe(true);
+  });
+
+  test("external sink true consumes the send; false falls through to the socket", () => {
+    const q = new SocketSendQueue(500);
+    const sent: string[] = [];
+    const ws = fakeSocket((serialized) => {
+      sent.push(serialized);
+      return 1;
+    });
+
+    q.setExternalSink("conn-1", () => true);
+    q.send(ws, { method: "consumed", params: { id: 1 } });
+    expect(sent).toEqual([]);
+
+    q.setExternalSink("conn-1", () => false);
+    q.send(ws, { method: "fallback", params: { id: 2 } });
+    expect(sent).toEqual([JSON.stringify({ method: "fallback", params: { id: 2 } })]);
+
+    q.setExternalSink("conn-1", null);
+    q.send(ws, { method: "direct", params: { id: 3 } });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toBe(JSON.stringify({ method: "direct", params: { id: 3 } }));
+
+    q.setExternalSink("conn-1", () => true);
+    q.deleteConnection("conn-1");
+    q.send(ws, { method: "after-delete", params: { id: 4 } });
+    expect(sent.at(-1)).toBe(JSON.stringify({ method: "after-delete", params: { id: 4 } }));
+  });
 });
 
 describe("startServer backpressure integration", () => {

@@ -156,6 +156,56 @@ describe("AgentSession stream pipeline", () => {
     expect(chunkIndex).toBe(-1);
   });
 
+  test("raw-backed turns still emit non-replayable normalized chunks after raw events", async () => {
+    const { session, events } = makeSession();
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      await params.onModelRawEvent?.({
+        format: "openai-responses-v1",
+        event: {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        },
+      });
+      await params.onModelStreamPart({
+        type: "reasoning-start",
+        id: "s0",
+        mode: "summary",
+      });
+      await params.onModelStreamPart({
+        type: "tool-result",
+        toolCallId: "tc-raw-1",
+        toolName: "read_file",
+        output: "still emit me",
+        isError: false,
+      });
+      await params.onModelStreamPart({
+        type: "error",
+        error: "still emit errors",
+      });
+      return { text: "", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("test");
+
+    expect(getRawStreamEvents(events)).toHaveLength(1);
+    const chunks = getStreamChunks(events);
+    expect(chunks.map((chunk) => chunk.partType)).toEqual(["tool_result", "error"]);
+    expect(chunks[0]).toMatchObject({
+      partType: "tool_result",
+      part: {
+        toolCallId: "tc-raw-1",
+        toolName: "read_file",
+        output: "still emit me",
+      },
+    });
+    expect(chunks[1]).toMatchObject({
+      partType: "error",
+      part: {
+        error: "still emit errors",
+      },
+    });
+  });
+
   test("codex app-server raw JSON-RPC requests persist through the SQLite raw stream path", async () => {
     const persisted: PersistedModelStreamChunk[] = [];
     const sessionDb = {

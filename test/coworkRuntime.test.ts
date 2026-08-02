@@ -16,6 +16,7 @@ import {
   resolveRuntimeAssetForHost,
   runtimeAssetFileName,
   runtimeAttestationPath,
+  __internal as runtimeIntegrityInternal,
   sha256File,
   verifyRuntime,
 } from "../src/coworkRuntime";
@@ -166,6 +167,7 @@ async function runtimeArchive(
 }
 
 afterEach(async () => {
+  runtimeIntegrityInternal.setTrustVerifiedRuntimeTreeHookForTests(null);
   releaseAllRuntimeTrust();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -701,6 +703,49 @@ describe("Cowork unified runtime", () => {
     });
     expect(planted.ok).toBe(false);
     expect(planted.errors.join("\n")).toMatch(/Unexpected runtime file/i);
+  });
+
+  test("fails closed when trust is invalidated mid-entrypoint verification", async () => {
+    const root = await tempRoot("mid-verify-race");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    releaseAllRuntimeTrust();
+
+    const gate = (() => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    })();
+    let verificationStarted = false;
+    runtimeIntegrityInternal.setTrustVerifiedRuntimeTreeHookForTests(async (run) => {
+      verificationStarted = true;
+      await gate.promise;
+      return run();
+    });
+
+    const verifyPromise = buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    const deadline = Date.now() + 2_000;
+    while (!verificationStarted) {
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for mid-verify hook");
+      }
+      await Bun.sleep(5);
+    }
+
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    gate.resolve();
+    await expect(verifyPromise).rejects.toThrow(
+      "Runtime changed while an entrypoint was being verified.",
+    );
   });
 
   test("blocks signature tampering and unexpected files before managed execution", async () => {

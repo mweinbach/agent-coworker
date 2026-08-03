@@ -319,6 +319,8 @@ export async function hydrateThreadSelection(
         candidate.id === selectedThreadId
           ? {
               ...candidate,
+              sessionKind: snapshot.sessionKind,
+              parentSessionId: snapshot.parentSessionId,
               title: snapshot.title,
               titleSource: snapshot.titleSource,
               lastMessageAt: snapshot.updatedAt,
@@ -700,6 +702,7 @@ export function createThreadActions(
   | "openNewChatLanding"
   | "setNewChatLandingTarget"
   | "selectThread"
+  | "openAgentThread"
   | "reconnectThread"
   | "reconnectThreadWithFeedback"
   | "sendMessage"
@@ -1631,6 +1634,54 @@ export function createThreadActions(
         skipWorkspaceSelectOnReconnect: true,
         signal: options.signal,
       });
+    },
+
+    openAgentThread: async (agentId: string, title?: string) => {
+      const normalizedAgentId = agentId.trim();
+      if (!normalizedAgentId) return;
+      const state = get();
+      const parentThreadId = state.selectedThreadId;
+      const parentThread = parentThreadId
+        ? state.threads.find((thread) => thread.id === parentThreadId)
+        : null;
+      if (!parentThread || parentThread.sessionKind === "agent") return;
+      const parentRuntime = state.threadRuntimeById[parentThread.id];
+      const agent = parentRuntime?.agents.find(
+        (candidate) => candidate.agentId === normalizedAgentId,
+      );
+      const resolvedTitle =
+        title?.trim() || agent?.nickname?.trim() || agent?.title?.trim() || "Subagent";
+      const parentSessionId = parentRuntime?.sessionId ?? parentThread.sessionId ?? parentThread.id;
+      const timestamp = nowIso();
+
+      set((current) => {
+        const existing = current.threads.find((thread) => thread.id === normalizedAgentId);
+        const agentThread: ThreadRecord = {
+          id: normalizedAgentId,
+          workspaceId: parentThread.workspaceId,
+          sessionKind: "agent",
+          parentSessionId,
+          title: resolvedTitle,
+          titleSource: "manual",
+          createdAt: existing?.createdAt ?? timestamp,
+          lastMessageAt: timestamp,
+          status: existing?.status ?? "disconnected",
+          sessionId: normalizedAgentId,
+          messageCount: existing?.messageCount ?? 0,
+          lastEventSeq: existing?.lastEventSeq ?? 0,
+          draft: false,
+          archived: false,
+        };
+        return {
+          threads: existing
+            ? current.threads.map((thread) =>
+                thread.id === normalizedAgentId ? { ...thread, ...agentThread } : thread,
+              )
+            : [...current.threads, agentThread],
+        };
+      });
+
+      await get().selectThread(normalizedAgentId);
     },
 
     reconnectThread: async (

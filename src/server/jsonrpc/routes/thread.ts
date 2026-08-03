@@ -208,6 +208,13 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       >();
       for (const record of context.threads.listPersisted({ cwd })) {
         if (
+          record.sessionKind !== "root" ||
+          record.parentSessionId !== null ||
+          record.role !== null
+        ) {
+          continue;
+        }
+        if (
           !context.utils.shouldIncludeThreadSummary({
             titleSource: record.titleSource,
             messageCount: record.messageCount,

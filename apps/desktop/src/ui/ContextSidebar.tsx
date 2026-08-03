@@ -83,6 +83,7 @@ export const ContextSidebar = memo(function ContextSidebar({
 }) {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const openAgentThread = useAppStore((s) => s.openAgentThread);
   const threadRuntime = useAppStore((s) =>
     selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null,
   );
@@ -212,9 +213,13 @@ export const ContextSidebar = memo(function ContextSidebar({
                 {agents.map((agent) => {
                   const usageLabel = agentUsageLabel(agent);
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={agent.agentId}
-                      className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-2"
+                      onClick={() =>
+                        void openAgentThread(agent.agentId, agent.nickname || agent.title)
+                      }
+                      className="app-context-sidebar__nested-panel w-full rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -240,7 +245,7 @@ export const ContextSidebar = memo(function ContextSidebar({
                           {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
                         </DesktopMarkdown>
                       ) : null}
-                    </div>
+                    </button>
                   );
                 })}
               </div>

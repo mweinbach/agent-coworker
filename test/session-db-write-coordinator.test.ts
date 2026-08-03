@@ -133,6 +133,37 @@ describe("SessionDbWriteCoordinator", () => {
     expect(Number(waitEvent?.attributes?.waitedMs ?? 0)).toBeGreaterThan(0);
   });
 
+  test("serializes concurrent writers from the same process in invocation order", async () => {
+    const paths = await makeTmpCoworkHome();
+    let activeLockAttempts = 0;
+    let maxConcurrentLockAttempts = 0;
+    const order: string[] = [];
+    const coordinator = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      mkdirLockDir: async (dirPath) => {
+        activeLockAttempts += 1;
+        maxConcurrentLockAttempts = Math.max(maxConcurrentLockAttempts, activeLockAttempts);
+        try {
+          await Bun.sleep(5);
+          await fs.mkdir(dirPath, { mode: 0o700 });
+        } finally {
+          activeLockAttempts -= 1;
+        }
+      },
+    });
+
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        coordinator.runExclusive(`writer-${index}`, async () => {
+          order.push(`writer-${index}`);
+        }),
+      ),
+    );
+
+    expect(maxConcurrentLockAttempts).toBe(1);
+    expect(order).toEqual(Array.from({ length: 12 }, (_, index) => `writer-${index}`));
+  });
+
   test("recovers stale lock owners and records stale recovery telemetry", async () => {
     const paths = await makeTmpCoworkHome();
     const telemetry: TelemetryEvent[] = [];

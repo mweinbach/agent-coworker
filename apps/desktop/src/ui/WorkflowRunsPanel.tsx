@@ -10,6 +10,7 @@ import {
 import { memo, useState } from "react";
 
 import { formatCost } from "../../../../src/session/pricing";
+import { useAppStore } from "../app/store";
 import type { ThreadWorkflowRun } from "../app/types";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
@@ -246,6 +247,7 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
   scrollerClassName: string;
 }) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+  const openAgentThread = useAppStore((s) => s.openAgentThread);
   const visibleRuns = runs.filter((run) => !isLegacyDryRun(run));
   // Read the run back out of `runs` rather than holding the object: progress
   // events replace it wholesale, and a captured copy would freeze mid-run.
@@ -275,6 +277,10 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
       <WorkflowRunDetailDialog
         run={openRun}
         open={openRun !== null}
+        onOpenAgent={(agentId, title) => {
+          setOpenRunId(null);
+          void openAgentThread(agentId, title);
+        }}
         onOpenChange={(next) => {
           if (!next) setOpenRunId(null);
         }}

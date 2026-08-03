@@ -20,7 +20,6 @@ import {
   MessageComposerFooter,
   MessageComposerForm,
   MessageComposerRoot,
-  MessageComposerStatus,
   MessageComposerStop,
   MessageComposerSubmissionNotice,
   MessageComposerSubmit,
@@ -46,7 +45,6 @@ export function ChatComposer(props: {
   removeAttachment: (index: number) => void;
   submitComposer: () => void;
   busy: boolean;
-  composerHint: string | null;
   composerSubmitState: ComposerSubmitState;
   attachmentPickerError: string | null;
   composerText: string;
@@ -86,7 +84,6 @@ export function ChatComposer(props: {
     removeAttachment,
     submitComposer,
     busy,
-    composerHint,
     composerSubmitState,
     attachmentPickerError,
     composerText,
@@ -161,7 +158,6 @@ export function ChatComposer(props: {
               submitComposer();
             }}
           >
-            <MessageComposerStatus>{composerHint}</MessageComposerStatus>
             <MessageComposerBody>
               {attachmentPickerError ? (
                 <div

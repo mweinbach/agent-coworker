@@ -101,6 +101,7 @@ export class SessionDbWriteCoordinator {
   private readonly processAlive: (pid: number) => boolean;
   private readonly mkdirLockDir: (dirPath: string) => Promise<void>;
   private readonly emitTelemetry?: SessionDbWriteCoordinatorOptions["emitTelemetry"];
+  private localWriteTail: Promise<void> = Promise.resolve();
   private readonly diagnostics: SessionDbWriteLockDiagnostics = {
     waitCount: 0,
     timeoutCount: 0,
@@ -147,6 +148,13 @@ export class SessionDbWriteCoordinator {
       return await callback();
     }
 
+    const previousLocalWriter = this.localWriteTail;
+    let releaseLocalWriter!: () => void;
+    this.localWriteTail = new Promise<void>((resolve) => {
+      releaseLocalWriter = resolve;
+    });
+    await previousLocalWriter.catch(() => {});
+
     const startedAt = this.now();
     let handle: LockHandle | null = null;
     try {
@@ -175,6 +183,7 @@ export class SessionDbWriteCoordinator {
       if (handle) {
         await handle.release();
       }
+      releaseLocalWriter();
     }
   }
 

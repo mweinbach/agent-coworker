@@ -337,6 +337,8 @@ const persistedThreadSchema = z
   .object({
     id: z.string(),
     workspaceId: z.string(),
+    sessionKind: z.enum(["root", "agent"]).optional(),
+    parentSessionId: normalizedSessionIdSchema.optional(),
     title: z.string(),
     titleSource: z.unknown().optional(),
     createdAt: z.string(),
@@ -368,6 +370,8 @@ const persistedThreadSchema = z
     return {
       id,
       workspaceId: thread.workspaceId,
+      ...(thread.sessionKind ? { sessionKind: thread.sessionKind } : {}),
+      ...(thread.parentSessionId !== undefined ? { parentSessionId: thread.parentSessionId } : {}),
       title: thread.title,
       titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
       createdAt: thread.createdAt,

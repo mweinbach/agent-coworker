@@ -91,10 +91,12 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
   run,
   open,
   onOpenChange,
+  onOpenAgent,
 }: {
   run: ThreadWorkflowRun | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onOpenAgent: (agentId: string, title: string) => void;
 }) {
   const counts = useMemo(() => tally(run?.agents ?? []), [run]);
 
@@ -216,47 +218,61 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
                         No agent started in this phase.
                       </div>
                     ) : (
-                      agents.map((agent) => (
-                        <div
-                          key={agent.index}
-                          className="rounded-md px-1.5 py-1 text-xs hover:bg-muted/40"
-                        >
-                          <div className="flex items-center gap-2">
-                            <AgentStateIcon state={agent.state} runCancelled={runCancelled} />
-                            <span className="sr-only">
-                              {agent.label}: {agentStateLabel(agent.state, runCancelled)}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-foreground">
-                              {agent.label}
-                            </span>
-                            {agent.state === "cached" ? (
-                              <span
-                                aria-hidden="true"
-                                className="app-type-caption shrink-0 app-text-muted"
-                              >
-                                cached
+                      agents.map((agent) => {
+                        const content = (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <AgentStateIcon state={agent.state} runCancelled={runCancelled} />
+                              <span className="sr-only">
+                                {agent.label}: {agentStateLabel(agent.state, runCancelled)}
                               </span>
-                            ) : agent.usdCost !== null && agent.usdCost > 0 ? (
-                              <span className="app-type-caption shrink-0 tabular-nums app-text-muted">
-                                {formatCost(agent.usdCost)}
+                              <span className="min-w-0 flex-1 truncate text-foreground">
+                                {agent.label}
                               </span>
+                              {agent.state === "cached" ? (
+                                <span
+                                  aria-hidden="true"
+                                  className="app-type-caption shrink-0 app-text-muted"
+                                >
+                                  cached
+                                </span>
+                              ) : agent.usdCost !== null && agent.usdCost > 0 ? (
+                                <span className="app-type-caption shrink-0 tabular-nums app-text-muted">
+                                  {formatCost(agent.usdCost)}
+                                </span>
+                              ) : null}
+                              {agent.agentId ? (
+                                <span
+                                  className="app-type-caption w-16 shrink-0 truncate font-mono app-text-muted"
+                                  title={agent.agentId}
+                                >
+                                  {agent.agentId.slice(0, 8)}
+                                </span>
+                              ) : null}
+                            </div>
+                            {agent.error ? (
+                              <p className="mt-1 whitespace-pre-wrap break-words pl-[1.375rem] leading-5 text-warning">
+                                {agent.error}
+                              </p>
                             ) : null}
-                            {agent.agentId ? (
-                              <span
-                                className="app-type-caption w-16 shrink-0 truncate font-mono app-text-muted"
-                                title={agent.agentId}
-                              >
-                                {agent.agentId.slice(0, 8)}
-                              </span>
-                            ) : null}
+                          </>
+                        );
+                        const agentId = agent.agentId;
+                        return agentId ? (
+                          <button
+                            type="button"
+                            key={agent.index}
+                            onClick={() => onOpenAgent(agentId, agent.label)}
+                            className="w-full rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {content}
+                          </button>
+                        ) : (
+                          <div key={agent.index} className="rounded-md px-1.5 py-1 text-xs">
+                            {content}
                           </div>
-                          {agent.error ? (
-                            <p className="mt-1 whitespace-pre-wrap break-words pl-[1.375rem] leading-5 text-warning">
-                              {agent.error}
-                            </p>
-                          ) : null}
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </section>

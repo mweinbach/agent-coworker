@@ -384,6 +384,7 @@ export type AppStoreState = {
   restoreThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string, options?: AbortableActionOptions) => Promise<void>;
+  openAgentThread: (agentId: string, title?: string) => Promise<void>;
   reconnectThread: (
     threadId: string,
     firstMessage?: string,

@@ -811,7 +811,7 @@ export class SessionRegistry {
           },
           parentSessionId,
         ),
-      disposeBinding: (binding, reason) => this.disposeBinding(binding, reason),
+      disposeBinding: (binding, reason, opts) => this.disposeBinding(binding, reason, opts),
       emitParentAgentStatus: (parentSessionId, agent) => {
         const parentBinding = this.sessionBindings.get(parentSessionId);
         if (!parentBinding) return;

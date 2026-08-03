@@ -140,6 +140,8 @@ export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
 export type ThreadRecord = {
   id: string;
   workspaceId: string;
+  sessionKind?: "root" | "agent";
+  parentSessionId?: string | null;
   title: string;
   titleSource?: ThreadTitleSource;
   createdAt: string;

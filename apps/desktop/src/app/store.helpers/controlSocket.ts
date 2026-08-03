@@ -153,6 +153,7 @@ export function createControlSocketHelpers(
     const clientOwnedThreads = workspaceThreads.filter(
       (thread) =>
         !thread.sessionId ||
+        thread.sessionKind === "agent" ||
         isTaskOwnedThread(thread) ||
         threadRuntimeById[thread.id]?.connected === true,
     );
@@ -166,6 +167,10 @@ export function createControlSocketHelpers(
       return {
         id: threadId,
         workspaceId,
+        ...(existing?.sessionKind ? { sessionKind: existing.sessionKind } : {}),
+        ...(existing?.parentSessionId !== undefined
+          ? { parentSessionId: existing.parentSessionId }
+          : {}),
         title: session.title,
         titleSource: session.titleSource,
         createdAt: session.createdAt,
@@ -270,7 +275,7 @@ export function createControlSocketHelpers(
         ? Boolean(
             selectionIntent.selectedTaskId && thread.taskId === selectionIntent.selectedTaskId,
           )
-        : isStandardChatThread(thread, { includeDrafts: true }));
+        : thread.sessionKind === "agent" || isStandardChatThread(thread, { includeDrafts: true }));
     const selectionFor = (threadId: string | null) => {
       if (selectionIntent.context === "task") {
         return { selectedThreadId: threadId, selectedTaskId: selectionIntent.selectedTaskId };

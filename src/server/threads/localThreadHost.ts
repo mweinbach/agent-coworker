@@ -410,6 +410,13 @@ export class LocalThreadHost implements ThreadHostAdapter {
     for (const summary of this.deps.sessionDb.listSessions()) {
       if (this.deps.taskCoordinator.isTaskThread(summary.sessionId)) continue;
       const record = this.deps.sessionDb.getSessionRecord(summary.sessionId);
+      if (
+        record?.sessionKind !== "root" ||
+        record.parentSessionId !== null ||
+        record.role !== null
+      ) {
+        continue;
+      }
       if (!record || !this.shouldIncludeRecord(record)) continue;
       threads.set(
         record.sessionId,

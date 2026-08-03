@@ -42,7 +42,6 @@ import { isChatProviderName } from "./chat/ComposerModelSelector";
 import { resolveChatBottomOffset } from "./chat/chatBottomOffset";
 import {
   activeChildAgentLabels,
-  composerBusyHint,
   countActiveChildAgents,
   getComposerSubmitState,
   resolveCurrentReasoningEffort,
@@ -825,8 +824,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         : pendingTurnStart
           ? "Sending..."
           : "Message...";
-  const composerHint = composerBusyHint(composerSubmitState);
-
   return (
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
@@ -924,7 +921,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             removeAttachment={removeAttachment}
             submitComposer={submitComposer}
             busy={busy}
-            composerHint={composerHint}
             composerSubmitState={composerSubmitState}
             attachmentPickerError={attachmentPickerError}
             composerText={composerText}

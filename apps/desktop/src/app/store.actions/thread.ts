@@ -703,6 +703,7 @@ export function createThreadActions(
   | "setNewChatLandingTarget"
   | "selectThread"
   | "openAgentThread"
+  | "closeAgentViewer"
   | "reconnectThread"
   | "reconnectThreadWithFeedback"
   | "sendMessage"
@@ -1673,6 +1674,7 @@ export function createThreadActions(
           archived: false,
         };
         return {
+          agentViewerThreadId: normalizedAgentId,
           threads: existing
             ? current.threads.map((thread) =>
                 thread.id === normalizedAgentId ? { ...thread, ...agentThread } : thread,
@@ -1680,8 +1682,20 @@ export function createThreadActions(
             : [...current.threads, agentThread],
         };
       });
+      syncDesktopStateCache(get);
 
-      await get().selectThread(normalizedAgentId);
+      // Hydrate the transcript and subscribe to live run events without taking
+      // over the main chat view; the viewer renders threadRuntimeById[agentId].
+      await get()
+        .reconnectThread(normalizedAgentId, undefined, { skipWorkspaceSelect: true })
+        .catch(() => {
+          // The viewer surfaces the disconnected state; reopening retries.
+        });
+    },
+
+    closeAgentViewer: () => {
+      if (get().agentViewerThreadId === null) return;
+      set({ agentViewerThreadId: null });
     },
 
     reconnectThread: async (

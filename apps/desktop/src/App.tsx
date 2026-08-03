@@ -36,6 +36,7 @@ import { applySystemAppearanceToDocument, readBootstrappedThemeSource } from "./
 import { useAdaptiveLayout } from "./lib/useAdaptiveLayout";
 import { cn } from "./lib/utils";
 import { getDesktopWindowMode } from "./lib/windowMode";
+import { AgentRunViewer } from "./ui/AgentRunViewer";
 import { Canvas } from "./ui/Canvas";
 import { CommandPalette } from "./ui/CommandPalette";
 import { ConnectionRecoveryBanner } from "./ui/ConnectionRecoveryBanner";
@@ -956,6 +957,7 @@ function AppContent() {
       ) : null}
       {windowMode === "main" ? <DesktopOnboarding /> : null}
       {windowMode === "main" ? <TranscriptDeliveryRecovery /> : null}
+      {windowMode === "main" ? <AgentRunViewer /> : null}
       {windowMode === "main" ? <InAppToasts /> : null}
     </>
   );

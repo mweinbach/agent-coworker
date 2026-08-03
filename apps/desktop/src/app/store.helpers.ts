@@ -297,6 +297,8 @@ export type AppStoreState = {
   composerAttachmentIngestionCountByKey: Record<string, number>;
   composerSubmissionsByKey: ComposerSubmissionsByKey;
   newChatLandingTarget: NewChatLandingTarget | null;
+  /** Hidden agent thread currently shown in the read-only run viewer, if any. */
+  agentViewerThreadId: string | null;
   quickChatPreparedWorkspaceId: string | null;
   researchCreationDraft: ComposerDraft;
   researchCreationError: CreationDraftError | null;
@@ -385,6 +387,7 @@ export type AppStoreState = {
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string, options?: AbortableActionOptions) => Promise<void>;
   openAgentThread: (agentId: string, title?: string) => Promise<void>;
+  closeAgentViewer: () => void;
   reconnectThread: (
     threadId: string,
     firstMessage?: string,

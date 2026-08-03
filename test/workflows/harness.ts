@@ -19,6 +19,7 @@ export type FakeAgent = {
 export type FakeControl = AgentControl & {
   spawnCount: () => number;
   messages: () => string[];
+  models: () => Array<string | undefined>;
   closed: () => string[];
 };
 
@@ -31,14 +32,16 @@ export function makeFakeControl(opts: FakeAgent = {}): FakeControl {
   const texts = new Map<string, string>();
   const order = new Map<string, number>();
   const messages: string[] = [];
+  const models: Array<string | undefined> = [];
   const closed: string[] = [];
 
   const control = {
-    spawn: async ({ message }: { message: string }) => {
+    spawn: async ({ message, model }: { message: string; model?: string }) => {
       const nth = ++spawns;
       const agentId = `agent-${nth}`;
       order.set(agentId, nth);
       messages.push(message);
+      models.push(model);
       texts.set(agentId, opts.reply ? opts.reply(nth, message) : `reply ${nth}`);
       return {
         agentId,
@@ -88,6 +91,7 @@ export function makeFakeControl(opts: FakeAgent = {}): FakeControl {
 
   control.spawnCount = () => spawns;
   control.messages = () => messages;
+  control.models = () => models;
   control.closed = () => closed;
   return control;
 }

@@ -34,7 +34,7 @@ import {
 } from "./releaseBuildUtils";
 import { tryDownloadPrebuiltHelpers } from "./winSandboxPrebuilt";
 
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 
 type DesktopResourcesCache = {
   version: number;
@@ -45,6 +45,7 @@ type DesktopResourcesCache = {
   promptsFingerprint: string;
   configFingerprint: string;
   skillsFingerprint: string;
+  workflowsFingerprint: string;
   foundationModelsSdkFingerprint: string | null;
   windowsAiElectronFingerprint: string | null;
   windowsSandboxHelperFingerprint: string | null;
@@ -120,6 +121,7 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
       typeof parsed.promptsFingerprint !== "string" ||
       typeof parsed.configFingerprint !== "string" ||
       typeof parsed.skillsFingerprint !== "string" ||
+      typeof parsed.workflowsFingerprint !== "string" ||
       (parsed.foundationModelsSdkFingerprint !== null &&
         typeof parsed.foundationModelsSdkFingerprint !== "string") ||
       (parsed.windowsAiElectronFingerprint !== null &&
@@ -582,10 +584,12 @@ async function main() {
   const promptsSrc = path.join(root, "prompts");
   const configSrc = path.join(root, "config");
   const skillsSrc = path.join(root, "skills");
+  const workflowsSrc = path.join(root, "workflows");
   const docsSrc = path.join(root, "docs");
   const promptsFingerprint = await fingerprintInputs([promptsSrc], root);
   const configFingerprint = await fingerprintInputs([configSrc], root);
   const skillsFingerprint = await fingerprintInputs([skillsSrc], root);
+  const workflowsFingerprint = await fingerprintInputs([workflowsSrc], root);
   const foundationModelsSdkInputs = shouldBundleFoundationModelsSdk(platform, arch)
     ? await ensureFoundationModelsSdkInputs(root)
     : null;
@@ -715,6 +719,7 @@ async function main() {
   const promptsDest = path.join(distDir, "prompts");
   const configDest = path.join(distDir, "config");
   const skillsDest = path.join(distDir, "skills");
+  const workflowsDest = path.join(distDir, "workflows");
 
   await syncCopiedDir({
     label: "prompts",
@@ -738,6 +743,14 @@ async function main() {
     dest: skillsDest,
     previousFingerprint: cache?.skillsFingerprint ?? null,
     nextFingerprint: skillsFingerprint,
+  });
+
+  await syncCopiedDir({
+    label: "workflows",
+    src: workflowsSrc,
+    dest: workflowsDest,
+    previousFingerprint: cache?.workflowsFingerprint ?? null,
+    nextFingerprint: workflowsFingerprint,
   });
 
   await syncFoundationModelsSdk({
@@ -791,6 +804,7 @@ async function main() {
     promptsFingerprint,
     configFingerprint,
     skillsFingerprint,
+    workflowsFingerprint,
     foundationModelsSdkFingerprint,
     windowsAiElectronFingerprint,
     windowsSandboxHelperFingerprint,

@@ -6,11 +6,23 @@
  * (`src/tools/defineTool.ts:7-9`), so there is no point in the tool factory where
  * a file could be awaited. Same shape as `TASK_REVIEW_DESCRIPTION`.
  */
-export const WORKFLOW_TOOL_DESCRIPTION = `Run a deterministic multi-agent workflow from a script you author.
+export const WORKFLOW_TOOL_DESCRIPTION = `Run, save, or list deterministic multi-agent workflows.
 
 Use this when orchestration should be REAL CODE rather than your own turn-by-turn tool calls: fanning out over a list, running a pipeline of stages, looping until a condition holds, or spawning more agents than you want to track by hand. The script runs in a sandbox off your context window, so a 50-agent fan-out costs you one tool call instead of 50.
 
 For a single delegated task, use spawnAgent instead — a workflow is overhead you do not need.
+
+## Tool actions
+
+- List reusable workflows: \`{ action: "list" }\`.
+- Run a bundled, project, or global workflow: \`{ name: "deep-research", args: { query: "...", model: "provider:model-id" } }\`.
+- \`deep-research\` supports a default \`args.model\` plus \`plannerModel\`, \`researchModel\`, \`verificationModel\`, and \`synthesisModel\` overrides.
+- Copy workflow model values exactly from the effective model catalog in the system prompt. Do not invent provider names or model IDs; disconnected, disabled, and disallowed targets are intentionally omitted.
+- Run an inline workflow: \`{ script: "...", args: ... }\`. Omitting \`action\` defaults to \`run\` for compatibility.
+- Save a reusable workflow: \`{ action: "save", name: "my-workflow", scope: "project" | "global", script: "..." }\`.
+  Saving validates metadata and compilation without running the workflow. Existing definitions are protected unless \`overwrite: true\` is explicit.
+
+Project definitions live in \`.cowork/workflows/<name>.ts\`; global definitions live in \`~/.cowork/workflows/<name>.ts\`; bundled definitions ship with Cowork. Resolution order is project, global, then bundled. Names use lowercase letters, digits, and hyphens and must match \`meta.name\`.
 
 ## Script shape
 

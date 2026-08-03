@@ -14,6 +14,11 @@ import { promptGuidance as shellPromptGuidance } from "./platform/shell";
 import { loadProjectInstructionsSection } from "./projectInstructions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import {
+  getProviderCatalog,
+  type ProviderCatalogModelEntry,
+  type ProviderCatalogPayload,
+} from "./providers/connectionCatalog";
+import {
   formatAgentProfilePromptSummaries,
   readAgentProfilesCatalog,
 } from "./server/agents/profiles";
@@ -280,6 +285,7 @@ const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER = "{{spawnAgentPromptBody}}";
 export function buildSpawnAgentPromptBody(
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: ProviderCatalogPayload,
 ): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   // Resolve custom cross-registry ids against the session's auth home so the
@@ -317,9 +323,23 @@ export function buildSpawnAgentPromptBody(
     })
     .filter((line): line is string => Boolean(line));
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
+  const currentProviderEntry = providerCatalog?.all.find((entry) => entry.id === config.provider);
+  const enabledCurrentModels = currentProviderEntry?.models.filter(
+    (model) => model.enabled !== false,
+  );
   const modelLines =
-    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
-      ? crossProviderRefs.join("\n")
+    enabledCurrentModels !== undefined
+      ? enabledCurrentModels.length > 0
+        ? enabledCurrentModels
+            .map((model) =>
+              formatPromptModelLine(config.provider, model, {
+                currentProvider: config.provider,
+                activeModel: config.model,
+                defaultModel: currentProviderEntry?.defaultModel,
+              }),
+            )
+            .join("\n")
+        : "- No enabled child model overrides are currently available for this provider."
       : config.provider === "lmstudio"
         ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
         : !providerSupportsUserFacingModels
@@ -330,6 +350,11 @@ export function buildSpawnAgentPromptBody(
                   `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`,
               )
               .join("\n");
+  const allowedCrossProviderLines = buildAllowedCrossProviderModelLines(
+    config,
+    providerCatalog,
+    crossProviderRefs,
+  );
 
   return [
     SPAWN_AGENT_PROMPT_OVERVIEW,
@@ -357,26 +382,90 @@ export function buildSpawnAgentPromptBody(
         ]
       : []),
     "",
-    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
-      ? "Available allowed child target refs for this workspace:"
-      : `Available model overrides for the current provider (${providerLabel}):`,
+    `Available model overrides for the current provider (${providerLabel}):`,
     modelLines,
+    ...(allowedCrossProviderLines.length > 0
+      ? [
+          "",
+          "Available allowed child target refs for this workspace:",
+          ...allowedCrossProviderLines,
+        ]
+      : []),
     providerSupportsUserFacingModels
       ? `- If you omit \`model\`, the child stays on **${currentModel.displayName}** (\`${currentModel.id}\`).`
       : "- If you omit `model`, the child stays on the session's current provider/model.",
   ].join("\n");
 }
 
+function formatPromptModelLine(
+  provider: ProviderName,
+  model: ProviderCatalogModelEntry,
+  opts: { currentProvider: ProviderName; activeModel: string; defaultModel?: string },
+): string {
+  const fullRef = `${provider}:${model.id}`;
+  const known = listChildAgentModelsWithInfo(provider).find(
+    (candidate) => candidate.id === model.id,
+  );
+  const sameProvider = provider === opts.currentProvider;
+  const attributes = [
+    sameProvider ? `full ref \`${fullRef}\`` : null,
+    model.id === opts.activeModel ? "active session model" : null,
+    model.id === opts.defaultModel ? "provider default" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (known) {
+    const modelValue = sameProvider ? model.id : fullRef;
+    return `- **${known.displayName}** (\`${modelValue}\`)${attributes.length > 0 ? ` [${attributes.join("; ")}]` : ""}: ${known.bestFor ?? "general-purpose work on this provider"}.`;
+  }
+  const bareValue = sameProvider ? `; bare value ${JSON.stringify(model.id)}` : "";
+  return `- Exact model value ${JSON.stringify(fullRef)}${bareValue}${attributes.length > 0 ? ` [${attributes.slice(1).join("; ")}]` : ""}.`;
+}
+
+function buildAllowedCrossProviderModelLines(
+  config: AgentConfig,
+  providerCatalog: ProviderCatalogPayload | undefined,
+  fallbackLines: readonly string[],
+): string[] {
+  if (config.childModelRoutingMode !== "cross-provider-allowlist") return [];
+  if (!providerCatalog) return [...fallbackLines];
+
+  const connected = new Set(providerCatalog.connected);
+  const lines: string[] = [];
+  for (const ref of config.allowedChildModelRefs ?? []) {
+    try {
+      const parsed = parseChildModelRef(ref, config.provider, "child target", {
+        home: resolveAuthHomeDir(config),
+      });
+      if (parsed.provider === config.provider || !connected.has(parsed.provider)) continue;
+      const entry = providerCatalog.all.find((candidate) => candidate.id === parsed.provider);
+      const model = entry?.models.find(
+        (candidate) => candidate.id === parsed.modelId && candidate.enabled !== false,
+      );
+      if (!model) continue;
+      lines.push(
+        formatPromptModelLine(parsed.provider, model, {
+          currentProvider: config.provider,
+          activeModel: config.model,
+          defaultModel: entry?.defaultModel,
+        }),
+      );
+    } catch {
+      // Invalid configured refs are excluded from model-facing guidance.
+    }
+  }
+  return lines;
+}
+
 function buildSpawnAgentPromptSections(
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: ProviderCatalogPayload,
 ): {
   body: string;
   markdownSection: string;
   toolSection: string;
   xmlSection: string;
 } {
-  const body = buildSpawnAgentPromptBody(config, profileLines);
+  const body = buildSpawnAgentPromptBody(config, profileLines, providerCatalog);
   return {
     body,
     markdownSection: `### spawnAgent\n${body}`,
@@ -389,10 +478,12 @@ function renderSpawnAgentSpecificPrompt(
   prompt: string,
   config: AgentConfig,
   profileLines: readonly string[] = [],
+  providerCatalog?: ProviderCatalogPayload,
 ): string {
   const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(
     config,
     profileLines,
+    providerCatalog,
   );
 
   if (prompt.includes(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER)) {
@@ -606,6 +697,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   const discoveredSkills = await discoverSkillsForConfig(config);
   const agentProfilePromptLines = await readAgentProfilePromptLines(config);
+  const providerCatalog = await getProviderCatalog({
+    homedir: resolveAuthHomeDir(config),
+    providerOptions: config.providerOptions,
+  }).catch((error) => {
+    console.warn(`[prompt] Failed to load provider catalog: ${String(error)}`);
+    return undefined;
+  });
   const skills = discoveredSkills;
 
   // Build dynamic skill-related template variables from discovered skills.
@@ -657,7 +755,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderLocalWebToolProviderPrompt(prompt, config);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
-  prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines);
+  prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines, providerCatalog);
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
   // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.

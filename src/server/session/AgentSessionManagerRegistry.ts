@@ -42,6 +42,7 @@ export type AgentSessionManagerHost = {
   formatErrorMessage(err: unknown): string;
   log(line: string): void;
   queuePersistSessionSnapshot(reason: string): void;
+  refreshSystemPromptWithSkills(reason?: string): Promise<void>;
   emitError(
     code: ServerErrorCode,
     source: ServerErrorSource,
@@ -124,6 +125,8 @@ export class AgentSessionManagerRegistry {
         emitTelemetry: (name, status, attributes, durationMs) =>
           this.host.emitTelemetry(name, status, attributes, durationMs),
         formatError: (err) => this.host.formatErrorMessage(err),
+        onCatalogChanged: async () =>
+          await this.host.refreshSystemPromptWithSkills("provider.catalog_updated"),
       });
     }
     return this.providerCatalogManager;

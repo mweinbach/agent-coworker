@@ -23,6 +23,49 @@ A workflow moves that control flow into code:
 
 For a single delegated task, `spawnAgent` remains the right tool.
 
+## Saved and bundled workflows
+
+The `workflow` tool supports three actions:
+
+| Action | Example | Notes |
+|---|---|---|
+| `list` | `{ action: "list" }` | Returns effective reusable definitions and diagnostics for invalid definitions. |
+| `run` | `{ name: "deep-research", args: { query: "...", model: "provider:model-id" } }` | Runs one saved/bundled definition by name. Inline `{ script, args }` remains supported and defaults to `run`. |
+| `save` | `{ action: "save", name: "audit-api", scope: "project", script }` | Validates and saves a reusable definition without running child agents. |
+
+Definitions are plain workflow TypeScript modules:
+
+| Scope | Directory | Writable |
+|---|---|---|
+| Project | `<workspace>/.cowork/workflows/<name>.ts` | Yes |
+| Global | `~/.cowork/workflows/<name>.ts` | Yes |
+| Bundled | `<builtInDir>/workflows/<name>.ts` | No |
+
+Resolution order is project, global, bundled. A higher-precedence invalid file
+shadows lower scopes and produces a diagnostic rather than silently falling back.
+Names must use lowercase letters, digits, and hyphens, and the filename must match
+`meta.name`. Saving refuses to replace an existing definition unless
+`overwrite: true` is explicit.
+
+Catalog listing and saving compile the source and evaluate only module metadata in
+the same sealed Worker/`node:vm` boundary used for execution. The default function
+is not invoked, so validation spends no agent budget. A full run remains the proof
+that live prompts, schemas, and external tools behave as intended.
+
+Cowork bundles `deep-research`, a four-phase workflow that plans bounded research
+questions, gathers compact source-backed claims, independently verifies each
+claim, and synthesizes only claims that survive. Failed shards, dropped claims,
+uncertainty, and bounded-output truncation are reported as coverage limitations;
+the result is marked `partial` whenever those limitations remain.
+
+`deep-research` accepts `model` as the default model for every phase. The optional
+`plannerModel`, `researchModel`, `verificationModel`, and `synthesisModel` arguments
+override it for their respective phases. Values use the normal model id or
+`provider:modelId` syntax and still pass through standard model routing/fallback.
+The root system prompt includes the effective enabled models for the current
+provider and only connected, allowlisted cross-provider targets. Workflow authors
+must copy those exact values rather than guessing provider names or model IDs.
+
 ## Script shape
 
 Exactly two exports, zero imports:

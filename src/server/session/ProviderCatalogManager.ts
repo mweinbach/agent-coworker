@@ -24,6 +24,7 @@ export class ProviderCatalogManager {
         durationMs?: number,
       ) => void;
       formatError: (err: unknown) => string;
+      onCatalogChanged?: () => Promise<void>;
     },
   ) {}
 
@@ -43,6 +44,7 @@ export class ProviderCatalogManager {
         default: defaults,
         connected: payload.connected,
       });
+      await this.opts.onCatalogChanged?.();
     } catch (err) {
       this.opts.emitError(
         "provider_error",

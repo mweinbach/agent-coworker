@@ -570,6 +570,8 @@ export class AgentSession {
       formatErrorMessage: (err) => this.formatErrorMessage(err),
       log: (line) => this.log(line),
       queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
+      refreshSystemPromptWithSkills: async (reason) =>
+        await this.refreshSystemPromptWithSkills(reason),
       emitError: (code, source, message) => this.emitError(code, source, message),
     };
   }

@@ -18,6 +18,45 @@ nothing new turns up). One `workflow` call replaces dozens of `spawnAgent` /
 Do **not** use it for a single delegated task. `spawnAgent` is one call and has no
 sandbox to reason about.
 
+## Reusable workflows
+
+Call `{ action: "list" }` to discover bundled and saved workflows. Run one by name:
+
+```json
+{
+  "name": "deep-research",
+  "args": {
+    "query": "Compare two migration approaches",
+    "model": "provider:model-id",
+    "verificationModel": "provider:stronger-model-id"
+  }
+}
+```
+
+Save a validated definition for the current project or every project:
+
+```json
+{
+  "action": "save",
+  "name": "review-changes",
+  "scope": "project",
+  "script": "export const meta = ..."
+}
+```
+
+Project workflows live in `.cowork/workflows/`; global workflows live in
+`~/.cowork/workflows/`; bundled workflows ship with Cowork. Resolution order is
+project, global, bundled. A name is lowercase kebab-case and must match
+`meta.name`. Saving compiles and inspects metadata but does not run child agents.
+Existing files require an explicit `overwrite: true`.
+
+The bundled `deep-research` workflow plans bounded questions, gathers structured
+source-backed claims, independently verifies every claim, and synthesizes only
+claims that survive. It reports failed shards, dropped claims, and uncertainties
+as coverage limitations and marks the result partial when coverage is incomplete.
+Use `args.model` for the default child model, with optional `plannerModel`,
+`researchModel`, `verificationModel`, and `synthesisModel` phase overrides.
+
 ## The contract
 
 Two exports, zero imports. Host functions arrive as the argument to the default
@@ -147,6 +186,9 @@ was dropped. Silent truncation reads as "covered everything" when it did not.
 A script that does not compile comes back as `{ ok: false, issues }` — fix it and
 call again, no spend. Use `dryRun: true` to see the whole call graph and fan-out
 count before spending anything.
+
+Use `action: "save"` after the definition compiles. Saved definitions are reusable
+by name, while an inline `{ script }` remains best for one-off orchestration.
 
 If a run fails partway, pass `resumeFromRunId` with the previous run id: every call
 that is byte-for-byte identical replays from the journal for free, and only what

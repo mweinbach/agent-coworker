@@ -350,7 +350,7 @@ self.onmessage = async (ev) => {
     return;
   }
 
-  if (msg.t !== "start") return;
+  if (msg.t !== "start" && msg.t !== "inspect") return;
 
   try {
     const context = vm.createContext({});
@@ -364,16 +364,6 @@ self.onmessage = async (ev) => {
       );
     };
 
-    const bridge = {
-      agent: (payload) => rpc((callId) => ({ t: "agent", callId, payload })),
-      phase: (title) => post({ t: "phase", title }),
-      log: (message) => post({ t: "log", message }),
-      set onBudget(fn) { onBudgetUpdate = fn; },
-    };
-
-    const buildHost = vm.runInContext(${JSON.stringify(HOST_SOURCE)}, context);
-    const host = buildHost(bridge, msg.argsJson, msg.budgetTotal);
-
     const mod = new vm.SourceTextModule(msg.js, {
       context,
       importModuleDynamically: denyImport,
@@ -384,17 +374,34 @@ self.onmessage = async (ev) => {
     await mod.evaluate();
 
     const meta = mod.namespace.meta;
+    const serializedMeta = JSON.parse(JSON.stringify(meta === undefined ? null : meta));
+    const run = mod.namespace.default;
+
+    if (msg.t === "inspect") {
+      post({ t: "inspected", meta: serializedMeta, hasDefault: typeof run === "function" });
+      return;
+    }
+
     const ack = await rpc((callId) => ({
       t: "meta",
       callId,
-      meta: JSON.parse(JSON.stringify(meta === undefined ? null : meta)),
+      meta: serializedMeta,
     }));
     if (ack && ack.ok === false) throw new Error(ack.message);
 
-    const run = mod.namespace.default;
     if (typeof run !== "function") {
       throw new Error("the default export must be a function");
     }
+
+    const bridge = {
+      agent: (payload) => rpc((callId) => ({ t: "agent", callId, payload })),
+      phase: (title) => post({ t: "phase", title }),
+      log: (message) => post({ t: "log", message }),
+      set onBudget(fn) { onBudgetUpdate = fn; },
+    };
+
+    const buildHost = vm.runInContext(${JSON.stringify(HOST_SOURCE)}, context);
+    const host = buildHost(bridge, msg.argsJson, msg.budgetTotal);
 
     const result = await run(host);
     await drainRpcs();

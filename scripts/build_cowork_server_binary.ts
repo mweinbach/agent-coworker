@@ -25,7 +25,7 @@ const root = path.resolve(import.meta.dirname, "..");
 
 async function copyBundledResourceDirs(outDir: string): Promise<string[]> {
   const bundledDirs: string[] = [];
-  for (const dir of ["prompts", "config", "docs", "skills"] as const) {
+  for (const dir of ["prompts", "config", "docs", "skills", "workflows"] as const) {
     const srcDir = path.join(root, dir);
     if (!(await pathExists(srcDir))) {
       continue;

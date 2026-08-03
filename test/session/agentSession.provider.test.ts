@@ -50,13 +50,22 @@ describe("AgentSession", () => {
         connected: ["openai"],
       };
       const getProviderCatalogImpl = mock(async () => catalog);
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Prompt refreshed with the latest effective model catalog.",
+        discoveredSkills: [],
+      }));
       const { session, events } = makeSession({
         getProviderCatalogImpl: getProviderCatalogImpl as any,
+        loadSystemPromptWithSkillsImpl,
       });
 
       await session.emitProviderCatalog();
 
       expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect((session as any).state.system).toBe(
+        "Prompt refreshed with the latest effective model catalog.",
+      );
       const evt = events.find((e) => e.type === "provider_catalog");
       expect(evt).toBeDefined();
       if (evt && evt.type === "provider_catalog") {

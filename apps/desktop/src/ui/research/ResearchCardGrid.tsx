@@ -131,10 +131,10 @@ function ResearchListItem({
 
   if (editing) {
     return (
-      <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground">
+      <div className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border app-border-subtle app-selected-row px-2.5 py-1.5 text-left">
         <Input
           ref={inputRef}
-          className="min-w-0 h-7 flex-1 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+          className="min-w-0 h-7 flex-1 rounded-md app-border-subtle app-type-body shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
           value={editingTitle}
           disabled={renaming}
           onChange={(event) => onEditingTitleChange(event.target.value)}
@@ -162,8 +162,8 @@ function ResearchListItem({
       className={cn(
         "sidebar-thread-item sidebar-lift flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-left",
         selected
-          ? "border-border/45 app-selected-row"
-          : "app-text-secondary hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+          ? "app-border-subtle app-selected-row"
+          : "app-text-secondary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
       )}
       onClick={onSelect}
       onContextMenu={onContextMenu}
@@ -173,7 +173,7 @@ function ResearchListItem({
       }}
     >
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+        <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
           {isChild ? (
             <span className="mr-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Follow-up
@@ -259,7 +259,7 @@ function renderResearchTree({
           onContextMenu={(event) => onContextMenu(event, research)}
         />
         {children.length > 0 ? (
-          <div className="ml-3 space-y-1 border-l border-border/45 pl-3">
+          <div className="ml-3 flex flex-col gap-1 border-l app-border-subtle pl-3">
             {renderResearchTree({
               parentId: research.id,
               depth: depth + 1,
@@ -464,7 +464,7 @@ export function ResearchCardGrid({
 
   if (visibleResearch.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-8 text-center text-xs text-muted-foreground">
+      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed app-border-subtle bg-muted/15 px-4 py-8 text-center text-xs text-muted-foreground">
         <span>No visible research runs. Hidden runs and follow-ups stay on disk.</span>
         {hiddenResearchCount > 0 ? (
           <Button type="button" variant="outline" size="sm" onClick={restoreHiddenResearch}>

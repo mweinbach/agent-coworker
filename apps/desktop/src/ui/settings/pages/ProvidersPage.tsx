@@ -401,7 +401,7 @@ export function ProvidersPage({
       <div
         key={stateKey}
         aria-busy={methodPending}
-        className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0"
+        className="flex flex-col gap-2 border-t app-border-subtle pt-4 first:border-t-0 first:pt-0"
       >
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -419,7 +419,7 @@ export function ProvidersPage({
 
         {opts.method.type === "api" ? (
           isStructuredMethod ? (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               <div className="grid gap-2 md:grid-cols-2">
                 {(opts.method.fields ?? []).map((field) => {
                   const savedValue = savedFieldMasks?.[field.id] ?? "";
@@ -772,7 +772,7 @@ export function ProvidersPage({
             <CollapsibleContent>
               <CardContent
                 id={`provider-panel-${provider}`}
-                className="space-y-4 border-t border-border/70 px-3 py-3"
+                className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
               >
                 <div className="text-sm text-muted-foreground">
                   LM Studio runs on a local server. Connect it once to make its models available in
@@ -804,7 +804,7 @@ export function ProvidersPage({
                   <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
                 ) : null}
 
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Models shown in chat
@@ -932,7 +932,7 @@ export function ProvidersPage({
           <CollapsibleContent>
             <CardContent
               id={`provider-panel-${provider}`}
-              className="space-y-3.5 border-t border-border/70 px-3 py-3"
+              className="flex flex-col gap-3.5 border-t app-border-subtle px-3 py-3"
             >
               {methods.map((method) =>
                 renderAuthMethod({
@@ -944,7 +944,7 @@ export function ProvidersPage({
               )}
 
               {status?.usage ? (
-                <div className="space-y-2.5 border-t border-border/70 pt-3">
+                <div className="flex flex-col gap-2.5 border-t app-border-subtle pt-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       Usage
@@ -966,7 +966,7 @@ export function ProvidersPage({
                           Email
                         </div>
                         <div
-                          className="min-w-0 truncate text-sm text-foreground/95"
+                          className="min-w-0 truncate text-sm app-text-emphasis"
                           title={status.usage.email}
                         >
                           {status.usage.email}
@@ -978,13 +978,13 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Status
                         </div>
-                        <div className="text-sm text-foreground/95">{status.message}</div>
+                        <div className="text-sm app-text-emphasis">{status.message}</div>
                       </>
                     ) : null}
                   </div>
 
                   {visibleRateLimits.length > 0 ? (
-                    <div className="space-y-1.5">
+                    <div className="flex flex-col gap-1.5">
                       <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Rate limits
                       </div>
@@ -1014,20 +1014,20 @@ export function ProvidersPage({
                                 primaryMeta,
                                 secondaryMeta,
                               ].join(":")}
-                              className="space-y-1 px-2.5 py-2"
+                              className="flex flex-col gap-1 px-2.5 py-2"
                             >
                               <div className="flex items-baseline justify-between gap-3">
                                 <div className="text-sm font-medium text-foreground">
                                   {formatRateLimitName(entry)}
                                 </div>
-                                <div className="text-xs font-medium text-foreground/90">
+                                <div className="text-xs font-medium app-text-emphasis">
                                   {primaryRemainingPercent === null
                                     ? "--"
                                     : `${Math.round(primaryRemainingPercent)}% remaining`}
                                 </div>
                               </div>
                               {entry?.primaryWindow ? (
-                                <div className="space-y-1">
+                                <div className="flex flex-col gap-1">
                                   <div className="h-1 overflow-hidden rounded-full bg-border/70">
                                     <div
                                       className={cn(
@@ -1071,13 +1071,13 @@ export function ProvidersPage({
                 // API-key statuses only carry the generic "API key saved." /
                 // "API key missing." boilerplate — the key field and badge
                 // already say that, so skip the standalone line for them.
-                <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">
+                <div className="border-t app-border-subtle pt-4 text-sm text-muted-foreground">
                   {status.message}
                 </div>
               ) : null}
 
               {provider === "codex-cli" ? (
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Codex runtime
@@ -1090,7 +1090,7 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Version
                         </div>
-                        <div className="text-sm text-foreground/95">
+                        <div className="text-sm app-text-emphasis">
                           {codexAppServerStatus.version}
                         </div>
                       </>
@@ -1100,7 +1100,7 @@ export function ProvidersPage({
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">
                           Required
                         </div>
-                        <div className="text-sm text-foreground/95">
+                        <div className="text-sm app-text-emphasis">
                           {codexAppServerStatus.pinnedVersion}
                         </div>
                       </>
@@ -1108,7 +1108,7 @@ export function ProvidersPage({
                     <div className="text-xs uppercase tracking-wide text-muted-foreground">
                       Status
                     </div>
-                    <div className="text-sm text-foreground/95">
+                    <div className="text-sm app-text-emphasis">
                       {codexAppServerStatus?.message ?? "Checking Codex runtime."}
                     </div>
                   </div>
@@ -1127,7 +1127,7 @@ export function ProvidersPage({
               ) : null}
 
               {catalogModels.length > 0 || modelPreviewIds.length > 0 || canUseCustomModels ? (
-                <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex flex-col gap-2 border-t app-border-subtle pt-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Available models
@@ -1246,7 +1246,7 @@ export function ProvidersPage({
           <CollapsibleContent>
             <CardContent
               id={opts.panelId}
-              className="space-y-4 border-t border-border/70 px-3 py-3"
+              className="flex flex-col gap-4 border-t app-border-subtle px-3 py-3"
             >
               <div className="text-sm text-muted-foreground">{opts.description}</div>
               {renderAuthMethod({
@@ -1325,7 +1325,7 @@ export function ProvidersPage({
   const effectiveTab = surface === "all" ? activeTab : surface;
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {!canConnectProvider ? (
         <SettingsSection>
           <div className="p-6 text-center text-sm text-muted-foreground">
@@ -1335,7 +1335,7 @@ export function ProvidersPage({
       ) : null}
 
       {surface === "all" ? (
-        <div className="relative mb-2 flex max-w-fit gap-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5">
+        <div className="relative mb-2 flex max-w-fit gap-1 rounded-xl border app-border-subtle app-fill-subtle p-1.5">
           {(["models", "tools"] as const).map((tab) => (
             <Button
               key={tab}
@@ -1355,7 +1355,7 @@ export function ProvidersPage({
               {activeTab === tab && (
                 <motion.div
                   layoutId="providers-active-tab"
-                  className="absolute inset-0 -z-10 rounded-lg border border-border/55 bg-card"
+                  className="absolute inset-0 -z-10 rounded-lg border app-border-subtle bg-card"
                   transition={{ type: "spring", stiffness: 500, damping: 30 }}
                 />
               )}
@@ -1366,7 +1366,7 @@ export function ProvidersPage({
       ) : null}
 
       {surface === "models" ? (
-        <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <SettingsSection
             title="Providers"
             description="Accounts and API keys Cowork can use to run models."
@@ -1402,7 +1402,7 @@ export function ProvidersPage({
           </SettingsSection>
           <Dialog open={newProviderOpen} onOpenChange={setNewProviderOpen}>
             <DialogContent className="gap-0 p-0 sm:max-w-2xl">
-              <DialogHeader className="border-b border-border/70 px-5 py-4">
+              <DialogHeader className="border-b app-border-subtle px-5 py-4">
                 <DialogTitle>New provider</DialogTitle>
                 <DialogDescription>
                   Pick a provider, then sign in or paste an API key to connect it.
@@ -1423,7 +1423,7 @@ export function ProvidersPage({
       ) : surface === "tools" ? null : (
         <div
           className={cn(
-            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
+            "divide-y divide-border/40 overflow-hidden rounded-xl border app-border-subtle bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
             effectiveTab !== "models" && "hidden",
           )}
         >
@@ -1441,7 +1441,7 @@ export function ProvidersPage({
       ) : (
         <div
           className={cn(
-            "divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
+            "divide-y divide-border/40 overflow-hidden rounded-xl border app-border-subtle bg-card animate-in fade-in slide-in-from-bottom-2 duration-300",
             effectiveTab !== "tools" && "hidden",
           )}
         >

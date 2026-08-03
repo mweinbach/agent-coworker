@@ -489,7 +489,7 @@ export function FilePreviewModal() {
                 </DialogTitle>
                 <Badge
                   variant="secondary"
-                  className="shrink-0 font-normal bg-muted/30 text-muted-foreground/90 border-transparent shadow-none"
+                  className="shrink-0 font-normal bg-muted/30 app-text-muted opacity-90 border-transparent shadow-none"
                 >
                   {kindLabel}
                 </Badge>

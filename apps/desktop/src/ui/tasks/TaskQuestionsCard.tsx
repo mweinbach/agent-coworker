@@ -41,7 +41,7 @@ function QuestionField({
   const textId = `${fieldId}-text`;
 
   return (
-    <Field className="rounded-lg border border-border/70 p-4" data-question-id={question.id}>
+    <Field className="rounded-lg border app-border-subtle p-4" data-question-id={question.id}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-xs font-medium text-muted-foreground">
@@ -67,7 +67,7 @@ function QuestionField({
               <label
                 key={option.id}
                 htmlFor={optionId}
-                className="flex cursor-pointer items-start gap-3 rounded-md border border-border/60 px-3 py-2.5 hover:bg-accent/50"
+                className="flex cursor-pointer items-start gap-3 rounded-md border app-border-subtle px-3 py-2.5 hover:bg-accent/50"
               >
                 <RadioGroupItem id={optionId} value={option.id} className="mt-0.5" />
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">

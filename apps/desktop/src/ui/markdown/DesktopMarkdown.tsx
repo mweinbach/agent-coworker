@@ -420,7 +420,7 @@ function DesktopCitationChip({
             type="button"
             variant="outline"
             size="sm"
-            className="h-auto min-w-0 gap-1 rounded-full border-border/70 bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
+            className="h-auto min-w-0 gap-1 rounded-full app-border-subtle bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:app-border-default hover:bg-muted"
             onPointerDown={cancelScheduledHoverClose}
           >
             {/* The site mark identifies the source faster than its name does at
@@ -439,7 +439,7 @@ function DesktopCitationChip({
             align="start"
             sideOffset={10}
             aria-label="Citation sources"
-            className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg border-border/32 p-0 text-card-foreground"
+            className="app-surface-card app-shadow-surface-elevated w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-lg app-border-subtle p-0 text-card-foreground"
             onMouseEnter={handleHoverEnter}
             onMouseLeave={handleHoverLeave}
             onKeyDown={(event) => {
@@ -453,7 +453,7 @@ function DesktopCitationChip({
               }
             }}
           >
-            <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
+            <div className="flex items-center gap-0 border-b app-border-subtle bg-muted/20 px-1.5 py-0.5">
               <AccessibleIconButton
                 type="button"
                 variant="ghost"
@@ -1363,7 +1363,7 @@ function DesktopMarkdownImage({
         loading="lazy"
         decoding="async"
         className={cn(
-          "max-h-[420px] max-w-full rounded-md border border-border/60 object-contain",
+          "max-h-[420px] max-w-full rounded-md border app-border-subtle object-contain",
           className,
         )}
         onError={() => setFailed(true)}
@@ -1431,7 +1431,7 @@ function PreWithCopy({
         onClick={handleCopy}
         aria-label={copied ? "Copied" : "Copy code"}
         title={copied ? "Copied" : "Copy"}
-        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border border-border/50 bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+        className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md border app-border-subtle bg-background/85 text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
       >
         {copied ? (
           <CheckIcon className="size-3.5 text-success" />
@@ -1591,9 +1591,9 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
         mermaid={resolvedMermaid}
         children={normalizedChildren}
         className={cn(
-          "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
+          "select-text [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:my-1.5 [&_li]:pl-1 [&_li::marker]:text-muted-foreground [&_li>p]:my-1 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:app-border-subtle [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
           // GFM tables: fill the bubble, wrap cell text (~3 lines) before horizontal scroll.
-          "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:border-border/60 [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:border-border/60 [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
+          "[&_table]:w-full [&_table]:min-w-0 [&_table]:table-auto [&_table]:text-sm [&_th]:border [&_th]:app-border-subtle [&_th]:px-2 [&_th]:py-1 [&_th]:align-top [&_th]:whitespace-normal [&_th]:break-words [&_td]:border [&_td]:app-border-subtle [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:whitespace-normal [&_td]:break-words",
           // Streamdown wraps GFM tables in a card even with controls disabled — flatten it.
           "[&_[data-streamdown=table-wrapper]]:my-0 [&_[data-streamdown=table-wrapper]]:w-full [&_[data-streamdown=table-wrapper]]:max-w-full [&_[data-streamdown=table-wrapper]]:gap-0 [&_[data-streamdown=table-wrapper]]:rounded-none [&_[data-streamdown=table-wrapper]]:border-0 [&_[data-streamdown=table-wrapper]]:bg-transparent [&_[data-streamdown=table-wrapper]]:p-0",
           "[&_[data-streamdown=table-wrapper]>div]:max-w-full [&_[data-streamdown=table-wrapper]>div]:overflow-x-auto [&_[data-streamdown=table-wrapper]>div]:rounded-none [&_[data-streamdown=table-wrapper]>div]:border-0 [&_[data-streamdown=table-wrapper]>div]:bg-transparent",

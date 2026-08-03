@@ -170,12 +170,12 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
           </div>
         ) : plugin ? (
           <>
-            <div className="border-b border-border/50 p-6 pb-4">
-              <DialogHeader className="space-y-4">
+            <div className="border-b app-border-subtle p-6 pb-4">
+              <DialogHeader className="flex flex-col gap-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
                     <EntityIcon src={pluginIcon(plugin)} name={plugin.displayName} size="lg" />
-                    <div className="space-y-1">
+                    <div className="flex flex-col gap-1">
                       <DialogTitle className="text-xl">{plugin.displayName}</DialogTitle>
                       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         <span>{pluginScopeLabel(plugin.scope)}</span>
@@ -211,7 +211,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               </DialogHeader>
             </div>
 
-            <div className="flex-1 space-y-6 overflow-y-auto p-6">
+            <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
               {pluginError ? (
                 <div className="rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-3 text-sm text-destructive">
                   {pluginError}
@@ -304,7 +304,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
 
               {installedPlugin && installedPlugin.mcpServers.length > 0 ? (
-                <section className="space-y-3">
+                <section className="flex flex-col gap-3">
                   <h3 className="text-sm font-semibold leading-tight text-foreground">
                     Bundled MCP Servers
                   </h3>
@@ -333,7 +333,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
 
               {plugin.warnings.length > 0 ? (
-                <section className="space-y-3">
+                <section className="flex flex-col gap-3">
                   <h3 className="text-sm font-semibold leading-tight text-foreground">Warnings</h3>
                   <div className="rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-3 text-sm text-destructive">
                     {plugin.warnings.map((warning) => (
@@ -344,7 +344,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
               ) : null}
             </div>
 
-            <div className="flex items-center justify-between border-t border-border/50 bg-muted/10 p-4">
+            <div className="flex items-center justify-between border-t app-border-subtle bg-muted/10 p-4">
               <div className="flex items-center gap-2">
                 {!installedPlugin && plugin.installSource ? (
                   <Button

@@ -64,7 +64,7 @@ export function ResearchExportMenu({
           type="button"
           variant="outline"
           aria-haspopup="menu"
-          className="h-7 gap-1.5 rounded-full border-border/60 bg-muted/15 px-3 text-xs"
+          className="h-7 gap-1.5 rounded-full app-border-subtle bg-muted/15 px-3 text-xs"
           disabled={disabled}
         >
           {pending ? (
@@ -104,7 +104,7 @@ export function ResearchExportMenu({
           size="sm"
           type="button"
           variant="outline"
-          className="h-7 gap-1.5 rounded-full border-border/60 bg-muted/15 px-3 text-xs"
+          className="h-7 gap-1.5 rounded-full app-border-subtle bg-muted/15 px-3 text-xs"
           disabled={disabled}
           title={
             disabled

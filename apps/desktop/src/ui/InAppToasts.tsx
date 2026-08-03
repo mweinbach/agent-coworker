@@ -98,7 +98,7 @@ export function InAppToasts({
       {waiting > 0 ? (
         <p
           data-slot="in-app-toast-queue"
-          className="self-end rounded-full border border-border/70 bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur"
+          className="self-end rounded-full border app-border-subtle bg-background/95 px-2.5 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur"
         >
           {waiting === 1 ? "1 more waiting" : `${waiting} more waiting`}
         </p>
@@ -150,7 +150,7 @@ function InAppToast({
         "pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur",
         isError
           ? "border-destructive/50 bg-destructive/10 p-3.5 shadow-xl ring-1 ring-destructive/15"
-          : "border-border/70 bg-background/95 p-2.5 shadow-md",
+          : "app-border-subtle bg-background/95 p-2.5 shadow-md",
       )}
     >
       {isError ? (

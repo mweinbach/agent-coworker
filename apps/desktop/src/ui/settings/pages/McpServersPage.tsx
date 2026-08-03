@@ -607,7 +607,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                               }
                             />
                           </Field>
-                          <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                          <div className="flex items-center justify-between rounded-md border app-border-subtle px-3 py-2">
                             <span className="flex flex-col gap-0.5">
                               <span className="text-sm">Use legacy SSE transport</span>
                               <span className="text-xs text-muted-foreground">
@@ -740,7 +740,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         />
                       </div>
 
-                      <div className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                      <div className="flex items-center justify-between rounded-md border app-border-subtle px-3 py-2">
                         <span className="flex flex-col gap-0.5">
                           <span className="text-sm">Required</span>
                           <span className="text-xs text-muted-foreground">
@@ -881,7 +881,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
             <div
               key={serverKey}
               className={cn(
-                "border-b border-border/45 last:border-b-0",
+                "border-b app-border-subtle last:border-b-0",
                 isExpanded && "bg-card/40",
               )}
             >
@@ -989,7 +989,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     <span className="text-xs uppercase tracking-wider text-muted-foreground">
                       Authentication
                     </span>
-                    <span className="text-[13px] text-foreground">
+                    <span className="app-type-body text-foreground">
                       {authModeLabel(server.authMode)}
                     </span>
                   </div>
@@ -999,7 +999,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       <span className="text-xs uppercase tracking-wider text-muted-foreground">
                         Status
                       </span>
-                      <span className="text-[13px] text-foreground">{server.authMessage}</span>
+                      <span className="app-type-body text-foreground">{server.authMessage}</span>
                     </div>
                   )}
 
@@ -1009,11 +1009,11 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         Last check
                       </span>
                       {!validation.ok && needsOAuthSignIn ? (
-                        <span className="text-[13px] text-muted-foreground">
+                        <span className="app-type-body text-muted-foreground">
                           Waiting for sign-in
                         </span>
                       ) : (
-                        <span className="text-[13px] text-foreground">
+                        <span className="app-type-body text-foreground">
                           {validation.ok ? "Passed" : "Failed"}
                           {typeof validation.latencyMs === "number"
                             ? ` • ${validation.latencyMs}ms`
@@ -1039,7 +1039,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                             {validationTools.map((t) => (
                               <div
                                 key={t.name}
-                                className="group relative flex cursor-default items-center rounded-sm border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
+                                className="group relative flex cursor-default items-center rounded-sm border app-border-subtle bg-muted/40 px-2 py-0.5 font-mono text-xs text-foreground"
                                 title={t.description || t.name}
                               >
                                 {displayToolName(t.name, server.name)}
@@ -1089,7 +1089,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   </div>
 
                   {server.auth?.type === "oauth" ? (
-                    <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-3">
+                    <div className="mt-2 flex flex-col gap-2 border-t app-border-subtle pt-3">
                       <div className="flex items-center gap-2">
                         <Button type="button" size="sm" onClick={authorizeServer}>
                           Sign in
@@ -1155,7 +1155,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                   ) : null}
 
                   {server.auth?.type === "api_key" ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t app-border-subtle pt-2">
                       <Input
                         className="h-7 max-w-64 text-xs"
                         placeholder="Paste API key"
@@ -1199,7 +1199,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
         <CollapsibleContent>
           <div className="flex flex-col gap-2 px-4 pb-4 text-xs">
             {files.map((file) => (
-              <div key={file.path} className="rounded-lg bg-foreground/[0.04] px-3 py-2">
+              <div key={file.path} className="rounded-lg app-fill-subtle px-3 py-2">
                 <div className="font-medium text-foreground">
                   {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
                 </div>

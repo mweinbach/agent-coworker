@@ -96,15 +96,15 @@ export function AdvancedMemoryEditorDialog({
       }}
     >
       <DialogContent className="flex max-h-[min(92vh,48rem)] w-[min(92vw,42rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
-        <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
+        <DialogHeader className="shrink-0 border-b app-border-subtle px-5 py-4 pr-12">
           <DialogTitle>{editingSlug ? "Edit memory" : "Add memory"}</DialogTitle>
           <DialogDescription className="sr-only">
             Edit the memory name, description, type, and content.
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          <div className="space-y-4">
-            <div className="space-y-1.5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
               <label htmlFor="adv-memory-name" className="text-xs font-medium text-foreground">
                 Name
               </label>
@@ -116,7 +116,7 @@ export function AdvancedMemoryEditorDialog({
                 onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               <label htmlFor="adv-memory-desc" className="text-xs font-medium text-foreground">
                 Description
               </label>
@@ -130,7 +130,7 @@ export function AdvancedMemoryEditorDialog({
                 }
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               <label htmlFor="adv-memory-type" className="text-xs font-medium text-foreground">
                 Type
               </label>
@@ -151,7 +151,7 @@ export function AdvancedMemoryEditorDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               <label htmlFor="adv-memory-body" className="text-xs font-medium text-foreground">
                 Content
               </label>
@@ -167,7 +167,7 @@ export function AdvancedMemoryEditorDialog({
           </div>
         </div>
         <OperationFeedback operation={operation} className="mx-5 mb-4" />
-        <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
+        <DialogFooter className="shrink-0 border-t app-border-subtle px-5 py-4">
           <Button type="button" variant="outline" disabled={saving} onClick={onCancel}>
             Cancel
           </Button>
@@ -290,7 +290,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {folder ? <Badge variant="secondary">{folder}</Badge> : null}
@@ -318,7 +318,7 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
           }
         />
       ) : (
-        <div className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card">
+        <div className="divide-y divide-border/40 overflow-hidden rounded-xl border app-border-subtle bg-card">
           {memories.map((entry) => {
             const isExpanded = expandedSlugs[entry.slug] ?? false;
             const deleteOperation =
@@ -351,13 +351,13 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
                       {entry.type}
                     </Badge>
                   </div>
-                  <span className="text-xs text-muted-foreground/60 truncate max-w-[40%]">
+                  <span className="text-xs app-text-muted opacity-60 truncate max-w-[40%]">
                     {entry.description}
                   </span>
                 </button>
                 {isExpanded && (
-                  <div className="px-10 pb-4 text-xs space-y-3">
-                    <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
+                  <div className="flex flex-col gap-3 px-10 pb-4 text-xs">
+                    <pre className="whitespace-pre-wrap text-muted-foreground font-sans app-type-body">
                       {entry.body}
                     </pre>
                     <div className="flex items-center gap-2">

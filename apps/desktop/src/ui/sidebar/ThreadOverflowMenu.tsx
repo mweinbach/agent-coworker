@@ -75,7 +75,7 @@ export function ThreadOverflowMenu({
           onPointerDown={stopPropagationOnly}
           onClick={stopPropagationOnly}
           className={cn(
-            "size-5 shrink-0 rounded-md text-muted-foreground/60 hover:text-foreground/85 hover:bg-foreground/[0.06] data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:scale-100",
+            "size-5 shrink-0 rounded-md app-text-muted opacity-60 hover:app-text-emphasis hover:app-hover-wash data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:scale-100",
             triggerVisibilityClassName,
             className,
           )}
@@ -86,7 +86,7 @@ export function ThreadOverflowMenu({
       <DropdownMenuContent
         align="start"
         onClick={stopPropagationOnly}
-        className="min-w-[12.5rem] rounded-lg border-border/50 bg-popover/95 p-1 text-popover-foreground app-shadow-popover ring-1 ring-black/[0.04] backdrop-blur-md"
+        className="min-w-[12.5rem] rounded-lg app-border-subtle bg-popover/95 p-1 text-popover-foreground app-shadow-popover ring-1 ring-black/[0.04] backdrop-blur-md"
       >
         <DropdownMenuItem onSelect={onRename} className="gap-2.5 rounded-md">
           <PencilIcon className="size-4 shrink-0 text-muted-foreground" />

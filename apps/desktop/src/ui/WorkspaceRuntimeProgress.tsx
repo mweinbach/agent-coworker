@@ -217,7 +217,7 @@ export function WorkspaceRuntimeProgress({
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      className="w-full max-w-xl gap-0 overflow-hidden border-border/80 bg-card/95 py-0 shadow-sm"
+      className="w-full max-w-xl gap-0 overflow-hidden app-border-subtle bg-card/95 py-0 shadow-sm"
     >
       <CardContent className="flex flex-col gap-6 p-7">
         <RuntimeProgressContent progress={progress} compact={false} />

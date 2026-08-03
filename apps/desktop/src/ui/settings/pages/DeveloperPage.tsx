@@ -527,7 +527,7 @@ export function DeveloperPage() {
                 </>
               }
             >
-              <div className="max-w-md space-y-2">
+              <div className="max-w-md flex flex-col gap-2">
                 <Input
                   type="text"
                   inputMode="numeric"

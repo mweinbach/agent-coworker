@@ -235,7 +235,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[760px]">
-          <DialogHeader className="border-b border-border/60 px-6 pb-4 pt-6">
+          <DialogHeader className="border-b app-border-subtle px-6 pb-4 pt-6">
             <DialogTitle>Import conversations</DialogTitle>
             <DialogDescription>
               Bring Codex, Claude Code, or Cowork backup chats into Cowork as normal threads. Future
@@ -351,7 +351,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
                     {formatCount(selectedConversations.length, "selected")}
                   </div>
                 </div>
-                <div className="flex flex-col divide-y divide-border/40">
+                <div className="flex flex-col divide-y app-divide-subtle">
                   {conversations.map((conversation) => {
                     const checked = selectedFingerprints.has(conversation.fingerprint);
                     const needsMapping = conversation.mapping.status === "missing";
@@ -440,7 +440,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
             )}
 
             {result ? (
-              <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-foreground">
+              <div className="flex items-center gap-2 rounded-md border app-border-subtle bg-muted/20 px-3 py-2 text-xs text-foreground">
                 <CheckCircle2Icon className="size-4 text-primary" />
                 <span>
                   Imported {result.imported.length}, skipped {result.skipped.length}, failed{" "}
@@ -450,7 +450,7 @@ export function ConversationImportDialog({ defaultOpen = false }: { defaultOpen?
             ) : null}
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t border-border/60 px-6 py-4">
+          <div className="flex items-center justify-end gap-2 border-t app-border-subtle px-6 py-4">
             <Button variant="ghost" type="button" onClick={() => setOpen(false)}>
               Close
             </Button>

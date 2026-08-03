@@ -27,7 +27,7 @@ export function LmStudioStartDialog() {
         <DialogHeader>
           <DialogTitle>LM Studio isn&apos;t running</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {modal.canAutoStart ? (
             <p className="text-sm text-muted-foreground">
               Your message needs the local LM Studio server at{" "}

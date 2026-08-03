@@ -111,8 +111,8 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
           </div>
         ) : (
           <>
-            <div className="p-6 pb-4 border-b border-border/50">
-              <DialogHeader className="space-y-4">
+            <div className="border-b app-border-subtle p-6 pb-4">
+              <DialogHeader className="flex flex-col gap-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted/50 text-2xl overflow-hidden">
@@ -126,7 +126,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                         }
                       />
                     </div>
-                    <div className="space-y-1">
+                    <div className="flex flex-col gap-1">
                       <DialogTitle className="text-xl">{selectedDisplayName}</DialogTitle>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span>
@@ -172,7 +172,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               </DialogHeader>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
               {selectedInstallation && (
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={stateTone(selectedInstallation.state)}>
@@ -194,7 +194,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               )}
 
               {selectedInstallation?.diagnostics && selectedInstallation.diagnostics.length > 0 && (
-                <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 space-y-2 text-sm">
+                <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
                   <div className="font-semibold text-destructive">Diagnostics</div>
                   {selectedInstallation.diagnostics.map((diagnostic) => (
                     <div key={diagnostic.code} className="text-destructive">
@@ -205,14 +205,14 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               )}
 
               {updateCheck && !updateCheck.canUpdate && (
-                <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-sm text-muted-foreground">
+                <div className="rounded-md border app-border-subtle bg-muted/25 px-3 py-2 text-sm text-muted-foreground">
                   {updateCheck.reason}
                 </div>
               )}
 
               <div className="text-sm">
                 {safeContent ? (
-                  <Streamdown className="select-text max-w-none leading-7 [&>*:first-child]:mt-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-foreground/[0.04] [&_pre]:p-3">
+                  <Streamdown className="select-text max-w-none leading-7 [&>*:first-child]:mt-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:app-fill-subtle [&_pre]:p-3">
                     {safeContent}
                   </Streamdown>
                 ) : (
@@ -225,7 +225,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-muted/10 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t app-border-subtle bg-muted/10 p-4">
               <div className="flex items-center gap-2">
                 {selectedInstallation?.writable && !selectedInstallation.plugin ? (
                   <Button

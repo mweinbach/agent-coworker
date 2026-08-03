@@ -142,7 +142,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   return (
     <InlineErrorBoundary label="This research report couldn't be rendered.">
       <div className="relative flex h-full min-h-0 flex-col">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b app-border-subtle px-4 py-2">
           <div className="flex min-w-0 flex-1 basis-[26rem] flex-wrap items-center gap-x-4 gap-y-2">
             <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Badge
@@ -205,7 +205,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 aria-controls={sourcesPanelId}
                 aria-label={sourcesOpen ? "Hide sources panel" : "Show sources panel"}
                 className={cn(
-                  "h-7 gap-1.5 rounded-full border-border/60 px-3 text-xs",
+                  "h-7 gap-1.5 rounded-full app-border-subtle px-3 text-xs",
                   sourcesOpen ? "bg-primary/10 border-primary/30 text-primary" : "bg-muted/15",
                 )}
               >
@@ -285,7 +285,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                       </Button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="flex flex-col gap-2">
                       <textarea
                         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring"
                         rows={3}
@@ -357,10 +357,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 prefersReducedMotion ? "duration-0" : "duration-200",
                 sourcesOverlay
                   ? showSourcesPanel
-                    ? "absolute inset-y-0 right-0 z-20 border-l border-border/55 bg-background/96 opacity-100 shadow-2xl shadow-black/10 backdrop-blur-sm"
+                    ? "absolute inset-y-0 right-0 z-20 border-l app-border-subtle bg-background/96 opacity-100 shadow-2xl shadow-black/10 backdrop-blur-sm"
                     : "pointer-events-none absolute inset-y-0 right-0 z-20 border-l border-transparent opacity-0 translate-x-3"
                   : showSourcesPanel
-                    ? "shrink-0 border-l border-border/55 opacity-100"
+                    ? "shrink-0 border-l app-border-subtle opacity-100"
                     : "pointer-events-none shrink-0 border-l border-transparent opacity-0",
               )}
               aria-label="Sources"
@@ -375,7 +375,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 className="flex h-full min-h-0 min-w-0 flex-col"
                 style={{ width: sourcesOverlay ? "100%" : "var(--research-sources-panel-width)" }}
               >
-                <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                <div className="flex h-9 items-center gap-2 border-b app-border-subtle px-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                   Sources
                   <span className="rounded-full bg-muted/80 px-1.5 text-xs font-medium tabular-nums text-muted-foreground">
                     {sourceCount}
@@ -546,7 +546,7 @@ function ResearchReasoningStream({
           {thoughtSummaries.length} {thoughtSummaries.length === 1 ? "update" : "updates"}
         </div>
       </div>
-      <ol className="relative space-y-3 before:absolute before:bottom-2 before:left-[0.5625rem] before:top-2 before:w-px before:bg-primary/20">
+      <ol className="relative flex flex-col gap-3 before:absolute before:bottom-2 before:left-[0.5625rem] before:top-2 before:w-px before:bg-primary/20">
         {thoughtSummaries.map((thought, index) => {
           const isLatest = index === thoughtSummaries.length - 1;
           return (
@@ -565,7 +565,7 @@ function ResearchReasoningStream({
                   "rounded-xl border px-3.5 py-3",
                   isLatest
                     ? "border-primary/25 bg-background/80"
-                    : "border-border/45 bg-background/55",
+                    : "app-border-subtle bg-background/55",
                 )}
               >
                 <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">

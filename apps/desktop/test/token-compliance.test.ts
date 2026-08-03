@@ -29,31 +29,12 @@ const hardcodedPaletteUtilityPattern =
   /\b(?:text|bg|border|ring|fill|stroke)-(?:amber|blue|emerald|green|red|orange|yellow|slate|zinc|neutral|stone|violet|purple|pink|rose|cyan|sky|teal|lime|indigo)(?:-[0-9]{2,3})?(?:\/(?:\[[^\]]+\]|[0-9]{1,3}))?\b/g;
 const selfReferentialVarPattern = /(--[\w-]+)\s*:\s*var\(\1\)\s*;/g;
 const subfloorTextUtilityPattern = /text-\[(?:[0-9](?:\.\d+)?|1[01](?:\.\d+)?)px\]/g;
-const opacityReducedTextPattern = /text-(?:foreground|muted-foreground)\/[0-9]+/g;
+// Placeholder text is intentionally de-emphasized; the placeholder: variant is exempt.
+const opacityReducedTextPattern = /(?<!placeholder:)text-(?:foreground|muted-foreground)\/[0-9]+/g;
 const opacityReducedFocusRingPattern =
   /(?:focus|focus-visible|focus-within|group-focus-within):ring-[\w-]+\/[0-9]+/g;
 const unsupportedRingWidthPattern = /\bring-3\b/g;
 const lowContrastMutedTextPattern = /text-muted-foreground\/65/g;
-const migratedHierarchyFiles = new Set([
-  "ui/Sidebar.tsx",
-  "ui/sidebar/SidebarThreadItem.tsx",
-  "ui/sidebar/SidebarWorkspaceItem.tsx",
-  "ui/layout/AppTopBar.tsx",
-  "ui/ContextSidebar.tsx",
-  "ui/Canvas.tsx",
-  "ui/ResearchView.tsx",
-  "ui/chat/ActivityGroupCard.tsx",
-  "ui/chat/ChatComposer.tsx",
-  "ui/chat/ChatFeed.tsx",
-  "ui/chat/ChatThreadHeader.tsx",
-  "ui/chat/FeedRow.tsx",
-  "ui/chat/toolCards/ToolCard.tsx",
-  "ui/chat/CitationSourcesCarousel.tsx",
-  "ui/file-explorer/WorkspaceFileExplorer.tsx",
-  "ui/settings/SettingsPrimitives.tsx",
-  "ui/settings/SettingsShell.tsx",
-  "ui/tasks/TaskContextSidebar.tsx",
-]);
 const inlineStyleBlockPattern = /style=\{\{([\s\S]*?)\}\}/g;
 const colorBearingInlineStylePattern =
   /\b(?:background|backgroundColor|color|borderColor|boxShadow|outlineColor|fill|stroke|filter)\s*:/;
@@ -174,11 +155,9 @@ describe("desktop token compliance", () => {
     expect(violations).toEqual([]);
   });
 
-  test("keeps migrated high-traffic surfaces on semantic text colors", () => {
-    const migratedFiles = readDesktopFiles().filter(({ relativePath }) =>
-      migratedHierarchyFiles.has(relativePath),
-    );
-    const violations = collectMatches(migratedFiles, opacityReducedTextPattern);
+  test("keeps desktop UI surfaces on semantic text colors", () => {
+    const uiFiles = readDesktopFiles().filter(({ relativePath }) => relativePath.startsWith("ui/"));
+    const violations = collectMatches(uiFiles, opacityReducedTextPattern);
     expect(violations).toEqual([]);
   });
 

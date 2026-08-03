@@ -88,6 +88,14 @@
   background: var(--surface-fill-strong);
 }
 
+/* Divider color matching the subtle border step: use alongside divide-y/divide-x
+   (divide-width utilities only set widths; color needs the child selector). */
+@utility app-divide-subtle {
+  & > :not(:last-child) {
+    border-color: var(--border-subtle);
+  }
+}
+
 /* Active/current rows keep the normal subtle wash while mapping to the system
  * Highlight/HighlightText pair in high-contrast and forced-colors modes. */
 .app-selected-row {

@@ -170,7 +170,7 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
 
         <SettingsRow title="Status" description={primaryMessage}>
           {updateState.phase === "downloading" && updateState.progress ? (
-            <div className="max-w-md space-y-2">
+            <div className="max-w-md flex flex-col gap-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium text-foreground">Download progress</span>
                 <span className="text-muted-foreground">{progressPercent}%</span>

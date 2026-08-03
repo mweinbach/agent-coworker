@@ -655,7 +655,7 @@ export function MemoryPage({
         description="Optional maintenance agent that sharpens local skills from recent usage."
       >
         <Collapsible open={skillImprovementOpen} onOpenChange={setSkillImprovementOpen}>
-          <div className="divide-y divide-border/30">
+          <div className="divide-y app-divide-subtle">
             <SettingsRow
               title="Advanced skill maintenance"
               description={`${skillImprovementEnabled ? "Enabled" : "Off"} · model, scope, queue, and history`}
@@ -672,7 +672,7 @@ export function MemoryPage({
                 </CollapsibleTrigger>
               }
             />
-            <CollapsibleContent className="divide-y divide-border/30">
+            <CollapsibleContent className="divide-y app-divide-subtle">
               <SettingsRow
                 title="Enable skill improvement"
                 description="Queues improvement runs after skill usage and keeps a restore backup for each changed skill."
@@ -789,15 +789,15 @@ export function MemoryPage({
                     }
                   >
                     {skillImprovementLoading && !skillImprovementStatus ? (
-                      <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+                      <div className="rounded-md border border-dashed app-border-subtle px-3 py-3 text-xs text-muted-foreground">
                         Loading eligible skills…
                       </div>
                     ) : skillImprovementSkills.length === 0 ? (
-                      <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+                      <div className="rounded-md border border-dashed app-border-subtle px-3 py-3 text-xs text-muted-foreground">
                         No eligible skills found for this scope.
                       </div>
                     ) : (
-                      <div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border border-border/60 p-2 sm:grid-cols-2">
+                      <div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border app-border-subtle p-2 sm:grid-cols-2">
                         {skillImprovementSkills.map((skill) => {
                           const checkboxId = `skill-improvement-${skill.skillName.replace(/[^A-Za-z0-9_-]/g, "-")}`;
                           const checked = !skillImprovementExcludedSkills.includes(skill.skillName);
@@ -819,7 +819,7 @@ export function MemoryPage({
                                 }
                               />
                               <span className="min-w-0 flex-1 truncate">{skill.skillName}</span>
-                              <span className="shrink-0 text-xs uppercase text-muted-foreground/70">
+                              <span className="shrink-0 text-xs uppercase app-text-muted opacity-70">
                                 {skill.scope}
                               </span>
                             </label>
@@ -864,7 +864,7 @@ export function MemoryPage({
                     {skillImprovementPendingJobs.length === 0 ? (
                       <div className="text-xs text-muted-foreground">No queued skill jobs.</div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="flex flex-col gap-2">
                         {skillImprovementPendingJobs.map((job) => (
                           <div
                             key={job.key}
@@ -887,7 +887,7 @@ export function MemoryPage({
                         No skill improvement runs yet.
                       </div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="flex flex-col gap-2">
                         {skillImprovementHistory.map((entry) => (
                           <div
                             key={entry.id}
@@ -926,7 +926,7 @@ export function MemoryPage({
                       No restore backups available.
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="flex flex-col gap-2">
                       {skillImprovementBackups.map((backup) => {
                         const restoreKey = `restore:${backup.skillName}`;
                         const restoreOperation = activeTarget
@@ -1025,7 +1025,7 @@ export function MemoryPage({
                   </Select>
                 ) : null}
 
-                <div className="flex rounded-md border border-border/70 overflow-hidden">
+                <div className="flex rounded-md border app-border-subtle overflow-hidden">
                   {(["all", "workspace", "user"] as const).map((scope) => (
                     <Button
                       key={scope}
@@ -1119,14 +1119,14 @@ export function MemoryPage({
                             {scopeLabel(entry.scope)}
                           </Badge>
                         </div>
-                        <span className="text-xs text-muted-foreground/60">
+                        <span className="text-xs app-text-muted opacity-60">
                           Updated {relativeTime(entry.updatedAt)}
                         </span>
                       </button>
 
                       {isExpanded && (
-                        <div className="px-10 pb-4 text-xs space-y-3">
-                          <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
+                        <div className="flex flex-col gap-3 px-10 pb-4 text-xs">
+                          <pre className="whitespace-pre-wrap text-muted-foreground font-sans app-type-body">
                             {entry.content}
                           </pre>
                           <div className="flex items-center gap-2">
@@ -1186,7 +1186,7 @@ export function MemoryPage({
               aria-busy={saveOperation?.status === "pending"}
               className="flex max-h-[min(88vh,36rem)] w-[min(92vw,34rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
             >
-              <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4 pr-12">
+              <DialogHeader className="shrink-0 border-b app-border-subtle px-5 py-4 pr-12">
                 <DialogTitle>
                   {editingEntry ? `Edit remembered fact` : "Add remembered fact"}
                 </DialogTitle>
@@ -1195,8 +1195,8 @@ export function MemoryPage({
                 </DialogDescription>
               </DialogHeader>
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                <div className="space-y-4">
-                  <div className="space-y-1.5">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1.5">
                     <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
                       Title
                     </label>
@@ -1211,7 +1211,7 @@ export function MemoryPage({
                     />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-1.5">
                     <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
                       Scope
                     </label>
@@ -1232,7 +1232,7 @@ export function MemoryPage({
                     </Select>
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="flex flex-col gap-1.5">
                     <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
                       Content
                     </label>
@@ -1250,7 +1250,7 @@ export function MemoryPage({
                 </div>
                 <OperationFeedback operation={saveOperation} className="mt-3" />
               </div>
-              <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-4">
+              <DialogFooter className="shrink-0 border-t app-border-subtle px-5 py-4">
                 <Button
                   type="button"
                   variant="outline"

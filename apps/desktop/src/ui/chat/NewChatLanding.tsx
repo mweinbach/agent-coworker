@@ -582,7 +582,7 @@ export function NewChatLanding() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium text-muted-foreground/90 hover:bg-muted/35 hover:text-foreground"
+                      className="h-8 min-w-0 max-w-full gap-1.5 rounded-md px-2 text-sm font-medium app-text-muted opacity-90 hover:bg-muted/35 hover:text-foreground"
                       aria-label="Select chat target"
                       disabled={composerLocked}
                     >

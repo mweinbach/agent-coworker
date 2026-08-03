@@ -139,7 +139,7 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
       type="button"
       onClick={() => onOpen(run)}
       aria-label={`Open workflow ${run.name} (${status}${costLabel}; ${run.runId})`}
-      className="app-context-sidebar__nested-panel w-full rounded-[10px] border px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="app-context-sidebar__nested-panel w-full rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
@@ -157,7 +157,7 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
       ) : null}
 
       {phases.length > 0 ? (
-        <div className="mt-1.5 space-y-1.5">
+        <div className="mt-1.5 flex flex-col gap-1.5">
           {phases.map(([phase, agents]) => (
             <div key={phase}>
               <div
@@ -168,7 +168,7 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
               >
                 {phase}
               </div>
-              <div className="mt-0.5 space-y-0.5">
+              <div className="mt-0.5 flex flex-col gap-0.5">
                 {agents.length === 0 ? (
                   <div className="app-type-caption text-warning">No agent started</div>
                 ) : (
@@ -216,11 +216,11 @@ const WorkflowRunCard = memo(function WorkflowRunCard({
       ) : null}
 
       {recentLogs.length > 0 ? (
-        <div className="mt-1.5 space-y-0.5 border-t pt-1.5">
+        <div className="mt-1.5 flex flex-col gap-0.5 border-t pt-1.5">
           {recentLogs.map(({ line, position }) => (
             <div
               key={`${run.runId}-log-${position}`}
-              className="app-type-caption truncate leading-4 app-text-muted"
+              className="app-type-caption truncate app-text-muted"
               title={line}
             >
               {line}
@@ -262,7 +262,7 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
         <span className={labelClassName}>Workflows</span>
       </div>
       <ScrollShadow className={scrollerClassName} data-sidebar-section="workflows">
-        <div className="space-y-1.5">
+        <div className="flex flex-col gap-1.5">
           {orderedRuns.map((run) => (
             <WorkflowRunCard
               key={run.runId}

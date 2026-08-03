@@ -105,7 +105,7 @@ function ImportItemCard({
   return (
     <div className="py-3.5">
       <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/40 text-muted-foreground">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border app-border-subtle bg-muted/40 text-muted-foreground">
           {kind === "plugin" ? (
             <PackageIcon className="h-4 w-4" />
           ) : (
@@ -139,7 +139,7 @@ function ImportItemCard({
       {hasDiagnostics ? (
         <div className="mt-2.5 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive">
           <AlertTriangleIcon className="mt-0.5 h-3 w-3 shrink-0" />
-          <div className="space-y-0.5">
+          <div className="flex flex-col gap-0.5">
             {item.diagnostics.map((diagnostic) => (
               <div key={`${item.id}:${diagnostic.code}`}>{diagnostic.message}</div>
             ))}
@@ -233,7 +233,7 @@ function FolderImportPanel({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       <Button
         variant="outline"
         type="button"
@@ -247,7 +247,7 @@ function FolderImportPanel({
       {folderPath ? (
         <div className="py-3.5">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/40 text-muted-foreground">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border app-border-subtle bg-muted/40 text-muted-foreground">
               <FolderInputIcon className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
@@ -303,7 +303,7 @@ function FolderImportPanel({
         </div>
       ) : null}
       {success ? (
-        <div className="flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-foreground">
+        <div className="flex items-center gap-1.5 rounded-md border app-border-subtle bg-muted/20 px-3 py-2 text-xs text-foreground">
           <CheckCircle2Icon className="h-3.5 w-3.5 shrink-0 text-primary" />
           <span>{success}</span>
         </div>
@@ -374,7 +374,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
         }}
       >
         <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[600px]">
-          <DialogHeader className="border-b border-border/60 px-6 pt-6 pb-4">
+          <DialogHeader className="border-b app-border-subtle px-6 pt-6 pb-4">
             <DialogTitle>Import {noun}s</DialogTitle>
             <DialogDescription>
               Bring {noun}s from Claude Code (<code>~/.claude</code>), Codex (<code>~/.codex</code>
@@ -421,7 +421,7 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
                 description={`Nothing to import from ${SOURCE_LABELS[tab]}.`}
               />
             ) : (
-              <div className="flex flex-col divide-y divide-border/40">
+              <div className="flex flex-col divide-y app-divide-subtle">
                 {items.map((item) => {
                   const globalOperation =
                     operationsByKey[

@@ -244,7 +244,7 @@ export function UsagePage(props: UsagePageProps = {}) {
             local pricing catalog.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 text-sm text-muted-foreground">
+        <div className="flex flex-col gap-3 text-sm text-muted-foreground">
           <p>
             Billing may vary. Providers can round differently, apply cached-token discounts
             differently, or change prices independently of what is bundled in the app.
@@ -388,11 +388,11 @@ export function UsagePage(props: UsagePageProps = {}) {
 
                   {/* Model rows */}
                   {isExpanded && (
-                    <div className="border-t border-border/50">
+                    <div className="border-t app-border-subtle">
                       {group.models.map((model) => (
                         <div
                           key={model.model}
-                          className="px-10 py-3 border-b border-border/40 last:border-b-0 bg-card/20"
+                          className="px-10 py-3 border-b app-border-subtle last:border-b-0 bg-card/20"
                         >
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">

@@ -643,7 +643,7 @@ export function Canvas({ path }: { path: string }) {
     <div
       className={cn(
         "app-canvas flex h-full w-full flex-col overflow-hidden bg-canvas text-canvas-foreground",
-        !isCanvasMode && "border-l border-border/50",
+        !isCanvasMode && "border-l app-border-subtle",
       )}
       data-canvas-surface="document"
     >
@@ -734,7 +734,7 @@ export function Canvas({ path }: { path: string }) {
         ) : null}
 
         {showFormattingBar && isMarkdown && activeTab === "edit" && (
-          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
+          <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b app-border-subtle bg-muted/15 px-2.5 py-1 select-none scrollbar-none">
             <AccessibleIconButton
               type="button"
               variant="ghost"
@@ -949,7 +949,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your markdown here..."
-                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                          className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -984,7 +984,7 @@ export function Canvas({ path }: { path: string }) {
                           onBlur={handleBlur}
                           readOnly={contentTruncated}
                           placeholder="Type your slide code here..."
-                          className="min-h-0 flex-1 resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                          className="min-h-0 flex-1 resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                         />
                       </div>
                     </TabsContent>
@@ -1010,7 +1010,7 @@ export function Canvas({ path }: { path: string }) {
                         onBlur={handleBlur}
                         readOnly={contentTruncated}
                         placeholder="Type your text here..."
-                        className="h-full w-full resize-none border border-border/60 bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
+                        className="h-full w-full resize-none border app-border-subtle bg-background p-4 font-mono text-sm leading-relaxed focus-visible:border-primary/80 focus-visible:ring-1 focus-visible:ring-primary"
                       />
                     </div>
                   </div>
@@ -1023,11 +1023,11 @@ export function Canvas({ path }: { path: string }) {
 
       <div
         className={cn(
-          "shrink-0 border-t border-border/45 bg-muted/20 pb-3 pt-2 flex flex-col gap-2 select-none",
+          "shrink-0 border-t app-border-subtle bg-muted/20 pb-3 pt-2 flex flex-col gap-2 select-none",
           pxClass,
         )}
       >
-        <div className="relative flex items-center rounded-xl border border-border/65 bg-background shadow-sm transition hover:border-border/80 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
+        <div className="relative flex items-center rounded-xl border app-border-subtle bg-background shadow-sm transition hover:app-border-subtle focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
           {promptError ? (
             <div
               role="alert"
@@ -1090,7 +1090,7 @@ export function Canvas({ path }: { path: string }) {
             }}
           >
             {showFormattingBar && isMarkdown && activeTab === "edit" && (
-              <div className="flex items-center gap-1 border-b border-border/45 pb-1 px-1">
+              <div className="flex items-center gap-1 border-b app-border-subtle pb-1 px-1">
                 <Button
                   type="button"
                   size="xs"

@@ -289,12 +289,12 @@ function SettingsNavigation({
 
   return (
     <>
-      <div className="shrink-0 settings-shell__nav-header border-b border-border/50">
+      <div className="shrink-0 settings-shell__nav-header border-b app-border-subtle">
         <div className="settings-shell__nav-titleband">
           <div className="settings-shell__nav-titleband-drag-zone" aria-hidden="true" />
           <div className="settings-shell__nav-titleband-row px-3 flex items-center">
             <button
-              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left text-[13px] font-medium app-text-secondary transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
+              className="settings-shell__back-button flex h-9 w-full items-center justify-start gap-2 rounded-md px-2.5 text-left app-type-body font-medium app-text-secondary transition-colors duration-150 hover:app-hover-wash hover:text-foreground"
               type="button"
               onClick={onBack}
             >
@@ -330,10 +330,10 @@ function SettingsNavigation({
                     <button
                       key={page.id}
                       className={cn(
-                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors duration-150",
+                        "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left app-type-body transition-colors duration-150",
                         activePage === page.id
                           ? "settings-shell__nav-button--active font-semibold text-foreground"
-                          : "font-medium app-text-secondary hover:bg-foreground/[0.045] hover:text-foreground",
+                          : "font-medium app-text-secondary hover:app-hover-wash hover:text-foreground",
                       )}
                       type="button"
                       onClick={() => onSelectPage(page.id)}
@@ -463,7 +463,7 @@ export function SettingsShell() {
       />
       <AdaptiveRailSurface
         active={navigationActive}
-        className="settings-shell__nav app-left-sidebar-pane flex h-full min-h-0 min-w-0 flex-col border-r border-border/50"
+        className="settings-shell__nav app-left-sidebar-pane flex h-full min-h-0 min-w-0 flex-col border-r app-border-subtle"
         label="Settings navigation"
         onClose={() => setNavigationOpen(false)}
         overlay={adaptiveLayout.leftOverlay}
@@ -529,7 +529,7 @@ export function SettingsShell() {
                 </>
               ) : (
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1">
+                  <div className="min-w-0 flex flex-col gap-1">
                     <div className="flex min-w-0 items-center gap-2">
                       {navigationToggle}
                       <h1 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">

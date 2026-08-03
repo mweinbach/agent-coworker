@@ -140,11 +140,11 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
   return (
     <Dialog open={selectedId !== null} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0">
-        <div className="border-b border-border/50 p-6 pb-4">
-          <DialogHeader className="space-y-4">
+        <div className="border-b app-border-subtle p-6 pb-4">
+          <DialogHeader className="flex flex-col gap-4">
             <div className="flex items-start gap-4">
               <EntityIcon name={displayName} size="lg" />
-              <div className="space-y-1">
+              <div className="flex flex-col gap-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <DialogTitle className="text-xl">{displayName}</DialogTitle>
                   {source?.builtIn ? <Badge variant="secondary">Built-in</Badge> : null}
@@ -178,7 +178,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
           </DialogHeader>
         </div>
 
-        <div className="flex-1 space-y-6 overflow-y-auto p-6">
+        <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
           {marketplaceMutationError ? (
             <div className="rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-3 text-sm text-destructive">
               {marketplaceMutationError}
@@ -301,7 +301,7 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
           ) : null}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border/50 bg-muted/10 p-4">
+        <div className="flex items-center justify-between border-t app-border-subtle bg-muted/10 p-4">
           <div className="flex items-center gap-2">
             {source && !source.builtIn ? (
               <Button

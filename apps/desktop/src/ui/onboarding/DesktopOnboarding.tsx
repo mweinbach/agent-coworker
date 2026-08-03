@@ -1136,7 +1136,7 @@ export function DesktopOnboarding() {
           label="Close onboarding"
           size="icon-sm"
           variant="ghost"
-          className="absolute right-3 top-3 z-20 size-7 rounded-md text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground"
+          className="absolute right-3 top-3 z-20 size-7 rounded-md app-text-muted opacity-70 hover:bg-muted/40 hover:text-foreground"
           onClick={() => void requestDismiss()}
         >
           <XIcon aria-hidden="true" />

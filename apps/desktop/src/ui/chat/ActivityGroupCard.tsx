@@ -1131,7 +1131,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
               />
               <span
                 className={cn(
-                  "min-w-0 truncate text-[13.5px] font-normal italic leading-6",
+                  "min-w-0 truncate app-type-body font-normal italic",
                   useThinkingTreatment ? "activity-thinking-shimmer" : "text-muted-foreground",
                 )}
               >

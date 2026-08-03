@@ -134,7 +134,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="h-9 w-9 rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+            className="h-9 w-9 rounded-full border app-border-subtle bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="Close quick chat"
             onClick={() => void windowClose()}
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
@@ -154,7 +154,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
               type="button"
               variant="ghost"
               size="icon-sm"
-              className="h-9 w-9 rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+              className="h-9 w-9 rounded-full border app-border-subtle bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
               aria-label="Start a new chat"
               onClick={() => void newThread()}
               style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
@@ -165,7 +165,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
               type="button"
               variant="ghost"
               size="icon-sm"
-              className="h-9 w-9 rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+              className="h-9 w-9 rounded-full border app-border-subtle bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
               aria-label="Open full app"
               onClick={() => {
                 void showMainWindow().then(() => windowClose());
@@ -177,7 +177,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2">
-          <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border border-border/45 bg-panel/75">
+          <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-composer border app-border-subtle bg-panel/75">
             {startupError ? (
               <StartupRecovery
                 detail={startupError}

@@ -99,7 +99,7 @@ export function ResearchSettingsDialog({
             </NativeSelect>
           </div>
 
-          <div className="flex items-start justify-between gap-4 rounded-md border border-border/50 px-3 py-2.5">
+          <div className="flex items-start justify-between gap-4 rounded-md border app-border-subtle px-3 py-2.5">
             <div>
               <Label htmlFor="research-plan-approval" className="text-sm font-medium">
                 Plan approval

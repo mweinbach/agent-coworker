@@ -614,7 +614,7 @@ export function SubagentsPage() {
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border border-border/60 bg-muted/25 p-1">
+          <div className="grid w-full max-w-xs grid-cols-2 rounded-md border app-border-subtle bg-muted/25 p-1">
             {(["global", "workspace"] as const).map((value) => (
               <Button
                 key={value}
@@ -649,7 +649,7 @@ export function SubagentsPage() {
         ) : null}
 
         {catalog?.diagnostics.length ? (
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {catalog.diagnostics.map((diagnostic) => (
               <div
                 key={`${diagnostic.scope}:${diagnostic.path}`}
@@ -789,7 +789,7 @@ function WorkspaceTargetPicker({
   if (!selectedWorkspace) return null;
 
   return (
-    <div className="grid gap-3 rounded-md border border-border/60 bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
+    <div className="grid gap-3 rounded-md border app-border-subtle bg-background/55 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)] sm:items-start">
       <div className="flex min-w-0 flex-col gap-1">
         <div className="text-xs text-muted-foreground">Profile workspace</div>
         <div className="truncate text-sm font-medium">{formatWorkspaceName(selectedWorkspace)}</div>
@@ -840,7 +840,7 @@ function ProfileRow({
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
           {entry.profile.enabled ? null : (
@@ -893,7 +893,7 @@ function GlobalAvailabilityRow({
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <EntityIcon name={entry.profile.displayName} />
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="truncate text-sm font-medium">{entry.profile.displayName}</div>
           {entry.locked ? <SettingsStatusPill>Always available</SettingsStatusPill> : null}
@@ -1083,7 +1083,7 @@ export function ProfileDialog({
                 />
               </ProfileField>
               <ProfileField label="Subagent id">
-                <div className="flex min-h-9 items-center rounded-lg bg-foreground/[0.04] px-3 text-sm text-muted-foreground">
+                <div className="flex min-h-9 items-center rounded-lg app-fill-subtle px-3 text-sm text-muted-foreground">
                   <code className="truncate text-xs">{generatedProfileRef}</code>
                 </div>
               </ProfileField>
@@ -1251,7 +1251,7 @@ function ProfileField({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-1.5">
       {htmlFor ? (
         <Label htmlFor={htmlFor} className="text-xs text-muted-foreground">
           {label}
@@ -1286,11 +1286,11 @@ function Checklist({
         </Badge>
       </legend>
       {values.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs text-muted-foreground">
+        <div className="rounded-md border border-dashed app-border-subtle px-3 py-3 text-xs text-muted-foreground">
           {emptyLabel}
         </div>
       ) : (
-        <div className="grid max-h-44 gap-1 overflow-y-auto rounded-md border border-border/60 p-2 sm:grid-cols-2">
+        <div className="grid max-h-44 gap-1 overflow-y-auto rounded-md border app-border-subtle p-2 sm:grid-cols-2">
           {values.map((value) => {
             const checkboxId = `subagent-profile-${slugify(title)}-${slugify(value)}`;
             return (

@@ -23,7 +23,7 @@ export function ThreadModelIndicator({
   return (
     <Badge
       variant="outline"
-      className="h-7 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium text-foreground/80 shadow-none"
+      className="h-7 max-w-[220px] rounded-md border-none bg-transparent px-2 text-xs font-medium app-text-secondary shadow-none"
     >
       <span className="truncate" title={title}>
         {friendly}

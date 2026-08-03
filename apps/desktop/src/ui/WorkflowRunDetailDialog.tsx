@@ -78,7 +78,7 @@ function tally(agents: WorkflowAgentRow[]) {
 
 function StatChip({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-1.5">
+    <div className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-1.5">
       <div className="app-type-label uppercase tracking-[0.14em] app-text-muted">{label}</div>
       <div className={cn("mt-0.5 text-sm font-medium tabular-nums", tone ?? "text-foreground")}>
         {value}
@@ -173,7 +173,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
         </div>
 
         {run.error ? (
-          <div className="rounded-[10px] border border-warning/30 bg-warning/5 px-3 py-2">
+          <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2">
             <div className="app-type-label uppercase tracking-[0.14em] text-warning">
               Failure reason
             </div>
@@ -190,7 +190,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
         ) : null}
 
         <ScrollShadow className="max-h-[22rem] overflow-y-auto overscroll-contain pr-1">
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3">
             {phases.map(([phase, agents]) => {
               const phaseCounts = tally(agents);
               const active = phase === run.currentPhase && !settled;
@@ -210,16 +210,16 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
                       {phaseCounts.completed + phaseCounts.cached}/{agents.length}
                     </span>
                   </div>
-                  <div className="mt-1 space-y-0.5">
+                  <div className="mt-1 flex flex-col gap-0.5">
                     {agents.length === 0 ? (
-                      <div className="rounded-[8px] px-1.5 py-1 text-xs text-warning">
+                      <div className="rounded-md px-1.5 py-1 text-xs text-warning">
                         No agent started in this phase.
                       </div>
                     ) : (
                       agents.map((agent) => (
                         <div
                           key={agent.index}
-                          className="rounded-[8px] px-1.5 py-1 text-xs hover:bg-muted/40"
+                          className="rounded-md px-1.5 py-1 text-xs hover:bg-muted/40"
                         >
                           <div className="flex items-center gap-2">
                             <AgentStateIcon state={agent.state} runCancelled={runCancelled} />
@@ -269,11 +269,11 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
           <div className="border-t pt-2">
             <div className="app-type-label uppercase tracking-[0.16em] app-text-muted">Log</div>
             <ScrollShadow className="mt-1 max-h-24 overflow-y-auto overscroll-contain">
-              <div className="space-y-0.5">
+              <div className="flex flex-col gap-0.5">
                 {logLines.map(({ line, position }) => (
                   <div
                     key={`${run.runId}-log-${position}`}
-                    className="app-type-caption leading-4 app-text-muted"
+                    className="app-type-caption app-text-muted"
                   >
                     {line}
                   </div>

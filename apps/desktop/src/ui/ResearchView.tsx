@@ -54,17 +54,17 @@ export function ResearchView() {
             ? compactHistoryOpen
               ? "flex w-full min-w-0"
               : "hidden"
-            : "flex w-[clamp(18rem,26vw,23.75rem)] min-w-[18rem] shrink-0 border-r border-border/40",
+            : "flex w-[clamp(18rem,26vw,23.75rem)] min-w-[18rem] shrink-0 border-r app-border-subtle",
         )}
         inert={compact && !compactHistoryOpen ? true : undefined}
       >
-        <div className="border-b border-border/35 px-4 py-3">
+        <div className="border-b app-border-subtle px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="app-type-label uppercase tracking-[0.16em] app-text-secondary">
                 Research
               </div>
-              <div className="mt-0.5 text-[13px] text-muted-foreground">
+              <div className="mt-0.5 app-type-body text-muted-foreground">
                 Select a run or follow-up
               </div>
             </div>
@@ -73,7 +73,7 @@ export function ResearchView() {
               size="sm"
               type="button"
               variant="secondary"
-              className="h-8 gap-1.5 rounded-md border-border/60 bg-background/70 px-3 text-xs"
+              className="h-8 gap-1.5 rounded-md app-border-subtle bg-background/70 px-3 text-xs"
               onClick={() => {
                 setCompactHistoryOpen(false);
                 if (!returningToDraft) {
@@ -121,7 +121,7 @@ export function ResearchView() {
               }}
             />
           ) : (
-            <div className="rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
+            <div className="rounded-xl border border-dashed app-border-subtle bg-muted/15 px-4 py-10 text-center">
               <p className="text-sm font-semibold text-foreground">Start your first research</p>
               <p className="mx-auto mt-2 max-w-[16rem] text-xs leading-5 text-muted-foreground">
                 Investigate a market, compare vendors, or draft a cited brief. Use the composer on
@@ -154,7 +154,7 @@ export function ResearchView() {
         inert={compact && compactHistoryOpen ? true : undefined}
       >
         {compact ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-background px-3 py-2">
+          <div className="flex shrink-0 items-center gap-2 border-b app-border-subtle bg-background px-3 py-2">
             <Button
               aria-label="Open research history"
               className="gap-1.5"

@@ -90,7 +90,7 @@ export function PluginsSection({
           </div>
         ) : null}
         {pluginsLoading && pluginsCatalog === null ? (
-          <div className="space-y-3 px-4 py-3.5">
+          <div className="flex flex-col gap-3 px-4 py-3.5">
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-9 w-full" />
           </div>

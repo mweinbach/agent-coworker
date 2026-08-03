@@ -295,13 +295,13 @@ export function InstallPluginDialog({
             </div>
 
             {showPreviewPending ? (
-              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              <div className="rounded-md border app-border-subtle bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                 Previewing plugin bundle…
               </div>
             ) : null}
 
             {showPreview ? (
-              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
+              <div className="rounded-md border app-border-subtle bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
                 <div className="font-medium text-foreground">
                   {pluginPreview ? previewSummary(pluginPreview) : "No plugin preview"}
                 </div>
@@ -309,11 +309,11 @@ export function InstallPluginDialog({
                   Previewed for{" "}
                   {pluginPreview?.targetScope === "workspace" ? "workspace" : "library"} install.
                 </div>
-                <div className="mt-2 space-y-1.5">
+                <div className="mt-2 flex flex-col gap-1.5">
                   {pluginPreview?.candidates.map((candidate) => (
                     <div
                       key={`${candidate.pluginId}:${candidate.relativeRootPath}`}
-                      className="rounded border border-border/60 bg-background/40 px-2.5 py-2"
+                      className="rounded border app-border-subtle bg-background/40 px-2.5 py-2"
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
@@ -338,7 +338,7 @@ export function InstallPluginDialog({
                         {candidate.description}
                       </div>
                       {candidate.diagnostics.length > 0 ? (
-                        <div className="mt-2 space-y-1 text-xs text-destructive">
+                        <div className="mt-2 flex flex-col gap-1 text-xs text-destructive">
                           {candidate.diagnostics.map((diagnostic) => (
                             <div key={`${candidate.pluginId}:${diagnostic.code}`}>
                               {diagnostic.message}
@@ -350,7 +350,7 @@ export function InstallPluginDialog({
                   ))}
                 </div>
                 {(pluginPreview?.warnings?.length ?? 0) > 0 ? (
-                  <div className="mt-2 space-y-1 text-xs text-destructive">
+                  <div className="mt-2 flex flex-col gap-1 text-xs text-destructive">
                     {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
@@ -378,7 +378,7 @@ export function InstallPluginDialog({
               </div>
             ) : null}
             {showPreview && validPreviewCandidateRows.length === 0 ? (
-              <div className="rounded-md border border-border/70 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+              <div className="rounded-md border app-border-subtle bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
                 Fix the preview issues before installing this plugin source.
               </div>
             ) : null}

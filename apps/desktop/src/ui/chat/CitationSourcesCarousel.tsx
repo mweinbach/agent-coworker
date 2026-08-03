@@ -102,7 +102,7 @@ function SourceCard({
       type="button"
       variant="ghost"
       size="sm"
-      className="h-auto w-44 shrink-0 justify-start gap-2.5 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-left shadow-none transition-colors hover:border-border hover:bg-accent/50"
+      className="h-auto w-44 shrink-0 justify-start gap-2.5 rounded-lg border app-border-subtle bg-card px-3 py-2.5 text-left shadow-none transition-colors hover:app-border-default hover:bg-accent/50"
       onClick={() => onOpenSource?.(source.url)}
     >
       <FaviconImage url={source.url} className="size-5 shrink-0" />
@@ -248,7 +248,7 @@ export const CitationSourcesCarousel = memo(function CitationSourcesCarousel({
           type="button"
           variant="outline"
           size="sm"
-          className="h-7 gap-1.5 rounded-full border-border/60 bg-background/60 px-2.5 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/50 hover:text-foreground"
+          className="h-7 gap-1.5 rounded-full app-border-subtle bg-background/60 px-2.5 text-xs font-medium app-text-muted shadow-none hover:bg-accent/50 hover:text-foreground"
           aria-label={open ? `Hide ${countLabel}` : `Show ${countLabel}`}
           data-slot="citation-sources-trigger"
         >

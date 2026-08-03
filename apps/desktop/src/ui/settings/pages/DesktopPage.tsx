@@ -148,7 +148,7 @@ export function DesktopPage() {
               </>
             }
           >
-            <div className="max-w-md space-y-3">
+            <div className="max-w-md flex flex-col gap-3">
               <Input
                 aria-label="Quick chat shortcut"
                 readOnly

@@ -214,7 +214,7 @@ function WorkingPlaceholderRow() {
   return (
     <div className="flex w-full items-center gap-1.5" data-slot="working-placeholder">
       <Marker variant="border" className="min-w-0 flex-1 pb-2.5 pt-1.5">
-        <MarkerContent className="flex items-center gap-2 text-[13px] font-medium">
+        <MarkerContent className="flex items-center gap-2 app-type-body font-medium">
           <span
             className="activity-live-dot size-1.5 shrink-0 rounded-full bg-primary"
             aria-hidden
@@ -232,7 +232,7 @@ function DaySeparatorRow(props: { label: string }) {
   return (
     <div className="flex w-full items-center gap-3 py-1" data-slot="day-separator">
       <div className="h-px flex-1 bg-border/40" />
-      <span className="shrink-0 text-xs font-medium tracking-wide text-muted-foreground/80">
+      <span className="shrink-0 app-type-caption font-medium tracking-wide app-text-muted opacity-80">
         {props.label}
       </span>
       <div className="h-px flex-1 bg-border/40" />
@@ -575,7 +575,7 @@ function TranscriptScroller(props: {
           type="button"
           variant="secondary"
           size="sm"
-          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border border-border/60 bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
+          className="chat-jump-in absolute inset-s-1/2 z-30 -translate-x-1/2 gap-2 border app-border-subtle bg-background/80 text-foreground shadow-md backdrop-blur-md hover:bg-background/90 rtl:translate-x-1/2"
           style={{ bottom: Math.max(12, bottomOffset - SCROLL_BUTTON_COMPOSER_INSET_PX) }}
           aria-label={
             newMessageCount > 0
@@ -708,7 +708,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
       >
         {transcriptOnly ? (
           <MessageScrollerItem messageId="status:transcript-only">
-            <Card className="border-border/70 bg-muted/30">
+            <Card className="app-border-subtle app-fill-subtle">
               <CardContent className="flex items-start gap-3 p-3">
                 <AlertTriangleIcon className="mt-0.5 size-4 text-primary" />
                 <div>
@@ -724,7 +724,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
 
         {visibleFeedLength === 0 ? (
           <MessageScrollerItem messageId={hydrating ? "status:hydrating" : "status:empty"}>
-            <Empty className="min-h-72 border border-border/55 bg-background/24">
+            <Empty className="min-h-72 border app-border-subtle bg-background/24">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   {hydrating ? (

@@ -23,7 +23,7 @@ export const ComposerHighlightOverlay = forwardRef<
       aria-hidden
       data-slot="composer-highlight-overlay"
       className={cn(
-        "pointer-events-none absolute left-0 top-0 select-none overflow-hidden whitespace-pre-wrap break-words px-1 py-1.5 text-[15px] leading-6 text-transparent",
+        "pointer-events-none absolute left-0 top-0 select-none overflow-hidden whitespace-pre-wrap break-words px-1 py-1.5 app-type-body-lg text-transparent",
         className,
       )}
     >

@@ -68,8 +68,8 @@ function Tool({
     <Collapsible
       className={cn(
         variant === "trace"
-          ? "w-full overflow-hidden rounded-xl border border-border/45 bg-foreground/[0.02]"
-          : "w-full max-w-3xl overflow-hidden rounded-lg border border-border/45 bg-foreground/[0.02] transition-colors hover:bg-foreground/[0.04]",
+          ? "w-full overflow-hidden rounded-xl border app-border-subtle app-fill-subtle"
+          : "w-full max-w-3xl overflow-hidden rounded-xl border app-border-subtle app-fill-subtle transition-colors hover:app-fill-strong",
         className,
       )}
       {...props}
@@ -133,13 +133,13 @@ function ToolHeader({
         {...props}
       >
         <div className="flex min-w-0 items-start gap-2.5">
-          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] transition-colors group-hover:bg-foreground/[0.08]">
-            <ToolIcon title={title} className="size-3 text-muted-foreground/80" />
+          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md app-fill-subtle transition-colors group-hover:app-fill-strong">
+            <ToolIcon title={title} className="size-3 app-text-muted opacity-80" />
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold leading-5 text-foreground">{title}</div>
             {subtitle ? (
-              <div className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground/85">
+              <div className="mt-0.5 whitespace-pre-wrap break-words app-type-caption app-text-muted opacity-85">
                 {subtitle}
               </div>
             ) : null}
@@ -160,7 +160,7 @@ function ToolHeader({
             <span>{stateLabel[state]}</span>
           </Badge>
           {showChevron ? (
-            <ChevronDownIcon className="mt-0.5 size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" />
+            <ChevronDownIcon className="mt-0.5 size-4 app-text-muted opacity-40 transition-transform group-data-[state=open]:rotate-180" />
           ) : null}
         </div>
       </CollapsibleTrigger>
@@ -176,15 +176,15 @@ function ToolHeader({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05] transition-colors group-hover:bg-foreground/[0.08]">
-          <ToolIcon title={title} className="size-3.5 text-muted-foreground/80" />
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-lg app-fill-subtle transition-colors group-hover:app-fill-strong">
+          <ToolIcon title={title} className="size-3.5 app-text-muted opacity-80" />
         </div>
         <div className="min-w-0">
-          <div className="truncate font-semibold leading-tight text-[12px] text-foreground">
-            {title}
-          </div>
+          <div className="truncate font-semibold app-type-caption text-foreground">{title}</div>
           {subtitle ? (
-            <div className="mt-0.5 truncate text-xs text-muted-foreground/80">{subtitle}</div>
+            <div className="mt-0.5 truncate app-type-caption app-text-muted opacity-80">
+              {subtitle}
+            </div>
           ) : null}
         </div>
       </div>
@@ -203,7 +203,7 @@ function ToolHeader({
           <span>{stateLabel[state]}</span>
         </Badge>
         {showChevron ? (
-          <ChevronDownIcon className="size-4 text-muted-foreground/40 transition-transform group-data-[state=open]:rotate-180" />
+          <ChevronDownIcon className="size-4 app-text-muted opacity-40 transition-transform group-data-[state=open]:rotate-180" />
         ) : null}
       </div>
     </CollapsibleTrigger>
@@ -220,7 +220,7 @@ function ToolContent({
       className={cn(
         "activity-trace-content",
         variant === "trace"
-          ? "flex flex-col gap-2 border-t border-border/50 px-3 pb-3 pt-2 select-text"
+          ? "flex flex-col gap-2 border-t app-border-subtle px-3 pb-3 pt-2 select-text"
           : "flex flex-col gap-3 px-2.5 pb-2.5 pt-1 select-text",
         className,
       )}
@@ -253,7 +253,7 @@ function ToolCodeBlock({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/60">
+        <div className="app-type-caption font-semibold uppercase tracking-widest app-text-muted opacity-60">
           {label}
         </div>
         <div className="flex items-center gap-1">
@@ -286,9 +286,9 @@ function ToolCodeBlock({
       </div>
       <pre
         className={cn(
-          "overflow-auto rounded-lg bg-foreground/[0.04] p-3 text-xs leading-relaxed",
+          "overflow-auto rounded-lg app-fill-subtle p-3 app-type-caption",
           expanded ? "max-h-none" : "max-h-72",
-          tone === "error" ? "bg-destructive/[0.06] text-destructive" : "text-foreground/80",
+          tone === "error" ? "bg-destructive/[0.06] text-destructive" : "app-text-secondary",
         )}
       >
         {value}
@@ -362,12 +362,12 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
               {detailRows.map((row) => (
                 <div
                   key={`${props.name}-${row.label}`}
-                  className="rounded-lg bg-foreground/[0.04] px-2.5 py-2"
+                  className="rounded-lg app-fill-subtle px-2.5 py-2"
                 >
                   <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     {row.label}
                   </div>
-                  <div className="mt-1 break-words text-xs leading-5 text-foreground/85">
+                  <div className="mt-1 break-words app-type-caption app-text-secondary">
                     {row.value}
                   </div>
                 </div>

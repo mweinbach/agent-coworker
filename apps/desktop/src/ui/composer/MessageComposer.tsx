@@ -145,7 +145,7 @@ export function MessageComposerRoot({
       onDragOver={onDragOver}
       onDrop={onDrop}
       className={cn(
-        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel p-0",
+        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-composer border app-border-subtle bg-panel p-0",
         dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
       )}
@@ -344,7 +344,7 @@ export const MessageComposerTextarea = forwardRef<HTMLTextAreaElement, Component
         ref={ref}
         rows={rows}
         className={cn(
-          "field-sizing-content min-h-[4.5rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
+          "field-sizing-content min-h-[4.5rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 app-type-body-lg text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
           className,
         )}
         {...props}
@@ -398,7 +398,7 @@ export function MessageComposerSubmit({
           ? "size-10 rounded-full border border-warning/35 bg-warning text-warning-foreground shadow-none hover:brightness-105"
           : "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary-hover",
         steerPending && "animate-pulse",
-        "disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+        "disabled:brightness-100 disabled:app-border-subtle disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
       )}
       disabled={disabled}

@@ -91,7 +91,7 @@ export const ContextSidebar = memo(function ContextSidebar({
   );
   const agents = threadRuntime?.agents ?? [];
   const workflowRuns = threadRuntime?.workflowRuns ?? [];
-  const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
+  const panelShellClassName = "app-context-sidebar__panel rounded-2xl border";
   const sectionLabelClassName = "app-type-label tracking-[0.16em] app-text-muted uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
   const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
@@ -141,7 +141,7 @@ export const ContextSidebar = memo(function ContextSidebar({
             <span className={sectionLabelClassName}>{planIsStale ? "Previous plan" : "Plan"}</span>
           </div>
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
-            <div className={cn("space-y-1.5", planIsStale && "opacity-75")}>
+            <div className={cn("flex flex-col gap-1.5", planIsStale && "opacity-75")}>
               {todos?.map((todo) => (
                 <div
                   key={`${todo.status}:${todo.content}`}
@@ -190,7 +190,7 @@ export const ContextSidebar = memo(function ContextSidebar({
           </div>
           {threadRuntime?.sessionKind === "agent" ? (
             <div className={compactSectionBodyClassName}>
-              <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-xs text-muted-foreground">
+              <div className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-2 app-type-caption app-text-muted">
                 <div className="flex items-center gap-2 text-foreground">
                   <BotIcon className="h-3.5 w-3.5" />
                   <span className="font-medium">This thread is a subagent</span>
@@ -208,13 +208,13 @@ export const ContextSidebar = memo(function ContextSidebar({
               className={compactSectionScrollerClassName}
               data-sidebar-section="subagents"
             >
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-1.5">
                 {agents.map((agent) => {
                   const usageLabel = agentUsageLabel(agent);
                   return (
                     <div
                       key={agent.agentId}
-                      className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2"
+                      className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-2"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">

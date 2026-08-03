@@ -87,7 +87,7 @@ function MessageCopyAction(props: {
         aria-label={copied ? "Copied" : "Copy message"}
         data-slot="message-copy-action"
         className={cn(
-          "h-7 gap-1.5 rounded-full border-border/60 bg-background/60 px-2.5 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/50 hover:text-foreground",
+          "h-7 gap-1.5 rounded-full app-border-subtle bg-background/60 px-2.5 app-type-caption font-medium app-text-muted shadow-none hover:bg-accent/50 hover:text-foreground",
           props.className,
         )}
       >
@@ -205,7 +205,7 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 select-none">
-        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-foreground/90">
+        <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 app-type-caption font-medium app-text-emphasis">
           <FileGlyph className="size-3 shrink-0 text-primary/80" />
           <span className="max-w-[200px] truncate" title={request.fileName ?? undefined}>
             {request.fileName ?? fallbackName}
@@ -225,7 +225,7 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
       </div>
       {request.selectionText ? (
         <div
-          className="line-clamp-3 rounded-md border border-border/40 bg-muted/30 px-2 py-1 text-xs italic text-muted-foreground"
+          className="line-clamp-3 rounded-md border app-border-subtle app-fill-subtle px-2 py-1 app-type-caption italic app-text-muted"
           title={request.selectionText}
         >
           {`\u201C${request.selectionText}\u201D`}
@@ -353,7 +353,7 @@ export const FeedRow = memo(function FeedRow(props: {
         <MessageContent className="relative">
           {item.role === "assistant" ? (
             <Bubble variant="ghost" align="start">
-              <BubbleContent className="text-[15px] leading-[1.65]">
+              <BubbleContent className="app-type-body-lg">
                 <div data-slot={isStreamingAssistant ? "streaming-markdown" : "markdown"}>
                   <DesktopMarkdown
                     citationAnnotations={item.annotations}
@@ -381,7 +381,7 @@ export const FeedRow = memo(function FeedRow(props: {
               align="end"
               className="*:data-[slot=bubble-content]:border-primary/15 *:data-[slot=bubble-content]:bg-primary/[0.07] dark:*:data-[slot=bubble-content]:border-primary/20 dark:*:data-[slot=bubble-content]:bg-primary/[0.10]"
             >
-              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap selection:bg-primary/20">
+              <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 app-type-body-lg whitespace-pre-wrap selection:bg-primary/20">
                 <div className="flex flex-col gap-2">
                   {canvasRequest ? (
                     <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />

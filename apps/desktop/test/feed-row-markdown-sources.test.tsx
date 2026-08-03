@@ -282,7 +282,7 @@ describe("FeedRow assistant markdown and sources integration", () => {
     expect(html).toContain("*:data-[slot=bubble-content]:bg-primary/[0.07]");
     expect(html).toContain("cursor-text select-text");
     expect(html).toContain("rounded-2xl rounded-br-md px-3.5 py-2.5");
-    expect(html).toContain("text-[15px]");
+    expect(html).toContain("app-type-body-lg");
     expect(html).toContain('data-slot="attachment-group"');
     expect(html.match(/data-slot="attachment"/g)).toHaveLength(2);
     expect(html).toContain("diagram.png");

@@ -240,7 +240,7 @@ function ReasoningSectionNode({
       <ReasoningMarkdown
         body={body}
         streaming={streaming}
-        className="text-[13px] leading-snug app-text-secondary"
+        className="app-type-body app-text-secondary"
       />
     );
   }
@@ -252,7 +252,7 @@ function ReasoningSectionNode({
         aria-controls={disclosureId}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1.5 text-left text-[13px] font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
+        className="flex items-center gap-1.5 text-left app-type-body font-medium app-text-secondary outline-none transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
           className={cn(
@@ -265,7 +265,7 @@ function ReasoningSectionNode({
       {open && body && (
         <div
           id={disclosureId}
-          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 border-border/40 pl-3 text-[12.5px] leading-relaxed app-text-muted select-text"
+          className="reasoning-section-in mt-1.5 ml-[7px] border-l-2 app-border-subtle pl-3 app-type-body app-text-muted select-text"
         >
           <ReasoningMarkdown
             body={body}
@@ -296,7 +296,7 @@ function ReasoningTimelineNode({
   if (!reasoningText) {
     return (
       <TimelineNode icon={<ClockIcon className="size-3 app-text-muted" />} isLast={isLast}>
-        <span className="activity-thinking-shimmer inline-flex items-center text-[13px] leading-snug">
+        <span className="activity-thinking-shimmer inline-flex items-center app-type-body">
           Thinking
         </span>
       </TimelineNode>
@@ -358,11 +358,11 @@ function ToolRowSummary({
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-1.5">
         {hideTitle ? (
-          <span className="min-w-0 truncate text-[13px] leading-snug text-foreground">
+          <span className="min-w-0 truncate app-type-body text-foreground">
             {subtitle || title}
           </span>
         ) : (
-          <span className="text-[13px] font-medium text-foreground">{title}</span>
+          <span className="app-type-body font-medium text-foreground">{title}</span>
         )}
         {recovered ? (
           <Badge
@@ -454,7 +454,7 @@ function ToolTimelineNode({
   const body =
     hasDetails && allowDisclosure ? (
       <Collapsible open={open} onOpenChange={handleOpenChange}>
-        <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger className="group/tool-row flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:app-hover-wash focus-visible:ring-1 focus-visible:ring-ring">
           {summary}
           <ChevronRightIcon
             className={cn(
@@ -470,7 +470,7 @@ function ToolTimelineNode({
               {detailRows.map((row) => (
                 <div
                   key={`${item.id}-${row.label}`}
-                  className="rounded-lg bg-foreground/[0.04] px-2 py-1.5"
+                  className="rounded-lg app-fill-subtle px-2 py-1.5"
                 >
                   <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     {row.label}
@@ -483,7 +483,7 @@ function ToolTimelineNode({
             </div>
           ) : null}
           {item.approval ? (
-            <div className="mt-1.5 rounded-lg bg-foreground/[0.04] px-2 py-1.5 text-xs app-text-secondary">
+            <div className="mt-1.5 rounded-lg app-fill-subtle px-2 py-1.5 app-type-caption app-text-secondary">
               Approval required
             </div>
           ) : null}
@@ -497,7 +497,7 @@ function ToolTimelineNode({
               </CollapsibleTrigger>
               <CollapsibleContent>
                 {argsText ? (
-                  <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-xs leading-relaxed app-text-secondary">
+                  <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg app-fill-subtle p-2 app-type-caption app-text-secondary">
                     {argsText}
                   </pre>
                 ) : null}
@@ -507,7 +507,7 @@ function ToolTimelineNode({
                       "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
                       item.state === "output-error" || item.state === "output-denied"
                         ? "bg-destructive/[0.06] text-destructive"
-                        : "bg-foreground/[0.04] app-text-secondary",
+                        : "app-fill-subtle app-text-secondary",
                     )}
                   >
                     {resultText}
@@ -634,16 +634,16 @@ function ToolClusterNode({
       >
         <Collapsible open={clusterOpen} onOpenChange={setClusterOpen}>
           <CollapsibleTrigger
-            className="group/cluster flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-1 focus-visible:ring-ring"
+            className="group/cluster flex w-full min-w-0 items-start gap-1.5 rounded-md py-0.5 text-left outline-none hover:app-hover-wash focus-visible:ring-1 focus-visible:ring-ring"
             data-slot="tool-cluster-label"
           >
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+              <div className="flex items-center gap-1.5 app-type-body font-medium text-foreground">
                 <span>{clusterLabel}</span>
                 <span className="tabular-nums app-text-muted">×{entries.length}</span>
               </div>
               {previews.length > 0 ? (
-                <div className="mt-0.5 space-y-0.5 text-xs leading-snug app-text-muted">
+                <div className="mt-0.5 flex flex-col gap-0.5 app-type-caption app-text-muted">
                   {previews.map((preview) => (
                     <div key={preview} className="truncate">
                       {preview}
@@ -664,7 +664,7 @@ function ToolClusterNode({
             />
           </CollapsibleTrigger>
           <CollapsibleContent className="activity-trace-content pt-1.5">
-            <div className="ml-0.5 space-y-1 border-l border-border/30 pl-2.5">
+            <div className="ml-0.5 flex flex-col gap-1 border-l app-border-subtle pl-2.5">
               {entries.map((entry) => (
                 <div
                   key={entry.item.id}
@@ -1039,7 +1039,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
                 ) : null}
                 <MarkerContent
                   className={cn(
-                    "text-[13px] font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
+                    "app-type-body font-medium tabular-nums transition-colors group-hover:text-foreground group-data-[variant=separator]/marker:text-left",
                     hasUnrecoveredIssue
                       ? "text-destructive/85 group-hover:text-destructive"
                       : props.live
@@ -1089,7 +1089,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
           </div>
 
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="border-b border-border/25 px-1 pb-2.5 pt-3">
+            <div className="border-b app-border-subtle px-1 pb-2.5 pt-3">
               {contentSummary ? (
                 <div
                   className="app-type-label mb-2 px-0.5 font-medium uppercase tracking-wide app-text-muted"
@@ -1117,7 +1117,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
   }
 
   return (
-    <Card className="max-w-3xl gap-0 rounded-xl border border-border/40 bg-foreground/[0.02] p-0 shadow-none backdrop-blur-none">
+    <Card className="max-w-3xl gap-0 rounded-xl border app-border-subtle app-fill-subtle p-0 shadow-none backdrop-blur-none">
       <Collapsible open={expanded} onOpenChange={handleOpenChange}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
         <CollapsibleTrigger className="group flex w-full flex-col gap-0 rounded-xl text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:shadow-none">
@@ -1164,7 +1164,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
 
         {/* ── Expanded timeline ─────────────────────────────────────────────── */}
         <CollapsibleContent className="activity-trace-content">
-          <CardContent className="border-t border-border/35 px-3 pb-2.5 pt-2">
+          <CardContent className="border-t app-border-subtle px-3 pb-2.5 pt-2">
             <ActivityTimeline summary={summary} live={props.live} />
           </CardContent>
         </CollapsibleContent>

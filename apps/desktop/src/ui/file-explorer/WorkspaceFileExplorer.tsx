@@ -355,7 +355,7 @@ const ExplorerTreeRowView = memo(
         aria-selected={isDirectory ? false : selected}
         aria-expanded={isDirectory ? row.expanded : undefined}
         className={cn(
-          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-[9px] py-0.5 pr-1 text-xs transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
+          "group flex min-h-8 cursor-pointer items-center gap-1 rounded-lg py-0.5 pr-1 text-xs transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
           selected
             ? "bg-accent text-accent-foreground"
             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -1286,7 +1286,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           </div>
         ) : treeRows.length === 0 &&
           (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
-          <div className="space-y-1 px-3 py-6 text-center text-xs text-muted-foreground">
+          <div className="flex flex-col gap-1 px-3 py-6 text-center app-type-caption app-text-muted">
             <div>No visible files yet</div>
             <div className="leading-5 app-text-muted">
               Research and tool results stay in chat until the agent saves an output here.

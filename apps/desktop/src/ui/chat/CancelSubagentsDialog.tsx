@@ -15,7 +15,7 @@ export function CancelSubagentsDialog(props: {
         <DialogHeader>
           <DialogTitle>Stop Subagents Too?</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground">
             This run currently has {activeChildAgentCount} active subagent
             {activeChildAgentCount === 1 ? "" : "s"}. You can stop only the main agent turn or

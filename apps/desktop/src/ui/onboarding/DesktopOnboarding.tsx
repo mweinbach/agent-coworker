@@ -105,9 +105,9 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
 
 function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDismiss: () => void }) {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <div className="flex items-center">
-        <div className="space-y-1">
+        <div className="flex flex-col gap-1">
           <h2 className="text-2xl font-semibold tracking-tight">Welcome to Cowork</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             A local-first AI assistant that runs on your machine.
@@ -117,7 +117,7 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
 
       <p className="text-sm text-muted-foreground leading-relaxed">Here's what we'll set up:</p>
 
-      <div className="space-y-3">
+      <div className="flex flex-col gap-3">
         {[
           { title: "Choose a workspace", desc: "Pick a folder on disk for Cowork to work in." },
           { title: "Connect a provider", desc: "Add an API key or sign in to a model provider." },
@@ -206,8 +206,8 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
   }, [startingSince]);
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-semibold tracking-tight">
           {hasMultipleWorkspaces ? "Choose a workspace" : "Add a workspace"}
         </h2>
@@ -222,7 +222,7 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
 
       {/* Workspace picker for rerun with multiple workspaces */}
       {workspacePickerEnabled && hasMultipleWorkspaces ? (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium">Active workspace</div>
           <Select
             value={activeWorkspaceTarget?.id ?? ""}
@@ -243,7 +243,7 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
       ) : null}
 
       {hasWorkspace ? (
-        <Card className="border-border/80 bg-card/85">
+        <Card className="app-border-subtle bg-card/85">
           <CardContent className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -408,15 +408,15 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-semibold tracking-tight">Connect a provider</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Add an API key or sign in to at least one model provider.
         </p>
       </div>
 
-      <div className="space-y-2 max-h-[340px] overflow-y-auto">
+      <div className="flex flex-col gap-2 max-h-[340px] overflow-y-auto">
         {modelProviders.map((provider) => {
           const status = providerStatusByName[provider];
           const connected = Boolean(status?.authorized || status?.verified);
@@ -430,7 +430,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           return (
             <Card
               key={provider}
-              className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}
+              className={cn("app-border-subtle bg-card/85", isExpanded && "border-primary/35")}
             >
               <Collapsible
                 open={isExpanded}
@@ -465,9 +465,9 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                 </CollapsibleTrigger>
 
                 <CollapsibleContent>
-                  <CardContent className="space-y-3 border-t border-border/70 px-4 py-3">
+                  <CardContent className="flex flex-col gap-3 border-t app-border-subtle px-4 py-3">
                     {provider === "lmstudio" ? (
-                      <div className="space-y-3">
+                      <div className="flex flex-col gap-3">
                         <div className="text-sm text-muted-foreground">
                           LM Studio runs on a local server. Connect it once to make its local models
                           available in Cowork.
@@ -553,7 +553,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                           <div
                             key={stateKey}
                             aria-busy={methodPending}
-                            className="space-y-2 border-t border-border/70 pt-3 first:border-t-0 first:pt-0"
+                            className="flex flex-col gap-2 border-t app-border-subtle pt-3 first:border-t-0 first:pt-0"
                           >
                             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                               {method.label}
@@ -789,8 +789,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   if (!workspace) return null;
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-semibold tracking-tight">Review defaults</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           These are the defaults for{" "}
@@ -799,8 +799,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
         </p>
       </div>
 
-      <div className="space-y-4">
-        <div className="space-y-2">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium">Default provider</div>
           <Select
             value={effectiveProvider}
@@ -831,7 +831,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           </Select>
         </div>
 
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           <div className="text-sm font-medium">Default model</div>
           <Select
             value={model || (modelOptions[0] ?? "")}
@@ -939,8 +939,8 @@ function FirstThreadStep({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
         <h2 className="text-2xl font-semibold tracking-tight">Start your first thread</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Pick a starter prompt or start with a blank thread.
@@ -953,11 +953,11 @@ function FirstThreadStep({
         </p>
       ) : null}
 
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         {STARTER_PROMPTS.map((prompt) => (
           <Button
             key={prompt.label}
-            className="h-auto w-full justify-start rounded-lg border border-border/80 bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
+            className="h-auto w-full justify-start rounded-lg border app-border-subtle bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
             onClick={() => handleClick(prompt.message)}
             type="button"
             variant="ghost"
@@ -1121,7 +1121,7 @@ export function DesktopOnboarding() {
     >
       <DialogContent
         aria-label="Onboarding"
-        className="app-shadow-overlay block w-[min(92vw,520px)] max-w-none rounded-xl border-border/80 bg-card p-6 sm:max-w-none"
+        className="app-shadow-overlay block w-[min(92vw,520px)] max-w-none rounded-xl app-border-subtle bg-card p-6 sm:max-w-none"
         overlayClassName="bg-background/80 backdrop-blur-sm"
         preventEditableEscapeDismissal
         showCloseButton={false}

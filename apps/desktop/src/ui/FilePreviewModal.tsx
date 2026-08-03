@@ -473,11 +473,11 @@ export function FilePreviewModal() {
       <DialogContent
         showCloseButton={false}
         className={cn(
-          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0 border border-border/45 rounded-xl shadow-2xl",
+          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0 border app-border-subtle rounded-xl shadow-2xl",
           kind === "pdf" ? "h-[96vh] w-[96vw] max-w-8xl" : "max-h-[92vh] w-[95vw] max-w-7xl",
         )}
       >
-        <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
+        <DialogHeader className="shrink-0 flex flex-col gap-3 border-b app-border-subtle px-5 py-4">
           <div className="flex items-center justify-between gap-4 min-w-0">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
@@ -563,7 +563,7 @@ export function FilePreviewModal() {
               <div data-file-preview-markdown-shell="true" className="mx-auto w-full max-w-[78ch]">
                 <Streamdown
                   key={`${path}:${fileChangeRevision}`}
-                  className="leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
+                  className="leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:app-border-subtle [&_pre]:bg-muted/35 [&_pre]:p-3"
                   components={{ a: DesktopMessageLink }}
                   plugins={previewStreamdownPlugins}
                   remarkPlugins={mdRemarkPlugins}
@@ -578,7 +578,7 @@ export function FilePreviewModal() {
           ) : kind === "docx" && visibleDocxHtml ? (
             <div
               className={cn(
-                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-card px-[1in] py-[1in] text-foreground shadow-sm",
+                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border app-border-subtle bg-card px-[1in] py-[1in] text-foreground shadow-sm",
                 "[&_.docx-title]:mb-3 [&_.docx-title]:text-[22pt] [&_.docx-title]:font-bold [&_.docx-title]:leading-[1.2] [&_.docx-title]:tracking-[-0.01em] [&_.docx-title]:text-[var(--docx-title)]",
                 "[&_.docx-subtitle]:mb-3 [&_.docx-subtitle]:text-[11pt] [&_.docx-subtitle]:italic [&_.docx-subtitle]:leading-[1.35] [&_.docx-subtitle]:text-[var(--docx-accent)]",
                 "[&_.docx-byline]:mb-2 [&_.docx-byline]:text-[10pt] [&_.docx-byline]:font-semibold [&_.docx-byline]:leading-[1.3] [&_.docx-byline]:text-[var(--docx-title)]",
@@ -592,7 +592,7 @@ export function FilePreviewModal() {
                 "[&_ul]:my-[6pt] [&_ul]:list-disc [&_ul]:pl-8 [&_ol]:my-[6pt] [&_ol]:list-decimal [&_ol]:pl-8",
                 "[&_li]:my-[2pt] [&_li]:text-[11pt] [&_li]:leading-[1.45]",
                 "[&_.docx-table]:my-6 [&_.docx-table]:w-full [&_.docx-table]:border-collapse",
-                "[&_.docx-cell]:border [&_.docx-cell]:border-border/70 [&_.docx-cell]:px-2.5 [&_.docx-cell]:py-2 [&_.docx-cell]:align-top",
+                "[&_.docx-cell]:border [&_.docx-cell]:app-border-subtle [&_.docx-cell]:px-2.5 [&_.docx-cell]:py-2 [&_.docx-cell]:align-top",
                 "[&_.docx-table-paragraph]:my-0 [&_.docx-table-paragraph]:text-[10pt] [&_.docx-table-paragraph]:leading-[1.35]",
                 "[&_tr:first-child_.docx-cell]:bg-muted/20 [&_tr:first-child_.docx-table-paragraph]:font-semibold",
                 "[&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_blockquote]:border-l-[3px] [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:italic",
@@ -635,7 +635,7 @@ export function FilePreviewModal() {
           ) : showUnknownAsText ? (
             <CodeFilePreview content={visibleTextContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (
-            <div className="space-y-4 py-8 text-center">
+            <div className="flex flex-col gap-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">
                 {kind === "unsupported"
                   ? "No in-app preview for this format."
@@ -648,7 +648,7 @@ export function FilePreviewModal() {
           ) : null}
         </div>
 
-        <DialogFooter className="shrink-0 border-t border-border/60 px-5 py-3">
+        <DialogFooter className="shrink-0 border-t app-border-subtle px-5 py-3">
           <Button type="button" variant="secondary" onClick={() => closeFilePreview()}>
             Close
           </Button>

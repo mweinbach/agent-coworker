@@ -446,7 +446,7 @@ export function NewChatLanding() {
           <h1 className="text-balance text-[2.125rem] font-medium leading-[1.08] tracking-[-0.035em] text-foreground sm:text-[2.75rem]">
             What should we work on?
           </h1>
-          <p className="text-balance text-[15px] leading-relaxed text-muted-foreground/88">
+          <p className="text-balance app-type-body-lg app-text-muted opacity-90">
             Describe a task, idea, or question — Cowork will take it from here.
           </p>
         </header>
@@ -458,7 +458,7 @@ export function NewChatLanding() {
               variant="outline"
               size="sm"
               disabled={composerLocked}
-              className="h-8 rounded-full border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:border-border hover:bg-background hover:text-foreground"
+              className="h-8 rounded-full app-border-subtle bg-background/70 px-3 app-type-caption font-medium app-text-muted transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:app-border-default hover:bg-background hover:text-foreground"
               onClick={() => {
                 updateComposerText(starter.prompt);
                 requestAnimationFrame(() => textareaRef.current?.focus());
@@ -479,7 +479,7 @@ export function NewChatLanding() {
           />
         </div>
         <MessageComposerRoot
-          className="w-full max-w-[42rem] rounded-[28px] border-border/45 bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
+          className="w-full max-w-[42rem] rounded-composer app-border-subtle bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
@@ -528,7 +528,7 @@ export function NewChatLanding() {
                 placeholder="Message Cowork..."
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
-                textareaClassName="min-h-[5.5rem] text-[16px] leading-relaxed placeholder:text-muted-foreground/75"
+                textareaClassName="min-h-[5.5rem] app-type-body-lg placeholder:text-muted-foreground/75"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
                   const isComposing = isImeComposing(event.nativeEvent);
@@ -598,10 +598,13 @@ export function NewChatLanding() {
                   <PopoverContent
                     align="start"
                     sideOffset={8}
-                    className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl border-border/70 bg-popover p-1 shadow-xl shadow-foreground/10"
+                    className="w-[min(23rem,calc(100vw-3rem))] overflow-hidden rounded-xl app-border-subtle bg-popover p-1 shadow-xl shadow-foreground/10"
                   >
-                    <Command className="rounded-lg bg-transparent text-[15px] [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:border-b-border/60 [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
-                      <CommandInput placeholder="Search projects" className="h-11 text-[15px]" />
+                    <Command className="rounded-lg bg-transparent app-type-body-lg [&_[data-slot=command-input-wrapper]]:h-12 [&_[data-slot=command-input-wrapper]]:rounded-t-lg [&_[data-slot=command-input-wrapper]]:app-border-subtle [&_[data-slot=command-input-wrapper]]:bg-background/70 [&_[data-slot=command-input-wrapper]]:px-3.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60">
+                      <CommandInput
+                        placeholder="Search projects"
+                        className="h-11 app-type-body-lg"
+                      />
                       <CommandList className="max-h-[20rem] py-1">
                         <CommandEmpty className="py-8 text-sm text-muted-foreground">
                           No projects found.
@@ -614,7 +617,7 @@ export function NewChatLanding() {
                             <CommandItem
                               key={workspace.id}
                               value={workspace.name}
-                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                               onSelect={() => selectProjectTarget(workspace.id)}
                             >
                               <FolderIcon className="size-4" />
@@ -630,7 +633,7 @@ export function NewChatLanding() {
                           {workspaceLifecycleEnabled ? (
                             <CommandItem
                               value="Add new project"
-                              className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                              className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                               onSelect={addProjectFromSelector}
                             >
                               <FolderPlusIcon className="size-4" />
@@ -639,7 +642,7 @@ export function NewChatLanding() {
                           ) : null}
                           <CommandItem
                             value="Quick chat"
-                            className="h-10 rounded-lg px-2.5 text-[15px] data-[selected=true]:bg-muted/70"
+                            className="h-10 rounded-lg px-2.5 app-type-body-lg data-[selected=true]:bg-muted/70"
                             onSelect={() => {
                               setNewChatLandingTarget({ kind: "oneOff" });
                               setSelectorOpen(false);

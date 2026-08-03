@@ -12,15 +12,13 @@ type FakeBinding = {
 };
 
 function makeRegistry(bindings: Array<[string, FakeBinding]>) {
-  const sessionBindings = new Map(bindings);
-  const sessionIdleSince = new Map<string, number>();
-  return {
-    sessionBindings,
-    sessionIdleSince,
-  } as unknown as SessionRegistry & {
+  const registry = Object.create(SessionRegistry.prototype) as SessionRegistry & {
     sessionBindings: Map<string, FakeBinding>;
     sessionIdleSince: Map<string, number>;
   };
+  registry.sessionBindings = new Map(bindings);
+  registry.sessionIdleSince = new Map();
+  return registry;
 }
 
 function makeBinding(id: string, opts: { busy?: boolean } = {}): FakeBinding {
@@ -40,11 +38,11 @@ describe("SessionRegistry idle eviction", () => {
     const registry = makeRegistry([["thread-journal", binding]]);
     const sink = () => {};
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "journal:thread-journal", sink);
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:1", sink);
+    registry.addBindingSink(binding as never, "journal:thread-journal", sink as never);
+    registry.addBindingSink(binding as never, "conn:1", sink as never);
     expect(registry.sessionIdleSince.has("thread-journal")).toBe(false);
 
-    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "conn:1");
+    registry.removeBindingSink(binding as never, "conn:1");
 
     expect(binding.sinks.has("journal:thread-journal")).toBe(true);
     expect(registry.sessionIdleSince.has("thread-journal")).toBe(true);
@@ -55,12 +53,12 @@ describe("SessionRegistry idle eviction", () => {
     const registry = makeRegistry([["thread-idle", binding]]);
     const sink = () => {};
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "journal:thread-idle", sink);
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:1", sink);
-    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "conn:1");
+    registry.addBindingSink(binding as never, "journal:thread-idle", sink as never);
+    registry.addBindingSink(binding as never, "conn:1", sink as never);
+    registry.removeBindingSink(binding as never, "conn:1");
     registry.sessionIdleSince.set("thread-idle", Date.now() - 10_000);
 
-    SessionRegistry.prototype.evictIdleSessionBindings.call(registry, 1_000);
+    registry.evictIdleSessionBindings(1_000);
 
     expect(binding.runtime.lifecycle.dispose).toHaveBeenCalledWith("idle eviction");
     expect(registry.sessionBindings.has("thread-idle")).toBe(false);
@@ -72,12 +70,12 @@ describe("SessionRegistry idle eviction", () => {
     const registry = makeRegistry([["thread-busy", binding]]);
     const sink = () => {};
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "journal:thread-busy", sink);
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:1", sink);
-    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "conn:1");
+    registry.addBindingSink(binding as never, "journal:thread-busy", sink as never);
+    registry.addBindingSink(binding as never, "conn:1", sink as never);
+    registry.removeBindingSink(binding as never, "conn:1");
     registry.sessionIdleSince.set("thread-busy", Date.now() - 10_000);
 
-    SessionRegistry.prototype.evictIdleSessionBindings.call(registry, 1_000);
+    registry.evictIdleSessionBindings(1_000);
 
     expect(binding.runtime.lifecycle.dispose).not.toHaveBeenCalled();
     expect(registry.sessionBindings.has("thread-busy")).toBe(true);
@@ -88,12 +86,12 @@ describe("SessionRegistry idle eviction", () => {
     const registry = makeRegistry([["thread-rejoin", binding]]);
     const sink = () => {};
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "journal:thread-rejoin", sink);
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:1", sink);
-    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "conn:1");
+    registry.addBindingSink(binding as never, "journal:thread-rejoin", sink as never);
+    registry.addBindingSink(binding as never, "conn:1", sink as never);
+    registry.removeBindingSink(binding as never, "conn:1");
     expect(registry.sessionIdleSince.has("thread-rejoin")).toBe(true);
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:2", sink);
+    registry.addBindingSink(binding as never, "conn:2", sink as never);
 
     expect(registry.sessionIdleSince.has("thread-rejoin")).toBe(false);
   });
@@ -103,11 +101,11 @@ describe("SessionRegistry idle eviction", () => {
     const registry = makeRegistry([["control-idle", binding]]);
     const sink = () => {};
 
-    SessionRegistry.prototype.addBindingSink.call(registry, binding, "conn:1", sink);
-    SessionRegistry.prototype.removeBindingSink.call(registry, binding, "conn:1");
+    registry.addBindingSink(binding as never, "conn:1", sink as never);
+    registry.removeBindingSink(binding as never, "conn:1");
     registry.sessionIdleSince.set("control-idle", Date.now() - 10_000);
 
-    SessionRegistry.prototype.evictIdleSessionBindings.call(registry, 1_000);
+    registry.evictIdleSessionBindings(1_000);
 
     expect(binding.runtime.lifecycle.dispose).toHaveBeenCalledWith("idle eviction");
     expect(registry.sessionBindings.has("control-idle")).toBe(false);

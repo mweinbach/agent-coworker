@@ -20,6 +20,11 @@
   line-height: var(--type-body-leading);
 }
 
+.app-type-body-lg {
+  font-size: var(--type-body-lg-size);
+  line-height: var(--type-body-lg-leading);
+}
+
 .app-type-title {
   font-size: var(--type-title-size);
   font-weight: 600;
@@ -69,6 +74,20 @@
   background: var(--surface-muted-fill);
 }
 
+/* Variant-compatible fills: usable as hover:app-hover-wash,
+   group-hover:app-fill-strong, etc. Pair with transition-colors. */
+@utility app-hover-wash {
+  background: var(--surface-row-hover);
+}
+
+@utility app-fill-subtle {
+  background: var(--surface-muted-fill);
+}
+
+@utility app-fill-strong {
+  background: var(--surface-fill-strong);
+}
+
 /* Active/current rows keep the normal subtle wash while mapping to the system
  * Highlight/HighlightText pair in high-contrast and forced-colors modes. */
 .app-selected-row {
@@ -76,15 +95,17 @@
   color: var(--text-selected-row);
 }
 
-.app-border-default {
+/* Variant-compatible border colors: usable as app-border-subtle,
+   hover:app-border-subtle, etc. Set border width separately. */
+@utility app-border-default {
   border-color: var(--border-default);
 }
 
-.app-border-subtle {
+@utility app-border-subtle {
   border-color: var(--border-subtle);
 }
 
-.app-border-strong {
+@utility app-border-strong {
   border-color: var(--border-strong);
 }
 

@@ -27,7 +27,6 @@
   --danger-base: #bb3e3e;
   --danger-hover-base: #a73535;
   --danger-foreground-base: #ffffff;
-  --danger-bg: rgba(187, 62, 62, 0.12);
   --inverse-text: #ffffff;
   --success-base: #3ab665;
   --success-foreground-base: #1f1f1c;
@@ -37,18 +36,18 @@
   --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
 
-  /* Type / space / motion scale (design-system foundations) */
-  --text-xs: 0.75rem;
-  --text-sm: 0.8125rem;
-  --text-md: 0.875rem;
-  --text-lg: 1rem;
-  --text-xl: 1.25rem;
+  /* Type / space / motion scale (design-system foundations).
+     Type steps mirror the product's real scale: 12px captions/labels,
+     13px dense UI chrome (body), 15px conversational prose (body-lg),
+     16px titles. */
   --type-caption-size: 0.75rem;
   --type-caption-leading: 1rem;
   --type-label-size: 0.75rem;
   --type-label-leading: 1rem;
-  --type-body-size: 0.875rem;
+  --type-body-size: 0.8125rem;
   --type-body-leading: 1.25rem;
+  --type-body-lg-size: 0.9375rem;
+  --type-body-lg-leading: 1.5rem;
   --type-title-size: 1rem;
   --type-title-leading: 1.375rem;
   --type-code-size: 0.75rem;
@@ -60,9 +59,6 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
-  --elevation-0: none;
-  --elevation-1: var(--shadow-surface-base);
-  --elevation-2: var(--shadow-overlay-base);
   --motion-fast: 120ms;
   --motion-base: 200ms;
   --motion-slow: 320ms;
@@ -100,7 +96,6 @@
   --danger-base: #e86060;
   --danger-hover-base: #f27070;
   --danger-foreground-base: #1f1f1c;
-  --danger-bg: rgba(232, 96, 96, 0.14);
   --inverse-text: #ffffff;
   --success-base: #5ecc7e;
   --success-foreground-base: #121a10;
@@ -138,7 +133,6 @@
     --danger-base: #e86060;
     --danger-hover-base: #f27070;
     --danger-foreground-base: #1f1f1c;
-    --danger-bg: rgba(232, 96, 96, 0.14);
     --inverse-text: #ffffff;
     --success-base: #5ecc7e;
     --success-foreground-base: #121a10;

@@ -17,7 +17,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 
 type WorkflowAgentRow = ThreadWorkflowRun["agents"][number];
@@ -191,7 +190,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
           </p>
         ) : null}
 
-        <ScrollShadow className="max-h-[22rem] overflow-y-auto overscroll-contain pr-1">
+        <div className="max-h-[22rem] overflow-y-auto overscroll-contain pr-1">
           <div className="flex flex-col gap-3">
             {phases.map(([phase, agents]) => {
               const phaseCounts = tally(agents);
@@ -279,12 +278,12 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
               );
             })}
           </div>
-        </ScrollShadow>
+        </div>
 
         {run.logs.length > 0 ? (
           <div className="border-t pt-2">
             <div className="app-type-label uppercase tracking-[0.16em] app-text-muted">Log</div>
-            <ScrollShadow className="mt-1 max-h-24 overflow-y-auto overscroll-contain">
+            <div className="mt-1 max-h-24 overflow-y-auto overscroll-contain">
               <div className="flex flex-col gap-0.5">
                 {logLines.map(({ line, position }) => (
                   <div
@@ -295,7 +294,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
                   </div>
                 ))}
               </div>
-            </ScrollShadow>
+            </div>
           </div>
         ) : null}
       </DialogContent>

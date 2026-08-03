@@ -13,7 +13,6 @@ import { memo, useMemo } from "react";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { FeedItem, ThreadAgentSummary } from "../app/types";
-import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { InlineErrorBoundary } from "./CrashReportingErrorBoundary";
 import { buildMarkdownPreviewText } from "./chat/markdownPreview";
@@ -141,7 +140,7 @@ export const ContextSidebar = memo(function ContextSidebar({
           <div className={compactSectionHeaderClassName}>
             <span className={sectionLabelClassName}>{planIsStale ? "Previous plan" : "Plan"}</span>
           </div>
-          <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="tasks">
+          <div className={compactSectionScrollerClassName} data-sidebar-section="tasks">
             <div className={cn("flex flex-col gap-1.5", planIsStale && "opacity-75")}>
               {todos?.map((todo) => (
                 <div
@@ -172,7 +171,7 @@ export const ContextSidebar = memo(function ContextSidebar({
                 </div>
               ))}
             </div>
-          </ScrollShadow>
+          </div>
         </section>
       ) : null}
 
@@ -205,7 +204,7 @@ export const ContextSidebar = memo(function ContextSidebar({
               </div>
             </div>
           ) : (
-            <ScrollShadow
+            <div
               className={compactSectionScrollerClassName}
               data-sidebar-section="subagents"
             >
@@ -249,7 +248,7 @@ export const ContextSidebar = memo(function ContextSidebar({
                   );
                 })}
               </div>
-            </ScrollShadow>
+            </div>
           )}
         </section>
       ) : null}

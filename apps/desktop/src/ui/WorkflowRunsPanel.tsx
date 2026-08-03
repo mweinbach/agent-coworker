@@ -12,7 +12,6 @@ import { memo, useState } from "react";
 import { formatCost } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadWorkflowRun } from "../app/types";
-import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { WorkflowRunDetailDialog } from "./WorkflowRunDetailDialog";
 
@@ -263,7 +262,7 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
       <div className={headerClassName}>
         <span className={labelClassName}>Workflows</span>
       </div>
-      <ScrollShadow className={scrollerClassName} data-sidebar-section="workflows">
+      <div className={scrollerClassName} data-sidebar-section="workflows">
         <div className="flex flex-col gap-1.5">
           {orderedRuns.map((run) => (
             <WorkflowRunCard
@@ -273,7 +272,7 @@ export const WorkflowRunsPanel = memo(function WorkflowRunsPanel({
             />
           ))}
         </div>
-      </ScrollShadow>
+      </div>
       <WorkflowRunDetailDialog
         run={openRun}
         open={openRun !== null}

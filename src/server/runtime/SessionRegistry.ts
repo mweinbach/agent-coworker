@@ -172,7 +172,9 @@ export class SessionRegistry {
 
   removeBindingSink(binding: SessionBinding, sinkId: string): void {
     binding.sinks.delete(sinkId);
-    if (binding.runtime && binding.sinks.size === 0) {
+    // Journal sinks are permanent process-local mirrors; idle tracking keys off
+    // live client connections only (same notion as countLiveConnectionSinks).
+    if (binding.runtime && this.countLiveConnectionSinks(binding) === 0) {
       this.sessionIdleSince.set(binding.runtime.id, Date.now());
     }
   }
@@ -436,7 +438,11 @@ export class SessionRegistry {
   evictIdleSessionBindings(idleTimeoutMs: number): void {
     const now = Date.now();
     for (const [sessionId, binding] of this.sessionBindings) {
-      if (binding.runtime && binding.sinks.size === 0 && !binding.runtime.read.isBusy) {
+      if (
+        binding.runtime &&
+        this.countLiveConnectionSinks(binding) === 0 &&
+        !binding.runtime.read.isBusy
+      ) {
         const idleSince = this.sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > idleTimeoutMs) {
           binding.runtime.lifecycle.dispose("idle eviction");

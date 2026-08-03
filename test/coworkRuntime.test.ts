@@ -730,4 +730,75 @@ describe("Cowork unified runtime", () => {
       buildRuntimeEnv(installed.runtimeDir, {}, process.platform, trustedKeys),
     ).rejects.toThrow("signature is invalid");
   });
+
+  test("rejects hard-linked runtime files on the fingerprint path", async () => {
+    const root = await tempRoot("hardlink-forbid");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+    const aliasPath = path.join(root, "node-hardlink-alias");
+    try {
+      await fs.link(nodePath, aliasPath);
+    } catch (error) {
+      // Some filesystems (or Windows without privilege) cannot create hard links.
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error.code === "EPERM" || error.code === "ENOTSUP" || error.code === "EXDEV")
+      ) {
+        return;
+      }
+      throw error;
+    }
+
+    releaseAllRuntimeTrust();
+    await fs.rm(runtimeAttestationPath(installed.runtimeDir), { force: true });
+    const verified = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(verified.ok).toBe(false);
+    expect(verified.errors.join("\n")).toMatch(/Runtime hard links are forbidden/i);
+  });
+
+  test("rejects escaping symlinks inside the signed runtime tree", async () => {
+    const root = await tempRoot("symlink-escape");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    await fs.symlink("../../outside-secret", path.join(installed.runtimeDir, "escape-link"));
+    releaseAllRuntimeTrust();
+    await fs.rm(runtimeAttestationPath(installed.runtimeDir), { force: true });
+    const verified = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(verified.ok).toBe(false);
+    expect(verified.errors.join("\n")).toMatch(
+      /symlink escapes the signed tree|Unsafe runtime symlink/i,
+    );
+  });
 });

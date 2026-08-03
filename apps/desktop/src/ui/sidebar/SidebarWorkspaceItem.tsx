@@ -211,10 +211,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           "sidebar-workspace-card group/workspace-row flex items-center gap-1 rounded-lg px-1 py-0.5",
           reorderEnabled && "sidebar-workspace-card--reorderable",
           emphasizeWorkspace
-            ? "border-border/45 app-selected-row"
+            ? "app-border-subtle app-selected-row"
             : active
-              ? "text-foreground hover:bg-foreground/[0.03]"
-              : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
+              ? "app-text-primary hover:app-hover-wash"
+              : "app-text-secondary hover:app-hover-wash hover:text-foreground",
         )}
         onPointerDownCapture={
           reorderEnabled
@@ -276,13 +276,13 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           type="button"
           variant="ghost"
         >
-          <span className="block min-w-0 flex-1 truncate text-[13px] font-medium tracking-[-0.015em]">
+          <span className="block min-w-0 flex-1 truncate app-type-body font-medium tracking-[-0.015em]">
             {workspace.name}
           </span>
         </Button>
         <Button
           aria-label={`New chat in ${workspace.name}`}
-          className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+          className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:app-hover-wash hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -298,7 +298,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         {tasksEnabled ? (
           <Button
             aria-label={`New task in ${workspace.name}`}
-            className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:bg-foreground/[0.045] hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
+            className="sidebar-lift size-6 shrink-0 rounded-md text-muted-foreground opacity-0 pointer-events-none transition-opacity duration-150 hover:app-hover-wash hover:text-foreground focus-visible:opacity-100 focus-visible:pointer-events-auto group-hover/workspace-row:opacity-100 group-hover/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto"
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -321,15 +321,15 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           data-state={threadRegionOpen ? "open" : "closed"}
         >
           <div className="min-h-0 overflow-hidden">
-            <div className="ml-3 min-w-0 space-y-1 border-l border-border/45 pl-3 pt-1">
+            <div className="ml-3 flex min-w-0 flex-col gap-1 border-l app-border-subtle pl-3 pt-1">
               {workspaceThreads.length === 0 && visibleTasks.length === 0 ? (
-                <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                <div className="px-3 py-2 app-type-caption app-text-muted">
                   No chats or tasks yet
                 </div>
               ) : (
                 <>
                   {workspaceThreads.length > 0 && visibleTasks.length > 0 ? (
-                    <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
+                    <div className="app-text-secondary px-2.5 pt-1 app-type-caption font-semibold uppercase tracking-[0.14em]">
                       Chats
                     </div>
                   ) : null}
@@ -364,7 +364,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 
                   {workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
                     <Button
-                      className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                      className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted transition-colors duration-200 hover:text-foreground"
                       onClick={() => onToggleThreadList(workspace.id)}
                       type="button"
                       variant="ghost"
@@ -376,7 +376,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     <div
                       className={cn("flex flex-col gap-1", workspaceThreads.length > 0 && "mt-2")}
                     >
-                      <div className="app-text-secondary px-2.5 pt-1 text-xs font-semibold uppercase tracking-[0.14em]">
+                      <div className="app-text-secondary px-2.5 pt-1 app-type-caption font-semibold uppercase tracking-[0.14em]">
                         Tasks
                       </div>
                       {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
@@ -387,18 +387,18 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                           className={cn(
                             "sidebar-lift flex h-auto min-w-0 w-full items-center gap-2 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
                             task.id === selectedTaskId
-                              ? "border-border/45 app-selected-row"
-                              : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+                              ? "app-border-subtle app-selected-row"
+                              : "app-text-secondary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
                           )}
                           onClick={() => selectTask(task.id)}
                           title={task.title}
                         >
                           <ClipboardListIcon className="size-3.5 shrink-0 text-muted-foreground" />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+                            <span className="block truncate app-type-body font-medium tracking-[-0.018em]">
                               {task.title}
                             </span>
-                            <span className="block truncate text-xs text-muted-foreground">
+                            <span className="block truncate app-type-caption app-text-muted">
                               {task.completedWorkItemCount}/{task.totalWorkItemCount} ·{" "}
                               {task.status.replaceAll("_", " ")}
                               {task.pendingQuestionCount > 0 ? " · needs input" : ""}

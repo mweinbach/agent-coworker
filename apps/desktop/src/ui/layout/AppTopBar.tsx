@@ -461,7 +461,7 @@ export function AppTopBar({
   return (
     <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
       <div
-        className="app-topbar__sidebar-fill border-r border-border/70"
+        className="app-topbar__sidebar-fill border-r app-border-subtle"
         aria-hidden="true"
         style={{
           width: sidebarCollapsed ? 0 : sidebarWidth,
@@ -497,7 +497,7 @@ export function AppTopBar({
             style={collapsedThreadAnchorStyle}
           >
             {suppressThreadDetails ? (
-              <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+              <span className="app-topbar__thread-title truncate app-type-body-lg font-semibold">
                 {title}
               </span>
             ) : (
@@ -512,25 +512,25 @@ export function AppTopBar({
                 data-open={detailsOpen ? "true" : "false"}
                 onClick={() => setDetailsOpen((open) => !open)}
               >
-                <span className="app-topbar__thread-title truncate text-[15px] font-semibold">
+                <span className="app-topbar__thread-title truncate app-type-body-lg font-semibold">
                   {title}
                 </span>
                 {subtitle ? (
                   <>
                     <span
-                      className="app-topbar__thread-separator text-muted-foreground/40"
+                      className="app-topbar__thread-separator app-text-muted opacity-40"
                       aria-hidden="true"
                     >
                       |
                     </span>
-                    <span className="app-topbar__thread-subtitle truncate text-sm text-muted-foreground/80">
+                    <span className="app-topbar__thread-subtitle truncate app-type-body app-text-muted">
                       {subtitle}
                     </span>
                   </>
                 ) : null}
                 <ChevronDownIcon
                   className={cn(
-                    "app-topbar__thread-chevron h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-150 ease-out",
+                    "app-topbar__thread-chevron h-4 w-4 shrink-0 app-text-muted opacity-60 transition-transform duration-150 ease-out",
                     detailsOpen && "rotate-180",
                   )}
                 />
@@ -547,9 +547,9 @@ export function AppTopBar({
               >
                 <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium leading-none text-muted-foreground">Usage</p>
+                    <p className="app-type-caption font-medium app-text-muted">Usage</p>
                     {hasUsage ? (
-                      <p className="mt-2 text-[13px] leading-snug tracking-tight text-foreground/92">
+                      <p className="mt-2 app-type-body tracking-tight app-text-emphasis">
                         <span className="font-semibold tabular-nums">{estimatedCostLabel}</span>
                         <span className="font-normal text-muted-foreground"> · </span>
                         <span className="font-normal text-muted-foreground">
@@ -557,15 +557,13 @@ export function AppTopBar({
                         </span>
                       </p>
                     ) : (
-                      <p className="mt-2 text-[13px] leading-snug text-muted-foreground">
-                        No usage recorded yet
-                      </p>
+                      <p className="mt-2 app-type-body app-text-muted">No usage recorded yet</p>
                     )}
                   </div>
                   {busy ? (
                     <Badge
                       variant="secondary"
-                      className="h-6 shrink-0 gap-1 rounded-full border-border/40 bg-muted/25 px-2 text-xs font-medium text-muted-foreground shadow-none"
+                      className="h-6 shrink-0 gap-1 rounded-full app-border-subtle app-fill-subtle px-2 app-type-caption font-medium app-text-muted shadow-none"
                     >
                       <LoaderCircleIcon className="h-3 w-3 animate-spin opacity-80" />
                       Busy
@@ -573,7 +571,7 @@ export function AppTopBar({
                   ) : null}
                 </div>
 
-                <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-[10px] border px-2.5 py-1">
+                <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-lg border px-2.5 py-1">
                   {usageDetailsOpen ? (
                     <>
                       <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
@@ -630,7 +628,7 @@ export function AppTopBar({
                       variant="ghost"
                       aria-label={usageDetailsOpen ? "Show usage summary" : "Show usage details"}
                       aria-expanded={usageDetailsOpen}
-                      className="h-6 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:text-foreground"
+                      className="h-6 gap-1.5 rounded-md px-2 app-type-caption app-text-muted hover:text-foreground"
                       onClick={() => setUsageDetailsOpen((open) => !open)}
                     >
                       <MoreVerticalIcon data-icon="inline-start" />
@@ -640,18 +638,16 @@ export function AppTopBar({
                 ) : null}
 
                 {lastTurnUsage ? (
-                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-xs">
+                  <div className="mt-2 flex items-center justify-between gap-3 px-0.5 app-type-caption">
                     <span className="text-muted-foreground">Last turn cost</span>
-                    <span className="tabular-nums font-medium text-foreground/88">
+                    <span className="tabular-nums font-medium app-text-emphasis">
                       {lastTurnCostLabel}
                     </span>
                   </div>
                 ) : null}
 
                 {budgetLine ? (
-                  <div className="mt-2 px-0.5 text-xs leading-relaxed text-muted-foreground">
-                    {budgetLine}
-                  </div>
+                  <div className="mt-2 px-0.5 app-type-caption app-text-muted">{budgetLine}</div>
                 ) : null}
 
                 {canClearHardCap && onClearHardCap ? (
@@ -660,7 +656,7 @@ export function AppTopBar({
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 rounded-full px-3 text-xs"
+                      className="h-7 rounded-full px-3 app-type-caption"
                       onClick={() => {
                         onClearHardCap();
                         setDetailsOpen(false);
@@ -689,7 +685,7 @@ export function AppTopBar({
               aria-label="Busy"
               variant="secondary"
               className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
+                "gap-1.5 rounded-md app-border-subtle app-fill-subtle py-0 app-type-caption app-text-muted shadow-none",
                 compactToolbar ? "size-7 justify-center px-0" : "px-2",
               )}
             >
@@ -828,7 +824,7 @@ export function AppTopBar({
               aria-label="Busy"
               variant="secondary"
               className={cn(
-                "gap-1.5 rounded-md border-border/55 bg-muted/20 py-0 text-xs text-muted-foreground shadow-none",
+                "gap-1.5 rounded-md app-border-subtle app-fill-subtle py-0 app-type-caption app-text-muted shadow-none",
                 compactToolbar ? "size-7 justify-center px-0" : "px-2",
               )}
             >
@@ -889,9 +885,9 @@ export function AppTopBar({
 
 function TopBarMetricRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border/20 py-1.5 last:border-b-0">
-      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right text-[13px] font-medium tabular-nums tracking-tight text-foreground/90">
+    <div className="flex items-baseline justify-between gap-4 border-b app-border-subtle py-1.5 last:border-b-0">
+      <span className="shrink-0 app-type-caption font-medium app-text-muted">{label}</span>
+      <span className="min-w-0 truncate text-right app-type-body font-medium tabular-nums tracking-tight app-text-emphasis">
         {value}
       </span>
     </div>

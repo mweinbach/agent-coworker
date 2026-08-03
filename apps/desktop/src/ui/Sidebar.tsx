@@ -586,13 +586,13 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
+          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
             Chats
           </span>
           <Button
             aria-expanded={chatsOpen}
             aria-label={chatsOpen ? "Collapse chats" : "Expand chats"}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
             size="icon-sm"
@@ -608,7 +608,7 @@ export const Sidebar = memo(function Sidebar() {
           <Button
             size="icon-sm"
             variant="ghost"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => void openNewChatLanding({ defaultTargetKind: "oneOff" })}
             aria-label="New chat"
@@ -619,7 +619,7 @@ export const Sidebar = memo(function Sidebar() {
       </div>
       {chatsOpen ? (
         oneOffChatThreads.length === 0 ? (
-          <div className="px-3 py-2 text-[12px] app-text-muted italic">No chats yet</div>
+          <div className="px-3 py-2 app-type-caption app-text-muted italic">No chats yet</div>
         ) : (
           <div className="flex flex-col gap-1">
             <div
@@ -654,7 +654,7 @@ export const Sidebar = memo(function Sidebar() {
             </div>
             {!threadSearchQuery && oneOffChatThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
               <Button
-                className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted transition-colors duration-200 hover:text-foreground"
                 onClick={() => setShowAllChats((prev) => !prev)}
                 type="button"
                 variant="ghost"
@@ -677,13 +677,13 @@ export const Sidebar = memo(function Sidebar() {
         data-sidebar-section-drag-handle="true"
       >
         <div className="flex min-w-0 flex-1 cursor-grab items-center gap-1.5 active:cursor-grabbing">
-          <span className="app-type-label truncate uppercase tracking-[0.16em] app-text-muted">
+          <span className="app-type-caption truncate font-semibold uppercase tracking-[0.16em] app-text-muted">
             Projects
           </span>
           <Button
             aria-expanded={projectsOpen}
             aria-label={projectsOpen ? "Collapse projects" : "Expand projects"}
-            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
             size="icon-sm"
@@ -698,7 +698,7 @@ export const Sidebar = memo(function Sidebar() {
         <div className="flex items-center">
           <Button
             aria-label="Project section options"
-            className="sidebar-lift size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
+            className="sidebar-lift size-6 rounded-md app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={handleProjectSectionMenu}
             size="icon-sm"
@@ -713,7 +713,7 @@ export const Sidebar = memo(function Sidebar() {
       {projectsOpen ? (
         projectWorkspaces.length === 0 ? (
           <div className="flex flex-col">
-            <div className="rounded-md border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
+            <div className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted">
               <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 app-text-muted" />
               <div>No projects yet</div>
               {workspaceLifecycleEnabled ? (
@@ -762,13 +762,13 @@ export const Sidebar = memo(function Sidebar() {
               size="sm"
               aria-current={isOnNewChatLanding ? "page" : undefined}
               className={cn(
-                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-                "hover:bg-foreground/[0.045] hover:text-foreground",
-                isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
+                "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+                "hover:app-hover-wash hover:text-foreground",
+                isOnNewChatLanding && "app-selected-row",
               )}
               onClick={() => void openNewChatLanding()}
             >
-              <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+              <SquarePenIcon className="h-4 w-4" />
               New Chat
             </Button>
           ) : null}
@@ -780,13 +780,13 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={isOnNewChatLanding ? "page" : undefined}
           className={cn(
-            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            isOnNewChatLanding && "bg-foreground/[0.055] text-foreground",
+            "app-sidebar__new-chat-button sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            isOnNewChatLanding && "app-selected-row",
           )}
           onClick={() => void openNewChatLanding()}
         >
-          <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+          <SquarePenIcon className="h-4 w-4" />
           New Chat
         </Button>
       ) : null}
@@ -796,7 +796,7 @@ export const Sidebar = memo(function Sidebar() {
           onChange={(event) => setThreadSearch(event.target.value)}
           placeholder="Search chats"
           aria-label="Search chats"
-          className="h-8 rounded-lg border-border/55 bg-foreground/[0.03] px-2.5 text-[13px] shadow-none"
+          className="h-8 rounded-lg app-border-subtle app-fill-subtle px-2.5 app-type-body shadow-none"
         />
       </div>
       {interactionCount > 0 ? (
@@ -804,7 +804,7 @@ export const Sidebar = memo(function Sidebar() {
           type="button"
           variant="secondary"
           size="sm"
-          className="h-8 w-full justify-start rounded-lg px-2.5 text-[13px]"
+          className="h-8 w-full justify-start rounded-lg px-2.5 app-type-body"
           onClick={() => void handleOpenNextInteraction()}
           aria-label={`Open next chat needing input, ${interactionCount} pending`}
         >
@@ -821,15 +821,13 @@ export const Sidebar = memo(function Sidebar() {
           size="sm"
           aria-current={effectiveView === "task" && selectedTaskId === null ? "page" : undefined}
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            effectiveView === "task" &&
-              selectedTaskId === null &&
-              "bg-foreground/[0.055] text-foreground",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            effectiveView === "task" && selectedTaskId === null && "app-selected-row",
           )}
           onClick={() => void openNewTask()}
         >
-          <ClipboardPlusIcon className="h-4 w-4 text-muted-foreground" />
+          <ClipboardPlusIcon className="h-4 w-4" />
           New Task
         </Button>
       ) : null}
@@ -840,13 +838,13 @@ export const Sidebar = memo(function Sidebar() {
             size="sm"
             aria-current={effectiveView === "research" ? "page" : undefined}
             className={cn(
-              "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-              "hover:bg-foreground/[0.045] hover:text-foreground",
-              effectiveView === "research" && "bg-foreground/[0.055] text-foreground",
+              "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+              "hover:app-hover-wash hover:text-foreground",
+              effectiveView === "research" && "app-selected-row",
             )}
             onClick={() => void openResearch()}
           >
-            <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
+            <BookOpenIcon className="h-4 w-4" />
             Research
           </Button>
         ) : null}
@@ -854,12 +852,12 @@ export const Sidebar = memo(function Sidebar() {
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
           )}
           onClick={() => void openSkills()}
         >
-          <SparklesIcon className="h-4 w-4 text-muted-foreground" />
+          <SparklesIcon className="h-4 w-4" />
           Plugins
         </Button>
       </nav>
@@ -883,19 +881,19 @@ export const Sidebar = memo(function Sidebar() {
         ))}
       </Reorder.Group>
 
-      <div className="border-t border-border/60 pt-2">
+      <div className="border-t app-border-subtle pt-2">
         <Button
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] app-text-secondary",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            view === "settings" && "bg-foreground/[0.055] text-foreground",
+            "sidebar-lift h-8 w-full justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
+            "hover:app-hover-wash hover:text-foreground",
+            view === "settings" && "app-selected-row",
           )}
           type="button"
           onClick={() => void openSettings()}
         >
-          <Settings2Icon className="h-4 w-4 text-muted-foreground" />
+          <Settings2Icon className="h-4 w-4" />
           Settings
         </Button>
       </div>

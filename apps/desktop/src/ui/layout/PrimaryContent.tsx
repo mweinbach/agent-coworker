@@ -62,7 +62,7 @@ function StartingContent({ stage }: { stage: BootstrapStage | null }) {
       aria-live="polite"
       className="flex h-full flex-col items-center justify-center gap-3 bg-panel px-6 text-center"
     >
-      <div className="relative flex size-12 items-center justify-center rounded-2xl border border-border/60 bg-primary/15 text-primary shadow-sm">
+      <div className="relative flex size-12 items-center justify-center rounded-2xl border app-border-subtle bg-primary/15 text-primary shadow-sm">
         <SparklesIcon className="size-5" aria-hidden="true" />
         <Spinner className="absolute -right-1 -bottom-1 size-4 bg-panel" aria-hidden="true" />
       </div>

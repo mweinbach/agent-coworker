@@ -36,6 +36,9 @@ const unsupportedRingWidthPattern = /\bring-3\b/g;
 const lowContrastMutedTextPattern = /text-muted-foreground\/65/g;
 const migratedHierarchyFiles = new Set([
   "ui/Sidebar.tsx",
+  "ui/sidebar/SidebarThreadItem.tsx",
+  "ui/sidebar/SidebarWorkspaceItem.tsx",
+  "ui/layout/AppTopBar.tsx",
   "ui/ContextSidebar.tsx",
   "ui/Canvas.tsx",
   "ui/ResearchView.tsx",

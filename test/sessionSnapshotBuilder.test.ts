@@ -171,6 +171,37 @@ describe("SessionSnapshotBuilder child execution state", () => {
     expect(persisted.config.providerOptions).toEqual(providerOptions);
   });
 
+  test("persists retained workflow runs in file-backed snapshots", () => {
+    const builder = new SessionSnapshotBuilder({
+      sessionId: "child-1",
+      state: makeAgentState(),
+      harnessContextStore: new HarnessContextStore(),
+      getEnableMcp: () => true,
+      hasPendingAsk: () => false,
+      hasPendingApproval: () => false,
+      getWorkflowRuns: () => [
+        {
+          runId: "wf_123",
+          name: "Failure",
+          phases: ["main"],
+          currentPhase: "main",
+          agents: [],
+          logs: [],
+          spentUsd: 0.1,
+          outcome: "errored",
+          error: "run failed",
+        },
+      ],
+    });
+
+    const persisted = builder.buildPersistedSnapshotAt("2026-03-16T18:01:00.000Z");
+
+    expect(persisted.version).toBe(7);
+    expect(persisted.context.workflowRuns).toEqual([
+      expect.objectContaining({ runId: "wf_123", error: "run failed" }),
+    ]);
+  });
+
   test("derives child lastMessagePreview from the latest assistant transcript when metadata is stale", () => {
     const base = makeAgentState();
     const state = makeAgentState({

@@ -45,6 +45,7 @@ export type WorkflowRunOptions = {
     agents: WorkflowProgressAgent[];
     logs: string[];
     spentUsd: number;
+    error?: string;
     outcome?: WorkflowOutcomeState;
   }) => void;
 };
@@ -168,6 +169,20 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     return true;
   };
 
+  const waitForSettledOrAbort = async (pending: Promise<unknown>): Promise<void> => {
+    if (runAbortController.signal.aborted) return;
+    let onAbort: (() => void) | null = null;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+      runAbortController.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([pending.then(() => undefined), aborted]);
+    } finally {
+      if (onAbort) runAbortController.signal.removeEventListener("abort", onAbort);
+    }
+  };
+
   const drainInflightCalls = async () => {
     while (inflightCalls.size > 0) {
       await Promise.allSettled([...inflightCalls]);
@@ -186,7 +201,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   const closeAgent = async (agentId: string): Promise<void> => {
     if (closedAgentIds.has(agentId)) return;
     const existing = closingAgents.get(agentId);
-    if (existing) return await existing;
+    if (existing) return await waitForSettledOrAbort(existing);
     const closing = opts.control
       .close({ agentId })
       .then(() => {
@@ -195,7 +210,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       })
       .finally(() => closingAgents.delete(agentId));
     closingAgents.set(agentId, closing);
-    await closing;
+    await waitForSettledOrAbort(closing);
   };
 
   const emitProgress = (outcome?: WorkflowOutcomeState, error?: string) => {
@@ -276,6 +291,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   const recordSpend = (usdCost: number | null) => {
     if (usdCost === null || usdCost <= 0) return;
     spentUsd += usdCost;
+    opts.ctx.costTracker?.recordUnattributedCost?.(usdCost);
     postWorker({ t: "budgetUpdate", spentUsd });
     if (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd) {
       budgetStopped = true;
@@ -478,7 +494,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       }
 
       if (options.onError === "null") {
-        if (!opts.dryRun) {
+        if (!opts.dryRun && row.agentId !== null) {
           journal.append({
             index,
             digest,
@@ -515,7 +531,20 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
 
   worker.onmessage = (event: MessageEvent) => {
     const parsedMessage = workflowHostMessageSchema.safeParse(event.data);
-    if (!parsedMessage.success) return;
+    if (!parsedMessage.success) {
+      if (!claimTerminal("errored")) return;
+      const message = "workflow worker sent an invalid message";
+      clearTimeout(runTimer);
+      runAbortController.abort();
+      markNonTerminalAgents("errored", message);
+      void (async () => {
+        await teardown(message);
+        await drainInflightCalls();
+        emitProgress("errored", message);
+        fail(new Error(message));
+      })();
+      return;
+    }
     const message = parsedMessage.data;
 
     switch (message.t) {

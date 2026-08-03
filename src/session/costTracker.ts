@@ -111,6 +111,7 @@ export type BudgetStatus = {
 
 export type CostTrackerEvent =
   | { type: "turn_recorded"; entry: TurnCostEntry; cumulative: SessionUsageSnapshot }
+  | { type: "usage_changed"; cumulative: SessionUsageSnapshot }
   | { type: "budget_warning"; currentCostUsd: number; thresholdUsd: number; message: string }
   | { type: "budget_exceeded"; currentCostUsd: number; thresholdUsd: number; message: string };
 
@@ -450,6 +451,18 @@ export class SessionCostTracker {
     this.checkBudget();
 
     return entry;
+  }
+
+  recordUnattributedCost(usdCost: number): void {
+    if (!Number.isFinite(usdCost) || usdCost < 0) {
+      throw new Error("Unattributed cost must be a finite non-negative number.");
+    }
+    if (usdCost === 0) return;
+
+    this.recordSessionCost(usdCost, usageCostBreakdownFromUnattributedCost(usdCost));
+    this.updatedAt = new Date().toISOString();
+    this.emit({ type: "usage_changed", cumulative: this.getSnapshot() });
+    this.checkBudget();
   }
 
   // ── Budget management ──────────────────────────────────────────────

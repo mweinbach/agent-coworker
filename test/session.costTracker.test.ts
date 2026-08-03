@@ -7,6 +7,25 @@ import {
 } from "../src/session/costTracker";
 
 describe("SessionCostTracker", () => {
+  test("records unattributed workflow spend and emits a usage update", () => {
+    const tracker = new SessionCostTracker("session-1", { stopAtUsd: 1 });
+    const updates: number[] = [];
+    tracker.addListener((event) => {
+      if (event.type === "usage_changed") {
+        updates.push(event.cumulative.estimatedTotalCostUsd ?? -1);
+      }
+    });
+
+    tracker.recordUnattributedCost(1.25);
+
+    expect(tracker.getSnapshot()).toMatchObject({
+      estimatedTotalCostUsd: 1.25,
+      costBreakdown: { otherCostUsd: 1.25 },
+      budgetStatus: { stopTriggered: true, currentCostUsd: 1.25 },
+    });
+    expect(updates).toEqual([1.25]);
+  });
+
   test("clears stop-triggered state when hard-stop threshold is removed", () => {
     const tracker = new SessionCostTracker("session-1");
 

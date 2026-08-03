@@ -400,10 +400,12 @@ self.onmessage = async (ev) => {
     await drainRpcs();
     post({ t: "done", result: JSON.parse(JSON.stringify(result === undefined ? null : result)) });
   } catch (error) {
+    const message = error && error.message ? String(error.message) : String(error);
+    const stack = error && error.stack ? String(error.stack) : undefined;
     post({
       t: "error",
-      message: error && error.message ? String(error.message) : String(error),
-      stack: error && error.stack ? String(error.stack) : undefined,
+      message: message.slice(0, 4000),
+      stack: stack ? stack.slice(0, 8000) : undefined,
     });
   }
 };

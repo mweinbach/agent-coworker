@@ -535,7 +535,7 @@ describe("DeveloperPage rerun onboarding button", () => {
     }
   });
 
-  test("workspace step shows runtime download progress during first-run startup", async () => {
+  test("waits for runtime download before showing onboarding", async () => {
     const harness = setupOnboardingJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -575,14 +575,27 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DesktopOnboarding));
       });
 
-      expect(harness.dom.window.document.body.textContent).toContain("Getting Cowork ready");
-      expect(harness.dom.window.document.body.textContent).toContain("Downloading runtime");
-      expect(harness.dom.window.document.body.textContent).toContain("25%");
       expect(
-        harness.dom.window.document.body
-          .querySelector('[role="progressbar"]')
-          ?.getAttribute("aria-valuenow"),
-      ).toBe("25");
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).toBeNull();
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaceRuntimeById: {
+            "ws-downloading": {
+              ...defaultWorkspaceRuntime(),
+              serverUrl: "ws://127.0.0.1:7337/ws",
+              starting: false,
+              startupProgress: null,
+            },
+          },
+        });
+        await Promise.resolve();
+      });
+
+      expect(
+        harness.dom.window.document.body.querySelector('[aria-label="Onboarding"]'),
+      ).not.toBeNull();
 
       await act(async () => root.unmount());
     } finally {
@@ -613,6 +626,15 @@ describe("DeveloperPage rerun onboarding button", () => {
               yolo: false,
             },
           ],
+          selectedWorkspaceId: "ws-focus",
+          workspaceRuntimeById: {
+            "ws-focus": {
+              ...defaultWorkspaceRuntime(),
+              serverUrl: "ws://127.0.0.1:7337/ws",
+              starting: false,
+              startupProgress: null,
+            },
+          },
         });
         root.render(
           createElement(

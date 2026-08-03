@@ -490,6 +490,7 @@ export class AgentSession {
       getEnableMcp: () => this.getEnableMcp(),
       hasPendingAsk: () => this.hasPendingAsk,
       hasPendingApproval: () => this.hasPendingApproval,
+      getWorkflowRuns: () => this.sessionSnapshotProjector.peekSnapshot().workflowRuns ?? [],
     });
     this.persistenceManager = new PersistenceManager({
       sessionId: this.id,

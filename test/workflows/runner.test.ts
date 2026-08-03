@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { SessionCostTracker } from "../../src/session/costTracker";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
 import { makeFakeControl, makeWorkflowCtx, metaHeader, workflowTmpDir } from "./harness";
 
@@ -492,6 +493,34 @@ describe("runWorkflow: settlement", () => {
     expect(control.closed()).toHaveLength(1);
   });
 
+  test("cancellation interrupts an outstanding AgentControl spawn promptly", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl();
+    let markSpawnStarted!: () => void;
+    const spawnStarted = new Promise<void>((resolve) => {
+      markSpawnStarted = resolve;
+    });
+    control.spawn = async () => {
+      markSpawnStarted();
+      return await new Promise<never>(() => {});
+    };
+    const abort = new AbortController();
+    const pending = runWorkflow({
+      ctx: makeWorkflowCtx(dir, { abortSignal: abort.signal }),
+      control,
+      script:
+        `${metaHeader("cancel-spawn", ["main"])}` +
+        `export default async function run({ agent }) { return await agent("slow spawn"); }`,
+    });
+
+    await spawnStarted;
+    const startedAt = performance.now();
+    abort.abort();
+
+    await expect(pending).rejects.toThrow(/cancelled/);
+    expect(performance.now() - startedAt).toBeLessThan(250);
+  });
+
   test("observes cancellation that occurs while the run is registering its listener", async () => {
     const dir = await workflowTmpDir();
     let abortedReads = 0;
@@ -595,6 +624,26 @@ describe("runWorkflow: settlement", () => {
     expect(finalOutcome).toBe("errored");
   });
 
+  test("surfaces oversized script errors instead of waiting for the run timeout", async () => {
+    const dir = await workflowTmpDir();
+    const startedAt = performance.now();
+    const message = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl(),
+      runTimeoutMs: 500,
+      script:
+        `${metaHeader("large-error", ["main"])}` +
+        `export default async function run() { throw new Error("x".repeat(5001)); }`,
+    }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(message).toHaveLength(4_000);
+    expect(message).not.toContain("exceeded");
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
   test("rejects non-JSON-serializable args before spawning a worker", async () => {
     const dir = await workflowTmpDir();
     const circular: Record<string, unknown> = {};
@@ -676,5 +725,66 @@ describe("runWorkflow: budget admission", () => {
     expect(control.spawnCount()).toBe(1);
     expect(outcome.summary.result).toEqual(["reply 1", null]);
     expect(outcome.summary.spentUsd).toBe(0.2);
+  });
+
+  test("records workflow spend on the session tracker for later runs", async () => {
+    const dir = await workflowTmpDir();
+    const tracker = new SessionCostTracker("session-1", { stopAtUsd: 1 });
+    const first = await runWorkflow({
+      ctx: makeWorkflowCtx(dir, { costTracker: tracker }),
+      control: makeFakeControl({ costUsd: 1.1 }),
+      script:
+        `${metaHeader("first-budget", ["main"])}` +
+        `export default async function run({ agent }) { return await agent("first"); }`,
+    });
+    expect(first.ok).toBe(true);
+    expect(tracker.getBudgetStatus()).toMatchObject({
+      currentCostUsd: 1.1,
+      stopTriggered: true,
+    });
+
+    const secondControl = makeFakeControl();
+    const second = await runWorkflow({
+      ctx: makeWorkflowCtx(dir, { costTracker: tracker }),
+      control: secondControl,
+      script:
+        `${metaHeader("second-budget", ["main"])}` +
+        `export default async function run({ agent }) { return await agent("second", { onError: "null" }); }`,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.summary.result).toBeNull();
+    expect(secondControl.spawnCount()).toBe(0);
+  });
+
+  test("does not cache a budget-blocked nullable call across resume", async () => {
+    const dir = await workflowTmpDir();
+    const script =
+      `${metaHeader("budget-resume", ["main"])}` +
+      `export default async function run({ agent }) {\n` +
+      `  const first = await agent("first");\n` +
+      `  const second = await agent("second", { onError: "null" });\n` +
+      `  return [first, second];\n}`;
+    const first = await runWorkflow({
+      ctx: makeWorkflowCtx(dir, { costTracker: budgetTracker(1, 0.9) as never }),
+      control: makeFakeControl({ costUsd: 0.2 }),
+      script,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.summary.result).toEqual(["reply 1", null]);
+
+    const resumedControl = makeFakeControl({ reply: () => "fresh" });
+    const resumed = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: resumedControl,
+      script,
+      resumeFromRunId: first.summary.runId,
+    });
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) return;
+    expect(resumed.summary.result).toEqual(["reply 1", "fresh"]);
+    expect(resumed.summary.cachedCount).toBe(1);
+    expect(resumedControl.spawnCount()).toBe(1);
   });
 });

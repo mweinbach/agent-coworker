@@ -9,6 +9,24 @@ import {
 } from "../src/server/transport/loopbackHttpRpc";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
+const RETRYABLE_TMP_CLEANUP_CODES = new Set(["EBUSY", "EFAULT", "ENOTEMPTY", "EPERM"]);
+
+async function removeTmpDir(tmpDir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
+      if (!RETRYABLE_TMP_CLEANUP_CODES.has(code) || attempt === 4) throw error;
+      await Bun.sleep(25 * (attempt + 1));
+    }
+  }
+}
+
 async function postRpc(
   baseHttpUrl: string,
   clientId: string,
@@ -110,7 +128,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       expect(listBody.result.total).toBe(listBody.result.threads.length);
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 
@@ -135,7 +153,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       expect(body.error.message).toBe("Not initialized");
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 
@@ -159,7 +177,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       expect(body.error).toContain(LOOPBACK_CLIENT_ID_HEADER);
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 
@@ -191,7 +209,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       expect(typeof listBody.result?.total).toBe("number");
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 
@@ -238,7 +256,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       expect(typeof initializedClientBody.result?.total).toBe("number");
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 
@@ -282,7 +300,7 @@ describe("loopback desktop HTTP JSON-RPC", () => {
       });
     } finally {
       await stopTestServer(server);
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await removeTmpDir(tmpDir);
     }
   });
 });

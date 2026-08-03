@@ -197,7 +197,16 @@ async function readJournal(dir: string): Promise<WorkflowJournalEntry[]> {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        out.push(JSON.parse(trimmed) as WorkflowJournalEntry);
+        const entry = JSON.parse(trimmed) as WorkflowJournalEntry;
+        if (
+          typeof entry.agentId === "string" &&
+          entry.agentId.startsWith("dry-") &&
+          typeof entry.result === "string" &&
+          entry.result.startsWith("[dry-run] ")
+        ) {
+          continue;
+        }
+        out.push(entry);
       } catch {
         // A torn final line (killed mid-write) truncates the replay prefix rather
         // than failing the resume outright.

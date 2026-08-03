@@ -1,5 +1,6 @@
 import type { HarnessContextStore } from "../../sessionContext/HarnessContextStore";
 import type { AgentExecutionState } from "../../shared/agents";
+import type { WorkflowProgressPayload } from "../../shared/workflows";
 import type { PersistedSessionMutation } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
 import type { SessionRuntimeState } from "./SessionContext";
@@ -13,6 +14,7 @@ export class SessionSnapshotBuilder {
       getEnableMcp: () => boolean;
       hasPendingAsk: () => boolean;
       hasPendingApproval: () => boolean;
+      getWorkflowRuns?: () => WorkflowProgressPayload[];
     },
   ) {}
 
@@ -97,6 +99,7 @@ export class SessionSnapshotBuilder {
         todos: this.opts.state.todos,
         harnessContext: this.opts.harnessContextStore.get(this.opts.sessionId),
         costTracker: this.opts.state.costTracker?.getSnapshot() ?? null,
+        workflowRuns: structuredClone(this.opts.getWorkflowRuns?.() ?? []),
       },
     };
   }

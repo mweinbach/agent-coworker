@@ -2071,6 +2071,17 @@ export class SessionDbRepository {
           costTracker === null ? null : toJsonString(costTracker),
         );
 
+      const importedRecord = this.getSessionRecord(legacy.sessionId);
+      if (!importedRecord) {
+        throw new Error(`Failed to project imported legacy session ${legacy.sessionId}`);
+      }
+      const { createLegacySessionSnapshot } =
+        require("../session/SessionSnapshotProjector") as typeof import("../session/SessionSnapshotProjector");
+      const projectedSnapshot = createLegacySessionSnapshot(importedRecord);
+      projectedSnapshot.workflowRuns =
+        legacy.version === 7 ? structuredClone(legacy.context.workflowRuns ?? []) : [];
+      this.persistSessionSnapshot(legacy.sessionId, projectedSnapshot);
+
       this.db
         .query(
           sql([

@@ -18,6 +18,16 @@ export function attachAgentSessionCostTrackerListeners(
 ): void {
   host.setCostTrackerUnsubscribe(
     tracker.addListener((event) => {
+      if (event.type === "usage_changed") {
+        host.context.emit({
+          type: "session_usage",
+          sessionId: host.id,
+          usage: event.cumulative,
+        });
+        host.queuePersistSessionSnapshot("session.usage_changed");
+        return;
+      }
+
       if (event.type === "budget_warning") {
         host.context.emit({
           type: "budget_warning",

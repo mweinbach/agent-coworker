@@ -478,7 +478,7 @@ describe("AgentSession", () => {
       });
     });
 
-    test("setConfig emits session_config and persists preferredChildModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
+    test("setConfig persists child routing without pinning inherited provider and model", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
@@ -504,8 +504,6 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        provider: "google",
-        model: "gemini-3-flash-preview",
         preferredChildModel: "gemini-3.1-pro-preview",
         childModelRoutingMode: "same-provider",
         preferredChildModelRef: "google:gemini-3.1-pro-preview",
@@ -648,8 +646,6 @@ describe("AgentSession", () => {
 
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        provider: "openai",
-        model: "gpt-5.2",
         preferredChildModel: "gpt-5.2",
         childModelRoutingMode: "cross-provider-allowlist",
         preferredChildModelRef: "google:gemini-3.1-pro-preview",

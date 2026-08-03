@@ -216,6 +216,44 @@ describe("resume", () => {
     expect(resumed.summary.result).toBe("live-value");
   });
 
+  test("ignores legacy dry-run journal entries during live resume", async () => {
+    const dir = await workflowTmpDir();
+    const script =
+      `${metaHeader("legacy-dry", ["a"])}` +
+      `export default async function run({ agent }) { return await agent("only"); }`;
+    const argsHash = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+    const digest = digestAgentCall({ argsHash, prompt: "only", opts: {} });
+    const legacyRunId = "wf_legacy_dry";
+    const runDir = workflowRunDir(dir, legacyRunId);
+    await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(
+      path.join(runDir, "journal.jsonl"),
+      `${JSON.stringify({
+        index: 0,
+        digest,
+        phase: null,
+        label: "agent-1",
+        result: "[dry-run] agent-1",
+        agentId: "dry-0",
+        usdCost: 0,
+      })}\n`,
+    );
+
+    const control = makeFakeControl({ reply: () => "live" });
+    const resumed = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control,
+      script,
+      resumeFromRunId: legacyRunId,
+    });
+
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) return;
+    expect(resumed.summary.result).toBe("live");
+    expect(resumed.summary.cachedCount).toBe(0);
+    expect(control.spawnCount()).toBe(1);
+  });
+
   test('onError:"null" results are journaled and replay without re-spawning', async () => {
     const dir = await workflowTmpDir();
     const script =

@@ -320,7 +320,7 @@ describe("sessionStore", () => {
     expect(() => parsePersistedSessionSnapshot(raw)).toThrow("Invalid persisted session snapshot");
   });
 
-  test("parsePersistedSessionSnapshot preserves v7 profile, sandbox, and provider options", () => {
+  test("parsePersistedSessionSnapshot preserves v7 profile, sandbox, provider options, and workflows", () => {
     const raw = makeRawSnapshot(7);
     raw.session.profile = {
       id: "reviewer",
@@ -349,6 +349,19 @@ describe("sessionStore", () => {
       requireBackend: true,
     };
     raw.context.lastMemoryGeneratedIndex = 1;
+    raw.context.workflowRuns = [
+      {
+        runId: "wf_123",
+        name: "Failure",
+        phases: ["main"],
+        currentPhase: "main",
+        agents: [],
+        logs: [],
+        spentUsd: 0.1,
+        outcome: "errored",
+        error: "run failed",
+      },
+    ];
 
     const parsed = parsePersistedSessionSnapshot(raw);
 
@@ -374,6 +387,7 @@ describe("sessionStore", () => {
       },
       context: {
         lastMemoryGeneratedIndex: 1,
+        workflowRuns: [{ runId: "wf_123", error: "run failed" }],
       },
     });
   });
@@ -389,6 +403,7 @@ describe("sessionStore", () => {
     });
     expect(parsed.config).not.toHaveProperty("providerOptions");
     expect(parsed.config).not.toHaveProperty("sandbox");
+    expect(parsed.context.workflowRuns).toEqual([]);
   });
 
   test("parsePersistedSessionSnapshot rejects malformed embedded v4 cost tracker state", () => {

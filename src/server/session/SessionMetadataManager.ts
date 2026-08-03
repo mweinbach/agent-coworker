@@ -177,12 +177,9 @@ export class SessionMetadataManager {
   private buildPersistPatch(
     patch: SessionConfigPatch,
     normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
-    baseConfig: AgentConfig,
   ): import("./SessionContext").PersistedProjectConfigPatch {
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (normalizedChildRouting !== undefined) {
-      persistPatch.provider = baseConfig.provider;
-      persistPatch.model = baseConfig.model;
       persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
       persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
       persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
@@ -575,7 +572,7 @@ export class SessionMetadataManager {
         baseMaxSteps,
         nextMaxSteps,
       ) || shouldSyncBackups;
-    const persistPatch = this.buildPersistPatch(patch, normalizedChildRouting, baseConfig);
+    const persistPatch = this.buildPersistPatch(patch, normalizedChildRouting);
     if (patch.backupsEnabled !== undefined && defaultBackupsEnabled === patch.backupsEnabled) {
       delete persistPatch.backupsEnabled;
     }

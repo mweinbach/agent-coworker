@@ -11,7 +11,7 @@ import {
   persistentAgentSummarySchema,
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
-import { WORKFLOW_AGENT_STATES, WORKFLOW_RUN_OUTCOMES } from "../../shared/workflows";
+import { workflowProgressPayloadSchema } from "../../shared/workflows";
 import { AGENT_WAIT_MODE_VALUES } from "../agents/types";
 import {
   nonEmptyTrimmedStringSchema,
@@ -76,29 +76,7 @@ const workflowProgressEventSchema = z
   .object({
     type: z.literal("workflow_progress"),
     sessionId: nonEmptyTrimmedStringSchema,
-    progress: z
-      .object({
-        runId: nonEmptyTrimmedStringSchema,
-        name: z.string(),
-        phases: z.array(z.string()),
-        currentPhase: z.string().nullable(),
-        agents: z.array(
-          z
-            .object({
-              index: z.number().int().min(0),
-              label: z.string(),
-              phase: z.string().nullable(),
-              state: z.enum(WORKFLOW_AGENT_STATES),
-              agentId: z.string().nullable(),
-              usdCost: z.number().nullable(),
-            })
-            .strict(),
-        ),
-        logs: z.array(z.string()),
-        spentUsd: z.number(),
-        outcome: z.enum(WORKFLOW_RUN_OUTCOMES).optional(),
-      })
-      .strict(),
+    progress: workflowProgressPayloadSchema,
   })
   .strict();
 

@@ -1132,6 +1132,19 @@ describe("sessionDb", () => {
           todos: [],
           harnessContext: null,
           costTracker: null,
+          workflowRuns: [
+            {
+              runId: "wf_legacy",
+              name: "Legacy failure",
+              phases: ["main"],
+              currentPhase: "main",
+              agents: [],
+              logs: [],
+              spentUsd: 0.25,
+              outcome: "errored",
+              error: "legacy run failed",
+            },
+          ],
         },
       }),
       "utf-8",
@@ -1149,6 +1162,9 @@ describe("sessionDb", () => {
       expect(persisted?.taskType).toBe("verify");
       expect(persisted?.targetPaths).toEqual(["src/auth", "test/auth"]);
       expect(db.listAgentSessions("root-1")[0]?.executionState).toBe("completed");
+      expect(db.getSessionSnapshot("legacy-7")?.workflowRuns).toEqual([
+        expect.objectContaining({ runId: "wf_legacy", error: "legacy run failed" }),
+      ]);
     } finally {
       db.close();
     }

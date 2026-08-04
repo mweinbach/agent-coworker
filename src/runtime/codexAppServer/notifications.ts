@@ -6,6 +6,11 @@ import type {
 import { extractReferencedCitationSourcesFromToolResult } from "../../shared/providerCitationSources";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
+import {
+  codeModeDisplayToolName,
+  codeModeWaitCellId,
+  runningCodeModeCellId,
+} from "./codeModeToolDisplay";
 import { parseUsage } from "./config";
 import { normalizeTodoList } from "./serverRequests";
 import {
@@ -65,6 +70,10 @@ function assistantPhase(record: Record<string, unknown> | null | undefined): str
 
 function isExecCustomToolName(name: string): boolean {
   return name === "exec" || name === "functions.exec";
+}
+
+function isCodeModeWaitToolName(name: string): boolean {
+  return name === "wait" || name === "functions.wait";
 }
 
 async function routeStreamingNotification(
@@ -249,7 +258,8 @@ export function createCodexTurnNotificationRouter(
   const textByItemId = new Map<string, string>();
   const phaseByItemId = new Map<string, string>();
   const itemOrder: string[] = [];
-  const customToolNameByCallId = new Map<string, string>();
+  const codeModeToolNameByCallId = new Map<string, string>();
+  const codeModeToolNameByCellId = new Map<string, string>();
 
   const ensureAssistantItem = (id: string | undefined, initialText = ""): string | null => {
     if (!id) return null;
@@ -407,12 +417,33 @@ export function createCodexTurnNotificationRouter(
       if ((itemType === "custom_tool_call" || itemType === "customToolCall") && callId) {
         const toolName = asString(item?.name) ?? asString(item?.tool) ?? "customTool";
         if (isExecCustomToolName(toolName)) {
-          customToolNameByCallId.set(callId, toolName);
+          const input = item?.input ?? item?.arguments ?? {};
+          const displayToolName = codeModeDisplayToolName(input);
+          codeModeToolNameByCallId.set(callId, displayToolName);
           void params.onModelStreamPart?.({
             type: "tool-call",
             toolCallId: callId,
-            toolName,
-            input: item?.input ?? item?.arguments ?? {},
+            toolName: displayToolName,
+            input,
+            providerExecuted: true,
+          });
+          return;
+        }
+      }
+
+      if ((itemType === "function_call" || itemType === "functionCall") && callId) {
+        const toolName = asString(item?.name) ?? asString(item?.tool) ?? "functionTool";
+        if (isCodeModeWaitToolName(toolName)) {
+          const input = item?.arguments ?? item?.input ?? {};
+          const cellId = codeModeWaitCellId(input);
+          const displayToolName =
+            (cellId ? codeModeToolNameByCellId.get(cellId) : undefined) ?? "codeExecution";
+          codeModeToolNameByCallId.set(callId, displayToolName);
+          void params.onModelStreamPart?.({
+            type: "tool-call",
+            toolCallId: callId,
+            toolName: displayToolName,
+            input,
             providerExecuted: true,
           });
           return;
@@ -420,16 +451,21 @@ export function createCodexTurnNotificationRouter(
       }
 
       if (
-        (itemType === "custom_tool_call_output" || itemType === "customToolCallOutput") &&
+        (itemType === "custom_tool_call_output" ||
+          itemType === "customToolCallOutput" ||
+          itemType === "function_call_output" ||
+          itemType === "functionCallOutput") &&
         callId &&
-        customToolNameByCallId.has(callId)
+        codeModeToolNameByCallId.has(callId)
       ) {
-        const toolName = customToolNameByCallId.get(callId) ?? "exec";
+        const toolName = codeModeToolNameByCallId.get(callId) ?? "codeExecution";
         const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
+        const cellId = runningCodeModeCellId(output);
+        if (cellId) codeModeToolNameByCellId.set(cellId, toolName);
         const citationSources = extractReferencedCitationSourcesFromToolResult(output);
         const projectedOutput =
           citationSources.length > 0 ? { contentItems: output, citationSources } : output;
-        customToolNameByCallId.delete(callId);
+        codeModeToolNameByCallId.delete(callId);
         void params.onModelStreamPart?.({
           type: "tool-result",
           toolCallId: callId,

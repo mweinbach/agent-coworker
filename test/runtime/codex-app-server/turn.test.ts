@@ -1148,14 +1148,14 @@ describe("codex app-server turn lifecycle", () => {
         expect(streamParts).toContainEqual({
           type: "tool-call",
           toolCallId: "call-1",
-          toolName: "exec",
+          toolName: "some_nested_tool",
           input: "const result = await tools.some_nested_tool(); text(result)",
           providerExecuted: true,
         });
         expect(streamParts).toContainEqual({
           type: "tool-result",
           toolCallId: "call-1",
-          toolName: "exec",
+          toolName: "some_nested_tool",
           output: {
             contentItems: [
               {
@@ -1181,14 +1181,14 @@ describe("codex app-server turn lifecycle", () => {
         expect(streamParts).toContainEqual({
           type: "tool-call",
           toolCallId: "call-2",
-          toolName: "functions.exec",
+          toolName: "some_nested_tool",
           input: { code: "await tools.some_nested_tool()" },
           providerExecuted: true,
         });
         expect(streamParts).toContainEqual({
           type: "tool-result",
           toolCallId: "call-2",
-          toolName: "functions.exec",
+          toolName: "some_nested_tool",
           output: {
             contentItems: {
               contentItems: [
@@ -1215,6 +1215,121 @@ describe("codex app-server turn lifecycle", () => {
       }
     },
   );
+
+  test.serial("labels yielded exec and wait calls with the nested tool name", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-label-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Read a file in code mode" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => streamParts.push(part),
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call",
+            call_id: "exec-1",
+            name: "exec",
+            input: "const result = await tools.read_file({ file_path: 'README.md' }); text(result)",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call_output",
+            call_id: "exec-1",
+            output: "Script running with cell ID cell-1. Continue with wait.",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "function_call",
+            call_id: "wait-1",
+            name: "wait",
+            arguments: '{"cell_id":"cell-1","yield_time_ms":1000}',
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "function_call_output",
+            call_id: "wait-1",
+            output: "README contents",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      for (const toolCallId of ["exec-1", "wait-1"]) {
+        expect(streamParts).toContainEqual(
+          expect.objectContaining({
+            type: "tool-call",
+            toolCallId,
+            toolName: "read_file",
+          }),
+        );
+        expect(streamParts).toContainEqual(
+          expect.objectContaining({
+            type: "tool-result",
+            toolCallId,
+            toolName: "read_file",
+          }),
+        );
+      }
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));

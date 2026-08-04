@@ -110,7 +110,7 @@ reference them.
 
 | Function | Notes |
 |---|---|
-| `agent(prompt, opts?)` | One child agent. Returns final text, or a validated object when `opts.schema` is set. Prompts are limited to 20,000 characters. |
+| `agent(prompt, opts?)` | One child agent. Returns final text, or a validated object when `opts.schema` is set. Prompts above 20,000 characters are automatically file-backed without truncation. |
 | `parallel(thunks)` | **Barrier** — awaits every thunk. A rejected thunk yields `null`. |
 | `pipeline(items, ...stages)` | Per-item stages with **no barrier between them**. Stages receive `(prev, originalItem, index)`. |
 | `judge(candidate, opts)` | `n` independent judges; `aggregate` is `majority`/`unanimous`/`meanScore`/`worst`. |
@@ -121,7 +121,7 @@ reference them.
 `agent()` options: `label`, `phase`, `schema` (JSON Schema literal), `model`,
 `effort`, `agentType` (role id or profile ref), `targetPaths`, `isolation`
 (`"none"`/`"brief"`) + `briefing`, `onError` (`"fail"` default, or `"null"`),
-`timeoutMs`.
+`timeoutMs`, and `inputFormat` (the extension for an automatically file-backed input).
 
 When a session hard cap is configured, workflow agent admission is serialized. The current child is
 allowed to finish, then no later child starts after cumulative session + workflow spend reaches the
@@ -132,10 +132,13 @@ Prefer `pipeline` over `parallel`. A barrier is only correct when a stage
 genuinely needs every prior result at once — deduping across the whole set, or an
 early exit on zero results.
 
-Do not concatenate full raw outputs from a broad fan-out into a single downstream
-`agent()` prompt. Ask upstream agents for compact structured results, reduce results
-in bounded batches, or return them for the parent to synthesize. Dynamic prompts
-must remain below the 20,000-character limit.
+Full raw outputs may be passed to a downstream `agent()` when the next stage needs
+all of their detail. A prompt above 20,000 characters is saved under
+`.ModelScratchpad/workflows/inputs/`, and the child receives a short instruction to
+read that file completely before working. The original prompt still drives journal
+digests, so replay semantics do not change. Inputs remain capped at 2,000,000
+characters as an availability backstop. Set `inputFormat` to choose a safe file
+extension such as `md`, `json`, `csv`, or `xml`.
 
 ## Execution model
 

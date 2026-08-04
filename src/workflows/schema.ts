@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { nonEmptyTrimmedStringSchema } from "../server/jsonrpc/schema.shared";
 import { agentReasoningEffortSchema, agentTargetPathsSchema } from "../shared/agents";
+import { WORKFLOW_MAX_PROMPT_CHARS } from "./inputSpill";
 
 /** Wall-clock ceiling for a single `agent()` call. */
 const WORKFLOW_DEFAULT_AGENT_TIMEOUT_MS = 600_000;
@@ -26,6 +27,11 @@ const workflowAgentOptionsSchema = z
     briefing: z.string().trim().min(1).max(20_000).optional(),
     agentType: nonEmptyTrimmedStringSchema.optional(),
     targetPaths: agentTargetPathsSchema.optional(),
+    inputFormat: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/)
+      .optional(),
     onError: z.enum(["fail", "null"]).default("fail"),
     timeoutMs: z
       .number()
@@ -47,7 +53,7 @@ const workflowAgentOptionsSchema = z
 
 export const workflowAgentCallSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(20_000),
+    prompt: z.string().trim().min(1).max(WORKFLOW_MAX_PROMPT_CHARS),
     opts: workflowAgentOptionsSchema,
   })
   .strict();

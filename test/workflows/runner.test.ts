@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { SessionCostTracker } from "../../src/session/costTracker";
+import {
+  WORKFLOW_INLINE_PROMPT_CHARS,
+  WORKFLOW_MAX_PROMPT_CHARS,
+} from "../../src/workflows/inputSpill";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
 import { makeFakeControl, makeWorkflowCtx, metaHeader, workflowTmpDir } from "./harness";
 
@@ -563,7 +569,42 @@ describe("runWorkflow: settlement", () => {
     ).rejects.toThrow(/source task is locked/);
   });
 
-  test("persists a rejected agent call as an errored row with a run diagnostic", async () => {
+  test("feeds oversized prompts to agents through format-preserving files", async () => {
+    const dir = await workflowTmpDir();
+    let finalProgress:
+      | {
+          outcome?: string;
+          agents: Array<{ label: string; state: string }>;
+        }
+      | undefined;
+    const control = makeFakeControl();
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control,
+      script:
+        `${metaHeader()}` +
+        `export default async function run({ agent }) { return await agent(JSON.stringify({ payload: "x".repeat(${WORKFLOW_INLINE_PROMPT_CHARS + 1}) }), { label: "synthesis", phase: "main", inputFormat: "json" }); }`,
+      onProgress: (progress) => {
+        if (progress.outcome) finalProgress = progress;
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    const transportMessage = control.messages()[0] ?? "";
+    expect(transportMessage.length).toBeLessThanOrEqual(WORKFLOW_INLINE_PROMPT_CHARS);
+    const targetPath = /^Input file: (.+)$/m.exec(transportMessage)?.[1]?.trim();
+    expect(targetPath).toEndWith(".json");
+    const savedPrompt = await fs.readFile(path.resolve(dir, targetPath as string), "utf8");
+    expect(JSON.parse(savedPrompt)).toEqual({
+      payload: "x".repeat(WORKFLOW_INLINE_PROMPT_CHARS + 1),
+    });
+    expect(finalProgress?.outcome).toBe("completed");
+    expect(finalProgress?.agents).toEqual([
+      expect.objectContaining({ label: "synthesis", state: "completed" }),
+    ]);
+  });
+
+  test("persists an over-limit agent call as an errored row with a run diagnostic", async () => {
     const dir = await workflowTmpDir();
     let finalProgress:
       | {
@@ -579,20 +620,26 @@ describe("runWorkflow: settlement", () => {
         control: makeFakeControl(),
         script:
           `${metaHeader()}` +
-          `export default async function run({ agent }) { return await agent("x".repeat(20001), { label: "synthesis", phase: "main" }); }`,
+          `export default async function run({ agent }) { return await agent("x".repeat(${WORKFLOW_MAX_PROMPT_CHARS + 1}), { label: "synthesis", phase: "main" }); }`,
         onProgress: (progress) => {
           if (progress.outcome) finalProgress = progress;
         },
       }),
-    ).rejects.toThrow(/expected string to have <=20000 characters/);
+    ).rejects.toThrow(
+      new RegExp(`expected string to have <=${WORKFLOW_MAX_PROMPT_CHARS} characters`),
+    );
 
     expect(finalProgress?.outcome).toBe("errored");
-    expect(finalProgress?.error).toContain("expected string to have <=20000 characters");
+    expect(finalProgress?.error).toContain(
+      `expected string to have <=${WORKFLOW_MAX_PROMPT_CHARS} characters`,
+    );
     expect(finalProgress?.agents).toEqual([
       expect.objectContaining({
         label: "synthesis",
         state: "errored",
-        error: expect.stringContaining("expected string to have <=20000 characters"),
+        error: expect.stringContaining(
+          `expected string to have <=${WORKFLOW_MAX_PROMPT_CHARS} characters`,
+        ),
       }),
     ]);
   });

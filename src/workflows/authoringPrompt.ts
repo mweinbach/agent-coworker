@@ -63,8 +63,9 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
   object when \`opts.schema\` is set. Options: \`label\`, \`phase\`, \`schema\` (a JSON Schema
   literal), \`model\`, \`effort\`, \`agentType\` (a role: default/explorer/research/worker/reviewer,
   or a profile ref), \`targetPaths\`, \`isolation\` ("none" | "brief") + \`briefing\`,
-  \`onError\` ("fail" — default — or "null"), \`timeoutMs\`. The prompt is limited to
-  20,000 characters.
+  \`inputFormat\` (file extension for oversized inputs), \`onError\` ("fail" — default — or
+  "null"), \`timeoutMs\`. Prompts above 20,000 characters are saved without truncation under
+  \`.ModelScratchpad/workflows/inputs/\`; the child receives a short instruction to read the file.
 - \`parallel(thunks)\` — BARRIER: awaits every thunk. A rejected thunk becomes null.
 - \`pipeline(items, ...stages)\` — per-item staged execution with NO barrier between stages:
   item 2 can reach stage 3 while item 5 is still in stage 1. Prefer this over parallel().
@@ -85,7 +86,7 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
   \`new Date(0)\` and the rest of Math work fine.
 - Prefer \`pipeline\` over \`parallel\`. Only use a barrier when a stage genuinely needs
   every prior result at once (dedup across the whole set, an early exit on zero results).
-- Never concatenate full raw outputs from a wide fan-out into one later \`agent()\` prompt.
-  Request compact structured results, reduce them in bounded batches, or return them for the
-  parent to synthesize; every dynamically constructed prompt must stay under 20,000 characters.
+- Full upstream outputs may be passed to a downstream \`agent()\`. Inputs above 20,000 characters
+  are automatically file-backed, so do not summarize or truncate details merely to fit inline.
+  Keep prompts below 2,000,000 characters and use \`inputFormat\` when the file should not be Markdown.
 - Return a compact summary. Do not return raw agent transcripts.`;

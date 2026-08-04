@@ -47,6 +47,7 @@ export async function runWorkflowAgent(opts: {
   abortSignal?: AbortSignal;
   closeAgent?: (agentId: string) => Promise<void>;
   prompt: string;
+  inputFileTargetPath?: string;
   options: WorkflowAgentOptions;
   label: string;
   onAgentId: (agentId: string) => void;
@@ -58,6 +59,14 @@ export async function runWorkflowAgent(opts: {
   const agentType = options.agentType?.trim();
   const role = agentType && isKnownRole(agentType) ? agentType : undefined;
   const profileRef = agentType && !isKnownRole(agentType) ? agentType : undefined;
+  const targetPaths = options.targetPaths?.length
+    ? [
+        ...new Set([
+          ...options.targetPaths,
+          ...(opts.inputFileTargetPath ? [opts.inputFileTargetPath] : []),
+        ]),
+      ]
+    : undefined;
 
   let spawned: Awaited<ReturnType<AgentControl["spawn"]>>;
   const spawnPromise = control.spawn({
@@ -67,16 +76,12 @@ export async function runWorkflowAgent(opts: {
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { reasoningEffort: options.effort } : {}),
     nickname: opts.label.slice(0, 120),
-    ...(options.targetPaths?.length ? { targetPaths: [...options.targetPaths] } : {}),
+    ...(targetPaths ? { targetPaths } : {}),
     contextMode: options.isolation ?? "none",
     ...(options.briefing ? { briefing: options.briefing } : {}),
   });
   try {
-    spawned = await raceWithAbort(
-      spawnPromise,
-      opts.abortSignal ?? ctx.abortSignal,
-      null,
-    );
+    spawned = await raceWithAbort(spawnPromise, opts.abortSignal ?? ctx.abortSignal, null);
   } catch (error) {
     if (error instanceof WorkflowAgentError && error.fatal) {
       void spawnPromise
@@ -143,11 +148,7 @@ export async function runWorkflowAgent(opts: {
 
     // CORRECTION 3: `AgentWaitInspection` carries no usage fields, so `wait()`
     // alone cannot fund `budget.spent()`. Inspect once, here, before close().
-    usdCost = await readAgentUsdCost(
-      control,
-      spawned.agentId,
-      opts.abortSignal ?? ctx.abortSignal,
-    );
+    usdCost = await readAgentUsdCost(control, spawned.agentId, opts.abortSignal ?? ctx.abortSignal);
     return { value, agentId: spawned.agentId, usdCost };
   } catch (error) {
     // Errored agents still spent tokens — capture cost so the host budget can

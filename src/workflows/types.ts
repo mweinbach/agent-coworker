@@ -26,6 +26,8 @@ export type WorkflowAgentOptions = {
   agentType?: string;
   /** Restricts the child's writes. Validated by `isUsableTargetPath`. Disables bash for that child. */
   targetPaths?: readonly string[];
+  /** Extension used when an oversized prompt is transported through a workspace file. */
+  inputFormat?: string;
   /** Per-call failure policy. Default `"fail"` — the promise rejects. */
   onError?: "fail" | "null";
   /** Wall-clock ceiling for this one agent. */

@@ -10,7 +10,7 @@ export async function workflowTmpDir(): Promise<string> {
 
 export type FakeAgent = {
   /** Final assistant text this child produces, by call order (1-based). */
-  reply?: (nth: number, message: string) => string;
+  reply?: (nth: number, message: string) => string | Promise<string>;
   /** Execution state reported by wait(), by call order. Defaults to "completed". */
   state?: (nth: number) => "completed" | "errored" | "closed";
   costUsd?: number;
@@ -42,7 +42,7 @@ export function makeFakeControl(opts: FakeAgent = {}): FakeControl {
       order.set(agentId, nth);
       messages.push(message);
       models.push(model);
-      texts.set(agentId, opts.reply ? opts.reply(nth, message) : `reply ${nth}`);
+      texts.set(agentId, opts.reply ? await opts.reply(nth, message) : `reply ${nth}`);
       return {
         agentId,
         parentSessionId: "root",
@@ -75,7 +75,7 @@ export function makeFakeControl(opts: FakeAgent = {}): FakeControl {
       messages.push(message);
       // A repair turn replaces the child's final message.
       const nth = order.get(agentId) ?? 1;
-      texts.set(agentId, opts.reply ? opts.reply(nth, message) : `reply ${nth}`);
+      texts.set(agentId, opts.reply ? await opts.reply(nth, message) : `reply ${nth}`);
     },
     inspect: async () =>
       ({
@@ -101,7 +101,11 @@ export function makeWorkflowCtx(
   overrides: Partial<ToolContext> = {},
 ): ToolContext {
   return {
-    config: { projectCoworkDir, workflowsEnabled: true } as ToolContext["config"],
+    config: {
+      projectCoworkDir,
+      workingDirectory: projectCoworkDir,
+      workflowsEnabled: true,
+    } as ToolContext["config"],
     log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,

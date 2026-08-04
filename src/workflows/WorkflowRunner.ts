@@ -8,6 +8,7 @@ import {
 import type { AgentControl, ToolContext } from "../tools/context";
 import { compileWorkflowSource } from "./compile";
 import { runWorkflowAgent, WorkflowAgentError } from "./hostAgent";
+import { spillWorkflowPromptToFile, WORKFLOW_INLINE_PROMPT_CHARS } from "./inputSpill";
 import { digestAgentCall, hashWorkflowArgs, WorkflowJournal } from "./journal";
 import { AgentScheduler, resolveWorkflowConcurrency } from "./scheduler";
 import { workflowAgentCallSchema, workflowHostMessageSchema, workflowMetaSchema } from "./schema";
@@ -428,12 +429,28 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
             usdCost: 0,
           };
         }
+        const preparedPrompt =
+          prompt.length > WORKFLOW_INLINE_PROMPT_CHARS
+            ? await spillWorkflowPromptToFile({
+                prompt,
+                workingDirectory: opts.ctx.config.workingDirectory,
+                ...(options.inputFormat ? { format: options.inputFormat } : {}),
+                ...(opts.ctx.assertCanMutate ? { assertCanMutate: opts.ctx.assertCanMutate } : {}),
+              })
+            : null;
+        if (preparedPrompt && logs.length < MAX_WORKFLOW_LOGS) {
+          logs.push(
+            `${label} received ${preparedPrompt.chars.toLocaleString()} characters through ${preparedPrompt.targetPath}.`,
+          );
+          emitProgress();
+        }
         return await runWorkflowAgent({
           ctx: opts.ctx,
           control: opts.control,
           abortSignal: runAbortController.signal,
           closeAgent,
-          prompt,
+          prompt: preparedPrompt?.prompt ?? prompt,
+          ...(preparedPrompt ? { inputFileTargetPath: preparedPrompt.targetPath } : {}),
           options,
           label,
           onAgentId: (agentId) => {

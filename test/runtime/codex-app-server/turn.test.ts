@@ -1216,7 +1216,7 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
-  test.serial("labels yielded exec and wait calls with the nested tool name", async () => {
+  test.serial("folds yielded exec and wait calls into one visible tool", async () => {
     const dir = await fs.mkdtemp(
       path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-label-"),
     );
@@ -1308,22 +1308,139 @@ describe("codex app-server turn lifecycle", () => {
       });
 
       await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
-      for (const toolCallId of ["exec-1", "wait-1"]) {
-        expect(streamParts).toContainEqual(
-          expect.objectContaining({
-            type: "tool-call",
-            toolCallId,
-            toolName: "read_file",
-          }),
-        );
-        expect(streamParts).toContainEqual(
-          expect.objectContaining({
-            type: "tool-result",
-            toolCallId,
-            toolName: "read_file",
-          }),
-        );
-      }
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "exec-1",
+          toolName: "read_file",
+          input: "const result = await tools.read_file({ file_path: 'README.md' }); text(result)",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-1",
+          toolName: "read_file",
+          output: "README contents",
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.serial("suppresses exec wrappers when nested dynamic tools are visible", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-dedupe-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Update the plan in code mode" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => streamParts.push(part),
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call",
+            call_id: "exec-1",
+            name: "exec",
+            input: "await tools.todo_write({ todos: [] })",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "item/started",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic-1",
+            tool: "todoWrite",
+            arguments: { todos: [] },
+            status: "inProgress",
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "dynamicToolCall",
+            id: "dynamic-1",
+            tool: "todoWrite",
+            arguments: { todos: [] },
+            status: "completed",
+            result: { updated: true },
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread_1",
+          turnId: "turn_1",
+          item: {
+            type: "custom_tool_call_output",
+            call_id: "exec-1",
+            output: { updated: true },
+          },
+        },
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "dynamic-1",
+          toolName: "todoWrite",
+          input: { todos: [] },
+        },
+        {
+          type: "tool-result",
+          toolCallId: "dynamic-1",
+          toolName: "todoWrite",
+          output: { updated: true },
+        },
+      ]);
     } finally {
       controlled.resolveTurnStart();
       await turnPromise?.catch(() => {});

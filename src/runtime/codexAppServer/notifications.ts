@@ -63,6 +63,11 @@ function dynamicToolErrorText(item: Record<string, unknown>): string {
   return contentText ?? "dynamic tool failed";
 }
 
+function projectedToolOutput(output: unknown): unknown {
+  const citationSources = extractReferencedCitationSourcesFromToolResult(output);
+  return citationSources.length > 0 ? { contentItems: output, citationSources } : output;
+}
+
 function assistantPhase(record: Record<string, unknown> | null | undefined): string | undefined {
   const phase = asString(record?.phase)?.trim();
   return phase ? phase : undefined;
@@ -210,11 +215,12 @@ async function routeStreamingNotification(
       } else if (item?.type === "dynamicToolCall") {
         const statusFailed = item.status === "failed" || item.success === false;
         const toolName = asString(item.tool);
+        const output = item.result ?? item.contentItems ?? null;
         await params.onModelStreamPart?.({
           type: statusFailed ? "tool-error" : "tool-result",
           toolCallId: asString(item.id) ?? asString(item.callId),
           toolName: toolName ? coworkToolNameFromCodexDynamicName(toolName) : "dynamicTool",
-          output: item.result ?? item.contentItems ?? null,
+          output: projectedToolOutput(output),
           error: statusFailed ? dynamicToolErrorText(item) : undefined,
         });
       } else if (item?.type === "fileChange") {
@@ -243,6 +249,17 @@ export type CodexTurnNotificationRouter = {
   waitForCompletion: () => Promise<unknown>;
 };
 
+type PendingCodeModeExec = {
+  toolName: string;
+  input: unknown;
+  nestedToolObserved: boolean;
+};
+
+type CodeModeContinuation = {
+  visibleToolCallId: string | null;
+  toolName: string;
+};
+
 export function createCodexTurnNotificationRouter(
   client: CodexAppServerClient,
   params: RuntimeRunTurnParams,
@@ -258,8 +275,10 @@ export function createCodexTurnNotificationRouter(
   const textByItemId = new Map<string, string>();
   const phaseByItemId = new Map<string, string>();
   const itemOrder: string[] = [];
-  const codeModeToolNameByCallId = new Map<string, string>();
-  const codeModeToolNameByCellId = new Map<string, string>();
+  const pendingCodeModeExecByCallId = new Map<string, PendingCodeModeExec>();
+  const codeModeContinuationByCellId = new Map<string, CodeModeContinuation>();
+  const codeModeContinuationByWaitCallId = new Map<string, CodeModeContinuation>();
+  let activeCodeModeExecCallId: string | null = null;
 
   const ensureAssistantItem = (id: string | undefined, initialText = ""): string | null => {
     if (!id) return null;
@@ -411,6 +430,15 @@ export function createCodexTurnNotificationRouter(
     if (!targetsActiveCodexTurn(payload, target)) return;
     if (completion.abortSignal?.aborted) return;
 
+    if (
+      notification.method === "item/started" &&
+      item?.type === "dynamicToolCall" &&
+      activeCodeModeExecCallId
+    ) {
+      const pending = pendingCodeModeExecByCallId.get(activeCodeModeExecCallId);
+      if (pending) pending.nestedToolObserved = true;
+    }
+
     if (notification.method === "rawResponseItem/completed") {
       const itemType = asString(item?.type);
       const callId = asString(item?.call_id) ?? asString(item?.callId) ?? asString(item?.id);
@@ -418,15 +446,12 @@ export function createCodexTurnNotificationRouter(
         const toolName = asString(item?.name) ?? asString(item?.tool) ?? "customTool";
         if (isExecCustomToolName(toolName)) {
           const input = item?.input ?? item?.arguments ?? {};
-          const displayToolName = codeModeDisplayToolName(input);
-          codeModeToolNameByCallId.set(callId, displayToolName);
-          void params.onModelStreamPart?.({
-            type: "tool-call",
-            toolCallId: callId,
-            toolName: displayToolName,
+          pendingCodeModeExecByCallId.set(callId, {
+            toolName: codeModeDisplayToolName(input),
             input,
-            providerExecuted: true,
+            nestedToolObserved: false,
           });
+          activeCodeModeExecCallId = callId;
           return;
         }
       }
@@ -436,13 +461,21 @@ export function createCodexTurnNotificationRouter(
         if (isCodeModeWaitToolName(toolName)) {
           const input = item?.arguments ?? item?.input ?? {};
           const cellId = codeModeWaitCellId(input);
-          const displayToolName =
-            (cellId ? codeModeToolNameByCellId.get(cellId) : undefined) ?? "codeExecution";
-          codeModeToolNameByCallId.set(callId, displayToolName);
+          const continuation = cellId ? codeModeContinuationByCellId.get(cellId) : undefined;
+          if (cellId) codeModeContinuationByCellId.delete(cellId);
+          if (continuation) {
+            codeModeContinuationByWaitCallId.set(callId, continuation);
+            return;
+          }
+          const fallbackContinuation = {
+            visibleToolCallId: callId,
+            toolName: "codeExecution",
+          };
+          codeModeContinuationByWaitCallId.set(callId, fallbackContinuation);
           void params.onModelStreamPart?.({
             type: "tool-call",
             toolCallId: callId,
-            toolName: displayToolName,
+            toolName: fallbackContinuation.toolName,
             input,
             providerExecuted: true,
           });
@@ -451,26 +484,52 @@ export function createCodexTurnNotificationRouter(
       }
 
       if (
-        (itemType === "custom_tool_call_output" ||
-          itemType === "customToolCallOutput" ||
-          itemType === "function_call_output" ||
-          itemType === "functionCallOutput") &&
-        callId &&
-        codeModeToolNameByCallId.has(callId)
+        (itemType === "custom_tool_call_output" || itemType === "customToolCallOutput") &&
+        callId
       ) {
-        const toolName = codeModeToolNameByCallId.get(callId) ?? "codeExecution";
+        const pending = pendingCodeModeExecByCallId.get(callId);
+        if (!pending) return;
+        pendingCodeModeExecByCallId.delete(callId);
+        if (activeCodeModeExecCallId === callId) activeCodeModeExecCallId = null;
         const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
         const cellId = runningCodeModeCellId(output);
-        if (cellId) codeModeToolNameByCellId.set(cellId, toolName);
-        const citationSources = extractReferencedCitationSourcesFromToolResult(output);
-        const projectedOutput =
-          citationSources.length > 0 ? { contentItems: output, citationSources } : output;
-        codeModeToolNameByCallId.delete(callId);
+        const continuation = {
+          visibleToolCallId: pending.nestedToolObserved ? null : callId,
+          toolName: pending.toolName,
+        };
+        if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
+        if (pending.nestedToolObserved) return;
+        void params.onModelStreamPart?.({
+          type: "tool-call",
+          toolCallId: callId,
+          toolName: pending.toolName,
+          input: pending.input,
+          providerExecuted: true,
+        });
+        if (cellId) return;
         void params.onModelStreamPart?.({
           type: "tool-result",
           toolCallId: callId,
-          toolName,
-          output: projectedOutput,
+          toolName: pending.toolName,
+          output: projectedToolOutput(output),
+          providerExecuted: true,
+        });
+        return;
+      }
+
+      if ((itemType === "function_call_output" || itemType === "functionCallOutput") && callId) {
+        const continuation = codeModeContinuationByWaitCallId.get(callId);
+        if (!continuation) return;
+        codeModeContinuationByWaitCallId.delete(callId);
+        const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
+        const cellId = runningCodeModeCellId(output);
+        if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
+        if (continuation.visibleToolCallId === null || cellId) return;
+        void params.onModelStreamPart?.({
+          type: "tool-result",
+          toolCallId: continuation.visibleToolCallId,
+          toolName: continuation.toolName,
+          output: projectedToolOutput(output),
           providerExecuted: true,
         });
         return;

@@ -2,23 +2,27 @@ import { z } from "zod";
 
 import type { WorkflowJsonSchema } from "./types";
 
-/**
- * Envelope a child agent is asked to close with when the caller supplied a schema.
- *
- * Deliberately NOT an extension of `<agent_report>`: every child is already
- * prompted to emit that block by `prompts/sub-agents/base.md`, and
- * `reportParser.ts` scrapes it with a fixed schema shared across the product.
- * Widening that contract for workflows would couple two unrelated features.
- */
+/** Envelope a workflow child returns when the caller supplied a schema. */
 const RESULT_OPEN = "<workflow_result>";
 const RESULT_CLOSE = "</workflow_result>";
+
+export function buildSchemaSystemInstruction(): string {
+  return [
+    "## Workflow structured-output mode",
+    "",
+    "This call is consumed by a workflow JSON-schema validator.",
+    `Return exactly one ${RESULT_OPEN}...${RESULT_CLOSE} block and nothing else.`,
+    "The workflow output contract in the user message replaces role-level final-response and report-footer instructions for this call.",
+    'Do not emit prose, markdown fences, an "Answer" prefix, or an <agent_report> block.',
+  ].join("\n");
+}
 
 export function buildSchemaInstruction(schema: WorkflowJsonSchema): string {
   return [
     "",
     "## Required output format",
     "",
-    `Your final message MUST end with a ${RESULT_OPEN}...${RESULT_CLOSE} block containing`,
+    `Reply with ONLY one ${RESULT_OPEN}...${RESULT_CLOSE} block containing`,
     "a single JSON value that validates against this JSON Schema:",
     "",
     "```json",
@@ -27,7 +31,7 @@ export function buildSchemaInstruction(schema: WorkflowJsonSchema): string {
     "",
     `Example: ${RESULT_OPEN}{"field": "value"}${RESULT_CLOSE}`,
     "",
-    "Write nothing after the closing tag. Do not wrap the block in a code fence.",
+    "Write nothing before or after the block. Do not wrap it in a code fence or add an <agent_report> footer.",
   ].join("\n");
 }
 

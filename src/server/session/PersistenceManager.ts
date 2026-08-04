@@ -7,6 +7,7 @@ export class PersistenceManager {
   private queue: Promise<void> = Promise.resolve();
   private pendingReasons = new Set<string>();
   private flushQueued = false;
+  private lastError: unknown = null;
 
   constructor(
     private readonly opts: {
@@ -83,6 +84,7 @@ export class PersistenceManager {
             Date.now() - startedAt,
           );
         }
+        this.lastError = null;
       } finally {
         this.flushQueued = false;
       }
@@ -94,6 +96,7 @@ export class PersistenceManager {
       })
       .then(run)
       .catch((err) => {
+        this.lastError = err;
         const formattedError = this.opts.formatError(err);
         this.opts.emitTelemetry("session.snapshot.persist", "error", {
           sessionId: this.opts.sessionId,
@@ -114,8 +117,11 @@ export class PersistenceManager {
       });
   }
 
-  async waitForIdle() {
+  async waitForIdle(opts: { throwOnError?: boolean } = {}) {
     await this.queue.catch(() => {});
+    if (opts.throwOnError && this.lastError) {
+      throw this.lastError;
+    }
   }
 
   getProjectedLastEventSeq(persistedLastEventSeq: number): number {

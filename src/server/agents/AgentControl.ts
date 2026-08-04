@@ -464,7 +464,11 @@ export class AgentControl {
         );
       }
     }
-    const childSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
+    const loadedChildSystem = await this.deps.loadAgentPrompt(routed.config, role, profile);
+    const systemPromptSuffix = opts.systemPromptSuffix?.trim();
+    const childSystem = systemPromptSuffix
+      ? `${loadedChildSystem.trimEnd()}\n\n${systemPromptSuffix}`
+      : loadedChildSystem;
     this.assertParentWritable(opts.parentSessionId);
     const binding: SessionBinding = {
       session: null,
@@ -510,6 +514,7 @@ export class AgentControl {
       executionState: "pending_init",
     });
     try {
+      await built.session.waitForPersistenceIdle({ throwOnError: true });
       this.assertParentWritable(opts.parentSessionId);
       return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
     } catch (error) {
@@ -520,7 +525,7 @@ export class AgentControl {
           this.deps.sessionBindings.delete(built.session.id);
         }
       }
-      this.deps.disposeBinding(binding, "child spawn blocked by parent task lock", {
+      this.deps.disposeBinding(binding, "child spawn failed before execution", {
         closeSharedCodexClient: false,
       });
       throw error;

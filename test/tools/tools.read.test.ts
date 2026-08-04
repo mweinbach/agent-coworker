@@ -123,6 +123,18 @@ describe("read tool", () => {
     ).rejects.toThrow();
   });
 
+  test("returns a directory guard instead of a failed read call", async () => {
+    const dir = await tmpDir();
+    const nested = path.join(dir, "docs");
+    await fs.mkdir(nested);
+    const t: any = createReadTool(makeCtx(dir));
+
+    const out: string = await t.execute({ filePath: nested, limit: 2000 });
+
+    expect(out).toContain("because it is a directory");
+    expect(out).toContain("concrete file paths only");
+  });
+
   test("default limit of 2000 lines", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "big.txt");

@@ -62,6 +62,7 @@ function makeChildSession(config: AgentConfig) {
     isBusy: false,
     currentTurnOutcome: "completed",
     beginDisconnectedReplayBuffer: mock(() => {}),
+    waitForPersistenceIdle: mock(async (_opts?: { throwOnError?: boolean }) => {}),
     sendUserMessage,
     reopenForHistory: mock(() => {
       session.persistenceStatus = "active";
@@ -151,6 +152,43 @@ function makePersistedChildRecord(
 }
 
 describe("AgentControl.spawn", () => {
+  test("appends an internal system prompt suffix for workflow children", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const buildSession = mock(
+      (binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+      },
+    );
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt\n",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "research",
+      message: "Return structured data",
+      systemPromptSuffix: "workflow schema mode",
+    });
+
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        system: "child system prompt\n\nworkflow schema mode",
+      }),
+    );
+  });
+
   test("passes a full parent context seed into child session creation when contextMode is full", async () => {
     const parentConfig = makeConfig();
     const childConfig = makeConfig({ model: "gpt-5-mini", preferredChildModel: "gpt-5-mini" });
@@ -218,6 +256,87 @@ describe("AgentControl.spawn", () => {
       }),
     );
     expect(childSession.sendUserMessage).toHaveBeenCalledWith("Handle the fix");
+  });
+
+  test("waits for initial persistence before starting the child turn", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const barrierEntered = Promise.withResolvers<void>();
+    const releaseBarrier = Promise.withResolvers<void>();
+    childSession.waitForPersistenceIdle = mock(async (opts?: { throwOnError?: boolean }) => {
+      expect(opts).toEqual({ throwOnError: true });
+      barrierEntered.resolve();
+      await releaseBarrier.promise;
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const spawn = control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      message: "Start after persistence",
+      contextMode: "none",
+    });
+    await barrierEntered.promise;
+
+    expect(childSession.sendUserMessage).not.toHaveBeenCalled();
+    releaseBarrier.resolve();
+    await spawn;
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("Start after persistence");
+  });
+
+  test("does not start a child turn when initial persistence fails", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const persistenceError = new Error("session DB write lock timed out");
+    childSession.waitForPersistenceIdle = mock(async () => {
+      throw persistenceError;
+    });
+    const disposeBinding = mock(() => {});
+    const sessionBindings = new Map<string, SessionBinding>();
+    const control = new AgentControl({
+      sessionBindings,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding,
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "Must not start",
+        contextMode: "none",
+      }),
+    ).rejects.toBe(persistenceError);
+
+    expect(childSession.sendUserMessage).not.toHaveBeenCalled();
+    expect(sessionBindings.has(childSession.id)).toBe(false);
+    expect(disposeBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      "child spawn failed before execution",
+      { closeSharedCodexClient: false },
+    );
   });
 
   test("rejects spawning beyond the maximum depth", async () => {
@@ -382,6 +501,7 @@ describe("AgentControl.spawn", () => {
         currentTurnOutcome: "completed",
         isAgentOf: (parent: string) => parent === "root-1",
         beginDisconnectedReplayBuffer: () => {},
+        waitForPersistenceIdle: async () => {},
         sendUserMessage: async () => {},
         getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
         getLatestAssistantText: () => null,
@@ -444,6 +564,7 @@ describe("AgentControl.spawn", () => {
         currentTurnOutcome: "completed",
         isAgentOf: (parent: string) => parent === "root-1",
         beginDisconnectedReplayBuffer: () => {},
+        waitForPersistenceIdle: async () => {},
         sendUserMessage: async () => {},
         getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
         getLatestAssistantText: () => null,

@@ -31,6 +31,7 @@ export interface AgentControl {
       profileRef?: string;
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
+      systemPromptSuffix?: string;
     },
   ) => Promise<PersistentAgentSummary>;
   list: () => Promise<PersistentAgentSummary[]>;

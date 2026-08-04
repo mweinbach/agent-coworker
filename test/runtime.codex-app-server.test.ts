@@ -717,7 +717,10 @@ rl.on("line", (line) => {
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
     expect(startParams?.developerInstructions).toContain(
-      "Cowork exposes coordination tools and Cowork MCP as dynamic tools.",
+      "Cowork exposes workflows, coordination tools, session/thread management, and Cowork MCP as dynamic tools.",
+    );
+    expect(startParams?.developerInstructions).toContain(
+      "Use Cowork dynamic tools for workflows, tasks, subagents, session/thread management, memory, skills, and todos.",
     );
   });
 
@@ -1133,6 +1136,34 @@ rl.on("line", (line) => {
 
     expect(response).toEqual({ decision: "decline" });
     expect(approvals).toBe(0);
+  });
+
+  test("declines unsupported Codex MCP elicitations with a protocol-complete response", async () => {
+    const logs: string[] = [];
+    const response = await handleServerRequest(
+      {
+        id: "mcp-elicitation-1",
+        jsonrpc: "2.0",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "research-mcp",
+          mode: "form",
+          message: "Provide credentials",
+          requestedSchema: { type: "object" },
+          _meta: null,
+        },
+      },
+      {
+        log: (line: string) => logs.push(line),
+      } as never,
+    );
+
+    expect(response).toEqual({ action: "decline", content: null, _meta: null });
+    expect(logs).toEqual([
+      "[codex-app-server] Declined unsupported MCP elicitation from research-mcp.",
+    ]);
   });
 
   test("still accepts ordinary Codex command approvals under yolo", async () => {

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -13,6 +14,8 @@ type LockOwnerMetadata = {
   pid: number;
   startedAt: string;
   updatedAt: string;
+  ownerId?: string;
+  operation?: string;
 };
 
 type SessionDbWriteCoordinatorOptions = {
@@ -82,6 +85,8 @@ async function readOwnerMetadata(ownerPath: string): Promise<LockOwnerMetadata |
       pid: parsed.pid,
       startedAt: parsed.startedAt,
       updatedAt: parsed.updatedAt,
+      ...(typeof parsed.ownerId === "string" ? { ownerId: parsed.ownerId } : {}),
+      ...(typeof parsed.operation === "string" ? { operation: parsed.operation } : {}),
     };
   } catch {
     return null;
@@ -197,7 +202,7 @@ export class SessionDbWriteCoordinator {
     let staleRecoveries = 0;
 
     while (true) {
-      const owner = this.makeOwnerMetadata();
+      const owner = this.makeOwnerMetadata(operation);
       try {
         await this.mkdirLockDir(this.lockDir);
         await fs.writeFile(this.ownerFilePath, `${JSON.stringify(owner, null, 2)}\n`, {
@@ -230,7 +235,7 @@ export class SessionDbWriteCoordinator {
           release: async () => {
             heartbeat.stop();
             const liveOwner = await readOwnerMetadata(this.ownerFilePath);
-            if (!liveOwner || liveOwner.pid === owner.pid) {
+            if (!liveOwner || liveOwner.ownerId === owner.ownerId) {
               await fs.rm(this.lockDir, { recursive: true, force: true });
             }
           },
@@ -264,8 +269,18 @@ export class SessionDbWriteCoordinator {
 
         const waitedMs = this.now() - acquireStartedAt;
         if (waitedMs >= this.acquireTimeoutMs) {
+          const blockingOwner = await readOwnerMetadata(this.ownerFilePath);
+          const ownerStartedAtMs = blockingOwner ? Date.parse(blockingOwner.startedAt) : Number.NaN;
+          const ownerHeldMs = Number.isFinite(ownerStartedAtMs)
+            ? Math.max(0, this.now() - ownerStartedAtMs)
+            : undefined;
+          const ownerDescription = blockingOwner
+            ? `; blocking owner pid=${blockingOwner.pid} operation=${JSON.stringify(
+                blockingOwner.operation ?? "unknown",
+              )} startedAt=${blockingOwner.startedAt} updatedAt=${blockingOwner.updatedAt}`
+            : "";
           const timeoutError = new Error(
-            `Timed out acquiring session DB write lock after ${waitedMs}ms for ${operation}`,
+            `Timed out acquiring session DB write lock after ${waitedMs}ms for ${operation}${ownerDescription}`,
           );
           this.recordWait(waitedMs, staleRecoveries);
           this.diagnostics.timeoutCount += 1;
@@ -277,6 +292,15 @@ export class SessionDbWriteCoordinator {
               waitedMs,
               staleRecoveries,
               error: timeoutError.message,
+              ...(blockingOwner
+                ? {
+                    ownerPid: blockingOwner.pid,
+                    ownerOperation: blockingOwner.operation ?? "unknown",
+                    ownerStartedAt: blockingOwner.startedAt,
+                    ownerUpdatedAt: blockingOwner.updatedAt,
+                    ...(ownerHeldMs !== undefined ? { ownerHeldMs } : {}),
+                  }
+                : {}),
               ...(attributes ?? {}),
             },
             waitedMs,
@@ -340,10 +364,12 @@ export class SessionDbWriteCoordinator {
     return false;
   }
 
-  private makeOwnerMetadata(): LockOwnerMetadata {
+  private makeOwnerMetadata(operation: string): LockOwnerMetadata {
     const at = new Date(this.now()).toISOString();
     return {
       pid: process.pid,
+      ownerId: randomUUID(),
+      operation,
       startedAt: at,
       updatedAt: at,
     };

@@ -241,6 +241,7 @@ export type SessionDependencies = {
       model?: string;
       reasoningEffort?: AgentReasoningEffort;
       parentDepth?: number;
+      systemPromptSuffix?: string;
     },
   ) => Promise<PersistentAgentSummary>;
   listAgentSessionsImpl?: (parentSessionId: string) => Promise<PersistentAgentSummary[]>;

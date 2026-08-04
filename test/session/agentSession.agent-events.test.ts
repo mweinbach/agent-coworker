@@ -105,4 +105,20 @@ describe("AgentSession child-agent events", () => {
       | undefined;
     expect(persistedSnapshot?.agents).toEqual([agent]);
   });
+
+  test("surfaces persistence failures to durability barriers", async () => {
+    const persistenceError = new Error("session DB write lock timed out");
+    const { session } = makeSession({
+      sessionDb: {
+        persistSessionMutation: mock(async () => {
+          throw persistenceError;
+        }),
+        persistSessionSnapshot: mock(async () => {}),
+      } as any,
+    });
+
+    await expect(session.waitForPersistenceIdle({ throwOnError: true })).rejects.toBe(
+      persistenceError,
+    );
+  });
 });

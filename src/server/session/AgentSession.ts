@@ -1698,8 +1698,8 @@ export class AgentSession {
     await this.persistenceManager.waitForIdle();
   }
 
-  async waitForPersistenceIdle(): Promise<void> {
-    await this.persistenceManager.waitForIdle();
+  async waitForPersistenceIdle(opts: { throwOnError?: boolean } = {}): Promise<void> {
+    await this.persistenceManager.waitForIdle(opts);
   }
 
   reopenForHistory() {

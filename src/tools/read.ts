@@ -95,7 +95,7 @@ export function createReadTool(
     opts.createReadStreamImpl ?? ((filePath, options) => createReadStream(filePath, options));
   return defineTool({
     description:
-      "Read a file from the filesystem. Returns line-numbered text for text files. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows. Use offset/limit for large text files.",
+      "Read a concrete file from the filesystem, not a directory. Returns line-numbered text for text files. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows. Use offset/limit for large text files.",
     inputSchema: z.object({
       filePath: z.string().describe("Path to the file (prefer absolute)"),
       offset: z.number().int().min(1).optional().describe("Start line (1-indexed)"),
@@ -118,6 +118,16 @@ export function createReadTool(
         "read",
         ctx.agentTargetPaths,
       );
+      const stat = await fs.stat(abs);
+      if (stat.isDirectory()) {
+        const message = [
+          `Cannot read ${path.basename(abs) || abs} because it is a directory.`,
+          "The read tool accepts concrete file paths only.",
+          "Use glob, grep, or a directory-listing tool when available, or choose a file inside the directory.",
+        ].join(" ");
+        ctx.log(`tool< read ${JSON.stringify({ directoryGuard: true })}`);
+        return message;
+      }
 
       const mimeType = mimeTypeFromPath(abs);
       const modelSupportsImages = modelSupportsImageInputSync(ctx.config);
@@ -133,7 +143,6 @@ export function createReadTool(
         // Reject by stat() BEFORE reading the file into memory. A workspace can
         // contain an attacker-planted multi-GB file with an image extension;
         // reading it first would OOM the process before the size check fires.
-        const stat = await fs.stat(abs);
         const preReadSizeMessage = getAttachmentByteLengthValidationMessage([Number(stat.size)]);
         if (preReadSizeMessage) {
           throw new Error(preReadSizeMessage);

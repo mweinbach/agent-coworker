@@ -701,6 +701,34 @@ describe("createTools", () => {
     expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("manageMemory");
   });
 
+  test("exposes workflow through the Codex dynamic tool boundary", async () => {
+    const dir = await tmpDir();
+    const agentControl = {
+      spawn: async () => ({}) as never,
+      list: async () => [],
+      sendInput: async () => {},
+      wait: async () => ({}) as never,
+      inspect: async () => ({}) as never,
+      resume: async () => ({}) as never,
+      close: async () => ({}) as never,
+    };
+    const rawTools = createTools(
+      makeCtx(dir, {
+        agentControl,
+        config: makeConfig(dir, {
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          workflowsEnabled: true,
+        }),
+      }),
+    );
+
+    const dynamicTools = filterToolsForCodexDynamicBoundary(rawTools);
+    expect(dynamicTools).toHaveProperty("workflow");
+    expect(codexDynamicToolSpecs(dynamicTools).map((tool) => tool.name)).toContain("workflow");
+  });
+
   test("listSessionToolNames reports legacy codex-cli webSearch when configured", () => {
     const names = listSessionToolNames({
       provider: "codex-cli",

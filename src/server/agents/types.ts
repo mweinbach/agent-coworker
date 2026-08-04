@@ -25,6 +25,7 @@ export type AgentSpawnOptions = AgentSpawnContextOptions & {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   parentDepth?: number;
+  systemPromptSuffix?: string;
 };
 
 export type AgentSendInputOptions = {

@@ -7,25 +7,21 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback, useMemo, useState } from "react";
+import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import {
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
 } from "../../../../src/shared/displayCitationMarkers";
-import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import { useAppStore } from "../app/store";
 import type { ThreadRuntime } from "../app/types";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/ui/dialog";
 import { cn } from "../lib/utils";
 import { buildChatRenderItems, shouldShowWorkingPlaceholder } from "./chat/activityGroups";
+import { formatAgentRunFeedForViewer } from "./chat/agentRunTranscript";
 import { ChatFeed } from "./chat/ChatFeed";
+import { ChatViewContext } from "./chat/ChatViewContext";
 import { activeChildAgentLabels } from "./chat/chatLogic";
 import { promoteCitationSourcesToFinalAssistants } from "./chat/citationSourcesForTurn";
-import { ChatViewContext } from "./chat/ChatViewContext";
 import { buildMentionCatalog } from "./chat/composerMentions";
 import {
   type FeedDerivationWindowState,
@@ -109,9 +105,10 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
   );
 
   const feed = rt?.feed ?? EMPTY_FEED;
+  const displayFeed = useMemo(() => formatAgentRunFeedForViewer(feed), [feed]);
   const derivationFeed = useMemo(
-    () => prepareFeedDerivationFeed(feed, developerMode),
-    [developerMode, feed],
+    () => prepareFeedDerivationFeed(displayFeed, developerMode),
+    [developerMode, displayFeed],
   );
   const [feedWindows, setFeedWindows] = useState<Map<string, FeedDerivationWindowState>>(
     () => new Map(),
@@ -153,9 +150,10 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
     });
   }, [agentViewerThreadId, derivationFeed.length]);
 
-  const citationUrlsByMessageId = useMemo(() => buildCitationUrlsByMessageId(visibleFeed), [
-    visibleFeed,
-  ]);
+  const citationUrlsByMessageId = useMemo(
+    () => buildCitationUrlsByMessageId(visibleFeed),
+    [visibleFeed],
+  );
   const inlineCitationSourcesByMessageId = useMemo(
     () => buildCitationSourcesByMessageId(visibleFeed),
     [visibleFeed],
@@ -204,11 +202,7 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
   const disconnected = !hydrating && !connected;
 
   const title = thread?.title?.trim() || "Subagent run";
-  const metaLine = [
-    rt?.role ?? null,
-    rt ? `depth ${rt.depth}` : null,
-    rt?.effectiveModel ?? null,
-  ]
+  const metaLine = [rt?.role ?? null, rt ? `depth ${rt.depth}` : null, rt?.effectiveModel ?? null]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" · ");
   const usageLabel = viewerUsageLabel(rt);
@@ -223,7 +217,7 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
       <DialogContent
         data-slot="agent-run-viewer"
         overlayClassName="bg-transparent"
-        className="top-3 right-3 bottom-3 left-auto flex h-auto w-full max-w-[calc(100%-1.5rem)] translate-x-0 translate-y-0 flex-col gap-0 rounded-2xl border bg-background/80 p-0 shadow-2xl backdrop-blur-xl data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-right data-[state=closed]:zoom-out-100 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-right data-[state=open]:zoom-in-100 sm:max-w-md"
+        className="top-[calc(var(--platform-drag-strip-height)+var(--platform-titlebar-height)+0.75rem)] right-3 bottom-3 left-auto app-surface-opaque flex h-auto w-full max-w-[calc(100%-1.5rem)] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-2xl border border-border p-0 shadow-none data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-right data-[state=closed]:zoom-out-100 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-right data-[state=open]:zoom-in-100 sm:max-w-md"
       >
         <div className="flex items-start gap-3 border-b border-border/60 px-4 py-3 pr-12">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
@@ -260,6 +254,7 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
               citationUrlsByMessageId={citationUrlsByMessageId}
               citationSourcesByMessageId={citationSourcesByMessageId}
               desktopBasePath={workspace?.path ?? null}
+              contentClassName="px-5 py-6"
               bottomOffset={VIEWER_BOTTOM_OFFSET_PX}
               interactions={EMPTY_INTERACTIONS}
               onAnswerAsk={noopInteractionHandler}

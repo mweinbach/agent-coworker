@@ -36,6 +36,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "../../components/ui/message-scroller";
+import { cn } from "../../lib/utils";
 import { InlineErrorBoundary } from "../CrashReportingErrorBoundary";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { ActivityGroupCard } from "./ActivityGroupCard";
@@ -255,6 +256,7 @@ const DETACH_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
 function TranscriptScroller(props: {
   bottomOffset: number;
   children: ReactNode;
+  contentClassName?: string;
   hydrating: boolean;
   itemIds: string[];
   lastUserTurnId: string | null;
@@ -265,6 +267,7 @@ function TranscriptScroller(props: {
   const {
     bottomOffset,
     children,
+    contentClassName,
     hydrating,
     itemIds,
     lastUserTurnId,
@@ -565,7 +568,10 @@ function TranscriptScroller(props: {
       >
         <MessageScrollerContent
           ref={contentRef}
-          className="chat-feed-content mx-auto w-full max-w-3xl gap-4 px-4 py-5 pt-6"
+          className={cn(
+            "chat-feed-content mx-auto w-full max-w-3xl gap-4 px-4 py-5 pt-6",
+            contentClassName,
+          )}
         >
           {children}
         </MessageScrollerContent>
@@ -618,6 +624,8 @@ export const ChatFeed = memo(function ChatFeed(props: {
   citationUrlsByMessageId: Map<string, Map<number, string>>;
   citationSourcesByMessageId: Map<string, CitationSource[]>;
   desktopBasePath: string | null;
+  /** Extra classes for the transcript content column (e.g. tighter panel padding). */
+  contentClassName?: string;
 
   bottomOffset: number;
   interactions: VisibleInteraction[];
@@ -649,6 +657,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     citationUrlsByMessageId,
     citationSourcesByMessageId,
     desktopBasePath,
+    contentClassName,
     bottomOffset,
     interactions,
     onAnswerAsk,
@@ -699,6 +708,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
       />
       <TranscriptScroller
         bottomOffset={bottomOffset}
+        contentClassName={contentClassName}
         hydrating={hydrating}
         itemIds={scrollItemIds}
         lastUserTurnId={lastUserTurnId}

@@ -24,6 +24,9 @@ const cancelAnimationFrameMock = (id: number) => clearTimeout(id);
 const { useAppStore } = await import("../src/app/store");
 const { AgentRunViewer } = await import("../src/ui/AgentRunViewer");
 const { OverlayStackProvider } = await import("../src/ui/OverlayStack");
+const { formatAgentRunFeedForViewer, formatAgentRunMessageText } = await import(
+  "../src/ui/chat/agentRunTranscript"
+);
 
 const defaultStoreState = useAppStore.getState();
 
@@ -131,6 +134,13 @@ function agentRuntime(overrides: Record<string, unknown> = {}) {
         ts: "2026-03-15T10:04:30.000Z",
         text: "Reading the parser tests now.",
       },
+      {
+        id: "msg-assistant-2",
+        kind: "message",
+        role: "assistant",
+        ts: "2026-03-15T10:04:45.000Z",
+        text: 'Finished the investigation. <workflow_result>{"findings": "Parser regression isolated."}</workflow_result> <agent_report>{"status":"completed","summary":"Produced the parser report."}</agent_report>',
+      },
     ],
     transcriptOnly: false,
     ...overrides,
@@ -231,6 +241,112 @@ describe("openAgentThread viewer routing", () => {
   });
 });
 
+describe("formatAgentRunMessageText", () => {
+  test("leaves plain text untouched", () => {
+    const text = "Just a normal assistant reply.";
+    expect(formatAgentRunMessageText(text)).toBe(text);
+  });
+
+  test("unwraps a workflow_result JSON string envelope into prose", () => {
+    const text = 'Intro. <workflow_result>"Line one.\\n- item A\\n- item B"</workflow_result>';
+    const formatted = formatAgentRunMessageText(text);
+    expect(formatted).toContain("Line one.\n- item A\n- item B");
+    expect(formatted).not.toContain("<workflow_result>");
+    expect(formatted).toContain("Intro.");
+  });
+
+  test("pretty-prints a workflow_result JSON object envelope", () => {
+    const text = '<workflow_result>{"findings": "isolated", "count": 2}</workflow_result>';
+    const formatted = formatAgentRunMessageText(text);
+    expect(formatted).toContain("```json");
+    expect(formatted).toContain('"findings": "isolated"');
+    expect(formatted).not.toContain("<workflow_result>");
+  });
+
+  test("fences a workflow_result body that is not JSON", () => {
+    const text = '<workflow_result>still streaming partial json {"a":</workflow_result>';
+    const formatted = formatAgentRunMessageText(text);
+    expect(formatted).toContain("```text");
+    expect(formatted).toContain('still streaming partial json {"a":');
+    expect(formatted).not.toContain("<workflow_result>");
+  });
+
+  test("renders a valid agent_report footer as a report card", () => {
+    const report = JSON.stringify({
+      status: "completed",
+      summary: "Produced the parser report.",
+      filesChanged: ["src/parser.ts"],
+      filesRead: ["a.ts", "b.ts"],
+      verification: [{ command: "bun test", outcome: "passed" }],
+      residualRisks: ["Edge case remains"],
+    });
+    const formatted = formatAgentRunMessageText(
+      `Answer text. <agent_report>${report}</agent_report>`,
+    );
+    expect(formatted).toContain("**Report to main agent** · finished");
+    expect(formatted).toContain("> Produced the parser report.");
+    expect(formatted).toContain("**Files changed:** `src/parser.ts`");
+    expect(formatted).toContain("**Files read:** 2 files");
+    expect(formatted).toContain("- `bun test` — passed");
+    expect(formatted).toContain("- Edge case remains");
+    expect(formatted).not.toContain("<agent_report>");
+    expect(formatted).toContain("Answer text.");
+  });
+
+  test("fences an agent_report body that is not valid JSON", () => {
+    const formatted = formatAgentRunMessageText("Text. <agent_report>{not json}</agent_report>");
+    expect(formatted).toContain("```text");
+    expect(formatted).toContain("{not json}");
+    expect(formatted).not.toContain("<agent_report>");
+  });
+
+  test("handles an unterminated footer while the run is still streaming", () => {
+    const formatted = formatAgentRunMessageText('Text. <agent_report>{"status":"comple');
+    expect(formatted).not.toContain("<agent_report>");
+    expect(formatted).toContain("```text");
+  });
+});
+
+describe("formatAgentRunFeedForViewer", () => {
+  test("only rewrites assistant messages and preserves feed identity when unchanged", () => {
+    const feed = [
+      { id: "u1", kind: "message", role: "user", ts: "2026-03-15T10:00:00.000Z", text: "hi" },
+      {
+        id: "a1",
+        kind: "message",
+        role: "assistant",
+        ts: "2026-03-15T10:01:00.000Z",
+        text: "hello",
+      },
+    ] as any;
+    expect(formatAgentRunFeedForViewer(feed)).toBe(feed);
+  });
+
+  test("rewrites assistant footers but leaves user text with tags alone", () => {
+    const feed = [
+      {
+        id: "u1",
+        kind: "message",
+        role: "user",
+        ts: "2026-03-15T10:00:00.000Z",
+        text: "show me <agent_report> output",
+      },
+      {
+        id: "a1",
+        kind: "message",
+        role: "assistant",
+        ts: "2026-03-15T10:01:00.000Z",
+        text: 'done <agent_report>{"status":"completed","summary":"ok"}</agent_report>',
+      },
+    ] as any;
+    const formatted = formatAgentRunFeedForViewer(feed);
+    expect(formatted).not.toBe(feed);
+    expect(formatted[0].text).toBe("show me <agent_report> output");
+    expect(formatted[1].text).toContain("**Report to main agent** · finished");
+    expect(formatted[1].id).toBe("a1");
+  });
+});
+
 describe("AgentRunViewer", () => {
   afterEach(() => {
     useAppStore.setState(defaultStoreState);
@@ -258,35 +374,54 @@ describe("AgentRunViewer", () => {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
-      await act(async () => {
-        root.render(createElement(OverlayStackProvider, null, createElement(AgentRunViewer)));
-      });
+      try {
+        await act(async () => {
+          root.render(createElement(OverlayStackProvider, null, createElement(AgentRunViewer)));
+        });
 
-      const document = harness.dom.window.document;
-      const viewer = document.querySelector('[data-slot="agent-run-viewer"]');
-      expect(viewer).not.toBeNull();
-      expect(viewer?.className).toContain("right-3");
-      expect(viewer?.className).toContain("rounded-2xl");
-      expect(viewer?.className).toContain("backdrop-blur-xl");
-      expect(viewer?.className).toContain("slide-in-from-right");
-      // The UI behind stays visible: no dark scrim behind the panel.
-      expect(document.querySelector('[data-slot="dialog-overlay"]')?.className).toContain(
-        "bg-transparent",
-      );
-      expect(viewer?.textContent).toContain("Investigate parser test");
-      expect(viewer?.textContent).toContain("running");
-      expect(viewer?.textContent).toContain("worker · depth 1 · gpt-5.4");
-      expect(viewer?.textContent).toContain("Reading the parser tests now.");
+        const document = harness.dom.window.document;
+        const viewer = document.querySelector('[data-slot="agent-run-viewer"]');
+        expect(viewer).not.toBeNull();
+        expect(viewer?.className).toContain("right-3");
+        expect(viewer?.className).toContain(
+          "top-[calc(var(--platform-drag-strip-height)+var(--platform-titlebar-height)+0.75rem)]",
+        );
+        expect(viewer?.className).toContain("rounded-2xl");
+        // Explicit border token: bare `border` would fall back to currentColor
+        // (near-black) because the app does not set --default-border-color.
+        expect(viewer?.className).toContain("border-border");
+        expect(viewer?.className).toContain("overflow-hidden");
+        expect(viewer?.className).toContain("app-surface-opaque");
+        expect(viewer?.className).not.toContain("backdrop-blur");
+        expect(viewer?.className).toContain("shadow-none");
+        expect(viewer?.className).toContain("slide-in-from-right");
+        // The UI behind stays visible: no dark scrim behind the panel.
+        expect(document.querySelector('[data-slot="dialog-overlay"]')?.className).toContain(
+          "bg-transparent",
+        );
+        expect(viewer?.textContent).toContain("Investigate parser test");
+        expect(viewer?.textContent).toContain("running");
+        expect(viewer?.textContent).toContain("worker · depth 1 · gpt-5.4");
+        // Mid-turn assistant text folds into the collapsed activity group; the
+        // final message renders in full.
+        expect(viewer?.textContent).toContain("Finished the investigation.");
+        // Protocol footers render as a structured card, not raw XML/JSON dumps.
+        expect(viewer?.textContent).toContain("Report to main agent");
+        expect(viewer?.textContent).toContain("finished");
+        expect(viewer?.textContent).toContain("Produced the parser report.");
+        expect(viewer?.textContent).not.toContain("<agent_report>");
+        expect(viewer?.textContent).not.toContain("<workflow_result>");
 
-      // Read-only: no composer, message input, or interaction affordances.
-      expect(document.querySelector("textarea")).toBeNull();
-      expect(viewer?.querySelector("input")).toBeNull();
-      expect(document.querySelector('[role="textbox"]')).toBeNull();
-      expect(viewer?.querySelector('[data-slot="message-bar"]')).toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
+        // Read-only: no composer, message input, or interaction affordances.
+        expect(document.querySelector("textarea")).toBeNull();
+        expect(viewer?.querySelector("input")).toBeNull();
+        expect(document.querySelector('[role="textbox"]')).toBeNull();
+        expect(viewer?.querySelector('[data-slot="message-bar"]')).toBeNull();
+      } finally {
+        await act(async () => {
+          root.unmount();
+        });
+      }
     } finally {
       harness.restore();
     }
@@ -313,17 +448,19 @@ describe("AgentRunViewer", () => {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
-      await act(async () => {
-        root.render(createElement(OverlayStackProvider, null, createElement(AgentRunViewer)));
-      });
+      try {
+        await act(async () => {
+          root.render(createElement(OverlayStackProvider, null, createElement(AgentRunViewer)));
+        });
 
-      expect(
-        harness.dom.window.document.querySelector('[data-slot="agent-run-viewer"]'),
-      ).toBeNull();
-
-      await act(async () => {
-        root.unmount();
-      });
+        expect(
+          harness.dom.window.document.querySelector('[data-slot="agent-run-viewer"]'),
+        ).toBeNull();
+      } finally {
+        await act(async () => {
+          root.unmount();
+        });
+      }
     } finally {
       harness.restore();
     }

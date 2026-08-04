@@ -102,6 +102,27 @@ describe("syncCodexWindowsSandboxSetupState", () => {
     expect(await readUsers(appServerHome)).toBe(usersJson("new"));
   });
 
+  test("falls back to marker mtime when created_at is missing or invalid", async () => {
+    const { coworkHome, appServerHome, env } = await makeHomes();
+    await writeState(coworkHome, { createdAt: "not-a-timestamp", tag: "stale" });
+    await writeState(appServerHome, { createdAt: "", tag: "fresh" });
+
+    const older = new Date("2026-07-01T00:00:00Z");
+    const newer = new Date("2026-07-20T00:00:00Z");
+    await fs.utimes(path.join(coworkHome, ".sandbox", "setup_marker.json"), older, older);
+    await fs.utimes(path.join(appServerHome, ".sandbox", "setup_marker.json"), newer, newer);
+
+    const result = await syncCodexWindowsSandboxSetupState(appServerHome, {
+      platform: "win32",
+      env,
+    });
+
+    expect(result.sourceHome).toBe(appServerHome);
+    expect(result.updatedHomes).toEqual([coworkHome]);
+    expect(await readUsers(coworkHome)).toBe(usersJson("fresh"));
+    expect(await readUsers(appServerHome)).toBe(usersJson("fresh"));
+  });
+
   test("never consults the native Codex home, even when it holds newer state", async () => {
     const { root, coworkHome, appServerHome, env } = await makeHomes();
     // A native Codex install next to Cowork's homes with the freshest state

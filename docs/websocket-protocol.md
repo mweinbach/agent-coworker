@@ -1178,7 +1178,7 @@ Changes in `7.32`:
   - `cowork/provider/codexAppServer/status` returns `{ status }` with source, current version, app-pinned version, and whether the installed managed payload matches the app pin.
   - `cowork/provider/codexAppServer/update` downloads/promotes the app-pinned Cowork-managed Codex app-server under `~/.cowork/codex-app-server`; callers cannot select or pin arbitrary versions.
 - Desktop/runtime Codex app-server resolution now downloads and uses the app-pinned Cowork-managed release. Updating the desktop app can bump the code pin so the next runtime use downloads the replacement payload.
-- The current managed runtime pin is Codex app-server `0.144.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
+- The current managed runtime pin is Codex app-server `0.146.0`. Release assets are SHA-256 verified for supported macOS, Linux, and Windows architectures before installation or execution.
 
 Changes in `7.31`:
 

@@ -78,7 +78,7 @@ const CODEX_RELEASES_LATEST_URL = "https://api.github.com/repos/openai/codex/rel
 const CODEX_RELEASE_TAG_URL = "https://api.github.com/repos/openai/codex/releases/tags";
 const CODEX_USER_AGENT = "agent-coworker-codex-app-server-runtime";
 const CODEX_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-export const CODEX_APP_SERVER_MANAGED_VERSION = "0.144.0";
+export const CODEX_APP_SERVER_MANAGED_VERSION = "0.146.0";
 const MANAGED_CODEX_APP_SERVER_ARGS: readonly string[] = [];
 const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
 
@@ -102,6 +102,40 @@ const inFlightInstalls = new Map<string, Promise<CodexAppServerCommand>>();
  *     --jq '.assets[] | "\(.name) \(.digest)"'
  */
 const CODEX_APP_SERVER_MANAGED_CHECKSUMS: Record<string, Record<string, string>> = {
+  "0.146.0": {
+    "codex-app-server-aarch64-apple-darwin.tar.gz":
+      "dffa09d1109474917989e844be4d86382dfc197ad2e10cda024dc9a4496aec35",
+    "codex-app-server-x86_64-apple-darwin.tar.gz":
+      "1d4a6061d6a0aec9bc55b2b941c60ec82ed0c9b32e931c42ab76414d8330ffb4",
+    "codex-app-server-aarch64-unknown-linux-musl.tar.gz":
+      "2f60c81ddbe2d0ba5f7cf5b0a2ab4705dd45ffaac7ef7676eeed7b6349c964c1",
+    "codex-app-server-x86_64-unknown-linux-musl.tar.gz":
+      "b0e7cc19ad3ad74995ebd640dfbaa7c6e51475c1a5b1ff9666d8d8e2db429d1f",
+    "codex-app-server-aarch64-pc-windows-msvc.exe":
+      "ac47da97f2b2632da3adf59875789fe40de8cf62cb7e5b68a15035f3157a27fc",
+    "codex-app-server-x86_64-pc-windows-msvc.exe":
+      "41ed6bd783de08e2ce6fe16195a4351d2578da9dac11910e3d2076a9756fae23",
+    "codex-code-mode-host-aarch64-apple-darwin.tar.gz":
+      "40a45d1ef8a2a7ef885c1fbe6e1ff0d1d2a53bef40273f39ba2b18f4dad86bf2",
+    "codex-code-mode-host-x86_64-apple-darwin.tar.gz":
+      "a2110452c4cfce4707fa0699344c95617a4c5816791b91e03c53456e9dd97b09",
+    "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz":
+      "95b4a80b15316a8eb4706a289697fc42fee7644ea79b0ad0bdae2273af5e08a8",
+    "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz":
+      "a140731f54e7039355d189479dfc7d059b6c0a87176c7a011d2f271a9914139a",
+    "codex-code-mode-host-aarch64-pc-windows-msvc.exe":
+      "886b506c5d995724f426ba730796ab3e9e1fe3291af79e7bea2dfe624f1ff580",
+    "codex-code-mode-host-x86_64-pc-windows-msvc.exe":
+      "6ef1de0e04d859f8f4f6d4d64f0f3ceeec28658423d91de160f5e804280d1c36",
+    "codex-command-runner-aarch64-pc-windows-msvc.exe":
+      "41f1af72cd6b151227cb4db5150ff707adf24d21a2f902512da07304397b2063",
+    "codex-command-runner-x86_64-pc-windows-msvc.exe":
+      "0102fa1820ecd03bb03a991fd2303a1a484118f7da8a71864f88ec94bca61d6d",
+    "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe":
+      "43e51904c21a6c702b5696050448cba2e1515b41ed143caed81a32c7680c3e7f",
+    "codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe":
+      "c12d225b34e7f82cdab6bbc714797abed661f40e158104694953889750121cef",
+  },
   "0.144.0": {
     "codex-app-server-aarch64-apple-darwin.tar.gz":
       "982f3a687dc8266580770da68dfe661d7a4825773737f23a7e74e15ab0866da9",

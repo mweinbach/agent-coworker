@@ -16,6 +16,7 @@ import {
   resolveRuntimeAssetForHost,
   runtimeAssetFileName,
   runtimeAttestationPath,
+  __internal as runtimeIntegrityInternal,
   sha256File,
   verifyRuntime,
 } from "../src/coworkRuntime";
@@ -166,6 +167,7 @@ async function runtimeArchive(
 }
 
 afterEach(async () => {
+  runtimeIntegrityInternal.setAfterVerifyExactTreeHookForTests(null);
   releaseAllRuntimeTrust();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -701,6 +703,37 @@ describe("Cowork unified runtime", () => {
     });
     expect(planted.ok).toBe(false);
     expect(planted.errors.join("\n")).toMatch(/Unexpected runtime file/i);
+  });
+
+  test("fails closed when the tree mutates after exact hashing but before attestation", async () => {
+    const root = await tempRoot("mid-hash-mutation");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const attestationPath = runtimeAttestationPath(installed.runtimeDir);
+    await fs.rm(attestationPath, { force: true });
+    releaseAllRuntimeTrust();
+
+    const planted = path.join(installed.runtimeDir, "planted-after-hash.dll");
+    runtimeIntegrityInternal.setAfterVerifyExactTreeHookForTests(async (runtimeRoot) => {
+      expect(runtimeRoot).toBe(path.resolve(installed.runtimeDir));
+      await fs.writeFile(planted, "mid-verify plant");
+    });
+
+    const verified = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(verified.ok).toBe(false);
+    expect(verified.errors.join("\n")).toContain("Runtime changed while it was being verified.");
+    await expect(fs.access(attestationPath)).rejects.toThrow();
   });
 
   test("blocks signature tampering and unexpected files before managed execution", async () => {

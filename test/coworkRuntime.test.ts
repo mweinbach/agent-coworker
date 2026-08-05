@@ -550,6 +550,100 @@ describe("Cowork unified runtime", () => {
     expect(forced.errors.join("\n")).toMatch(/SHA-256 mismatch/i);
   });
 
+  test("ignores incomplete or foreign-signature attestations on the verify fast path", async () => {
+    const root = await tempRoot("attestation-bind");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    const attestationPath = runtimeAttestationPath(installed.runtimeDir);
+    const filterDll = path.join(
+      installed.runtimeDir,
+      "dependencies",
+      "libreoffice",
+      "program",
+      "filter.dll",
+    );
+    const original = await fs.readFile(filterDll, "utf8");
+    const pinned = new Date("2026-01-01T00:00:00.000Z");
+    await fs.utimes(filterDll, pinned, pinned);
+    await fs.rm(attestationPath, { force: true });
+    releaseAllRuntimeTrust();
+    expect(
+      (await verifyRuntime({ runtimeDir: installed.runtimeDir, execute: false, trustedKeys })).ok,
+    ).toBe(true);
+
+    const goodAttestation = JSON.parse(await fs.readFile(attestationPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+
+    // Same-size content mutation keeps the fingerprint digest, so only a valid
+    // attestation bind (or forced full verify) can catch it. Incomplete or
+    // foreign-signature attestations must fall through to full hashing.
+    await fs.writeFile(filterDll, "TRUSTED FILTER DLL".slice(0, original.length));
+    await fs.utimes(filterDll, pinned, pinned);
+
+    await fs.writeFile(
+      attestationPath,
+      `${JSON.stringify({
+        schemaVersion: goodAttestation.schemaVersion,
+        runtimeVersion: goodAttestation.runtimeVersion,
+      })}\n`,
+    );
+    releaseAllRuntimeTrust();
+    const incomplete = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(incomplete.ok).toBe(false);
+    expect(incomplete.errors.join("\n")).toMatch(/SHA-256 mismatch/i);
+
+    // Restore a complete attestation that points at a foreign signature digest.
+    await fs.writeFile(
+      attestationPath,
+      `${JSON.stringify({
+        ...goodAttestation,
+        signatureSha256: "0".repeat(64),
+      })}\n`,
+    );
+    releaseAllRuntimeTrust();
+    const foreign = await verifyRuntime({
+      runtimeDir: installed.runtimeDir,
+      execute: false,
+      trustedKeys,
+    });
+    expect(foreign.ok).toBe(false);
+    expect(foreign.errors.join("\n")).toMatch(/SHA-256 mismatch/i);
+
+    // After a successful re-verify of a clean tree, attestation is rewritten to
+    // the current bundle signature rather than keeping the foreign digest.
+    await fs.writeFile(filterDll, original);
+    await fs.utimes(filterDll, pinned, pinned);
+    await fs.writeFile(
+      attestationPath,
+      `${JSON.stringify({
+        ...goodAttestation,
+        signatureSha256: "0".repeat(64),
+      })}\n`,
+    );
+    releaseAllRuntimeTrust();
+    expect(
+      (await verifyRuntime({ runtimeDir: installed.runtimeDir, execute: false, trustedKeys })).ok,
+    ).toBe(true);
+    const rewritten = JSON.parse(await fs.readFile(attestationPath, "utf8")) as {
+      signatureSha256: string;
+    };
+    expect(rewritten.signatureSha256).toBe(goodAttestation.signatureSha256);
+  });
+
   test("re-collects the tree fingerprint once trust is invalidated", async () => {
     const root = await tempRoot("per-use-fingerprint");
     const home = path.join(root, "home");

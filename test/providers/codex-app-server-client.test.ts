@@ -269,6 +269,61 @@ setInterval(() => {}, 1000);
     expect(syncCalls).toEqual([codexHome]);
   });
 
+  test("request timeout rejects without leaving a hung pending waiter", async () => {
+    const home = await makeTmpHome();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-timeout-"));
+    const script = path.join(dir, "mock-codex-app-server-timeout.js");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", () => {
+  // Intentionally never reply — client-side timeout must win.
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    process.env.HOME = home;
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+
+    const client = await startCodexAppServerClient();
+    await expect(client.request("account/read", undefined, 50)).rejects.toThrow(
+      /timed out after 50ms/i,
+    );
+    await client.close();
+  });
+
+  test("process exit rejects in-flight requests with pending method context", async () => {
+    const home = await makeTmpHome();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-exit-"));
+    const script = path.join(dir, "mock-codex-app-server-exit.js");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", () => {
+  process.exit(7);
+});
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    process.env.HOME = home;
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+
+    const client = await startCodexAppServerClient();
+    await expect(client.request("thread/start")).rejects.toThrow(
+      /exited before replying.*pending=thread\/start/i,
+    );
+    expect(client.isClosed()).toBe(true);
+  });
+
   test("a failing sandbox setup sync does not block the pooled client", async () => {
     const home = await makeTmpHome();
     process.env.HOME = home;

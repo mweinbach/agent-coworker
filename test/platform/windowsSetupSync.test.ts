@@ -196,4 +196,25 @@ describe("syncCodexWindowsSandboxSetupState", () => {
     expect(result.sourceHome).toBeUndefined();
     expect(result.updatedHomes).toEqual([]);
   });
+
+  test("write failures are soft-failed and do not throw or claim an update", async () => {
+    const { coworkHome, appServerHome, env } = await makeHomes();
+    await writeState(coworkHome, { createdAt: "2026-07-01T00:00:00Z", tag: "cowork" });
+    // Block creating `.sandbox` under the destination home by occupying that path
+    // with a regular file — writeSetupState must fail without aborting sync.
+    await fs.mkdir(appServerHome, { recursive: true });
+    await fs.writeFile(path.join(appServerHome, ".sandbox"), "not-a-directory", "utf8");
+
+    const logs: string[] = [];
+    const result = await syncCodexWindowsSandboxSetupState(appServerHome, {
+      platform: "win32",
+      env,
+      log: (line) => logs.push(line),
+    });
+
+    expect(result.sourceHome).toBe(coworkHome);
+    expect(result.updatedHomes).toEqual([]);
+    expect(logs.some((line) => /failed to sync setup state/i.test(line))).toBe(true);
+    expect(await readUsers(appServerHome)).toBeNull();
+  });
 });

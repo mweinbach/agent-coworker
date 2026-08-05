@@ -71,6 +71,67 @@ describe("WebSocket backpressure queue", () => {
     q.flush(ws);
     expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
   });
+
+  test("queues messages when send returns -1 (socket closing)", () => {
+    const q = new SocketSendQueue(500);
+    q.send(
+      fakeSocket(() => -1),
+      { method: "ask", params: { id: "closing" } },
+    );
+    const stats = q.getStats();
+    expect(stats.queueDepthByConnection["conn-1"]).toBe(1);
+    expect(stats.queuedSends).toBe(1);
+    expect(stats.sendFailures).toBe(0);
+  });
+
+  test("counts serializationFailures and drops non-serializable payloads", () => {
+    const q = new SocketSendQueue(500);
+    const circular: Record<string, unknown> = { method: "ask" };
+    circular.self = circular;
+    q.send(
+      fakeSocket(() => 1),
+      circular,
+    );
+    expect(q.getStats().serializationFailures).toBe(1);
+    expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
+    expect(q.getStats().queuedSends).toBe(0);
+  });
+
+  test("counts sendFailures when ws.send throws and does not queue", () => {
+    const q = new SocketSendQueue(500);
+    q.send(
+      fakeSocket(() => {
+        throw new Error("socket closed");
+      }),
+      { method: "ask", params: {} },
+    );
+    const stats = q.getStats();
+    expect(stats.sendFailures).toBe(1);
+    expect(stats.queueDepthByConnection["conn-1"]).toBeUndefined();
+    expect(stats.queuedSends).toBe(0);
+  });
+
+  test("flush drops the head item when send throws and continues draining", () => {
+    const q = new SocketSendQueue(500);
+    const received: string[] = [];
+    let sendCalls = 0;
+    const ws = fakeSocket((serialized) => {
+      sendCalls += 1;
+      if (sendCalls === 1) return 0; // queue on first send
+      if (sendCalls === 2) return 0; // queue second
+      if (sendCalls === 3) throw new Error("transient drain failure");
+      received.push(serialized);
+      return 1;
+    });
+    q.send(ws, { method: "ask", params: { seq: 1 } });
+    q.send(ws, { method: "approval", params: { seq: 2 } });
+    expect(q.getStats().queueDepthByConnection["conn-1"]).toBe(2);
+
+    q.flush(ws);
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!).params.seq).toBe(2);
+    expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
+  });
 });
 
 describe("startServer backpressure integration", () => {

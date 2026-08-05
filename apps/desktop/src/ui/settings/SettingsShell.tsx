@@ -329,6 +329,7 @@ function SettingsNavigation({
                   return (
                     <button
                       key={page.id}
+                      aria-current={activePage === page.id ? "page" : undefined}
                       className={cn(
                         "settings-shell__nav-button flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left app-type-body transition-colors duration-150",
                         activePage === page.id

@@ -266,6 +266,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const submitComposerDraft = useAppStore((s) => s.submitComposerDraft);
   const retryComposerSubmission = useAppStore((s) => s.retryComposerSubmission);
+  const cancelComposerSubmission = useAppStore((s) => s.cancelComposerSubmission);
   const editAcceptedComposerSubmission = useAppStore((s) => s.editAcceptedComposerSubmission);
   const dismissComposerSubmission = useAppStore((s) => s.dismissComposerSubmission);
   const cancelThread = useAppStore((s) => s.cancelThread);
@@ -289,6 +290,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerSubmissionAbortRef = useRef<AbortController | null>(null);
   const [messageBarOverlayElement, setMessageBarOverlayElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -359,6 +361,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       if (!files || files.length === 0) return;
       await ingestAttachmentFiles(Array.from(files));
       if (fileInputRef.current) fileInputRef.current.value = "";
+      requestAnimationFrame(() => textareaRef.current?.focus());
     },
     [ingestAttachmentFiles],
   );
@@ -671,8 +674,22 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const submitComposer = useCallback(() => {
     if (!thread) return;
     setAttachmentPickerError(null);
-    submitComposerDraft({ kind: "thread", threadId: thread.id });
+    const controller = new AbortController();
+    composerSubmissionAbortRef.current?.abort();
+    composerSubmissionAbortRef.current = controller;
+    const submitted = submitComposerDraft(
+      { kind: "thread", threadId: thread.id },
+      {
+        signal: controller.signal,
+      },
+    );
+    if (!submitted) composerSubmissionAbortRef.current = null;
   }, [setAttachmentPickerError, submitComposerDraft, thread]);
+  const cancelSubmission = useCallback(() => {
+    composerSubmissionAbortRef.current?.abort();
+    composerSubmissionAbortRef.current = null;
+    cancelComposerSubmission(composerDraftKey);
+  }, [cancelComposerSubmission, composerDraftKey]);
   const retrySubmission = useCallback(() => {
     retryComposerSubmission(composerDraftKey);
   }, [composerDraftKey, retryComposerSubmission]);
@@ -683,6 +700,20 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const dismissSubmission = useCallback(() => {
     dismissComposerSubmission(composerDraftKey);
   }, [composerDraftKey, dismissComposerSubmission]);
+
+  useEffect(() => {
+    if (composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending") {
+      return;
+    }
+    composerSubmissionAbortRef.current = null;
+  }, [composerSubmission?.phase]);
+
+  useEffect(
+    () => () => {
+      composerSubmissionAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -919,6 +950,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             ingestAttachmentFiles={ingestAttachmentFiles}
             pendingAttachments={pendingAttachments}
             removeAttachment={removeAttachment}
+            attachmentRemovalDisabled={
+              composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending"
+            }
             submitComposer={submitComposer}
             busy={busy}
             composerSubmitState={composerSubmitState}
@@ -944,7 +978,13 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             onRetrySubmission={retrySubmission}
             onEditSubmission={editAcceptedSubmission}
             onDismissSubmission={dismissSubmission}
-            onStop={selectedThreadId ? handleStop : undefined}
+            onStop={
+              composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending"
+                ? cancelSubmission
+                : selectedThreadId
+                  ? handleStop
+                  : undefined
+            }
           />
         )}
 

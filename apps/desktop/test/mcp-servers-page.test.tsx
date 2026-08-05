@@ -924,6 +924,9 @@ describe("MCP servers settings page", () => {
       expect(addButton).toBeDefined();
 
       await act(async () => {
+        addButton?.dispatchEvent(
+          new harness.dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+        );
         addButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 

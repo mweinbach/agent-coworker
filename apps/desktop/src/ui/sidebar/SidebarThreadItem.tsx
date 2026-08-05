@@ -98,8 +98,9 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
           "sidebar-thread-item sidebar-lift flex min-w-0 w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
           isActive
             ? "app-border-subtle app-selected-row"
-            : "app-text-secondary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
+            : "app-text-primary hover:app-border-subtle hover:app-hover-wash hover:text-foreground",
         )}
+        aria-current={isActive ? "page" : undefined}
         onClick={() => selectThread(thread.id)}
         onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
         onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
@@ -123,10 +124,12 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
               {interactionCount}
             </Badge>
           ) : busy ? (
-            <span
-              className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
-              aria-hidden="true"
-            />
+            <span className="flex items-center" role="status" aria-label="Working" title="Working">
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                aria-hidden="true"
+              />
+            </span>
           ) : hasDraft ? (
             <span
               className="size-1.5 rounded-full bg-muted-foreground/70"

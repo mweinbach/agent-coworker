@@ -44,4 +44,5 @@ test("desktop main window applies the adaptive narrow-width guard", async () => 
   expect(mainWindowStart).toBeGreaterThanOrEqual(0);
   expect(quickChatStart).toBeGreaterThan(mainWindowStart);
   expect(mainWindowSource).toContain("minWidth: MAIN_WINDOW_MIN_WIDTH");
+  expect(mainWindowSource).toContain("minHeight: MAIN_WINDOW_MIN_HEIGHT");
 });

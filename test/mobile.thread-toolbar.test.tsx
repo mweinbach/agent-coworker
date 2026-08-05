@@ -47,6 +47,7 @@ const toolbarButton = (props: { icon?: string; accessibilityLabel?: string }) =>
 
 const expoRouterMock = () => ({
   useLocalSearchParams: () => ({ id: "test-thread-123" }),
+  useRouter: () => ({ back: () => {} }),
   Stack: {
     Screen: () => null,
     Toolbar: Object.assign(
@@ -128,10 +129,12 @@ const threadStoreMock = () => ({
         beginComposerSubmission: () => null,
         retryComposerSubmission: () => null,
         failComposerSubmission: () => {},
+        cancelComposerSubmission: () => false,
         acceptComposerSubmission: () => {},
         interruptThread: () => {},
         clearPendingRequest: () => {},
         appendOptimisticUserMessage: () => {},
+        removeOptimisticUserMessage: () => {},
       };
       return fn(state);
     },

@@ -173,6 +173,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
           command: request.params.command,
           reason: request.params.reason,
           dangerous: request.params.dangerous,
+          detail: request.params.detail,
+          category: request.params.category,
         });
       },
     });

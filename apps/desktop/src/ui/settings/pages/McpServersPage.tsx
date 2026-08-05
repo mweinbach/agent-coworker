@@ -386,13 +386,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
       description="Connect Cowork to external tools and services using MCP."
       action={
         workspace ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onPointerDown={openCreateEditor}
-            onClick={openCreateEditor}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={openCreateEditor}>
             <PlusIcon data-icon="inline-start" />
             Add connector
           </Button>
@@ -959,10 +953,6 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                       size="icon"
                       aria-label={`Edit ${server.name}`}
                       className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                        openEditEditor(server, editSource);
-                      }}
                       onClick={(event) => {
                         event.stopPropagation();
                         openEditEditor(server, editSource);
@@ -1131,6 +1121,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                         <div className="flex flex-wrap items-center gap-2">
                           <Input
                             className="h-7 max-w-64 text-xs"
+                            aria-label={`Sign-in code for ${server.name}`}
                             placeholder="Paste sign-in code (optional)"
                             value={oauthCode}
                             onChange={(event) =>
@@ -1158,6 +1149,9 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t app-border-subtle pt-2">
                       <Input
                         className="h-7 max-w-64 text-xs"
+                        type="password"
+                        autoComplete="off"
+                        aria-label={`API key for ${server.name}`}
                         placeholder="Paste API key"
                         value={apiKeyDraft}
                         onChange={(event) =>

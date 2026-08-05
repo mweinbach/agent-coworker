@@ -7,7 +7,7 @@ import type * as Electron from "electron";
 import { hostPlatform } from "../../../src/platform/host";
 import { CloudSyncService } from "../../../src/sync/service";
 import type { PersistedState } from "../src/app/types";
-import { MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
+import { MAIN_WINDOW_MIN_HEIGHT, MAIN_WINDOW_MIN_WIDTH } from "../src/lib/adaptiveLayout";
 import {
   getCanvasCaptionSymbolTone,
   getCanvasNativeBackgroundColor,
@@ -483,6 +483,7 @@ async function createMainWindow(): Promise<Electron.BrowserWindow> {
     width: savedBounds?.width ?? 1240,
     height: savedBounds?.height ?? 820,
     minWidth: MAIN_WINDOW_MIN_WIDTH,
+    minHeight: MAIN_WINDOW_MIN_HEIGHT,
     ...(savedBounds ? { x: savedBounds.x, y: savedBounds.y } : {}),
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
     ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),

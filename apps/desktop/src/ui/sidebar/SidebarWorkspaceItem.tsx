@@ -253,6 +253,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           </Button>
         </CollapsibleTrigger>
         <Button
+          aria-current={emphasizeWorkspace ? "page" : undefined}
           aria-keyshortcuts={
             reorderEnabled ? "Alt+ArrowUp Alt+ArrowDown Meta+ArrowUp Meta+ArrowDown" : undefined
           }
@@ -382,6 +383,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
                         <Button
                           key={task.id}
+                          aria-current={task.id === selectedTaskId ? "page" : undefined}
                           type="button"
                           variant="ghost"
                           className={cn(

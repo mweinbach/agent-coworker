@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import {
+  CoworkJsonRpcClient,
+  type JsonRpcServerRequest,
+} from "../apps/mobile/src/features/cowork/jsonRpcClient";
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -205,7 +208,7 @@ describe("mobile cowork jsonrpc client", () => {
 
   test("routes server requests and responses", async () => {
     const sent: string[] = [];
-    const requests: Array<{ id: string | number; method: string }> = [];
+    const requests: JsonRpcServerRequest[] = [];
 
     const client = new CoworkJsonRpcClient({
       clientInfo: {
@@ -219,7 +222,7 @@ describe("mobile cowork jsonrpc client", () => {
         // ignore
       },
       onServerRequest(message) {
-        requests.push({ id: message.id, method: message.method });
+        requests.push(message);
       },
     });
 
@@ -272,7 +275,33 @@ describe("mobile cowork jsonrpc client", () => {
       }),
     );
     await flushMicrotasks();
-    expect(requests).toEqual([{ id: 7, method: "item/tool/requestUserInput" }]);
+    expect(requests[0]).toMatchObject({ id: 7, method: "item/tool/requestUserInput" });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        id: 8,
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "req-2",
+          itemId: "item-2",
+          command: "curl https://example.com",
+          dangerous: true,
+          reason: "The command needs access outside the sandbox.",
+          detail: "Allow outbound access to example.com.",
+          category: "network",
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(requests[1]).toMatchObject({
+      id: 8,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        detail: "Allow outbound access to example.com.",
+        category: "network",
+      },
+    });
 
     await client.respondServerRequest(7, { answer: "yes" });
     const responsePayload = JSON.parse(sent.at(-1)!);

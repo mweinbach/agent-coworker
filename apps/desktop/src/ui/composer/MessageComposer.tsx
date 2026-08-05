@@ -430,9 +430,13 @@ export function MessageComposerStop({
   className,
   disabled,
   pending = false,
+  label,
   onStop,
   ...props
-}: MessageComposerStopProps) {
+}: MessageComposerStopProps & { label?: string }) {
+  const accessibleLabel = pending
+    ? "Stopping current response"
+    : (label ?? "Stop current response");
   return (
     <Button
       type="button"
@@ -444,8 +448,8 @@ export function MessageComposerStop({
       )}
       disabled={disabled || pending}
       onClick={onStop}
-      aria-label={pending ? "Stopping current response" : "Stop current response"}
-      title={pending ? "Stopping current response" : "Stop current response"}
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
       aria-busy={pending || undefined}
       {...props}
     >

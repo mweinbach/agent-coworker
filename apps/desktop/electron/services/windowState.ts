@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type * as Electron from "electron";
-import { MAIN_WINDOW_MIN_WIDTH } from "../../src/lib/adaptiveLayout";
+import { MAIN_WINDOW_MIN_HEIGHT, MAIN_WINDOW_MIN_WIDTH } from "../../src/lib/adaptiveLayout";
 
 /**
  * Persisted main-window bounds. Kept in a dedicated `window-state.json`
@@ -78,7 +78,7 @@ export async function loadMainWindowBounds(
   // supported minimum. In that edge case, keep restored geometry aligned with
   // BrowserWindow.minWidth instead of handing Electron contradictory bounds.
   const width = Math.max(MAIN_WINDOW_MIN_WIDTH, Math.min(saved.width, workArea.width));
-  const height = Math.min(saved.height, workArea.height);
+  const height = Math.max(MAIN_WINDOW_MIN_HEIGHT, Math.min(saved.height, workArea.height));
   const minVisibleWidth = Math.min(200, width);
   const minVisibleHeight = Math.min(120, height);
 

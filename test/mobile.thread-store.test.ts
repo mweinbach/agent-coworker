@@ -153,6 +153,35 @@ describe("mobile thread store offline draft preservation", () => {
     expect(thread?.composerSubmission).toBeNull();
   });
 
+  test("cancels only the matching composer submission and preserves the draft", () => {
+    useThreadStore.getState().hydrate({
+      sessionId: "remote-cancel",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const store = useThreadStore.getState();
+    store.setComposerDraft("remote-cancel", "keep this draft");
+    store.beginComposerSubmission("remote-cancel", "client-message-1");
+
+    expect(store.cancelComposerSubmission("remote-cancel", "other-message")).toBe(false);
+    expect(store.cancelComposerSubmission("remote-cancel", "client-message-1")).toBe(true);
+    const thread = useThreadStore.getState().getThread("remote-cancel");
+    expect(thread?.composerDraft).toBe("keep this draft");
+    expect(thread?.composerSubmission).toBeNull();
+  });
+
   test("does not append a second optimistic row after server reconciliation", () => {
     useThreadStore.getState().hydrate({
       sessionId: "remote-dedupe",

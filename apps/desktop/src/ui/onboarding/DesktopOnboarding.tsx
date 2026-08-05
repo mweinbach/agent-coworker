@@ -1121,7 +1121,7 @@ export function DesktopOnboarding() {
     >
       <DialogContent
         aria-label="Onboarding"
-        className="app-shadow-overlay block w-[min(92vw,520px)] max-w-none rounded-xl app-border-subtle bg-card p-6 sm:max-w-none"
+        className="app-shadow-overlay block max-h-[calc(100dvh-2rem)] w-[min(92vw,520px)] max-w-none overflow-y-auto rounded-xl app-border-subtle bg-card p-6 sm:max-w-none"
         overlayClassName="bg-background/80 backdrop-blur-sm"
         preventEditableEscapeDismissal
         showCloseButton={false}

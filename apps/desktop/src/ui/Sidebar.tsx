@@ -67,6 +67,7 @@ export const Sidebar = memo(function Sidebar() {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const sidebarSectionOrder = useAppStore((s) => s.desktopSettings.sidebarSectionOrder);
+  const bootstrapLoading = useAppStore((s) => s.bootstrapPhase === "loading");
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -362,7 +363,9 @@ export const Sidebar = memo(function Sidebar() {
     const normalizedOrder = normalizeSidebarSectionOrder(sidebarSectionOrder);
     const chatsAboveProjects = normalizedOrder[0] === "chats";
     const result = await showContextMenu([
-      ...(workspaceLifecycleEnabled ? [{ id: "add_project", label: "Add project" }] : []),
+      ...(workspaceLifecycleEnabled
+        ? [{ id: "add_project", label: "Add project", enabled: !bootstrapLoading }]
+        : []),
       {
         id: chatsAboveProjects ? "move_projects_above_chats" : "move_chats_above_projects",
         label: chatsAboveProjects ? "Move projects above chats" : "Move chats above projects",
@@ -371,7 +374,7 @@ export const Sidebar = memo(function Sidebar() {
     ]);
 
     if (result === "add_project") {
-      void addWorkspace();
+      if (!bootstrapLoading) void addWorkspace();
     } else if (result === "move_chats_above_projects") {
       setSidebarSectionOrder(["chats", "projects"]);
     } else if (result === "move_projects_above_chats") {
@@ -711,7 +714,15 @@ export const Sidebar = memo(function Sidebar() {
       </div>
 
       {projectsOpen ? (
-        projectWorkspaces.length === 0 ? (
+        bootstrapLoading && projectWorkspaces.length === 0 ? (
+          <div
+            className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted"
+            role="status"
+            aria-live="polite"
+          >
+            Restoring projects…
+          </div>
+        ) : projectWorkspaces.length === 0 ? (
           <div className="flex flex-col">
             <div className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted">
               <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 app-text-muted" />
@@ -723,6 +734,7 @@ export const Sidebar = memo(function Sidebar() {
                   variant="outline"
                   type="button"
                   onClick={() => void addWorkspace()}
+                  disabled={bootstrapLoading}
                 >
                   Add project
                 </Button>

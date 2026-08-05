@@ -228,7 +228,27 @@ samp {
   color: var(--text-selected-row) !important;
 }
 
+:where(:root[data-high-contrast="true"])
+  .app-selected-row
+  :where(button, [role="button"], button *, [role="button"] *) {
+  /* biome-ignore lint/complexity/noImportantStyles: selected nested controls must remain legible in high contrast */
+  color: var(--text-selected-row) !important;
+  /* biome-ignore lint/complexity/noImportantStyles: selected nested controls must not paint over the system highlight */
+  background: transparent !important;
+}
+
 @media (forced-colors: active) {
+  :root .app-selected-row,
+  :root .app-selected-row :where(button, [role="button"], button *, [role="button"] *) {
+    /* biome-ignore lint/complexity/noImportantStyles: system selected rows require the HighlightText pair */
+    color: HighlightText !important;
+  }
+
+  :root .app-selected-row :where(button, [role="button"]) {
+    /* biome-ignore lint/complexity/noImportantStyles: nested buttons must preserve the selected row highlight */
+    background: transparent !important;
+  }
+
   :where(:root) [data-slot="dropdown-menu-item"][data-variant="destructive"]:focus {
     --danger: var(--text-accent-foreground);
     background: var(--surface-accent-interactive);
@@ -367,7 +387,7 @@ samp {
 
 [data-slot="message-composer"] textarea:focus-visible {
   outline: none;
-  box-shadow: none;
+  box-shadow: inset 0 -2px 0 var(--ring);
 }
 
 [data-slot="command-input"]:focus-visible {

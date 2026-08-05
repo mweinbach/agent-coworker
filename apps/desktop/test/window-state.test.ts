@@ -106,6 +106,18 @@ describe("windowState", () => {
     expect(result?.height).toBe(700);
   });
 
+  test("raises a saved main window below the supported minimum height", async () => {
+    const dir = await freshUserDataDir();
+    await writeBoundsFile(dir, { x: 20, y: 30, width: 900, height: 320 });
+    const app = await makeFakeApp(dir);
+    const screen = makeFakeScreen({ x: 0, y: 0, width: 1920, height: 1080 });
+
+    const result = await loadMainWindowBounds(app, screen);
+
+    expect(result?.width).toBe(900);
+    expect(result?.height).toBe(560);
+  });
+
   test("keeps restored width aligned with the enforced minimum on a smaller display", async () => {
     const dir = await freshUserDataDir();
     await writeBoundsFile(dir, { x: 0, y: 0, width: 480, height: 700 });

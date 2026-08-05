@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -146,6 +146,7 @@ function reconcileActiveTurn(
 
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
+  const router = useRouter();
   const threadId = typeof params.id === "string" ? params.id : "";
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
@@ -173,6 +174,7 @@ export default function ThreadDetailScreen() {
   const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
   const retryComposerSubmission = useThreadStore((state) => state.retryComposerSubmission);
   const failComposerSubmission = useThreadStore((state) => state.failComposerSubmission);
+  const cancelComposerSubmission = useThreadStore((state) => state.cancelComposerSubmission);
   const acceptComposerSubmission = useThreadStore((state) => state.acceptComposerSubmission);
   const appendOptimisticUserMessage = useThreadStore((state) => state.appendOptimisticUserMessage);
   const removeOptimisticUserMessage = useThreadStore((state) => state.removeOptimisticUserMessage);
@@ -196,16 +198,21 @@ export default function ThreadDetailScreen() {
   const previousFeedMutationRevisionRef = useRef<number | null>(null);
   const scrollThreadIdRef = useRef(threadId);
   const loadRequestIdRef = useRef(0);
+  const submissionAttemptRef = useRef(0);
   const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
   const isDraftThread = threadId.startsWith("draft-");
   const turnActive = activeTurnStartedAt !== null;
+  const isSubmitting = thread?.composerSubmission?.status === "submitting";
 
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
   const isOfflineReadOnly = !isConnected && !isDraftThread;
+  const [isLoadingThread, setIsLoadingThread] = useState(() =>
+    Boolean(threadId && !isDraftThread && !thread),
+  );
   const capability = useMemo(
     () =>
       resolveComposerCapabilityAvailability({
@@ -260,8 +267,10 @@ export default function ThreadDetailScreen() {
   const loadThreadFeed = useCallback(async () => {
     const requestId = ++loadRequestIdRef.current;
     if (!threadId || isDraftThread || !isConnected || !runtimeClient) {
+      setIsLoadingThread(false);
       return;
     }
+    setIsLoadingThread(true);
     try {
       await runtimeClient.resumeThread(threadId);
       if (requestId !== loadRequestIdRef.current) return;
@@ -278,6 +287,10 @@ export default function ThreadDetailScreen() {
         kind: "load",
         message: describeError(error, "Failed to load this conversation."),
       });
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setIsLoadingThread(false);
+      }
     }
   }, [threadId, isConnected, runtimeClient, isDraftThread]);
 
@@ -288,7 +301,7 @@ export default function ThreadDetailScreen() {
     };
   }, [loadThreadFeed]);
 
-  const showStop = turnActive || (isConnected && pendingRequest !== null);
+  const showStop = turnActive || isSubmitting || (isConnected && pendingRequest !== null);
   useEffect(() => {
     if (showStop) return;
     stoppingRef.current = false;
@@ -464,6 +477,64 @@ export default function ThreadDetailScreen() {
   );
 
   if (!thread) {
+    if (isLoadingThread) {
+      return (
+        <Screen scroll contentStyle={{ justifyContent: "center" }}>
+          <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+            Loading chat
+          </Text>
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
+            Restoring this conversation from your desktop.
+          </Text>
+        </Screen>
+      );
+    }
+    if (actionError?.kind === "load") {
+      return (
+        <Screen scroll contentStyle={{ justifyContent: "center" }}>
+          <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
+            Couldn’t load chat
+          </Text>
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
+            {actionError.message}
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading chat"
+              onPress={() => void loadThreadFeed()}
+              style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
+                borderRadius: 999,
+                backgroundColor: pressed ? theme.primaryPressed : theme.primary,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+              })}
+            >
+              <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to chats"
+              onPress={() => router.back()}
+              style={({ pressed }) => ({
+                minHeight: minimumTouchTarget(),
+                justifyContent: "center",
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+              })}
+            >
+              <Text style={{ color: theme.text, fontWeight: "600" }}>Back to chats</Text>
+            </Pressable>
+          </View>
+        </Screen>
+      );
+    }
     return (
       <Screen scroll contentStyle={{ justifyContent: "center" }}>
         <Text selectable style={{ color: theme.text, fontSize: 22, fontWeight: "700" }}>
@@ -472,13 +543,45 @@ export default function ThreadDetailScreen() {
         <Text selectable style={{ color: theme.textSecondary, fontSize: 15, lineHeight: 22 }}>
           Return to the thread list and choose another conversation.
         </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to chats"
+          onPress={() => router.back()}
+          style={({ pressed }) => ({
+            alignSelf: "flex-start",
+            minHeight: minimumTouchTarget(),
+            justifyContent: "center",
+            borderRadius: 999,
+            backgroundColor: pressed ? theme.primaryPressed : theme.primary,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+          })}
+        >
+          <Text style={{ color: theme.primaryText, fontWeight: "600" }}>Back to chats</Text>
+        </Pressable>
       </Screen>
     );
   }
 
   const activeThread = thread;
 
+  function cancelPendingComposerSubmission(): boolean {
+    const submission = activeThread.composerSubmission;
+    if (submission?.status !== "submitting") {
+      return false;
+    }
+    submissionAttemptRef.current += 1;
+    removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
+    cancelComposerSubmission(activeThread.id, submission.clientMessageId);
+    setActionError((current) => (current?.kind === "send" ? null : current));
+    if (runtimeClient && isConnected && !isDraftThread) {
+      void runtimeClient.interruptTurn(activeThread.id).catch(() => {});
+    }
+    return true;
+  }
+
   async function interruptCurrentThread() {
+    if (cancelPendingComposerSubmission()) return;
     if (stoppingRef.current) return;
     stoppingRef.current = true;
     setIsStopping(true);
@@ -536,6 +639,7 @@ export default function ThreadDetailScreen() {
   }
 
   async function sendComposerSubmission(submission: ComposerSubmission) {
+    const attempt = ++submissionAttemptRef.current;
     const client = getActiveCoworkJsonRpcClient();
     const optimisticText =
       submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
@@ -552,8 +656,15 @@ export default function ThreadDetailScreen() {
         toComposerTurnInput(submission),
         submission.clientMessageId,
       );
+      if (attempt !== submissionAttemptRef.current) {
+        if (submissionAttemptRef.current === attempt + 1) {
+          await client.interruptTurn(activeThread.id).catch(() => {});
+        }
+        return;
+      }
       acceptComposerSubmission(activeThread.id, submission.clientMessageId);
     } catch (error) {
+      if (attempt !== submissionAttemptRef.current) return;
       const message = describeError(error, "Failed to send message.");
       removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
       failComposerSubmission(activeThread.id, submission.clientMessageId, message);
@@ -614,7 +725,6 @@ export default function ThreadDetailScreen() {
   }
 
   const activePendingRequest = isConnected ? pendingRequest : null;
-  const isSubmitting = activeThread.composerSubmission?.status === "submitting";
   const composerPolicy = getComposerPolicy({
     connected: isConnected,
     draftThread: isDraftThread,

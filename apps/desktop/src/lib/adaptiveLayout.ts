@@ -1,4 +1,5 @@
 export const MAIN_WINDOW_MIN_WIDTH = 640;
+export const MAIN_WINDOW_MIN_HEIGHT = 560;
 export const MIN_PRIMARY_WORKSPACE_WIDTH = 520;
 
 export const DESKTOP_LAYOUT_BREAKPOINTS = {

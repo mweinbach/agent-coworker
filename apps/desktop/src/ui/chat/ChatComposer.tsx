@@ -43,6 +43,7 @@ export function ChatComposer(props: {
   ingestAttachmentFiles: (files: File[]) => Promise<boolean>;
   pendingAttachments: ComposerAttachmentFile[];
   removeAttachment: (index: number) => void;
+  attachmentRemovalDisabled: boolean;
   submitComposer: () => void;
   busy: boolean;
   composerSubmitState: ComposerSubmitState;
@@ -82,6 +83,7 @@ export function ChatComposer(props: {
     ingestAttachmentFiles,
     pendingAttachments,
     removeAttachment,
+    attachmentRemovalDisabled,
     submitComposer,
     busy,
     composerSubmitState,
@@ -142,6 +144,7 @@ export function ChatComposer(props: {
           <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
+            disabled={attachmentRemovalDisabled}
             className="px-0"
           />
           <MessageComposerSubmissionNotice
@@ -223,8 +226,12 @@ export function ChatComposer(props: {
                 ) : null}
               </MessageComposerTools>
               <div className="flex shrink-0 items-center gap-2">
-                {busy && onStop ? (
-                  <MessageComposerStop pending={interruptPending} onStop={onStop} />
+                {(busy || preparingAttachments || submission?.phase === "sending") && onStop ? (
+                  <MessageComposerStop
+                    pending={busy && interruptPending}
+                    onStop={onStop}
+                    label={busy ? undefined : "Cancel message submission"}
+                  />
                 ) : null}
                 <MessageComposerSubmit
                   mode={composerSubmitState.mode}

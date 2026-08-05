@@ -69,6 +69,8 @@ export type PendingServerRequest = PendingServerRequestIdentity &
         command: string;
         reason: string;
         dangerous: boolean;
+        detail?: string;
+        category?: "filesystem" | "network";
       }
   );
 
@@ -115,6 +117,7 @@ type ThreadStoreState = {
   beginComposerSubmission(threadId: string, clientMessageId: string): ComposerSubmission | null;
   retryComposerSubmission(threadId: string): ComposerSubmission | null;
   failComposerSubmission(threadId: string, clientMessageId: string, error: string): void;
+  cancelComposerSubmission(threadId: string, clientMessageId: string): boolean;
   acceptComposerSubmission(threadId: string, clientMessageId: string): void;
   submitComposer(threadId: string): void;
   appendOptimisticUserMessage(threadId: string, text: string, clientMessageId: string): void;
@@ -645,6 +648,22 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           : thread,
       ),
     }));
+  },
+  cancelComposerSubmission(threadId, clientMessageId) {
+    let cancelled = false;
+    set((state) => ({
+      threads: state.threads.map((thread) => {
+        if (
+          thread.id !== threadId ||
+          thread.composerSubmission?.clientMessageId !== clientMessageId
+        ) {
+          return thread;
+        }
+        cancelled = true;
+        return { ...thread, composerSubmission: null };
+      }),
+    }));
+    return cancelled;
   },
   acceptComposerSubmission(threadId, clientMessageId) {
     set((state) => ({

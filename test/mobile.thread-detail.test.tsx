@@ -82,6 +82,7 @@ const toolbarMock = Object.assign(
 );
 const expoRouterMock = () => ({
   useLocalSearchParams: () => ({ id: "test-thread-123" }),
+  useRouter: () => ({ back: () => {} }),
   Stack: {
     Screen: () => null,
     Toolbar: toolbarMock,
@@ -150,6 +151,7 @@ const mockRemoveOptimisticUserMessage = mock((_threadId: string, _clientMessageI
 const mockFailComposerSubmission = mock(
   (_threadId: string, _clientMessageId: string, _error: string) => {},
 );
+const mockCancelComposerSubmission = mock((_threadId: string, _clientMessageId: string) => true);
 const mockAcceptComposerSubmission = mock((_threadId: string, _clientMessageId: string) => {});
 const mockMarkTurnStarted = mock((_threadId: string, _startedAt: string) => {});
 const mockMarkTurnCompleted = mock((_threadId: string) => {});
@@ -186,6 +188,7 @@ const threadStoreMock = () => ({
         beginComposerSubmission: mockBeginComposerSubmission,
         retryComposerSubmission: mockRetryComposerSubmission,
         failComposerSubmission: mockFailComposerSubmission,
+        cancelComposerSubmission: mockCancelComposerSubmission,
         acceptComposerSubmission: mockAcceptComposerSubmission,
         appendOptimisticUserMessage: mockAppendOptimisticUserMessage,
         removeOptimisticUserMessage: mockRemoveOptimisticUserMessage,
@@ -343,6 +346,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockBeginComposerSubmission.mockClear();
     mockRetryComposerSubmission.mockClear();
     mockFailComposerSubmission.mockClear();
+    mockCancelComposerSubmission.mockClear();
     mockAcceptComposerSubmission.mockClear();
     mockMarkTurnStarted.mockClear();
     mockMarkTurnCompleted.mockClear();

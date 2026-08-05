@@ -761,7 +761,6 @@ export const ChatFeed = memo(function ChatFeed(props: {
             {hiddenFeedItemCount > 0 ? (
               <MessageScrollerItem messageId="status:show-older">
                 <div
-                  aria-hidden="true"
                   className="flex flex-col items-center gap-2 py-1"
                   data-slot="feed-window-spacer"
                 >

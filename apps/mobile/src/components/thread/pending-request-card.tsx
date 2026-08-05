@@ -33,7 +33,7 @@ export function PendingRequestCard({
 }: PendingRequestCardProps) {
   const theme = useAppTheme();
   const isApproval = request.kind === "approval";
-  const isDangerous = isApproval && request.dangerous;
+  const isSandboxEscalation = isApproval && request.dangerous;
   const [respondingAction, setRespondingAction] = useState<ApprovalResponseAction | null>(null);
   const respondingActionRef = useRef<ApprovalResponseAction | null>(null);
   const focusRef = useAccessibilityFocus<View>(
@@ -41,8 +41,36 @@ export function PendingRequestCard({
   );
   // Desktop SandboxApprovalCard: quiet tinted wash (border-destructive/40 + bg-destructive/5),
   // no heavy shadow — not a loud solid border.
-  const toneAccent = isDangerous ? theme.danger : theme.warning;
+  const toneAccent = isSandboxEscalation ? theme.danger : theme.warning;
   const isResponding = respondingAction !== null;
+  const approvalDetail = isApproval ? (request.detail ?? request.reason) : null;
+  const categoryLabel =
+    isApproval && request.category
+      ? request.category === "filesystem"
+        ? "Filesystem access"
+        : "Network access"
+      : null;
+  const approvalLabels = isSandboxEscalation
+    ? {
+        approving: "Starting command with full access",
+        approved: "Command started with full access",
+        approvalFailed: "Full access request failed",
+        approve: "Run with full access",
+        rejecting: "Keeping command blocked",
+        rejected: "Command kept blocked",
+        rejectionFailed: "Failed to keep command blocked",
+        reject: "Keep blocked",
+      }
+    : {
+        approving: "Approving command",
+        approved: "Command approved",
+        approvalFailed: "Command approval failed",
+        approve: "Approve command",
+        rejecting: "Declining command",
+        rejected: "Command declined",
+        rejectionFailed: "Command decline failed",
+        reject: "Decline command",
+      };
 
   async function respondToApproval(
     action: ApprovalResponseAction,
@@ -53,15 +81,19 @@ export function PendingRequestCard({
     }
     respondingActionRef.current = action;
     setRespondingAction(action);
-    announceForAccessibility(action === "approve" ? "Approving command" : "Declining command");
+    announceForAccessibility(
+      action === "approve" ? approvalLabels.approving : approvalLabels.rejecting,
+    );
     try {
       const sent = await respond();
       if (sent) {
-        announceForAccessibility(action === "approve" ? "Command approved" : "Command declined");
+        announceForAccessibility(
+          action === "approve" ? approvalLabels.approved : approvalLabels.rejected,
+        );
       }
     } catch {
       announceForAccessibility(
-        action === "approve" ? "Command approval failed" : "Command decline failed",
+        action === "approve" ? approvalLabels.approvalFailed : approvalLabels.rejectionFailed,
       );
     } finally {
       respondingActionRef.current = null;
@@ -74,7 +106,7 @@ export function PendingRequestCard({
       ref={focusRef}
       accessibilityLabel={
         request.kind === "approval"
-          ? `${isDangerous ? "Dangerous command" : "Approval needed"}. ${request.command}. ${request.reason}`
+          ? `${isSandboxEscalation ? "Full access required. This command is blocked by the sandbox" : "Approval needed"}. ${request.command}. ${approvalDetail}`
           : `Question from Cowork. ${request.question}`
       }
       accessibilityLiveRegion="assertive"
@@ -87,7 +119,7 @@ export function PendingRequestCard({
         borderWidth: 1,
         borderColor: isApproval ? alpha(toneAccent, 0.4) : theme.border,
         backgroundColor: isApproval
-          ? isDangerous
+          ? isSandboxEscalation
             ? theme.dangerMuted
             : theme.warningMuted
           : theme.surface,
@@ -106,8 +138,8 @@ export function PendingRequestCard({
         }}
       >
         {request.kind === "approval"
-          ? isDangerous
-            ? "Dangerous command"
+          ? isSandboxEscalation
+            ? "Full access required"
             : "Approval needed"
           : "Question from desktop"}
       </Text>
@@ -129,8 +161,13 @@ export function PendingRequestCard({
           >
             {request.command}
           </Text>
+          {categoryLabel ? (
+            <Text selectable style={{ color: toneAccent, fontSize: 13, fontWeight: "600" }}>
+              {categoryLabel}
+            </Text>
+          ) : null}
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-            {request.reason}
+            {approvalDetail}
           </Text>
         </>
       ) : (
@@ -217,7 +254,7 @@ export function PendingRequestCard({
             }}
             accessibilityRole="button"
             accessibilityLabel={
-              respondingAction === "approve" ? "Approving command" : "Approve command"
+              respondingAction === "approve" ? approvalLabels.approving : approvalLabels.approve
             }
             accessibilityState={{
               busy: respondingAction === "approve",
@@ -234,7 +271,13 @@ export function PendingRequestCard({
             })}
           >
             <Text style={{ color: theme.primaryText, fontWeight: "600" }}>
-              {respondingAction === "approve" ? "Approving…" : "Approve"}
+              {respondingAction === "approve"
+                ? isSandboxEscalation
+                  ? "Starting…"
+                  : "Approving…"
+                : isSandboxEscalation
+                  ? "Run with full access"
+                  : "Approve"}
             </Text>
           </Pressable>
           <Pressable
@@ -244,7 +287,7 @@ export function PendingRequestCard({
             }}
             accessibilityRole="button"
             accessibilityLabel={
-              respondingAction === "reject" ? "Declining command" : "Decline command"
+              respondingAction === "reject" ? approvalLabels.rejecting : approvalLabels.reject
             }
             accessibilityState={{
               busy: respondingAction === "reject",
@@ -263,7 +306,13 @@ export function PendingRequestCard({
             })}
           >
             <Text style={{ color: theme.danger, fontWeight: "600" }}>
-              {respondingAction === "reject" ? "Declining…" : "Decline"}
+              {respondingAction === "reject"
+                ? isSandboxEscalation
+                  ? "Keeping blocked…"
+                  : "Declining…"
+                : isSandboxEscalation
+                  ? "Keep blocked"
+                  : "Decline"}
             </Text>
           </Pressable>
         </View>

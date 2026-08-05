@@ -147,6 +147,8 @@ export type JsonRpcServerRequest =
         command: string;
         dangerous: boolean;
         reason: string;
+        detail?: string;
+        category?: "filesystem" | "network";
       };
     };
 
@@ -292,6 +294,8 @@ function normalizeServerRequest(message: JsonRpcRequestMessage): JsonRpcServerRe
             command: z.string(),
             dangerous: z.boolean(),
             reason: z.string(),
+            detail: z.string().optional(),
+            category: z.enum(["filesystem", "network"]).optional(),
           })
           .strict()
           .parse(message.params),

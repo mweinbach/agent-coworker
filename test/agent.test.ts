@@ -1512,6 +1512,29 @@ describe("runTurn", () => {
     expect(mockStreamText).not.toHaveBeenCalled();
   });
 
+  test("logs MCP close errors on cold-start abort without masking the sibling failure", async () => {
+    const logLines: string[] = [];
+    const closeMcp = mock(async () => {
+      throw new Error("close exploded during abort");
+    });
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({ tools: {}, errors: [], close: closeMcp });
+    observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(async () => {
+      throw new Error("otel exploded");
+    });
+
+    await expect(
+      runTurn(makeParams({ enableMcp: true, log: (line: string) => logLines.push(line) })),
+    ).rejects.toThrow("otel exploded");
+
+    expect(closeMcp).toHaveBeenCalledTimes(1);
+    expect(logLines.some((line) => line.includes("Error closing MCP connections"))).toBe(true);
+    expect(logLines.some((line) => line.includes("close exploded during abort"))).toBe(true);
+    expect(mockStreamText).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Error propagation
   // -------------------------------------------------------------------------

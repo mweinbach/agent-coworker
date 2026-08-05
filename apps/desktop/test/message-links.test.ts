@@ -220,6 +220,29 @@ describe("desktop message local file links", () => {
     ]);
   });
 
+  test("removes stray spaces before Windows path separators in bare file links", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "text",
+              value: "C:\\Users\\maxw6\\Pictures\\Screenshots \\Screenshot 2026-08-04 232855.png",
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteBareDesktopFilePathsInTree(tree);
+
+    expect(fileUrlToDesktopPath(tree.children[0]?.children[0]?.url ?? "")).toBe(
+      "C:\\Users\\maxw6\\Pictures\\Screenshots\\Screenshot 2026-08-04 232855.png",
+    );
+  });
+
   test("remark transformer also rewrites rendered anchor hrefs", () => {
     const transform = remarkRewriteDesktopFileLinks();
     const tree = {

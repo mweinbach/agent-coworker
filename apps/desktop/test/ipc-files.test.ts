@@ -13,6 +13,7 @@ const showSaveDialogMock = mock(async () => ({
   canceled: true,
   filePath: undefined as string | undefined,
 }));
+const showMessageBoxMock = mock(async () => ({ response: 0, checkboxChecked: false }));
 const getDownloadsPathMock = mock(() => path.join(os.tmpdir(), "cowork-downloads"));
 const clipboardWriteTextMock = mock((_text: string) => {});
 const trashItemMock = mock(async (_targetPath: string) => {});
@@ -36,6 +37,9 @@ async function loadFilesIpcModule() {
       dialog: {
         showSaveDialog(...args: unknown[]) {
           return showSaveDialogMock(...args);
+        },
+        showMessageBox(...args: unknown[]) {
+          return showMessageBoxMock(...args);
         },
       },
       shell: {
@@ -985,6 +989,80 @@ describe("files IPC", () => {
     });
 
     await fs.rm(tempWorkspace, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview authorizes one exact external file without broadening read access", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-preview-auth-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-preview-auth-outside-"));
+    const outsideFile = path.join(outsideDir, "screenshot.png");
+    await fs.writeFile(outsideFile, new Uint8Array([1, 2, 3, 4]));
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    const readHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFile);
+    expect(previewHandler).toBeDefined();
+    expect(readHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementation(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+    const authorizedEvent = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    const [firstPreview, secondPreview] = await Promise.all([
+      previewHandler?.(authorizedEvent, { path: outsideFile }),
+      previewHandler?.(authorizedEvent, { path: outsideFile }),
+    ]);
+
+    expect(firstPreview).toMatchObject({ byteLength: 4, truncated: false });
+    expect(secondPreview).toMatchObject({ byteLength: 4, truncated: false });
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
+    await expect(readHandler?.(authorizedEvent, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+
+    showMessageBoxMock.mockImplementation(async () => ({ response: 0, checkboxChecked: false }));
+    const otherSenderEvent = { sender: { id: 10 }, processId: 11, frameId: 12 };
+    await expect(previewHandler?.(otherSenderEvent, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
   });
 
   test("readFile rejects directories", async () => {

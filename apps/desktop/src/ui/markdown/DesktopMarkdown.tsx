@@ -593,7 +593,11 @@ export function fileUrlToDesktopPath(rawHref: string): string | null {
 }
 
 function desktopPathToFileUrl(rawPath: string): string | null {
-  const normalized = rawPath.trim();
+  const normalized = rawPath
+    .trim()
+    .replace(/^([A-Za-z]:\\|\\\\)(.*)$/s, (_match, prefix: string, rest: string) => {
+      return `${prefix}${rest.replace(/[ \t]+(?=\\)/g, "")}`;
+    });
   if (!normalized) {
     return null;
   }

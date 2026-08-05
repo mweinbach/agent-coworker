@@ -81,6 +81,7 @@ const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
 const MAX_AUTHORIZED_UPLOAD_SOURCES_PER_SENDER = 64;
+const MAX_AUTHORIZED_EXTERNAL_FILES_PER_SENDER = 64;
 
 type UploadAuthorizationOwnerKey = string;
 type AuthorizedUploadSource = {
@@ -165,6 +166,20 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
     throw new Error("Upload source path must be a file.");
   }
   return uploadSourceIdentityFromStat(sourceStat);
+}
+
+async function readExternalFileIdentity(
+  requestedPath: string,
+): Promise<{ identity: AuthorizedUploadSource; path: string }> {
+  const resolvedPath = await fs.realpath(path.resolve(requestedPath));
+  const stat = await fs.stat(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error("Path is not a file");
+  }
+  return {
+    identity: uploadSourceIdentityFromStat(stat),
+    path: resolvedPath,
+  };
 }
 
 function sendPreviewFileChanged(
@@ -260,6 +275,8 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
   // resolved from a real user-selected File. Authorizations are scoped to the
   // sender frame and consumed on copy so another renderer cannot reuse them.
   const authorizedUploadSources: AuthorizedUploadSources = new Map();
+  const authorizedExternalFiles: AuthorizedUploadSources = new Map();
+  const pendingExternalFileAuthorizations = new Map<string, Promise<boolean>>();
   const rememberAuthorizedUploadSource = async (
     ownerKey: UploadAuthorizationOwnerKey,
     sourcePath: string,
@@ -278,6 +295,98 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       const oldest = ownerSources.keys().next().value;
       if (oldest === undefined) break;
       ownerSources.delete(oldest);
+    }
+  };
+
+  const rememberAuthorizedExternalFile = (
+    ownerKey: UploadAuthorizationOwnerKey,
+    filePath: string,
+    identity: AuthorizedUploadSource,
+  ): void => {
+    let ownerFiles = authorizedExternalFiles.get(ownerKey);
+    if (!ownerFiles) {
+      ownerFiles = new Map();
+      authorizedExternalFiles.set(ownerKey, ownerFiles);
+    }
+
+    ownerFiles.delete(filePath);
+    ownerFiles.set(filePath, identity);
+    while (ownerFiles.size > MAX_AUTHORIZED_EXTERNAL_FILES_PER_SENDER) {
+      const oldest = ownerFiles.keys().next().value;
+      if (oldest === undefined) break;
+      ownerFiles.delete(oldest);
+    }
+  };
+
+  const requestExternalFileAuthorization = async (
+    event: Electron.IpcMainInvokeEvent,
+    filePath: string,
+  ): Promise<boolean> => {
+    const options: Electron.MessageBoxOptions = {
+      type: "question",
+      title: "Open local file?",
+      message: "Open a file outside the current workspace?",
+      detail: `Cowork will access only this file for preview or opening.\n\n${filePath}`,
+      buttons: ["Cancel", "Open File"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    };
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    const result = ownerWindow
+      ? await dialog.showMessageBox(ownerWindow, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1;
+  };
+
+  const resolveAllowedPreviewOrOpenPath = async (
+    event: Electron.IpcMainInvokeEvent,
+    requestedPath: string,
+  ): Promise<string> => {
+    try {
+      return resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), requestedPath);
+    } catch (boundaryError) {
+      const externalFile = await readExternalFileIdentity(requestedPath);
+      const ownerKey = uploadAuthorizationOwnerKey(event);
+      const existingAuthorization = getAuthorizedUploadSource(
+        authorizedExternalFiles,
+        ownerKey,
+        externalFile.path,
+      );
+      if (
+        existingAuthorization &&
+        uploadSourceIdentityMatches(existingAuthorization, externalFile.identity)
+      ) {
+        return externalFile.path;
+      }
+      authorizedExternalFiles.get(ownerKey)?.delete(externalFile.path);
+
+      const authorizationKey = `${ownerKey}\0${externalFile.path}`;
+      let pendingAuthorization = pendingExternalFileAuthorizations.get(authorizationKey);
+      if (!pendingAuthorization) {
+        pendingAuthorization = requestExternalFileAuthorization(event, externalFile.path);
+        pendingExternalFileAuthorizations.set(authorizationKey, pendingAuthorization);
+      }
+
+      if (!(await pendingAuthorization)) {
+        if (pendingExternalFileAuthorizations.get(authorizationKey) === pendingAuthorization) {
+          pendingExternalFileAuthorizations.delete(authorizationKey);
+        }
+        throw boundaryError;
+      }
+
+      try {
+        const confirmedFile = await readExternalFileIdentity(externalFile.path);
+        if (!uploadSourceIdentityMatches(externalFile.identity, confirmedFile.identity)) {
+          throw new Error("File changed while access was being authorized");
+        }
+        rememberAuthorizedExternalFile(ownerKey, confirmedFile.path, confirmedFile.identity);
+        return confirmedFile.path;
+      } finally {
+        if (pendingExternalFileAuthorizations.get(authorizationKey) === pendingAuthorization) {
+          pendingExternalFileAuthorizations.delete(authorizationKey);
+        }
+      }
     }
   };
 
@@ -392,28 +501,28 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.readFileForPreview,
-    async (_event, args: ReadFileForPreviewInput) => {
+    async (event, args: ReadFileForPreviewInput) => {
       const input = parseWithSchema(
         readFileForPreviewInputSchema,
         args,
         "readFileForPreview options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
     },
   );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.getPreferredFileApp,
-    async (_event, args: PreferredFileAppInput) => {
+    async (event, args: PreferredFileAppInput) => {
       const input = parseWithSchema(
         preferredFileAppInputSchema,
         args,
         "getPreferredFileApp options",
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       return await resolvePreferredFileAppLabel(safePath);
     },
   );
@@ -423,7 +532,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     async (event, args: PreviewOSFileInput) => {
       const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+      const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
       const win = BrowserWindow.fromWebContents(event.sender);
       if (win) {
         win.previewFile(safePath);
@@ -431,10 +540,10 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     },
   );
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);

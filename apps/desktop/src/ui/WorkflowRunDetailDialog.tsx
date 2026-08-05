@@ -77,7 +77,7 @@ function tally(agents: WorkflowAgentRow[]) {
 
 function StatChip({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="app-context-sidebar__nested-panel rounded-lg border px-2.5 py-1.5">
+    <div className="app-context-sidebar__nested-panel min-w-0 rounded-lg border px-2.5 py-1.5">
       <div className="app-type-label uppercase tracking-[0.14em] app-text-muted">{label}</div>
       <div className={cn("mt-0.5 text-sm font-medium tabular-nums", tone ?? "text-foreground")}>
         {value}
@@ -137,8 +137,8 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton className="max-w-2xl">
-        <DialogHeader>
+      <DialogContent showCloseButton className="min-w-0 max-w-2xl overflow-hidden">
+        <DialogHeader className="min-w-0">
           <DialogTitle className="flex items-center gap-2">
             {settled ? (
               run.outcome === "completed" && !completedWithFailures ? (
@@ -153,12 +153,15 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
             )}
             <span className="truncate">{run.name}</span>
           </DialogTitle>
-          <DialogDescription className="font-mono text-xs">
+          <DialogDescription className="truncate font-mono text-xs">
             {run.runId} · {statusLabel}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-4 gap-2">
+        <div
+          data-slot="workflow-run-stats"
+          className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4"
+        >
           <StatChip label="Agents" value={String(total)} />
           <StatChip
             label="Done"
@@ -190,13 +193,13 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
           </p>
         ) : null}
 
-        <div className="max-h-[22rem] overflow-y-auto overscroll-contain pr-1">
-          <div className="flex flex-col gap-3">
+        <div className="min-w-0 max-h-[22rem] overflow-x-hidden overflow-y-auto overscroll-contain pr-1">
+          <div className="flex min-w-0 flex-col gap-3">
             {phases.map(([phase, agents]) => {
               const phaseCounts = tally(agents);
               const active = phase === run.currentPhase && !settled;
               return (
-                <section key={phase}>
+                <section key={phase} className="min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
                     <span
                       className={cn(
@@ -262,7 +265,7 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
                             type="button"
                             key={agent.index}
                             onClick={() => onOpenAgent(agentId, agent.label)}
-                            className="w-full rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            className="min-w-0 w-full overflow-hidden rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             {content}
                           </button>
@@ -281,14 +284,15 @@ export const WorkflowRunDetailDialog = memo(function WorkflowRunDetailDialog({
         </div>
 
         {run.logs.length > 0 ? (
-          <div className="border-t pt-2">
+          <div className="min-w-0 overflow-hidden border-t pt-2">
             <div className="app-type-label uppercase tracking-[0.16em] app-text-muted">Log</div>
-            <div className="mt-1 max-h-24 overflow-y-auto overscroll-contain">
-              <div className="flex flex-col gap-0.5">
+            <div className="mt-1 max-h-24 overflow-x-hidden overflow-y-auto overscroll-contain">
+              <div className="flex min-w-0 flex-col gap-0.5">
                 {logLines.map(({ line, position }) => (
                   <div
                     key={`${run.runId}-log-${position}`}
-                    className="app-type-caption app-text-muted"
+                    data-slot="workflow-run-log-line"
+                    className="app-type-caption min-w-0 whitespace-pre-wrap break-all app-text-muted"
                   >
                     {line}
                   </div>

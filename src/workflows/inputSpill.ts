@@ -82,6 +82,7 @@ export async function spillWorkflowPromptToFile(opts: {
       `This workflow input contains ${opts.prompt.length.toLocaleString()} characters and is file-backed so no detail is truncated.`,
       `Input file: ${targetPath}`,
       "Use the read tool to read the file completely before doing any work.",
+      "If read reports that a line continues, keep reading that same line with the exact offset, columnOffset, and limit values it provides until no continuation remains.",
       "Treat the file contents as the complete task, including every instruction, source, report, and data section.",
     ].join("\n"),
     absolutePath,

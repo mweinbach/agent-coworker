@@ -429,9 +429,6 @@ export class AgentControl {
         : {}),
       connectedProviders: await this.deps.getConnectedProviders(opts.parentConfig),
     });
-    if (routed.fallbackLine) {
-      this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
-    }
     const nickname = normalizeNickname(opts.nickname);
     const taskType =
       opts.taskType === undefined && profile?.defaultTaskType === undefined

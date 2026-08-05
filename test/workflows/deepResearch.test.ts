@@ -184,6 +184,9 @@ describe("bundled deep-research workflow", () => {
       20_000,
     );
     expect(control.messages().filter((message) => message.includes("Input file:"))).toHaveLength(3);
+    for (const message of control.messages().filter((message) => message.includes("Input file:"))) {
+      expect(message).toContain("columnOffset");
+    }
     const result = outcome.summary.result as {
       reportMarkdown: string;
       researchReports: Array<{ reportMarkdown: string }>;

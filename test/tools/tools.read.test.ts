@@ -101,7 +101,7 @@ describe("read tool", () => {
     expect(out).toBe("1\t");
   });
 
-  test("truncates lines longer than 2000 chars", async () => {
+  test("marks lines longer than 2000 chars with an exact continuation request", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "long.txt");
     const longLine = "x".repeat(3000);
@@ -109,10 +109,28 @@ describe("read tool", () => {
 
     const t: any = createReadTool(makeCtx(dir));
     const out: string = await t.execute({ filePath: p, limit: 2000 });
-    // truncateLine slices to 2000 and appends "..."
     const content = out.split("\t").slice(1).join("\t");
-    expect(content.length).toBeLessThanOrEqual(2003); // 2000 + "..."
-    expect(content.endsWith("...")).toBe(true);
+    expect(content.startsWith("x".repeat(2000))).toBe(true);
+    expect(content).toContain("read offset=1 columnOffset=2001 limit=1");
+  });
+
+  test("continues a long line from an explicit column offset without losing content", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "long-single-line.json");
+    const longLine = `${"a".repeat(2000)}${"b".repeat(1500)}`;
+    await fs.writeFile(p, longLine, "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir));
+    const first: string = await t.execute({ filePath: p, offset: 1, limit: 1 });
+    const second: string = await t.execute({
+      filePath: p,
+      offset: 1,
+      columnOffset: 2001,
+      limit: 1,
+    });
+
+    expect(first).toContain("read offset=1 columnOffset=2001");
+    expect(second).toBe(`1\t${"b".repeat(1500)}`);
   });
 
   test("throws for non-existent files", async () => {

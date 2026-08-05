@@ -666,9 +666,6 @@ export function createRawLoopAgentControl(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         connectedProviders,
       });
-      if (routed.fallbackLine) {
-        opts.log(routed.fallbackLine);
-      }
       const timestamp = now();
       const seededTodos =
         resolvedContext.includeParentTodos && opts.getParentTodos

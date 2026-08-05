@@ -156,7 +156,11 @@ describe("AgentControl.spawn", () => {
     const parentConfig = makeConfig();
     const childSession = makeChildSession(parentConfig);
     const buildSession = mock(
-      (binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
+      (
+        binding: SessionBinding,
+        _persistedSessionId?: string,
+        overrides?: Record<string, unknown>,
+      ) => {
         binding.session = childSession;
         return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
       },
@@ -1241,7 +1245,7 @@ describe("AgentControl.spawn", () => {
     expect(childSession.sendUserMessage).toHaveBeenCalledWith("Investigate with glm-5");
   });
 
-  test("falls back to the parent target and logs when a cross-provider ref is not allowlisted", async () => {
+  test("rejects a blocked cross-provider ref before building a child session", async () => {
     const parentConfig = makeConfig({
       provider: "codex-cli",
       model: "gpt-5.4",
@@ -1283,28 +1287,18 @@ describe("AgentControl.spawn", () => {
       emitParentLog,
     });
 
-    await control.spawn({
-      parentSessionId: "root-1",
-      parentConfig,
-      role: "worker",
-      model: "opencode-go:glm-5",
-      message: "Investigate with fallback",
-    });
-
-    expect(buildSession).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      expect.objectContaining({
-        config: expect.objectContaining({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-        }),
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        model: "opencode-go:glm-5",
+        message: "Investigate with exact target",
       }),
-    );
-    expect(emitParentLog).toHaveBeenCalledWith(
-      "root-1",
-      expect.stringContaining("falling back to codex-cli:gpt-5.4"),
-    );
+    ).rejects.toThrow(/not in this workspace allowlist/);
+
+    expect(buildSession).not.toHaveBeenCalled();
+    expect(emitParentLog).not.toHaveBeenCalled();
   });
 });
 

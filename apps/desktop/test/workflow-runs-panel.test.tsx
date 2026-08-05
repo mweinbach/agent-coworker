@@ -65,6 +65,7 @@ describe("workflow runs panel", () => {
         currentPhase: "synthesis",
         outcome: "errored",
         error: "invalid agent() call: prompt exceeds 20000 characters",
+        logs: [`.ModelScratchpad/workflows/inputs/${"a".repeat(180)}.md`],
         agents: [
           {
             index: 0,
@@ -126,6 +127,16 @@ describe("workflow runs panel", () => {
       expect(harness.dom.window.document.body.textContent).toContain(
         "prompt exceeds 20000 characters",
       );
+      const dialog = harness.dom.window.document.body.querySelector('[data-slot="dialog-content"]');
+      const stats = harness.dom.window.document.body.querySelector(
+        '[data-slot="workflow-run-stats"]',
+      );
+      const logLine = harness.dom.window.document.body.querySelector(
+        '[data-slot="workflow-run-log-line"]',
+      );
+      expect(dialog?.className).toContain("overflow-hidden");
+      expect(stats?.className).toContain("grid-cols-2");
+      expect(logLine?.className).toContain("break-all");
 
       await act(async () => {
         root.unmount();

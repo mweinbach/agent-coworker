@@ -14,12 +14,14 @@ import {
   mimeTypeFromPath,
   multimodalPartLabel,
 } from "../shared/multimodalMime";
-import { resolveMaybeRelative, truncateLine } from "../utils/paths";
+import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
 type SniffedBom = "utf-8" | "utf-16le" | "utf-16be" | null;
+
+const MAX_READ_LINE_CHARS = 2_000;
 
 type ReadStreamFactory = (
   filePath: string,
@@ -87,6 +89,17 @@ function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   ].join(" ");
 }
 
+function renderTextLine(lineNo: number, line: string, columnOffset: number): string {
+  const start = Math.min(line.length, columnOffset - 1);
+  const segment = line.slice(start, start + MAX_READ_LINE_CHARS);
+  const nextStart = start + segment.length;
+  const continuation =
+    nextStart < line.length
+      ? `... [line ${lineNo} continues; read offset=${lineNo} columnOffset=${nextStart + 1} limit=1]`
+      : "";
+  return `${lineNo}\t${segment}${continuation}`;
+}
+
 export function createReadTool(
   ctx: ToolContext,
   opts: { createReadStreamImpl?: ReadStreamFactory } = {},
@@ -95,22 +108,31 @@ export function createReadTool(
     opts.createReadStreamImpl ?? ((filePath, options) => createReadStream(filePath, options));
   return defineTool({
     description:
-      "Read a concrete file from the filesystem, not a directory. Returns line-numbered text for text files. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows. Use offset/limit for large text files.",
+      "Read a concrete file from the filesystem, not a directory. Returns line-numbered text for text files. Use offset/limit for large files and columnOffset to continue a source line longer than 2,000 characters. For images, returns visual content when the model supports image input. Audio, video, and PDF files are binary media and are not returned through read; use attached media or dedicated extraction/transcription workflows.",
     inputSchema: z.object({
       filePath: z.string().describe("Path to the file (prefer absolute)"),
       offset: z.number().int().min(1).optional().describe("Start line (1-indexed)"),
+      columnOffset: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .default(1)
+        .describe("Start character in the first returned line (1-indexed)"),
       limit: z.number().int().min(1).max(20000).optional().default(2000).describe("Max lines"),
     }),
     execute: async ({
       filePath,
       offset,
+      columnOffset = 1,
       limit,
     }: {
       filePath: string;
       offset?: number;
+      columnOffset?: number;
       limit: number;
     }) => {
-      ctx.log(`tool> read ${JSON.stringify({ filePath, offset, limit })}`);
+      ctx.log(`tool> read ${JSON.stringify({ filePath, offset, columnOffset, limit })}`);
 
       const abs = await assertReadPathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
@@ -186,6 +208,7 @@ export function createReadTool(
 
       const start = (offset || 1) - 1;
       const end = start + limit;
+      const firstReturnedLine = start + 1;
       const numbered: string[] = [];
 
       // The documented canonical view: LF-normalized lines regardless of the
@@ -204,7 +227,9 @@ export function createReadTool(
             if (lineNo <= start) continue;
             if (lineNo > end) break;
             if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+            numbered.push(
+              renderTextLine(lineNo, line, lineNo === firstReturnedLine ? columnOffset : 1),
+            );
           }
         } finally {
           rl.close();
@@ -223,7 +248,9 @@ export function createReadTool(
             if (lineNo <= start) continue;
             if (lineNo > end) break;
             if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-            numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+            numbered.push(
+              renderTextLine(lineNo, line, lineNo === firstReturnedLine ? columnOffset : 1),
+            );
           }
         } finally {
           rl.close();

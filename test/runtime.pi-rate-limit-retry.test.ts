@@ -265,7 +265,9 @@ describe("resolveRateLimitMaxAttempts", () => {
 
   test("sanitizes non-finite, negative, and fractional maxRetries", () => {
     expect(
-      resolveRateLimitMaxAttempts(makeConfig("/tmp/x", { modelSettings: { maxRetries: Number.NaN } })),
+      resolveRateLimitMaxAttempts(
+        makeConfig("/tmp/x", { modelSettings: { maxRetries: Number.NaN } }),
+      ),
     ).toBe(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS);
     expect(
       resolveRateLimitMaxAttempts(
@@ -451,28 +453,43 @@ describe("pi runtime rate-limit retry", () => {
     expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(0);
   });
 
-  test("does not retry rate limits when the abort signal is already set", async () => {
-    const homeDir = await makeTestHome("pi-rate-limit-preabort-");
+  test("does not retry rate limits when the abort signal fires during the failed attempt", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-midabort-");
     const controller = new AbortController();
-    controller.abort();
     const onModelAbort = mock(async () => {});
     const onModelError = mock(async () => {});
-    const harness = createRetryHarness(() => ({
-      events: [rateLimitErrorEvent()],
-      result: rateLimitAssistantRecord,
-    }));
+    let streamCount = 0;
+    const sleeps: number[] = [];
+    const runtime = createPiRuntime({
+      piStreamImpl: (() => {
+        streamCount += 1;
+        return fakeStream({
+          events: [rateLimitErrorEvent()],
+          result: () => {
+            // Abort after the provider rate-limit is observed so the catch
+            // gate prefers abort-like handling over a visible retry loop.
+            controller.abort();
+            return rateLimitAssistantRecord();
+          },
+        });
+      }) as never,
+      retrySleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
 
     await expect(
-      harness.runtime.runTurn({
-        ...harnessParams(makeConfig(homeDir), harness),
-        abortSignal: controller.signal,
-        onModelAbort,
-        onModelError,
-      }),
+      runtime.runTurn(
+        makeParams(makeConfig(homeDir), {
+          abortSignal: controller.signal,
+          onModelAbort,
+          onModelError,
+        }),
+      ),
     ).rejects.toThrow(RATE_LIMIT_MESSAGE);
 
-    expect(harness.streamCount()).toBe(1);
-    expect(harness.sleeps).toHaveLength(0);
+    expect(streamCount).toBe(1);
+    expect(sleeps).toHaveLength(0);
     expect(onModelAbort).toHaveBeenCalledTimes(1);
     expect(onModelError).not.toHaveBeenCalled();
   });

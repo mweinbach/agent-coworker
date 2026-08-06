@@ -513,4 +513,76 @@ describe("server JSON-RPC flows", () => {
       await stopTestServer(server);
     }
   });
+
+  test("equal duplicate ask responses on the live socket are idempotent", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const answer = await params.askUser("Pick one", ["a", "b"]);
+          await releaseTurn.promise;
+          return { text: `answer:${answer}`, responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start equal ask retry flow" }],
+      });
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/tool/requestUserInput",
+      );
+
+      rpc.sendResponse(request.id, { answer: "a" });
+      const firstResolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+      );
+      expect(firstResolved.params.response).toEqual({
+        kind: "ask",
+        answer: "a",
+      });
+
+      rpc.sendResponse(request.id, { answer: "a" });
+      const replayResolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+        2_000,
+      );
+      expect(replayResolved.params.response).toEqual({
+        kind: "ask",
+        answer: "a",
+      });
+
+      rpc.sendResponse(request.id, { answer: "b" });
+      const conflict = await rpc.waitFor((message) => message.id === request.id && message.error);
+      expect(conflict.error).toMatchObject({
+        code: -32602,
+        data: {
+          category: "interaction_response_conflict",
+          requestId: request.params.requestId,
+          threadId: started.result.thread.id,
+        },
+      });
+
+      releaseTurn.resolve();
+      const completed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      expect(completed.params.item.text).toBe("answer:a");
+      rpc.close();
+    } finally {
+      releaseTurn.resolve();
+      await stopTestServer(server);
+    }
+  });
 });

@@ -236,6 +236,57 @@ describe("Server Startup", () => {
     }
   });
 
+  test("aggregates independent startup bootstrap failures without leaving readiness hanging", async () => {
+    const tmpDir = await makeTmpProject();
+    const started = await startAgentServer(
+      serverOpts(tmpDir, {
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async () => {
+          throw new Error("runtime archive corrupt");
+        },
+        ensureDefaultGlobalSkillsReadyImpl: async () => {
+          throw new Error("default skills missing");
+        },
+      }),
+    );
+    try {
+      await started.ready;
+      const response = await fetch(`http://127.0.0.1:${started.server.port}/cowork/health`);
+      const body = (await response.json()) as {
+        startup: { ready: boolean; error?: string };
+      };
+      expect(body.startup.ready).toBe(true);
+      expect(body.startup.error).toContain("Cowork runtime setup failed: runtime archive corrupt");
+      expect(body.startup.error).toContain("Default skill setup failed: default skills missing");
+    } finally {
+      await stopTestServer(started.server);
+    }
+  });
+
+  test("surfaces a single startup leg failure when the sibling bootstrap succeeds", async () => {
+    const tmpDir = await makeTmpProject();
+    const started = await startAgentServer(
+      serverOpts(tmpDir, {
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async () => {
+          throw new Error("runtime unavailable");
+        },
+        ensureDefaultGlobalSkillsReadyImpl: async () => null,
+      }),
+    );
+    try {
+      await started.ready;
+      const response = await fetch(`http://127.0.0.1:${started.server.port}/cowork/health`);
+      const body = (await response.json()) as {
+        startup: { ready: boolean; error?: string };
+      };
+      expect(body.startup.ready).toBe(true);
+      expect(body.startup.error).toBe("Cowork runtime setup failed: runtime unavailable");
+    } finally {
+      await stopTestServer(started.server);
+    }
+  });
+
   test("creates projectCoworkDir on startup", async () => {
     const tmpDir = await makeTmpProject();
     // Remove the .agent dir so startServer has to create it

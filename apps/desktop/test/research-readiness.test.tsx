@@ -3,12 +3,21 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createEmptyComposerDraft } from "../src/app/composerDrafts";
-import { useAppStore } from "../src/app/store";
 import type { AppStoreState } from "../src/app/store.helpers";
 import type { WorkspaceRecord } from "../src/app/types";
-import { ResearchView } from "../src/ui/ResearchView";
-import { NewResearchComposer } from "../src/ui/research/NewResearchComposer";
+import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
+import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
+import { createDesktopApiMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
+
+installDesktopCommandsBridge();
+
+const desktopApiMock = createDesktopApiMock();
+
+const { useAppStore } = await import("../src/app/store");
+const { __internal: persistenceInternal } = await import("../src/app/store.helpers/persistence");
+const { ResearchView } = await import("../src/ui/ResearchView");
+const { NewResearchComposer } = await import("../src/ui/research/NewResearchComposer");
 
 const workspace: WorkspaceRecord = {
   id: "workspace-1",
@@ -35,6 +44,8 @@ describe("Research readiness", () => {
   let snapshot: AppStoreState;
 
   beforeEach(() => {
+    (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY] = desktopApiMock;
+    persistenceInternal.resetPersistedStateCache();
     harness = setupJsdom();
     container = harness.dom.window.document.getElementById("root") as HTMLDivElement;
     root = createRoot(container);
@@ -44,7 +55,9 @@ describe("Research readiness", () => {
   afterEach(() => {
     act(() => root.unmount());
     useAppStore.setState(snapshot, true);
+    persistenceInternal.resetPersistedStateCache();
     harness.restore();
+    delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
   test("keeps Research visible with a Connect Google setup action", async () => {

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { EventEmitter } from "node:events";
+import type { FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +11,7 @@ import {
   buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
+  __internal as integrityInternal,
   invalidateRuntimeTrust,
   listInstalledRuntimes,
   releaseAllRuntimeTrust,
@@ -166,6 +169,8 @@ async function runtimeArchive(
 }
 
 afterEach(async () => {
+  integrityInternal.setWatchForTests(null);
+  integrityInternal.setTrustVerifiedRuntimeTreeHookForTests(null);
   releaseAllRuntimeTrust();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -613,6 +618,126 @@ describe("Cowork unified runtime", () => {
     await expect(
       buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
     ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("keeps the in-process memo armed when the runtime watcher fails to start", async () => {
+    const root = await tempRoot("watcher-start-fail");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+
+    let watchAttempts = 0;
+    integrityInternal.setWatchForTests(() => {
+      watchAttempts += 1;
+      throw new Error("watch unavailable");
+    });
+    // Install may already have started a real watcher; clear trust so the next
+    // use re-enters startRuntimeWatcher under the throwing mock.
+    releaseAllRuntimeTrust();
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    expect(watchAttempts).toBe(1);
+
+    // Start-failure leaves the memo armed (unlike invalidateRuntimeTrust(..., false)).
+    await fs.writeFile(nodePath, "replaced node");
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    // The watcher is marked unavailable, so later uses must not retry watch().
+    expect(watchAttempts).toBe(1);
+
+    invalidateRuntimeTrust(installed.runtimeDir, false);
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("clears the in-process memo when the runtime watcher emits an error", async () => {
+    const root = await tempRoot("watcher-error");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(installed.runtimeDir, "runtime.json"), "utf8"),
+    );
+    const nodePath = path.join(
+      installed.runtimeDir,
+      ...(installedManifest.paths.node as string).split("/"),
+    );
+
+    class FakeWatcher extends EventEmitter {
+      close() {}
+      unref() {
+        return this;
+      }
+      ref() {
+        return this;
+      }
+    }
+    let attached: FakeWatcher | null = null;
+    integrityInternal.setWatchForTests(() => {
+      attached = new FakeWatcher();
+      return attached as unknown as FSWatcher;
+    });
+    releaseAllRuntimeTrust();
+
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+    expect(attached).not.toBeNull();
+
+    // Memo is armed; a same-process edit is invisible until the watcher fails closed.
+    await fs.writeFile(nodePath, "replaced node");
+    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
+
+    attached?.emit("error", new Error("watch broken"));
+    await expect(
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);
+  });
+
+  test("coalesces concurrent first-use verifications onto one tree walk", async () => {
+    const root = await tempRoot("verify-coalesce");
+    const home = path.join(root, "home");
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const installed = await installRuntimeArchive({
+      archivePath: archive.archivePath,
+      expectedSha256: archive.sha256,
+      home,
+      execute: false,
+      trustedKeys,
+    });
+
+    releaseAllRuntimeTrust();
+    let verificationRuns = 0;
+    integrityInternal.setTrustVerifiedRuntimeTreeHookForTests(async (run) => {
+      verificationRuns += 1;
+      await Bun.sleep(25);
+      return await run();
+    });
+
+    const [first, second] = await Promise.all([
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+      buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
+    ]);
+    expect(first.COWORK_RUNTIME_VERSION).toBeTruthy();
+    expect(second.COWORK_RUNTIME_VERSION).toBe(first.COWORK_RUNTIME_VERSION);
+    expect(verificationRuns).toBe(1);
   });
 
   test("full-verify escape hatch bypasses the in-process verification memo", async () => {

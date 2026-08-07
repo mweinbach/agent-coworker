@@ -644,6 +644,9 @@ describe("Cowork unified runtime", () => {
       watchAttempts += 1;
       throw new Error("watch unavailable");
     });
+    // Install may already have started a real watcher; clear trust so the next
+    // use re-enters startRuntimeWatcher under the throwing mock.
+    releaseAllRuntimeTrust();
 
     await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
     expect(watchAttempts).toBe(1);
@@ -693,6 +696,7 @@ describe("Cowork unified runtime", () => {
       attached = new FakeWatcher();
       return attached as unknown as FSWatcher;
     });
+    releaseAllRuntimeTrust();
 
     await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
     expect(attached).not.toBeNull();

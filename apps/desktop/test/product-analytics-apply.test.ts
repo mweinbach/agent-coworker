@@ -24,10 +24,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-function makeService(opts?: {
-  appVersion?: () => string;
-  initialized?: boolean;
-}) {
+function makeService(opts?: { appVersion?: () => string; initialized?: boolean }) {
   const initCalls: unknown[] = [];
   const captured: Array<{ name: string; properties: unknown }> = [];
   const service = new DesktopProductAnalyticsService({

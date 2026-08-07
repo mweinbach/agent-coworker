@@ -8,10 +8,10 @@ import path from "node:path";
 
 import { loadConfig } from "../src/config";
 import {
-  __internal as integrityInternal,
   buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
+  __internal as integrityInternal,
   invalidateRuntimeTrust,
   listInstalledRuntimes,
   releaseAllRuntimeTrust,

@@ -73,6 +73,25 @@ type RuntimeTrustState = {
 
 const trustStates = new Map<string, RuntimeTrustState>();
 
+type WatchImpl = typeof watch;
+type TrustVerifiedRuntimeTreeRun = () => Promise<{ fileCount: number; bytes: number }>;
+type TrustVerifiedRuntimeTreeHook = (
+  run: TrustVerifiedRuntimeTreeRun,
+) => Promise<{ fileCount: number; bytes: number }>;
+
+let watchImpl: WatchImpl = watch;
+let trustVerifiedRuntimeTreeHookForTests: TrustVerifiedRuntimeTreeHook | null = null;
+
+/** Test-only hooks for watcher and verification coalescing seams. */
+export const __internal = {
+  setWatchForTests(next: WatchImpl | null): void {
+    watchImpl = next ?? watch;
+  },
+  setTrustVerifiedRuntimeTreeHookForTests(hook: TrustVerifiedRuntimeTreeHook | null): void {
+    trustVerifiedRuntimeTreeHookForTests = hook;
+  },
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -562,7 +581,7 @@ function stateFor(root: string): RuntimeTrustState {
 function startRuntimeWatcher(root: string, state: RuntimeTrustState): void {
   if (!state.watcherAvailable || state.watcher) return;
   try {
-    state.watcher = watch(root, { recursive: true }, () => {
+    state.watcher = watchImpl(root, { recursive: true }, () => {
       invalidateRuntimeTrust(root);
     });
     state.watcher.on("error", () => {
@@ -637,7 +656,10 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   }
   const generation = state.generation;
   if (!state.verification) {
-    state.verification = trustVerifiedRuntimeTree(root, bundle, state)
+    const run = () => trustVerifiedRuntimeTree(root, bundle, state);
+    state.verification = (
+      trustVerifiedRuntimeTreeHookForTests ? trustVerifiedRuntimeTreeHookForTests(run) : run()
+    )
       .then(() => undefined)
       .finally(() => {
         state.verification = null;

@@ -31,6 +31,8 @@ type DesktopProductAnalyticsServiceOptions = {
   generateAnonymousId?: () => string;
   /** Injectable so tests can observe re-initialization without module mocks. */
   initProductAnalyticsImpl?: typeof initProductAnalytics;
+  /** Injectable so tests can observe lifecycle captures without module mocks. */
+  captureProductEventImpl?: typeof captureProductEvent;
 };
 
 type PreparedPersistedState = {
@@ -224,6 +226,7 @@ export class DesktopProductAnalyticsService {
   private readonly arch: string;
   private readonly generateAnonymousId: () => string;
   private readonly initProductAnalytics: typeof initProductAnalytics;
+  private readonly captureProductEvent: typeof captureProductEvent;
   private persistedState: PersistedProductAnalyticsState | undefined;
   private pendingAppUpdated = false;
   private startupCaptured = false;
@@ -238,6 +241,7 @@ export class DesktopProductAnalyticsService {
     this.arch = options.arch ?? process.arch;
     this.generateAnonymousId = options.generateAnonymousId ?? generateAnonymousInstallationId;
     this.initProductAnalytics = options.initProductAnalyticsImpl ?? initProductAnalytics;
+    this.captureProductEvent = options.captureProductEventImpl ?? captureProductEvent;
   }
 
   getStatus(): ProductAnalyticsStatus | null {
@@ -360,7 +364,7 @@ export class DesktopProductAnalyticsService {
       }
       if (this.pendingAppUpdated) {
         this.pendingAppUpdated = false;
-        captureProductEvent("app_updated", {
+        this.captureProductEvent("app_updated", {
           eventSource: "main",
           status: "version_changed",
         });
@@ -376,7 +380,7 @@ export class DesktopProductAnalyticsService {
     name: Name,
     properties?: ProductAnalyticsEventProperties<Name>,
   ): void {
-    captureProductEvent(name, properties ?? ({} as ProductAnalyticsEventProperties<Name>));
+    this.captureProductEvent(name, properties ?? ({} as ProductAnalyticsEventProperties<Name>));
   }
 
   async shutdown(): Promise<void> {
@@ -407,6 +411,6 @@ export class DesktopProductAnalyticsService {
       quickChatIconEnabled: desktopSettings.quickChat.iconEnabled,
       quickChatShortcutEnabled: desktopSettings.quickChat.shortcutEnabled,
     } satisfies ProductAnalyticsProperties;
-    captureProductEvent("app_started", properties);
+    this.captureProductEvent("app_started", properties);
   }
 }

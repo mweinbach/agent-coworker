@@ -10,7 +10,9 @@ import {
 import { scratchRoots } from "../src/platform/sandbox";
 
 async function tempHome(label: string): Promise<string> {
-  return await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", `cowork-prepare-tool-env-${label}-`));
+  return await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", `cowork-prepare-tool-env-${label}-`),
+  );
 }
 
 describe("prepareCoworkRuntimeToolEnv", () => {
@@ -64,9 +66,9 @@ describe("prepareCoworkRuntimeToolEnv", () => {
       expect(env.COWORK_RUNTIME_DIR).toBeUndefined();
       expect(env.COWORK_RUNTIME_NODE).toBeUndefined();
       expect(env.COWORK_RUNTIME_PYTHON).toBeUndefined();
-      expect(logs.some((line) => line.includes(`Blocked untrusted Cowork runtime at ${bogusRuntime}`))).toBe(
-        true,
-      );
+      expect(
+        logs.some((line) => line.includes(`Blocked untrusted Cowork runtime at ${bogusRuntime}`)),
+      ).toBe(true);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

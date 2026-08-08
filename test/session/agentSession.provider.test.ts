@@ -211,6 +211,55 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
     });
 
+    test("copyProviderApiKey rejects non-OpenCode sibling pairs before connect", async () => {
+      const connectProviderImpl = mock(async () => ({
+        ok: true,
+        provider: "openai",
+        mode: "api_key",
+        storageFile: "/tmp/unused.json",
+        message: "should not connect",
+      }));
+      const { session, events } = makeSession({
+        connectProviderImpl: connectProviderImpl as any,
+      });
+
+      await session.copyProviderApiKey("openai", "google");
+
+      const errorEvt = events.find((e) => e.type === "error");
+      expect(errorEvt).toBeDefined();
+      if (errorEvt && errorEvt.type === "error") {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.message).toContain(
+          "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen",
+        );
+      }
+      expect(connectProviderImpl).not.toHaveBeenCalled();
+      expect(events.some((e) => e.type === "provider_auth_result")).toBe(false);
+    });
+
+    test("copyProviderApiKey rejects unsupported providers before connect", async () => {
+      const connectProviderImpl = mock(async () => ({
+        ok: true,
+        provider: "opencode-zen",
+        mode: "api_key",
+        storageFile: "/tmp/unused.json",
+        message: "should not connect",
+      }));
+      const { session, events } = makeSession({
+        connectProviderImpl: connectProviderImpl as any,
+      });
+
+      await session.copyProviderApiKey("not-a-provider" as any, "opencode-go");
+
+      const errorEvt = events.find((e) => e.type === "error");
+      expect(errorEvt).toBeDefined();
+      if (errorEvt && errorEvt.type === "error") {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.message).toContain("Unsupported provider");
+      }
+      expect(connectProviderImpl).not.toHaveBeenCalled();
+    });
+
     test("copyProviderApiKey emits provider_auth_result and refreshes status/catalog", async () => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-copy-provider-key-"));
       const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");

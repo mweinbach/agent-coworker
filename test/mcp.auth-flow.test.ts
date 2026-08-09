@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { SessionEvent } from "../src/server/protocol";
 import { McpAuthFlow } from "../src/server/session/mcp/McpAuthFlow";
 import type { AgentConfig } from "../src/types";
+
+async function makeTempDir(prefix: string): Promise<string> {
+  return await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
+}
 
 const mockAuthorizeMcpServerOAuth = mock(async () => {
   throw new Error("mockAuthorizeMcpServerOAuth not configured");
@@ -107,9 +111,9 @@ describe("McpAuthFlow", () => {
     mockExchangeMcpServerOAuthCode.mockReset();
   });
   test("auto OAuth completes from the captured callback and writes the user auth file", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events, getEmitMcpServersCalls } = createHarness(config, server);
@@ -198,9 +202,9 @@ describe("McpAuthFlow", () => {
   });
 
   test("close does not abort in-flight auto OAuth completion", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events } = createHarness(config, server);
@@ -276,9 +280,9 @@ describe("McpAuthFlow", () => {
   });
 
   test("auto OAuth abandons when the session stays busy past the challenge deadline", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events, state } = createHarness(config, server);
@@ -346,9 +350,9 @@ describe("McpAuthFlow", () => {
   });
 
   test("auto OAuth emits an error and clears connecting when token exchange fails", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events, state } = createHarness(config, server);

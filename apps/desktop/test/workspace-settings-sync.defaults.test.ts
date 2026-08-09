@@ -763,4 +763,110 @@ describe("workspace settings sync", () => {
     );
     expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
   });
+
+  test("setPerWorkspaceSettings(false) fans out defaults to active threads in other workspaces", async () => {
+    const applied: Array<{ threadId: string; mode: "auto" | "auto-resume" | "explicit" }> = [];
+    const originalApply = useAppStore.getState().applyWorkspaceDefaultsToThread;
+
+    useAppStore.setState((state) => ({
+      ...state,
+      perWorkspaceSettings: true,
+      selectedWorkspaceId: workspaceId,
+      applyWorkspaceDefaultsToThread: async (threadId, mode = "explicit") => {
+        applied.push({ threadId, mode });
+      },
+      workspaces: [
+        {
+          ...state.workspaces[0]!,
+          id: workspaceId,
+          workspaceKind: "project",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          defaultPreferredChildModel: "gemini-3-flash-preview",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          userName: "Source user",
+          yolo: true,
+        },
+        {
+          id: "ws-other",
+          name: "Other workspace",
+          path: "/tmp/workspace-other",
+          workspaceKind: "project",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastOpenedAt: "2026-06-02T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
+          defaultChildModelRoutingMode: "same-provider",
+          defaultPreferredChildModelRef: "openai:gpt-5.2",
+          defaultAllowedChildModelRefs: [],
+          defaultEnableMcp: false,
+          defaultBackupsEnabled: false,
+          userName: "Other user",
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-source",
+          workspaceId,
+          title: "Source thread",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastMessageAt: "2026-06-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-source",
+          messageCount: 1,
+          lastEventSeq: 1,
+          archived: false,
+        },
+        {
+          id: "thread-other-a",
+          workspaceId: "ws-other",
+          title: "Other A",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastMessageAt: "2026-06-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-other-a",
+          messageCount: 1,
+          lastEventSeq: 1,
+          archived: false,
+        },
+        {
+          id: "thread-other-b",
+          workspaceId: "ws-other",
+          title: "Other B",
+          createdAt: "2026-06-02T00:00:00.000Z",
+          lastMessageAt: "2026-06-02T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-other-b",
+          messageCount: 1,
+          lastEventSeq: 1,
+          archived: false,
+        },
+      ],
+    }));
+
+    try {
+      useAppStore.getState().setPerWorkspaceSettings(false);
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().perWorkspaceSettings).toBe(false);
+      const other = useAppStore.getState().workspaces.find((entry) => entry.id === "ws-other");
+      expect(other?.userName).toBe("Source user");
+      expect(other?.defaultModel).toBe("gemini-3-flash-preview");
+      expect(other?.yolo).toBe(true);
+
+      expect(applied).toEqual([
+        { threadId: "thread-other-a", mode: "explicit" },
+        { threadId: "thread-other-b", mode: "explicit" },
+      ]);
+    } finally {
+      useAppStore.setState({ applyWorkspaceDefaultsToThread: originalApply });
+    }
+  });
 });

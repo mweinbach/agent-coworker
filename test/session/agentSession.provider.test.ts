@@ -442,6 +442,49 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
       expect(logoutProviderAuthImpl).toHaveBeenCalledTimes(1);
     });
+
+    test("provider auth actions emit busy and skip side effects while the session is running", async () => {
+      const logoutProviderAuthImpl = mock(async () => {
+        throw new Error("logoutProviderAuth should not run while busy");
+      });
+      const connectProviderImpl = mock(async () => {
+        throw new Error("copyProviderApiKey should not connect while busy");
+      });
+      const { session, events } = makeSession({
+        logoutProviderAuthImpl: logoutProviderAuthImpl as any,
+        connectProviderImpl: connectProviderImpl as any,
+      });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const first = session.sendUserMessage("busy auth gate");
+      await new Promise((r) => setTimeout(r, 10));
+      const eventsBeforeAuth = events.length;
+
+      await session.authorizeProviderAuth("codex-cli", "oauth_cli");
+      await session.callbackProviderAuth("codex-cli", "oauth_cli", "code");
+      await session.logoutProviderAuth("codex-cli");
+      await session.copyProviderApiKey("opencode-zen", "opencode-go");
+
+      const authWindow = events.slice(eventsBeforeAuth);
+      expect(authWindow.some((e) => e.type === "provider_auth_challenge")).toBe(false);
+      expect(authWindow.some((e) => e.type === "provider_auth_result")).toBe(false);
+      expect(
+        authWindow.filter((e) => e.type === "error" && (e as any).message === "Agent is busy"),
+      ).toHaveLength(4);
+      expect(logoutProviderAuthImpl).toHaveBeenCalledTimes(0);
+      expect(connectProviderImpl).toHaveBeenCalledTimes(0);
+
+      resolveRunTurn();
+      await first;
+    });
   });
 
   describe("refreshProviderStatus", () => {

@@ -131,14 +131,23 @@ function makeHarness() {
   const errors: Array<{ id: JsonRpcLiteId | null; error: JsonRpcLiteError }> = [];
   const sentMessages: Array<{ text: string; displayText?: string }> = [];
   let baselineCalls = 0;
+  const hooks = {
+    getArtifactDetail: (): TaskArtifactDetail => data.detail,
+    ensureArtifactBaseline: async (): Promise<TaskArtifactDetail> => {
+      baselineCalls += 1;
+      return data.detail;
+    },
+    restoreArtifactVersion: async (
+      _args: Record<string, unknown>,
+    ): Promise<{ task: TaskRecord; detail: TaskArtifactDetail }> => {
+      throw new ArtifactConflictError("artifact-1", data.after.sha256, "f".repeat(64));
+    },
+  };
   const context = {
     tasks: {
       get: () => data.task,
-      getArtifactDetail: () => data.detail,
-      ensureArtifactBaseline: async () => {
-        baselineCalls += 1;
-        return data.detail;
-      },
+      getArtifactDetail: () => hooks.getArtifactDetail(),
+      ensureArtifactBaseline: async () => await hooks.ensureArtifactBaseline(),
       readArtifactVersion: async ({ versionId }: { versionId: string }) => {
         const selected = versionId === data.before.id ? data.before : data.after;
         return {
@@ -153,9 +162,8 @@ function makeHarness() {
         detail: { ...data.detail, activeRevision: data.revision },
         revision: data.revision,
       }),
-      restoreArtifactVersion: async () => {
-        throw new ArtifactConflictError("artifact-1", data.after.sha256, "f".repeat(64));
-      },
+      restoreArtifactVersion: async (args: Record<string, unknown>) =>
+        await hooks.restoreArtifactVersion(args),
       handleThreadOutcome: async () => null,
     },
     threads: {
@@ -193,7 +201,15 @@ function makeHarness() {
         errors.push({ id, error }),
     },
   } as unknown as JsonRpcRouteContext;
-  return { context, results, errors, sentMessages, getBaselineCalls: () => baselineCalls, ...data };
+  return {
+    context,
+    results,
+    errors,
+    sentMessages,
+    hooks,
+    getBaselineCalls: () => baselineCalls,
+    ...data,
+  };
 }
 
 async function invoke(
@@ -354,6 +370,124 @@ describe("task artifact JSON-RPC routes", () => {
       artifactId: "artifact-1",
       expectedSha256: harness.after.sha256,
       currentSha256: "f".repeat(64),
+    });
+  });
+
+  test("recovers artifact reads when concurrent baseline creation races", async () => {
+    const harness = makeHarness();
+    harness.task.status = "working";
+    let detailReads = 0;
+    harness.hooks.getArtifactDetail = () => {
+      detailReads += 1;
+      if (detailReads === 1) {
+        return {
+          ...harness.detail,
+          versions: [],
+          latestVersionId: null,
+          acceptedVersionId: null,
+        };
+      }
+      return harness.detail;
+    };
+    harness.hooks.ensureArtifactBaseline = async () => {
+      throw new Error("artifact baseline already exists");
+    };
+
+    await invoke(harness.context, "task/artifact/read", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      artifactId: "artifact-1",
+    });
+
+    expect(harness.errors).toEqual([]);
+    expect(detailReads).toBe(2);
+    expect(harness.results[0]?.result).toEqual({ detail: harness.detail });
+  });
+
+  test("rethrows baseline failures when concurrent detail remains empty", async () => {
+    const harness = makeHarness();
+    harness.task.status = "working";
+    harness.hooks.getArtifactDetail = () => ({
+      ...harness.detail,
+      versions: [],
+      latestVersionId: null,
+      acceptedVersionId: null,
+    });
+    harness.hooks.ensureArtifactBaseline = async () => {
+      throw new Error("baseline write failed");
+    };
+
+    await invoke(harness.context, "task/artifact/read", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      artifactId: "artifact-1",
+    });
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors[0]?.error.message).toMatch(/baseline write failed/);
+  });
+
+  test("refuses restore when the artifact has no current version", async () => {
+    const harness = makeHarness();
+    harness.hooks.getArtifactDetail = () => ({
+      ...harness.detail,
+      versions: [],
+      latestVersionId: null,
+      acceptedVersionId: null,
+    });
+    let restoreCalls = 0;
+    harness.hooks.restoreArtifactVersion = async () => {
+      restoreCalls += 1;
+      throw new Error("should not restore");
+    };
+
+    await invoke(harness.context, "task/artifact/version/restore", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      artifactId: "artifact-1",
+      versionId: "version-1",
+      expectedRevision: 4,
+    });
+
+    expect(restoreCalls).toBe(0);
+    expect(harness.results).toEqual([]);
+    expect(harness.errors[0]?.error.message).toMatch(
+      /Artifact has no current version to restore over/,
+    );
+  });
+
+  test("passes the latest version SHA into restoreArtifactVersion", async () => {
+    const harness = makeHarness();
+    const restoreArgs: Array<Record<string, unknown>> = [];
+    harness.hooks.restoreArtifactVersion = async (args) => {
+      restoreArgs.push(args);
+      return { task: harness.task, detail: harness.detail };
+    };
+
+    await invoke(harness.context, "task/artifact/version/restore", {
+      cwd: "C:\\workspace",
+      taskId: "task-1",
+      artifactId: "artifact-1",
+      versionId: "version-1",
+      expectedRevision: 4,
+      changeSummary: "Restore prior greeting",
+    });
+
+    expect(harness.errors).toEqual([]);
+    expect(restoreArgs).toEqual([
+      {
+        taskId: "task-1",
+        workspacePath: "C:\\workspace",
+        artifactId: "artifact-1",
+        versionId: "version-1",
+        expectedRevision: 4,
+        expectedSha256: harness.after.sha256,
+        changeSummary: "Restore prior greeting",
+      },
+    ]);
+    expect(harness.results[0]?.result).toEqual({
+      task: harness.task,
+      detail: harness.detail,
     });
   });
 });

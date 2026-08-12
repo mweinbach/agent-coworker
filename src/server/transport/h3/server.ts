@@ -360,10 +360,11 @@ function pairingTicketMatchesExpected(
 
 function createH3HttpJsonRpcConnection(
   runtime: AgentServerRuntime,
-  options?: { keepaliveIntervalMs?: number },
+  options?: { keepaliveIntervalMs?: number; responseTimeoutMs?: number },
 ): H3JsonRpcConnection {
   return createHttpJsonRpcConnection(runtime, {
     keepaliveIntervalMs: options?.keepaliveIntervalMs,
+    responseTimeoutMs: options?.responseTimeoutMs,
     protocolMode: "h3",
     transportType: "h3",
     selectedSubprotocol: "cowork.jsonrpc.v1",

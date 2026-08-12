@@ -10,6 +10,7 @@ import {
   runtimeAssetFileName,
   sha256File,
 } from "../src/coworkRuntime";
+import { hostArch, hostPlatform } from "../src/platform/host";
 import { scratchRoots } from "../src/platform/sandbox";
 import { S_IFREG, writeZip } from "./fixtures/zipBuilder";
 
@@ -73,12 +74,12 @@ async function runtimeArchive(
     createdAt: `${version}T00:00:00.000Z`,
     asset,
     assetFileName: runtimeAssetFileName(asset),
-    compatibleHosts: [`${process.platform}-${process.arch}`],
+    compatibleHosts: [`${hostPlatform()}-${hostArch()}`],
     source: {
       kind: "codex-primary-runtime",
       bundleVersion: "fixture.1",
-      targetPlatform: process.platform,
-      targetArch: process.arch,
+      targetPlatform: hostPlatform(),
+      targetArch: hostArch(),
     },
     components: [],
     versions: { node: "fixture", python: "fixture", libreOffice: "26.2.3" },

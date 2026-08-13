@@ -142,6 +142,44 @@ describe("control socket helpers over JSON-RPC", () => {
     readyGate.resolve();
   });
 
+  test("waitForControlSession returns false when ready consumes the full bootstrap budget", async () => {
+    const workspaceId = "ws-budget-exhausted";
+    const { get, set } = createState(workspaceId);
+    // Keep bootstrap pending so the remaining-budget gate is reachable.
+    jsonRpcHandlers.set("cowork/session/state/read", async () => await new Promise(() => {}));
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId).hasBootstrapPromise).toBe(
+      true,
+    );
+
+    const readyGate = Promise.withResolvers<void>();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: readyGate.promise,
+      connect() {},
+      request: async () => ({}),
+      respond: () => true,
+      close() {},
+    } as never);
+
+    const realNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now;
+    try {
+      const pending = helpers.waitForControlSession(get as never, set as never, workspaceId, 50);
+      await flushAsyncWork();
+      // Consume the entire timeout while waiting for ready so remainingMs hits 0
+      // before bootstrap is observed.
+      now += 50;
+      readyGate.resolve();
+      expect(await pending).toBe(false);
+      expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(0);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   test("requestJsonRpc aborts before an unresolved response arrives", async () => {
     const workspaceId = "ws-abort-request";
     const { get, set } = createState(workspaceId);

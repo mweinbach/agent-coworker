@@ -127,4 +127,3 @@ describe("research JSON-RPC schemas", () => {
     ).toThrow();
   });
 });
-

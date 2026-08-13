@@ -547,7 +547,6 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     }
   });
 
-
   test("cached session snapshots hydrate the thread model before reconnect", async () => {
     const { threadId } = seedStore();
     const snapshot = {

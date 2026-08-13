@@ -56,9 +56,9 @@ describe("research service input and plan guards", () => {
         }),
       );
 
-      await expect(
-        service.followUp("research-parent-complete", { input: "\t\n" }),
-      ).rejects.toThrow("Follow-up input is required.");
+      await expect(service.followUp("research-parent-complete", { input: "\t\n" })).rejects.toThrow(
+        "Follow-up input is required.",
+      );
       expect(sessionDb.listResearch().map((row) => row.id)).toEqual(["research-parent-complete"]);
       expect(createResearchInteractionStreamMock).not.toHaveBeenCalled();
     });

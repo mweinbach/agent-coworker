@@ -110,4 +110,21 @@ describe("research JSON-RPC schemas", () => {
       }),
     ).toThrow();
   });
+
+  test("rejects whitespace-only research prompts at the protocol boundary", () => {
+    expect(() => jsonRpcRequestSchemas["research/start"].parse({ input: "   " })).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/followup"].parse({
+        parentResearchId: "research-1",
+        input: "\n\t",
+      }),
+    ).toThrow();
+    expect(() =>
+      jsonRpcRequestSchemas["research/refinePlan"].parse({
+        researchId: "research-1",
+        input: " ",
+      }),
+    ).toThrow();
+  });
 });
+

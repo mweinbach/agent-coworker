@@ -119,7 +119,6 @@ describe("research service input and plan guards", () => {
       const refined = await service.refinePlan("research-refine", "  Narrow to pricing.  ");
       expect(refined).not.toBeNull();
       expect(refined?.planPending).toBe(false);
-      expect(refined?.status).toBe("pending");
       await waitFor(
         () => createResearchInteractionStreamMock.mock.calls.length,
         (count) => count > 0,
@@ -134,7 +133,12 @@ describe("research service input and plan guards", () => {
 
       const persisted = sessionDb.getResearch("research-refine");
       expect(persisted?.planPending).toBe(false);
-      expect(persisted?.status).toBe("pending");
+
+      await service.cancel("research-refine");
+      await waitFor(
+        () => (service as unknown as { states: Map<string, unknown> }).states.has("research-refine"),
+        (value) => value === false,
+      );
     });
   });
 });

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
 import { __internal as agentInternal, createRunTurn } from "../src/agent";
+import { __internal as mcpInternal } from "../src/mcp";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
@@ -1510,6 +1511,38 @@ describe("runTurn", () => {
     await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow("otel exploded");
     expect(closeMcp).toHaveBeenCalledTimes(1);
     expect(mockStreamText).not.toHaveBeenCalled();
+  });
+
+  test("keeps workspace MCP cache open when a sibling cold-start step fails for a session", async () => {
+    mcpInternal.workspaceMcpCache.clear();
+    const closeMcp = mock(async () => {});
+    const { workspaceRoot, config } = await makeTempWorkspaceConfig();
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: { mcp__srv__ping: { description: "ping" } },
+      errors: [],
+      close: closeMcp,
+    });
+    observabilityRuntimeInternal.setEnsureObservabilityRuntimeForTests(async () => {
+      throw new Error("otel exploded");
+    });
+
+    try {
+      await expect(
+        runTurn(makeParams({ config, enableMcp: true, sessionId: "session-keep-mcp" })),
+      ).rejects.toThrow("otel exploded");
+
+      expect(closeMcp).not.toHaveBeenCalled();
+      expect(mockStreamText).not.toHaveBeenCalled();
+      const cacheEntry = mcpInternal.workspaceMcpCache.get(path.resolve(config.projectCoworkDir));
+      expect(cacheEntry).toBeDefined();
+      expect(cacheEntry?.sessionIds.has("session-keep-mcp")).toBe(true);
+    } finally {
+      mcpInternal.workspaceMcpCache.clear();
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   // -------------------------------------------------------------------------

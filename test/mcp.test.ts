@@ -640,6 +640,36 @@ describe("loadMCPTools", () => {
     expect(result.errors[0]).toContain("broken");
   });
 
+  test("remaps colliding normalized server names in config order under concurrency", async () => {
+    const release = new Map<string, () => void>();
+    const logs: string[] = [];
+    const createClient = mock(async (opts: any) => {
+      await new Promise<void>((resolve) => release.set(opts.name, resolve));
+      return {
+        tools: mock(async () => ({ ping: { description: opts.name } })),
+        close: mock(async () => {}),
+      };
+    });
+    // Both names normalize to Foo_Bar; reservation must follow config order
+    // even when the second server finishes first.
+    const servers: MCPServerConfig[] = [
+      { name: "Foo Bar", transport: { type: "stdio", command: "echo" } },
+      { name: "Foo_Bar", transport: { type: "stdio", command: "echo" } },
+    ];
+
+    const pending = loadMCPTools(servers, {
+      createClient: createClient as any,
+      log: (line) => logs.push(line),
+    });
+    expect([...release.keys()].sort()).toEqual(["Foo Bar", "Foo_Bar"]);
+    release.get("Foo_Bar")?.();
+    release.get("Foo Bar")?.();
+
+    const result = await pending;
+    expect(Object.keys(result.tools)).toEqual(["mcp__Foo_Bar__ping", "mcp__Foo_Bar__ping_2"]);
+    expect(logs.some((line) => line.includes("Tool name collision"))).toBe(true);
+  });
+
   test("required server failure closes connected clients and throws", async () => {
     const close = mock(async () => {});
     const createClient = mock(async (opts: any) => {

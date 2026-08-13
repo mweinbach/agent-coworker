@@ -166,6 +166,135 @@ describe("creation readiness preflight", () => {
     });
   });
 
+  test("returns a Codex app-server runtime repair action when the managed runtime is missing", async () => {
+    const codexCatalog: ProviderCatalogPayload = {
+      all: [
+        {
+          id: "codex-cli",
+          name: "Codex",
+          defaultModel: "gpt-5",
+          state: "ready",
+          models: [
+            {
+              id: "gpt-5",
+              displayName: "GPT-5",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      default: { "codex-cli": "gpt-5" },
+      connected: ["codex-cli"],
+    };
+    const result = await preflight(
+      { kind: "chat", provider: "codex-cli", model: "gpt-5" },
+      {
+        getProviderCatalog: async () => codexCatalog,
+        getCodexAppServerStatus: async () => ({
+          available: false,
+          source: "missing",
+          pinnedVersion: "0.0.0-test",
+          pinMatchesCurrent: false,
+          message: "Cowork-managed Codex runtime has not been downloaded yet.",
+        }),
+      },
+    );
+
+    expect(result.ready).toBe(false);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "blocked",
+      message: "Cowork-managed Codex runtime has not been downloaded yet.",
+      repairAction: { type: "installCodexRuntime" },
+    });
+  });
+
+  test("marks Codex runtime ready when the app-server is available", async () => {
+    const codexCatalog: ProviderCatalogPayload = {
+      all: [
+        {
+          id: "codex-cli",
+          name: "Codex",
+          defaultModel: "gpt-5",
+          state: "ready",
+          models: [
+            {
+              id: "gpt-5",
+              displayName: "GPT-5",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+        },
+      ],
+      default: { "codex-cli": "gpt-5" },
+      connected: ["codex-cli"],
+    };
+    const result = await preflight(
+      { kind: "chat", provider: "codex-cli", model: "gpt-5" },
+      {
+        getProviderCatalog: async () => codexCatalog,
+        getCodexAppServerStatus: async () => ({
+          available: true,
+          source: "managed",
+          command: "/tmp/codex",
+          args: ["app-server"],
+          version: "0.0.0-test",
+          pinnedVersion: "0.0.0-test",
+          pinMatchesCurrent: true,
+          managedPath: "/tmp/codex",
+          message: "Using Cowork-managed Codex runtime.",
+        }),
+      },
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "ok",
+      message: "Codex app-server is available.",
+    });
+  });
+
+  test("still appends runtime checks when the provider catalog fails to load", async () => {
+    const getCodexAppServerStatus = mock(async () => ({
+      available: false,
+      source: "missing" as const,
+      pinnedVersion: "0.0.0-test",
+      pinMatchesCurrent: false,
+      message: "Codex runtime missing during catalog outage.",
+    }));
+    const result = await preflight(
+      { kind: "chat", provider: "codex-cli", model: "gpt-5" },
+      {
+        getProviderCatalog: async () => {
+          throw new Error("catalog down");
+        },
+        getCodexAppServerStatus,
+      },
+    );
+
+    expect(result.ready).toBe(false);
+    expect(result.checks.map((entry) => entry.id)).toEqual([
+      "project_access",
+      "provider_connected",
+      "runtime_ready",
+    ]);
+    expect(result.checks.find((entry) => entry.id === "provider_connected")).toMatchObject({
+      status: "blocked",
+      message: "Provider status could not be loaded: catalog down",
+      repairAction: { type: "openProviderSettings", provider: "codex-cli" },
+    });
+    expect(result.checks.find((entry) => entry.id === "runtime_ready")).toEqual({
+      id: "runtime_ready",
+      status: "blocked",
+      message: "Codex runtime missing during catalog outage.",
+      repairAction: { type: "installCodexRuntime" },
+    });
+    expect(getCodexAppServerStatus).toHaveBeenCalledTimes(1);
+  });
+
   test("runs the same dependency set for a task as for a chat", async () => {
     const result = await preflight(
       { kind: "task", provider: "google", model: "gemini-2.5-flash" },

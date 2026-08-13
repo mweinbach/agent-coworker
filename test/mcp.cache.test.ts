@@ -219,4 +219,47 @@ describe("MCP Caching and Lifecycle", () => {
       warnSpy.mock.calls.some((call) => String(call[0]).includes("Error closing MCP servers")),
     ).toBe(true);
   });
+
+  test("reloads after a config change even when closing the stale cache throws", async () => {
+    const config = makeConfig("/path/to/workspace-a");
+    const servers1: MCPServerConfig[] = [
+      { name: "test-server", transport: { type: "stdio", command: "node" } },
+    ];
+    const servers2: MCPServerConfig[] = [
+      { name: "test-server", transport: { type: "stdio", command: "bun" } },
+    ];
+
+    let currentServers = servers1;
+    const loadMCPServers = mock(async () => currentServers);
+    const loadMCPTools = mock(async (servers) => {
+      const isBun = (servers[0]?.transport as { command?: string } | undefined)?.command === "bun";
+      return {
+        tools: { [isBun ? "bun-tool" : "node-tool"]: {} },
+        errors: [],
+        close: mock(async () => {
+          if (!isBun) throw new Error("stale close exploded");
+        }),
+      };
+    });
+
+    const first = await getOrLoadMCPToolsCached(config, "session-1", {
+      loadMCPServers,
+      loadMCPTools,
+    });
+    expect(first.tools).toHaveProperty("node-tool");
+
+    currentServers = servers2;
+    const logs: string[] = [];
+    const second = await getOrLoadMCPToolsCached(config, "session-1", {
+      loadMCPServers,
+      loadMCPTools,
+      log: (line) => logs.push(line),
+    });
+
+    expect(loadMCPTools).toHaveBeenCalledTimes(2);
+    expect(second.tools).toHaveProperty("bun-tool");
+    expect(second.tools).not.toHaveProperty("node-tool");
+    expect(__internal.workspaceMcpCache.get(workspaceA)?.tools).toHaveProperty("bun-tool");
+    expect(logs.some((line) => line.includes("Error closing stale MCP cache"))).toBe(true);
+  });
 });

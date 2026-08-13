@@ -136,7 +136,7 @@ describe("research service input and plan guards", () => {
 
       await service.cancel("research-refine");
       await waitFor(
-        () => (service as unknown as { states: Map<string, unknown> }).states.has("research-refine"),
+        () => (service as any).states.has("research-refine"),
         (value) => value === false,
       );
     });

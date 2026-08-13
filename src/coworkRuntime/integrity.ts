@@ -73,6 +73,17 @@ type RuntimeTrustState = {
 
 const trustStates = new Map<string, RuntimeTrustState>();
 
+type AfterVerifyExactTreeHook = (root: string) => void | Promise<void>;
+
+let afterVerifyExactTreeHookForTests: AfterVerifyExactTreeHook | null = null;
+
+/** Test-only hooks for integrity verification seams. */
+export const __internal = {
+  setAfterVerifyExactTreeHookForTests(hook: AfterVerifyExactTreeHook | null): void {
+    afterVerifyExactTreeHookForTests = hook;
+  },
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -507,6 +518,9 @@ async function trustVerifiedRuntimeTree(
   const result = await verifyExactTree(root, bundle);
   // Re-fingerprint after hashing so a tree that changed mid-verification is never
   // trusted or attested: only a stable tree earns the fast path.
+  if (afterVerifyExactTreeHookForTests) {
+    await afterVerifyExactTreeHookForTests(root);
+  }
   const after = await collectRuntimeTreeState(root);
   if (current.digest !== after.digest || after.fileCount !== result.fileCount) {
     state.trustedTreeDigest = null;

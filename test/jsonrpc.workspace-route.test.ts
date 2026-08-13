@@ -372,6 +372,57 @@ describe("workspace JSON-RPC route", () => {
     }
   });
 
+  test("Canvas document save conflict through the route preserves external content and skips fileChanged", async () => {
+    const tempRoot = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-document-conflict-route-"),
+    );
+    const dir = path.join(tempRoot, "workspace");
+    const home = path.join(tempRoot, "home");
+    await Promise.all([fs.mkdir(dir), fs.mkdir(home)]);
+    const restoreHome = pinHome(home);
+    try {
+      const filePath = path.join(dir, "notes.md");
+      await fs.writeFile(filePath, "original", "utf8");
+      const harness = createWorkspaceRouteHarness();
+      harness.context.canvasDocuments = new CanvasDocumentPersistenceService();
+      harness.context.getConfig = () => ({ workingDirectory: dir }) as never;
+      const handlers = createWorkspaceRouteHandlers(harness.context);
+
+      await invokeWorkspaceDocument(handlers, "cowork/workspace/document/open", {
+        path: filePath,
+        documentId: "canvas-conflict-route",
+        generation: 1,
+      });
+      const opened = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/open"].parse(
+        harness.results[0]?.result,
+      );
+      expect(opened.ok).toBe(true);
+
+      await fs.writeFile(filePath, "external edit", "utf8");
+
+      await invokeWorkspaceDocument(handlers, "cowork/workspace/document/save", {
+        documentId: "canvas-conflict-route",
+        generation: 1,
+        editRevision: 1,
+        content: "stale local edit",
+      });
+      const saved = jsonRpcWorkspaceResultSchemas["cowork/workspace/document/save"].parse(
+        harness.results[1]?.result,
+      );
+      expect(saved.ok).toBe(false);
+      if (!saved.ok) {
+        expect(saved.error.kind).toBe("conflict");
+        expect(saved.currentRevision?.fingerprint).toStartWith("sha256:");
+      }
+      expect(await fs.readFile(filePath, "utf8")).toBe("external edit");
+      expect(harness.notifications).toEqual([]);
+      expect(harness.errors).toEqual([]);
+    } finally {
+      restoreHome();
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   test("Canvas document methods reject caller-controlled cwd before persistence", async () => {
     const harness = createWorkspaceRouteHarness();
     const calls: string[] = [];

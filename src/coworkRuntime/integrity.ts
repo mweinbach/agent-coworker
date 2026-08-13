@@ -73,6 +73,20 @@ type RuntimeTrustState = {
 
 const trustStates = new Map<string, RuntimeTrustState>();
 
+type TrustVerifiedRuntimeTreeRun = () => Promise<{ fileCount: number; bytes: number }>;
+type TrustVerifiedRuntimeTreeHook = (
+  run: TrustVerifiedRuntimeTreeRun,
+) => Promise<{ fileCount: number; bytes: number }>;
+
+let trustVerifiedRuntimeTreeHookForTests: TrustVerifiedRuntimeTreeHook | null = null;
+
+/** Test-only hook to pause/observe in-flight tree verification. */
+export const __internal = {
+  setTrustVerifiedRuntimeTreeHookForTests(hook: TrustVerifiedRuntimeTreeHook | null): void {
+    trustVerifiedRuntimeTreeHookForTests = hook;
+  },
+} as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -637,7 +651,10 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   }
   const generation = state.generation;
   if (!state.verification) {
-    state.verification = trustVerifiedRuntimeTree(root, bundle, state)
+    const run = () => trustVerifiedRuntimeTree(root, bundle, state);
+    state.verification = (
+      trustVerifiedRuntimeTreeHookForTests ? trustVerifiedRuntimeTreeHookForTests(run) : run()
+    )
       .then(() => undefined)
       .finally(() => {
         state.verification = null;

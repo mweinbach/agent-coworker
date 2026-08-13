@@ -880,6 +880,45 @@ describe("loadConfig", () => {
     expect(cfg.preferredChildModel).toBe("gpt-5.4");
   });
 
+  test("stale preferredChildModelRef resets without discarding a valid allowlist", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      childModelRoutingMode: "cross-provider-allowlist",
+      // Hand-edited / provider-switched typo: invalid preferred must not wipe the allowlist.
+      preferredChildModelRef: "not-a-valid-ref",
+      allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+    });
+
+    const warn = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+    try {
+      const cfg = await loadConfig({
+        cwd,
+        homedir: home,
+        builtInDir: repoRoot(),
+        env: {},
+      });
+
+      expect(cfg.childModelRoutingMode).toBe("cross-provider-allowlist");
+      expect(cfg.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+      expect(cfg.preferredChildModelRef).toBe("opencode-zen:glm-5");
+      expect(cfg.preferredChildModel).toBe("gpt-5.4");
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            String(call[0] ?? "").includes("[config]") &&
+            String(call[0] ?? "").includes("Using opencode-zen:glm-5 instead."),
+        ),
+      ).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("knowledgeCutoff config values are ignored in favor of the selected model registry entry", async () => {
     const { cwd, home } = await makeTmpDirs();
 

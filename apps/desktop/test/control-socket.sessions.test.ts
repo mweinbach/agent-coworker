@@ -652,4 +652,69 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(requestCalls).toBe(1);
     expect(sessions?.map((session) => session.sessionId)).toEqual(["session-1"]);
   });
+
+  test("requestWorkspaceSessions keeps connected chats missing from a stale thread/list", async () => {
+    const workspaceId = "ws-connected-stale-list";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        makeThread("chat-keep", workspaceId),
+        makeThread("chat-connected-missing", workspaceId),
+        makeThread("chat-disconnected-missing", workspaceId),
+      ],
+      selectedThreadId: "chat-connected-missing",
+      threadRuntimeById: {
+        "chat-keep": { connected: true, sessionId: "chat-keep" },
+        "chat-connected-missing": { connected: true, sessionId: "chat-connected-missing" },
+        "chat-disconnected-missing": {
+          connected: false,
+          sessionId: "chat-disconnected-missing",
+        },
+      },
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      // Stale concurrent listing: live chat is already registered client-side but
+      // has not appeared in this server snapshot yet.
+      return {
+        threads: [makeThreadListEntry("chat-keep")],
+      };
+    });
+
+    RUNTIME.sessionSnapshots.set("chat-keep", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-keep" },
+    } as never);
+    RUNTIME.sessionSnapshots.set("chat-connected-missing", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-connected-missing" },
+    } as never);
+    RUNTIME.sessionSnapshots.set("chat-disconnected-missing", {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "chat-disconnected-missing" },
+    } as never);
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+
+    expect(state.threads.map((thread: { id: string }) => thread.id).sort()).toEqual([
+      "chat-connected-missing",
+      "chat-keep",
+    ]);
+    expect(state.selectedThreadId).toBe("chat-connected-missing");
+    expect(
+      state.threads.find((thread: { id: string }) => thread.id === "chat-connected-missing"),
+    ).toEqual(
+      expect.objectContaining({
+        id: "chat-connected-missing",
+        sessionId: "chat-connected-missing",
+        status: "active",
+      }),
+    );
+    // Disconnected sessions missing from thread/list are genuinely gone.
+    expect(
+      state.threads.some((thread: { id: string }) => thread.id === "chat-disconnected-missing"),
+    ).toBe(false);
+    expect(RUNTIME.sessionSnapshots.has("chat-disconnected-missing")).toBe(false);
+  });
 });

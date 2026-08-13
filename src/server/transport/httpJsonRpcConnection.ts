@@ -21,6 +21,8 @@ export type HttpJsonRpcConnection = {
 
 export type CreateHttpJsonRpcConnectionOptions = {
   keepaliveIntervalMs?: number;
+  /** Override for tests; production default is HTTP_RPC_RESPONSE_TIMEOUT_MS. */
+  responseTimeoutMs?: number;
   protocolMode?: StartServerSocketData["protocolMode"];
   transportType?: StartServerSocketData["transportType"];
   selectedSubprotocol?: string | null;
@@ -38,7 +40,10 @@ function tryParseJsonRpcSendPayload(message: string): unknown {
   }
 }
 
-async function withResponseTimeout(response: Promise<unknown>): Promise<unknown> {
+async function withResponseTimeout(
+  response: Promise<unknown>,
+  timeoutMs: number,
+): Promise<unknown> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -46,7 +51,7 @@ async function withResponseTimeout(response: Promise<unknown>): Promise<unknown>
       new Promise<unknown>((_, reject) => {
         timeout = setTimeout(() => {
           reject(new Error("Timed out waiting for JSON-RPC response."));
-        }, HTTP_RPC_RESPONSE_TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -96,6 +101,7 @@ export function createHttpJsonRpcConnection(
 ): HttpJsonRpcConnection {
   const encoder = new TextEncoder();
   const keepaliveIntervalMs = options?.keepaliveIntervalMs ?? SSE_KEEPALIVE_INTERVAL_MS;
+  const responseTimeoutMs = options?.responseTimeoutMs ?? HTTP_RPC_RESPONSE_TIMEOUT_MS;
   const pendingResponses = new Map<
     string,
     { resolve(payload: unknown): void; reject(error: Error): void }
@@ -189,7 +195,7 @@ export function createHttpJsonRpcConnection(
       });
       runtime.handleDecodedMessage(connection as never, message);
       try {
-        return await withResponseTimeout(responsePromise);
+        return await withResponseTimeout(responsePromise, responseTimeoutMs);
       } finally {
         pendingResponses.delete(idKey);
       }

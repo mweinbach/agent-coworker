@@ -117,28 +117,30 @@ describe("research service input and plan guards", () => {
       );
 
       const refined = await service.refinePlan("research-refine", "  Narrow to pricing.  ");
-      expect(refined).not.toBeNull();
-      expect(refined?.planPending).toBe(false);
-      await waitFor(
-        () => createResearchInteractionStreamMock.mock.calls.length,
-        (count) => count > 0,
-      );
-      expect(createResearchInteractionStreamMock.mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({
-          prompt: "Narrow to pricing.",
-          previousInteractionId: "interaction-refine",
-          collaborativePlanning: true,
-        }),
-      );
+      try {
+        expect(refined).not.toBeNull();
+        expect(refined?.planPending).toBe(false);
+        await waitFor(
+          () => createResearchInteractionStreamMock.mock.calls.length,
+          (count) => count > 0,
+        );
+        expect(createResearchInteractionStreamMock.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            input: "Narrow to pricing.",
+            previousInteractionId: "interaction-refine",
+            collaborativePlanning: true,
+          }),
+        );
 
-      const persisted = sessionDb.getResearch("research-refine");
-      expect(persisted?.planPending).toBe(false);
-
-      await service.cancel("research-refine");
-      await waitFor(
-        () => (service as any).states.has("research-refine"),
-        (value) => value === false,
-      );
+        const persisted = sessionDb.getResearch("research-refine");
+        expect(persisted?.planPending).toBe(false);
+      } finally {
+        await service.cancel("research-refine");
+        await waitFor(
+          () => (service as any).states.has("research-refine"),
+          (value) => value === false,
+        );
+      }
     });
   });
 });

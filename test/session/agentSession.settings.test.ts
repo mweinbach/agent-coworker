@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { MemoryStore } from "../../src/memoryStore";
 import { scratchRoots } from "../../src/platform/sandbox";
+import type { SessionEvent } from "../../src/server/protocol";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -760,6 +761,44 @@ describe("AgentSession", () => {
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         clearMemoryGenerationModel: true,
       });
+    });
+
+    test("setConfig rejects combining a model field with its clear counterpart", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          memoryGenerationModel: "gemini-old",
+          skillImprovementModel: "openai:gpt-5.2",
+          toolOutputOverflowChars: 12_000,
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        memoryGenerationModel: "gemini-new",
+        clearMemoryGenerationModel: true,
+      });
+      await session.setConfig({
+        skillImprovementModel: "openai:gpt-5.4",
+        clearSkillImprovementModel: true,
+      });
+      await session.setConfig({
+        toolOutputOverflowChars: 8_000,
+        clearToolOutputOverflowChars: true,
+      });
+
+      const errors = events.filter(
+        (evt): evt is Extract<SessionEvent, { type: "error" }> => evt.type === "error",
+      );
+      expect(errors.map((evt) => evt.message)).toEqual([
+        "memoryGenerationModel cannot be combined with clearMemoryGenerationModel",
+        "skillImprovementModel cannot be combined with clearSkillImprovementModel",
+        "toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars",
+      ]);
+      expect(errors.every((evt) => evt.code === "validation_failed")).toBe(true);
+      expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+      expect(events.some((evt) => evt.type === "session_config")).toBe(false);
     });
 
     test("setConfig emits and persists skill improvement defaults", async () => {

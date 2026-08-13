@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { SessionEvent } from "../src/server/protocol";
 import { McpAuthFlow } from "../src/server/session/mcp/McpAuthFlow";
 import type { AgentConfig } from "../src/types";
+
+async function makeTempDir(prefix: string): Promise<string> {
+  return await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", prefix));
+}
 
 const mockAuthorizeMcpServerOAuth = mock(async () => {
   throw new Error("mockAuthorizeMcpServerOAuth not configured");
@@ -95,6 +99,7 @@ function createHarness(config: AgentConfig, server: MCPRegistryServer) {
   return {
     flow,
     events,
+    state,
     getEmitMcpServersCalls: () => emitMcpServersCalls,
   };
 }
@@ -106,9 +111,9 @@ describe("McpAuthFlow", () => {
     mockExchangeMcpServerOAuthCode.mockReset();
   });
   test("auto OAuth completes from the captured callback and writes the user auth file", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events, getEmitMcpServersCalls } = createHarness(config, server);
@@ -197,9 +202,9 @@ describe("McpAuthFlow", () => {
   });
 
   test("close does not abort in-flight auto OAuth completion", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-builtin-"));
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
     const config = makeConfig(workspace, home, builtInConfigDir);
     const server = inheritedOauthServer("quartr");
     const { flow, events } = createHarness(config, server);
@@ -267,6 +272,152 @@ describe("McpAuthFlow", () => {
             event.mode === "oauth",
         ),
       ).toBe(true);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("auto OAuth abandons when the session stays busy past the challenge deadline", async () => {
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = inheritedOauthServer("quartr");
+    const { flow, events, state } = createHarness(config, server);
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 400).toISOString();
+    const userAuthFile = path.join(home, ".cowork", "auth", "mcp-credentials.json");
+
+    try {
+      mockAuthorizeMcpServerOAuth.mockResolvedValue({
+        challenge: {
+          method: "auto",
+          instructions: "Complete sign-in in your browser.",
+          url: "https://mcp.quartr.com/oauth/authorize?client_id=test-client",
+          expiresAt,
+        },
+        pending: {
+          challengeId: "challenge-busy",
+          state: "state-busy",
+          codeVerifier: "code-verifier-busy",
+          redirectUri: "http://127.0.0.1:1455/oauth/callback",
+          createdAt,
+          expiresAt,
+          authorizationServerUrl: "https://mcp.quartr.com",
+          resource: "https://mcp.quartr.com/",
+        },
+        openedBrowser: true,
+      });
+
+      mockConsumeCapturedOAuthCode.mockResolvedValue("oauth-code-busy");
+      mockExchangeMcpServerOAuthCode.mockImplementation(async () => {
+        throw new Error("exchange should not run after idle timeout");
+      });
+
+      await flow.authorize("quartr");
+      // Keep the session busy so waitForConnectionIdle exhausts the challenge deadline.
+      state.connecting = true;
+
+      await waitForCondition(() => Date.now() >= Date.parse(expiresAt) + 50, 2_000);
+      // Allow one more poll interval for the auto-completion loop to observe !ready.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(mockExchangeMcpServerOAuthCode).toHaveBeenCalledTimes(0);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "mcp_server_auth_result" &&
+            event.name === "quartr" &&
+            event.ok &&
+            event.mode === "oauth",
+        ),
+      ).toBe(false);
+
+      const raw = await fs.readFile(userAuthFile, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        servers?: Record<string, { oauth?: { pending?: unknown; tokens?: unknown } }>;
+      };
+      expect(parsed.servers?.quartr?.oauth?.pending).toBeDefined();
+      expect(parsed.servers?.quartr?.oauth?.tokens).toBeUndefined();
+    } finally {
+      state.connecting = false;
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("auto OAuth emits an error and clears connecting when token exchange fails", async () => {
+    const workspace = await makeTempDir("mcp-auth-flow-workspace-");
+    const home = await makeTempDir("mcp-auth-flow-home-");
+    const builtInConfigDir = await makeTempDir("mcp-auth-flow-builtin-");
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = inheritedOauthServer("quartr");
+    const { flow, events, state } = createHarness(config, server);
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const userAuthFile = path.join(home, ".cowork", "auth", "mcp-credentials.json");
+
+    try {
+      mockAuthorizeMcpServerOAuth.mockResolvedValue({
+        challenge: {
+          method: "auto",
+          instructions: "Complete sign-in in your browser.",
+          url: "https://mcp.quartr.com/oauth/authorize?client_id=test-client",
+          expiresAt,
+        },
+        pending: {
+          challengeId: "challenge-exchange-fail",
+          state: "state-exchange-fail",
+          codeVerifier: "code-verifier-exchange-fail",
+          redirectUri: "http://127.0.0.1:1455/oauth/callback",
+          createdAt,
+          expiresAt,
+          authorizationServerUrl: "https://mcp.quartr.com",
+          resource: "https://mcp.quartr.com/",
+        },
+        openedBrowser: true,
+      });
+
+      mockConsumeCapturedOAuthCode.mockResolvedValue("oauth-code-exchange-fail");
+      mockExchangeMcpServerOAuthCode.mockRejectedValue(new Error("token endpoint 500"));
+
+      await flow.authorize("quartr");
+
+      await waitForCondition(
+        () =>
+          events.some(
+            (event) =>
+              event.type === "mcp_server_auth_result" &&
+              event.name === "quartr" &&
+              !event.ok &&
+              event.mode === "error",
+          ),
+        2_000,
+      );
+
+      const errEvt = events.find(
+        (event) =>
+          event.type === "mcp_server_auth_result" &&
+          event.name === "quartr" &&
+          !event.ok &&
+          event.mode === "error",
+      );
+      expect(errEvt).toBeDefined();
+      if (errEvt && errEvt.type === "mcp_server_auth_result") {
+        expect(errEvt.message).toContain("token endpoint 500");
+      }
+      expect(state.connecting).toBe(false);
+      expect(mockExchangeMcpServerOAuthCode).toHaveBeenCalledTimes(1);
+
+      const raw = await fs.readFile(userAuthFile, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        servers?: Record<string, { oauth?: { pending?: unknown; tokens?: unknown } }>;
+      };
+      expect(parsed.servers?.quartr?.oauth?.tokens).toBeUndefined();
+      expect(parsed.servers?.quartr?.oauth?.pending).toBeDefined();
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

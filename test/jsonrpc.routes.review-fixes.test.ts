@@ -352,6 +352,44 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(harness.captureTimeouts.at(-1)).toBe(13 * 60_000);
   });
 
+  test("provider auth copyApiKey rejects missing provider or sourceProvider", async () => {
+    let copyCalls = 0;
+    const harness = createRouteHarness({
+      copyProviderApiKey: async () => {
+        copyCalls += 1;
+        harness.emitted.push({
+          type: "provider_auth_result",
+          sessionId: "session-1",
+          provider: "opencode-zen",
+          methodId: "api_key",
+          ok: true,
+          mode: "api_key",
+          message: "copied",
+        });
+      },
+    });
+
+    const handlers = createProviderRouteHandlers(harness.context);
+
+    const missingSource = await harness.invoke(handlers, "cowork/provider/auth/copyApiKey", {
+      cwd: "C:/workspace",
+      provider: "opencode-zen",
+    });
+    expect(missingSource.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(missingSource.error?.message).toContain("requires provider and sourceProvider");
+
+    const missingProvider = await harness.invoke(handlers, "cowork/provider/auth/copyApiKey", {
+      cwd: "C:/workspace",
+      sourceProvider: "opencode-go",
+    });
+    expect(missingProvider.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(missingProvider.error?.message).toContain("requires provider and sourceProvider");
+
+    expect(copyCalls).toBe(0);
+    expect(missingSource.result).toBeUndefined();
+    expect(missingProvider.result).toBeUndefined();
+  });
+
   test("session model set returns the current config when the mutation is a no-op", async () => {
     const threadSession = {
       id: "thread-1",

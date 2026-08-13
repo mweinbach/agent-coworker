@@ -507,6 +507,46 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     );
   });
 
+  test("reconnectThreadWithFeedback reports when reconnect cannot start", async () => {
+    const result = await useAppStore.getState().reconnectThreadWithFeedback("missing-thread");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected reconnect to fail");
+    }
+    expect(result.error.message).toContain("could not start a reconnect attempt");
+    expect(
+      useAppStore.getState().operationsByKey[operationKey("thread-reconnect", "missing-thread")]
+        ?.status,
+    ).toBe("error");
+  });
+
+  test("reconnectThreadWithFeedback reports when the chat is removed mid-wait", async () => {
+    const { threadId } = seedStore();
+    const originalReconnect = useAppStore.getState().reconnectThread;
+    useAppStore.setState({
+      reconnectThread: async () => true,
+    });
+
+    try {
+      const pending = useAppStore.getState().reconnectThreadWithFeedback(threadId);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      useAppStore.setState({ threads: [] });
+      const result = await pending;
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected reconnect to fail");
+      }
+      expect(result.error.message).toContain("no longer available");
+      expect(
+        useAppStore.getState().operationsByKey[operationKey("thread-reconnect", threadId)]?.status,
+      ).toBe("error");
+    } finally {
+      useAppStore.setState({ reconnectThread: originalReconnect });
+    }
+  });
+
   test("cached session snapshots hydrate the thread model before reconnect", async () => {
     const { threadId } = seedStore();
     const snapshot = {

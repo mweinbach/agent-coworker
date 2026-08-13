@@ -363,6 +363,37 @@ describe("AgentSession", () => {
       }
     });
 
+    test("setModel while running emits Agent is busy and leaves the model unchanged", async () => {
+      const { session, events } = makeSession();
+      const before = session.getPublicConfig().model;
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () =>
+              resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const first = session.sendUserMessage("first");
+      await waitForCondition(() => session.isBusy);
+
+      await session.setModel("claude-sonnet-4-5", "anthropic");
+      const errEvt = events.find((e) => e.type === "error") as Extract<
+        SessionEvent,
+        { type: "error" }
+      >;
+      expect(errEvt).toBeDefined();
+      expect(errEvt.code).toBe("busy");
+      expect(errEvt.message).toBe("Agent is busy");
+      expect(session.getPublicConfig().model).toBe(before);
+      expect(session.getPublicConfig().provider).toBe("google");
+
+      resolveRunTurn();
+      await first;
+    });
+
     test("empty model emits error and does not change model", async () => {
       const { session, events } = makeSession();
       const before = session.getPublicConfig().model;

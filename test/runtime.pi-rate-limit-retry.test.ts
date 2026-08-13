@@ -146,6 +146,7 @@ describe("isRateLimitError", () => {
     expect(isRateLimitError({ statusCode: 429, message: "API call failed" })).toBe(true);
     expect(isRateLimitError({ status: 429 })).toBe(true);
     expect(isRateLimitError({ response: { status: 429 } })).toBe(true);
+    expect(isRateLimitError({ response: { statusCode: 429 } })).toBe(true);
     expect(isRateLimitError(new Error("429"))).toBe(true);
   });
 
@@ -172,6 +173,41 @@ describe("isRateLimitError", () => {
       isRateLimitError({ name: "AI_RetryError", lastError: new Error(RATE_LIMIT_MESSAGE) }),
     ).toBe(true);
     expect(isRateLimitError(new Error("retry failed", { cause: new Error("boom") }))).toBe(false);
+  });
+
+  test("prefers cause over lastError and caps chain depth at four", () => {
+    // A non-rate-limit cause shadows a rate-limit lastError sibling.
+    expect(
+      isRateLimitError({
+        message: "retry failed",
+        cause: new Error("boom"),
+        lastError: { statusCode: 429 },
+      }),
+    ).toBe(false);
+
+    // 429 only at depth 5 (beyond the walk cap) must not match.
+    const tooDeep = {
+      cause: {
+        cause: {
+          cause: {
+            cause: {
+              cause: { statusCode: 429 },
+            },
+          },
+        },
+      },
+    };
+    expect(isRateLimitError(tooDeep)).toBe(false);
+
+    // Depth 4 (root + 3 causes) still matches.
+    const atCap = {
+      cause: {
+        cause: {
+          cause: { statusCode: 429 },
+        },
+      },
+    };
+    expect(isRateLimitError(atCap)).toBe(true);
   });
 
   test("rejects non-rate-limit and abort-shaped errors", () => {
@@ -225,6 +261,25 @@ describe("resolveRateLimitMaxAttempts", () => {
     expect(
       resolveRateLimitMaxAttempts(makeConfig("/tmp/x", { modelSettings: { maxRetries: 25 } })),
     ).toBe(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS);
+  });
+
+  test("sanitizes non-finite, negative, and fractional maxRetries", () => {
+    expect(
+      resolveRateLimitMaxAttempts(
+        makeConfig("/tmp/x", { modelSettings: { maxRetries: Number.NaN } }),
+      ),
+    ).toBe(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS);
+    expect(
+      resolveRateLimitMaxAttempts(
+        makeConfig("/tmp/x", { modelSettings: { maxRetries: Number.POSITIVE_INFINITY } }),
+      ),
+    ).toBe(RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS);
+    expect(
+      resolveRateLimitMaxAttempts(makeConfig("/tmp/x", { modelSettings: { maxRetries: -3 } })),
+    ).toBe(1);
+    expect(
+      resolveRateLimitMaxAttempts(makeConfig("/tmp/x", { modelSettings: { maxRetries: 2.9 } })),
+    ).toBe(3);
   });
 });
 
@@ -371,6 +426,115 @@ describe("pi runtime rate-limit retry", () => {
       harness.emitted.some((part) => part.type === "text-delta" && part.text === "partial answer"),
     ).toBe(true);
     expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(1);
+  });
+
+  test("retries after only lifecycle stream parts without visible content", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-lifecycle-");
+    const harness = createRetryHarness((attempt) =>
+      attempt === 1
+        ? {
+            events: [
+              { type: "start" },
+              { type: "done", reason: "error", message: { usage: { input: 0, output: 0 } } },
+              rateLimitErrorEvent(),
+            ],
+            result: rateLimitAssistantRecord,
+          }
+        : { events: [{ type: "start" }], result: () => okAssistantRecord("recovered") },
+    );
+
+    const result = await harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness));
+
+    expect(result.text).toBe("recovered");
+    expect(harness.streamCount()).toBe(2);
+    expect(harness.sleeps).toHaveLength(1);
+    expect(harness.emitted.some((part) => part.type === "start")).toBe(true);
+    expect(harness.emitted.some((part) => part.type === "finish")).toBe(true);
+    expect(harness.emitted.filter((part) => part.type === "error")).toHaveLength(0);
+  });
+
+  test("does not retry rate limits when the abort signal fires during the failed attempt", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-midabort-");
+    const controller = new AbortController();
+    const onModelAbort = mock(async () => {});
+    const onModelError = mock(async () => {});
+    let streamCount = 0;
+    const sleeps: number[] = [];
+    const runtime = createPiRuntime({
+      piStreamImpl: (() => {
+        streamCount += 1;
+        return fakeStream({
+          events: [rateLimitErrorEvent()],
+          result: () => {
+            // Abort after the provider rate-limit is observed so the catch
+            // gate prefers abort-like handling over a visible retry loop.
+            controller.abort();
+            return rateLimitAssistantRecord();
+          },
+        });
+      }) as never,
+      retrySleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    await expect(
+      runtime.runTurn(
+        makeParams(makeConfig(homeDir), {
+          abortSignal: controller.signal,
+          onModelAbort,
+          onModelError,
+        }),
+      ),
+    ).rejects.toThrow(RATE_LIMIT_MESSAGE);
+
+    expect(streamCount).toBe(1);
+    expect(sleeps).toHaveLength(0);
+    expect(onModelAbort).toHaveBeenCalledTimes(1);
+    expect(onModelError).not.toHaveBeenCalled();
+  });
+
+  test("treats cancel-shaped rate-limit messages as abort-like and skips retry", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-cancel-msg-");
+    const message = "request cancelled due to rate limit";
+    const harness = createRetryHarness(() => ({
+      events: [{ type: "error", reason: "error", error: { errorMessage: message } }],
+      result: () => ({
+        role: "assistant",
+        content: [],
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        stopReason: "error",
+        errorMessage: message,
+      }),
+    }));
+
+    await expect(
+      harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness)),
+    ).rejects.toThrow(message);
+
+    expect(harness.streamCount()).toBe(1);
+    expect(harness.sleeps).toHaveLength(0);
+  });
+
+  test("retries stopReason=aborted rate limits when the message is not abort-like", async () => {
+    const homeDir = await makeTestHome("pi-rate-limit-aborted-stop-");
+    const harness = createRetryHarness((attempt) =>
+      attempt === 1
+        ? {
+            events: [rateLimitErrorEvent()],
+            result: () => ({
+              ...rateLimitAssistantRecord(),
+              stopReason: "aborted",
+            }),
+          }
+        : { events: [], result: () => okAssistantRecord("after-aborted-stop") },
+    );
+
+    const result = await harness.runtime.runTurn(harnessParams(makeConfig(homeDir), harness));
+
+    expect(result.text).toBe("after-aborted-stop");
+    expect(harness.streamCount()).toBe(2);
+    expect(harness.sleeps).toHaveLength(1);
   });
 
   test("gives up after the bounded attempts and surfaces the last error", async () => {

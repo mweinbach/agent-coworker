@@ -285,4 +285,91 @@ describe("JSON-RPC projectors", () => {
       "Hello world",
     ]);
   });
+
+  test("notification projector flushes micro-batched deltas on the 16ms timer without a boundary", async () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "tick" }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "-tock" }));
+    expect(outbound.filter((message) => message.method === "item/agentMessage/delta")).toHaveLength(
+      0,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const assistantDeltas = outbound
+      .filter((message) => message.method === "item/agentMessage/delta")
+      .map((message) => String(message.params?.delta ?? ""));
+    expect(assistantDeltas).toEqual(["tick-tock"]);
+  });
+
+  test("deferred tool-arg normalization does not publish partial JSON during tool_input_delta", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("tool_input_start", { id: "deferred-args", toolName: "bash" }));
+    projector.handle(
+      streamChunk("tool_input_delta", { id: "deferred-args", delta: '{"command":"bun ' }),
+    );
+    projector.handle(streamChunk("tool_input_delta", { id: "deferred-args", delta: 'test"}' }));
+
+    const midStreamToolItems = outbound
+      .filter(
+        (message) =>
+          (message.method === "item/started" || message.method === "item/completed") &&
+          message.params?.item?.type === "toolCall" &&
+          message.params?.item?.id === `toolCall:${turnId}:deferred-args`,
+      )
+      .map((message) => message.params?.item);
+    expect(midStreamToolItems.length).toBeGreaterThan(0);
+    expect(
+      midStreamToolItems.every(
+        (item) =>
+          item.state === "input-streaming" &&
+          (item.args === undefined || Object.keys(item.args ?? {}).length === 0),
+      ),
+    ).toBe(true);
+
+    projector.handle(
+      streamChunk("tool_call", {
+        toolCallId: "deferred-args",
+        toolName: "bash",
+      }),
+    );
+
+    const available = outbound
+      .filter(
+        (message) =>
+          message.method === "item/completed" &&
+          message.params?.item?.type === "toolCall" &&
+          message.params?.item?.state === "input-available",
+      )
+      .map((message) => message.params?.item);
+    expect(available.at(-1)).toMatchObject({
+      toolName: "bash",
+      state: "input-available",
+      args: { command: "bun test" },
+    });
+  });
 });

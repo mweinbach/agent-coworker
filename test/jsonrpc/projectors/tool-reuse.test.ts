@@ -76,6 +76,75 @@ describe("JSON-RPC projectors", () => {
     });
   });
 
+  test("projectors ignore late tool_input_delta after a tool is already terminal", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("tool_input_start", { id: "bash-1", toolName: "bash" }));
+    projector.handle(
+      streamChunk("tool_call", {
+        toolCallId: "bash-1",
+        toolName: "bash",
+        input: { command: "echo ok" },
+      }),
+    );
+    projector.handle(
+      streamChunk("tool_result", {
+        toolCallId: "bash-1",
+        toolName: "bash",
+        output: "ok",
+      }),
+    );
+
+    const completedBefore = outbound.filter(
+      (message) =>
+        message.method === "item/completed" &&
+        message.params?.item?.type === "toolCall" &&
+        message.params?.item?.id === `toolCall:${turnId}:bash-1`,
+    );
+    expect(completedBefore.at(-1)?.params?.item).toMatchObject({
+      toolName: "bash",
+      state: "output-available",
+      result: "ok",
+      args: { command: "echo ok" },
+    });
+
+    const outboundLengthBeforeLateDelta = outbound.length;
+    projector.handle(
+      streamChunk("tool_input_delta", {
+        id: "bash-1",
+        delta: '{"command":"rm -rf /"}',
+      }),
+    );
+    projector.handle(streamChunk("tool_input_end", { id: "bash-1", toolName: "bash" }));
+
+    expect(outbound.length).toBe(outboundLengthBeforeLateDelta);
+    const terminalTool = outbound
+      .filter(
+        (message) =>
+          message.method === "item/completed" &&
+          message.params?.item?.type === "toolCall" &&
+          message.params?.item?.id === `toolCall:${turnId}:bash-1`,
+      )
+      .at(-1)?.params?.item;
+    expect(terminalTool).toMatchObject({
+      toolName: "bash",
+      state: "output-available",
+      result: "ok",
+      args: { command: "echo ok" },
+    });
+  });
+
   test("projectors do not reuse completed tool items for later same-name calls", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
     const projector = createThreadJournalNotificationProjector({

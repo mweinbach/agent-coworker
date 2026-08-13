@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../src/platform/sandbox";
 import {
   __internal,
   type CodexAppServerClient,
@@ -18,8 +18,14 @@ const originalCommand = process.env.COWORK_CODEX_APP_SERVER_COMMAND;
 const originalArgs = process.env.COWORK_CODEX_APP_SERVER_ARGS;
 const originalCodexHome = process.env.CODEX_HOME;
 
+async function makeScratchDir(prefix: string): Promise<string> {
+  const [tempRoot] = scratchRoots();
+  if (!tempRoot) throw new Error("No platform scratch root is available");
+  return await fs.mkdtemp(path.join(tempRoot, prefix));
+}
+
 async function makeTmpHome(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-test-"));
+  return await makeScratchDir("cowork-codex-client-test-");
 }
 
 async function waitForFile(filePath: string): Promise<void> {
@@ -64,7 +70,7 @@ describe("codex app-server client", () => {
 
   test("evicts pooled clients as soon as the app-server process exits", async () => {
     const home = await makeTmpHome();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-pool-"));
+    const dir = await makeScratchDir("cowork-codex-client-pool-");
     process.env.HOME = home;
 
     let starts = 0;
@@ -124,7 +130,7 @@ describe("codex app-server client", () => {
 
   test("starts app-server with Cowork-owned CODEX_HOME", async () => {
     const home = await makeTmpHome();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-script-"));
+    const dir = await makeScratchDir("cowork-codex-client-script-");
     const envFile = path.join(dir, "env.json");
     const script = path.join(dir, "mock-codex-app-server.js");
     await fs.writeFile(
@@ -267,6 +273,61 @@ setInterval(() => {}, 1000);
 
     expect(client.isClosed()).toBe(false);
     expect(syncCalls).toEqual([codexHome]);
+  });
+
+  test("request timeout rejects without leaving a hung pending waiter", async () => {
+    const home = await makeTmpHome();
+    const dir = await makeScratchDir("cowork-codex-client-timeout-");
+    const script = path.join(dir, "mock-codex-app-server-timeout.js");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", () => {
+  // Intentionally never reply — client-side timeout must win.
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    process.env.HOME = home;
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+
+    const client = await startCodexAppServerClient();
+    await expect(client.request("account/read", undefined, 50)).rejects.toThrow(
+      /timed out after 50ms/i,
+    );
+    await client.close();
+  });
+
+  test("process exit rejects in-flight requests with pending method context", async () => {
+    const home = await makeTmpHome();
+    const dir = await makeScratchDir("cowork-codex-client-exit-");
+    const script = path.join(dir, "mock-codex-app-server-exit.js");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", () => {
+  process.exit(7);
+});
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    process.env.HOME = home;
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+
+    const client = await startCodexAppServerClient();
+    await expect(client.request("thread/start")).rejects.toThrow(
+      /exited before replying.*pending=thread\/start/i,
+    );
+    expect(client.isClosed()).toBe(true);
   });
 
   test("a failing sandbox setup sync does not block the pooled client", async () => {

@@ -1100,7 +1100,7 @@ describe("composer draft clear after send", () => {
       newChatLandingTarget: { kind: "project", workspaceId: "ws-1" },
       composerDraftsByKey: {
         [key]: {
-          ...createEmptyComposerDraft("2026-07-10T20:00:00.000Z"),
+          ...createEmptyComposerDraft(new Date().toISOString()),
           revision: 1,
           attachments: [
             {
@@ -1132,7 +1132,8 @@ describe("composer draft clear after send", () => {
     const originalRevokeObjectURL = URL.revokeObjectURL;
     const revokeObjectURL = mock(() => {});
     URL.revokeObjectURL = revokeObjectURL;
-    const nowMs = Date.parse("2026-07-10T20:00:00.000Z");
+    // Persistence re-prunes with Date.now(); keep fixtures inside the 30-day max age.
+    const nowMs = Date.now();
     const realThreads = Array.from({ length: 51 }, (_, index) => ({
       id: `real-${index}`,
       workspaceId: "ws-1",

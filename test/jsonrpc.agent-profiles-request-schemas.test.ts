@@ -74,14 +74,9 @@ describe("agent profile request schemas", () => {
     ).toBe(false);
   });
 
-  test("rejects workspace-availability updates with invalid ids or a missing disabled flag", () => {
+  test("rejects workspace-availability updates missing disabled or a blank id", () => {
     expect(availabilitySchema.safeParse({ id: "qa-reviewer" }).success).toBe(false);
-    expect(
-      availabilitySchema.safeParse({
-        id: "QA Reviewer",
-        disabled: true,
-      }).success,
-    ).toBe(false);
+    expect(availabilitySchema.safeParse({ id: "   ", disabled: true }).success).toBe(false);
     expect(
       availabilitySchema.parse({
         id: "qa-reviewer",

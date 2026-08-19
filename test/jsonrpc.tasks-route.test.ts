@@ -79,6 +79,9 @@ function makeHarness(
       resumeStatus: "queued" | "steered" | "not_needed" | "failed";
     }>;
     resolveWorkspacePath?: (params: unknown, method: string) => string;
+    getByCreationKey?: () => TaskRecord | null;
+    getLive?: () => { runtime: unknown } | undefined;
+    getPersisted?: () => unknown;
   } = {},
 ) {
   const results: Array<{ id: JsonRpcLiteId; result: unknown }> = [];
@@ -117,7 +120,7 @@ function makeHarness(
       },
     },
     tasks: {
-      getByCreationKey: () => null,
+      getByCreationKey: overrides.getByCreationKey ?? (() => null),
       createPlanned: async (input: unknown) => {
         createCalls.push(input);
         return { task, workspaceDisposition: "existing_project" as const };
@@ -141,8 +144,8 @@ function makeHarness(
     },
     threads: {
       create: () => runtime,
-      getLive: () => undefined,
-      getPersisted: () => null,
+      getLive: overrides.getLive ?? (() => undefined),
+      getPersisted: overrides.getPersisted ?? (() => null),
     },
     utils: {
       resolveWorkspacePath: overrides.resolveWorkspacePath ?? (() => "C:\\workspace"),
@@ -520,5 +523,99 @@ describe("task JSON-RPC routes", () => {
 
     expect(harness.results).toEqual([]);
     expect(harness.errors[0]?.error.code).toBe(-32602);
+  });
+
+  test("returns the existing task when an idempotency key still has a live thread", async () => {
+    const existing = makeTask({ id: "task-existing" });
+    const harness = makeHarness({
+      getByCreationKey: () => existing,
+      getLive: () => ({ runtime: { id: "session-1" } }),
+    });
+
+    await invoke(harness.context, "task/create", {
+      cwd: "C:\\workspace",
+      idempotencyKey: "manual-task-1",
+      title: "Task",
+      objective: "Do the work",
+      context: "The task needs an explicit implementation and verification pass.",
+      requirements: [
+        { kind: "acceptance_criterion", text: "The implementation passes its tests." },
+      ],
+      workItems: [
+        {
+          key: "implement",
+          title: "Implement",
+          description: "Build the requested feature.",
+          dependsOn: [],
+          expectedOutputs: ["Working implementation"],
+        },
+      ],
+      decisions: [],
+      reviewRequired: true,
+      reviewRounds: 5,
+    });
+
+    expect(harness.createCalls).toEqual([]);
+    expect(harness.errors).toEqual([]);
+    expect(harness.results[0]?.result).toEqual(
+      expect.objectContaining({
+        task: existing,
+        thread: expect.objectContaining({ id: "session-1" }),
+      }),
+    );
+  });
+
+  test("fails closed when an idempotency key points at a missing task thread", async () => {
+    const existing = makeTask({
+      threads: [
+        {
+          id: "task-thread-1",
+          taskId: "task-1",
+          sessionId: "dead-session",
+          title: "Main",
+          createdBy: "user",
+          createdAt: "2026-06-18T12:00:00.000Z",
+          updatedAt: "2026-06-18T12:00:00.000Z",
+        },
+      ],
+    });
+    const harness = makeHarness({
+      getByCreationKey: () => existing,
+    });
+
+    await invoke(harness.context, "task/create", {
+      cwd: "C:\\workspace",
+      idempotencyKey: "orphan-task-1",
+      title: "Task",
+      objective: "Do the work",
+      context: "The existing task thread is gone.",
+      requirements: [
+        { kind: "acceptance_criterion", text: "The implementation passes its tests." },
+      ],
+      workItems: [
+        {
+          key: "implement",
+          title: "Implement",
+          description: "Build the requested feature.",
+          dependsOn: [],
+          expectedOutputs: ["Working implementation"],
+        },
+      ],
+      decisions: [],
+      reviewRequired: true,
+      reviewRounds: 5,
+    });
+
+    expect(harness.createCalls).toEqual([]);
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toEqual([
+      {
+        id: 1,
+        error: {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "The existing task thread is unavailable",
+        },
+      },
+    ]);
   });
 });

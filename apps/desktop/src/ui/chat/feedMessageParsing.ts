@@ -1,3 +1,5 @@
+import { getFilePreviewKind } from "../../lib/filePreviewKind";
+
 export type CanvasRequestSurface = "spreadsheet" | "document";
 
 export type CanvasRequest = {
@@ -114,28 +116,186 @@ export function parseCanvasRequest(text: string): CanvasRequest | null {
   return null;
 }
 
+function looksLikeCanvasEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    trimmed.startsWith("<spreadsheet_canvas_request") ||
+    trimmed.startsWith("<canvas_request") ||
+    trimmed.startsWith("[Canvas Collaborative Edit]")
+  );
+}
+
+function inferCanvasSurface(text: string): CanvasRequestSurface {
+  return text.trim().startsWith("<spreadsheet_canvas_request") ? "spreadsheet" : "document";
+}
+
+/**
+ * Recover a compact canvas model from a stored envelope, including malformed
+ * or partial payloads. Never returns null for a recognized envelope — the
+ * transcript can always show a readable chip instead of raw serialization.
+ */
+export function interpretCanvasRequest(text: string): CanvasRequest | null {
+  const trimmed = text.trim();
+  if (!looksLikeCanvasEnvelope(trimmed)) return null;
+
+  const parsed = parseCanvasRequest(trimmed);
+  if (parsed) return parsed;
+
+  const userRequest = firstCapture(trimmed, /<user_request>([\s\S]*?)<\/user_request>/) ?? "";
+  const fileName =
+    firstCapture(trimmed, /<workbook\b[^>]*?\sfile_name="([^"]*)"/) ??
+    firstCapture(trimmed, /<file\b[^>]*?\sname="([^"]*)"/) ??
+    trimmed.match(/edit the file `([^`]+)`/)?.[1]?.trim() ??
+    null;
+
+  return {
+    surface: inferCanvasSurface(trimmed),
+    fileName,
+    fileKind: firstCapture(trimmed, /\skind="([^"]*)"/),
+    sheet: firstCapture(trimmed, /<active_sheet>([\s\S]*?)<\/active_sheet>/),
+    region: firstCapture(trimmed, /\srange="([^"]*)"/),
+    selectionText:
+      firstCapture(trimmed, /<selection\b[^>]*>\s*<value>([\s\S]*?)<\/value>/) ??
+      firstCapture(trimmed, /<selection>([\s\S]*?)<\/selection>/),
+    userRequest,
+  };
+}
+
+function parseAttachmentNameList(raw: string): string[] {
+  const unwrapped = raw
+    .trim()
+    .replace(/^\[[\s\u00A0]*/, "")
+    .replace(/[\s\u00A0]*\]$/, "");
+  if (!unwrapped) return [];
+  return unwrapped
+    .split(/,\s+/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
 export function parseUserMessageAttachments(text: string): {
   cleanText: string;
   fileNames: string[];
 } {
-  const attachedMatch = text.match(/\n\nAttached:\s+\[(.*?)\]$/);
+  const attachedMatch = text.match(/\n\nAttached:\s+\[(.*?)\]\s*$/);
   if (attachedMatch) {
-    const fileNames = attachedMatch[1]
-      .split(/,\s+/)
-      .map((f) => f.trim())
-      .filter(Boolean);
-    const cleanText = text.substring(0, attachedMatch.index).trim();
-    return { cleanText, fileNames };
+    return {
+      cleanText: text.substring(0, attachedMatch.index).trim(),
+      fileNames: parseAttachmentNameList(attachedMatch[1]),
+    };
   }
 
-  const onlyAttachmentsMatch = text.match(/^\[(.*?)\]$/);
+  const attachedLooseMatch = text.match(/\n\nAttached:\s*(\S[\s\S]*)$/);
+  if (attachedLooseMatch) {
+    return {
+      cleanText: text.substring(0, attachedLooseMatch.index).trim(),
+      fileNames: parseAttachmentNameList(attachedLooseMatch[1]),
+    };
+  }
+
+  const onlyAttachmentsMatch = text.match(/^\[(.*?)\]\s*$/);
   if (onlyAttachmentsMatch) {
-    const fileNames = onlyAttachmentsMatch[1]
-      .split(/,\s+/)
-      .map((f) => f.trim())
-      .filter(Boolean);
-    return { cleanText: "", fileNames };
+    return {
+      cleanText: "",
+      fileNames: parseAttachmentNameList(onlyAttachmentsMatch[1]),
+    };
   }
 
   return { cleanText: text, fileNames: [] };
+}
+
+export type VisibleUserAttachment = {
+  fileName: string;
+  displayName: string;
+  isImage: boolean;
+};
+
+export type VisibleUserMessage = {
+  bodyText: string;
+  attachments: VisibleUserAttachment[];
+  canvas: CanvasRequest | null;
+  copyText: string;
+};
+
+function attachmentDisplayName(fileName: string): string {
+  const normalized = fileName.replace(/\\/g, "/").trim();
+  const base = normalized.split("/").pop()?.trim();
+  if (!base || base === "." || base === "..") return fileName.trim();
+  return base;
+}
+
+export function canvasFallbackName(surface: CanvasRequestSurface): string {
+  return surface === "spreadsheet" ? "Spreadsheet" : "Document";
+}
+
+function formatCanvasCopyText(request: CanvasRequest): string {
+  const header = [
+    request.fileName ?? canvasFallbackName(request.surface),
+    request.sheet,
+    request.region,
+  ]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join(" · ");
+  const lines: string[] = [];
+  if (header) lines.push(header);
+  if (request.selectionText) lines.push(`\u201C${request.selectionText}\u201D`);
+  if (request.userRequest) lines.push(request.userRequest);
+  return lines.join("\n");
+}
+
+function formatAttachmentCopyText(attachments: readonly VisibleUserAttachment[]): string {
+  const names = attachments.map((attachment) => attachment.displayName).filter(Boolean);
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  return `Attached: ${names.join(", ")}`;
+}
+
+function formatVisibleUserCopyText(opts: {
+  bodyText: string;
+  attachments: readonly VisibleUserAttachment[];
+  canvas: CanvasRequest | null;
+}): string {
+  if (opts.canvas) {
+    const canvasText = formatCanvasCopyText(opts.canvas);
+    const attached = formatAttachmentCopyText(opts.attachments);
+    if (canvasText && attached) return `${canvasText}\n\n${attached}`;
+    return canvasText || attached;
+  }
+  const attached = formatAttachmentCopyText(opts.attachments);
+  const body = opts.bodyText.trim();
+  if (body && attached) return `${body}\n\n${attached}`;
+  return body || attached;
+}
+
+function isImageAttachmentName(fileName: string): boolean {
+  return (
+    getFilePreviewKind(fileName) === "image" ||
+    getFilePreviewKind(attachmentDisplayName(fileName)) === "image"
+  );
+}
+
+/**
+ * One semantic view of a persisted user turn: visible body, attachments, canvas
+ * context, and the clipboard string. Callers must not copy or render `rawText`
+ * once this model exists — that string can contain attachment/Canvas markup.
+ */
+export function buildVisibleUserMessage(rawText: string): VisibleUserMessage {
+  const parsed = parseUserMessageAttachments(rawText);
+  const canvas = interpretCanvasRequest(parsed.cleanText);
+  const attachments = parsed.fileNames.map((fileName) => ({
+    fileName,
+    displayName: attachmentDisplayName(fileName),
+    isImage: isImageAttachmentName(fileName),
+  }));
+  const bodyText = canvas ? canvas.userRequest : parsed.cleanText;
+  return {
+    bodyText,
+    attachments,
+    canvas,
+    copyText: formatVisibleUserCopyText({
+      bodyText: canvas ? canvas.userRequest : parsed.cleanText,
+      attachments,
+      canvas,
+    }),
+  };
 }

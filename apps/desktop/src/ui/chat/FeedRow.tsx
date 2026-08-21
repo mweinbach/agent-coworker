@@ -1,4 +1,5 @@
 import {
+  AlertCircleIcon,
   CheckIcon,
   CopyIcon,
   FileAudioIcon,
@@ -34,26 +35,97 @@ import {
 } from "../../lib/mediaProtocol";
 import { openExternalSource } from "../../lib/openExternalSource";
 import { cn } from "../../lib/utils";
-import { DesktopMarkdown } from "../markdown";
+import { DesktopMarkdown, rewriteDesktopImageUrl } from "../markdown";
 import { recordDesktopRenderMetric } from "../renderDiagnostics";
 import { useChatViewContext } from "./ChatViewContext";
 import { CitationSourcesCarousel } from "./CitationSourcesCarousel";
 import type { MentionCatalog } from "./composerMentions";
 import {
+  buildVisibleUserMessage,
   type CanvasRequest,
-  parseCanvasRequest,
-  parseUserMessageAttachments,
+  canvasFallbackName,
+  type VisibleUserAttachment,
 } from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
 import { ToolCard } from "./toolCards/ToolCard";
 
-function MessageCopyAction(props: {
-  text: string;
-  className?: string;
-  /** Compact pill aligned with the Sources control (always visible). */
-  prominent?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
+type CopyStatus = "idle" | "copied" | "failed";
+
+function copyStatusLabel(status: CopyStatus, idleLabel: string): string {
+  switch (status) {
+    case "idle":
+      return idleLabel;
+    case "copied":
+      return "Copied";
+    case "failed":
+      return "Copy failed. Retry.";
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+function copyButtonCaption(status: CopyStatus): string {
+  switch (status) {
+    case "idle":
+      return "Copy";
+    case "copied":
+      return "Copied";
+    case "failed":
+      return "Retry";
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+function copyStatusSrOnly(status: CopyStatus): string {
+  switch (status) {
+    case "idle":
+      return "Copy";
+    case "copied":
+      return "Copied";
+    case "failed":
+      return "Copy failed. Retry.";
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+function copyLiveAnnouncement(status: CopyStatus): string {
+  switch (status) {
+    case "idle":
+      return "";
+    case "copied":
+      return "Copied";
+    case "failed":
+      return "Couldn't copy message. Try again.";
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+function CopyStatusIcon(props: { status: CopyStatus }) {
+  switch (props.status) {
+    case "copied":
+      return <CheckIcon data-icon="inline-start" className="text-success" />;
+    case "failed":
+      return <AlertCircleIcon data-icon="inline-start" className="text-destructive" />;
+    case "idle":
+      return <CopyIcon data-icon="inline-start" />;
+    default: {
+      const _exhaustive: never = props.status;
+      return _exhaustive;
+    }
+  }
+}
+
+function useClipboardCopy() {
+  const [status, setStatus] = useState<CopyStatus>("idle");
   const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -64,91 +136,60 @@ function MessageCopyAction(props: {
     };
   }, []);
 
-  const handleCopy = async () => {
+  const copy = async (text: string) => {
     try {
-      await writeClipboardText(props.text);
-      setCopied(true);
+      await writeClipboardText(text);
+      setStatus("copied");
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
       }
-      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
+      copyTimeoutRef.current = window.setTimeout(() => setStatus("idle"), 1500);
     } catch {
-      // Clipboard may still be unavailable outside Electron. Fail silently.
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+      setStatus("failed");
     }
   };
 
-  if (props.prominent) {
-    return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => void handleCopy()}
-        aria-label={copied ? "Copied" : "Copy message"}
-        data-slot="message-copy-action"
-        className={cn(
-          "h-7 gap-1.5 rounded-full app-border-subtle bg-background/60 px-2.5 app-type-caption font-medium app-text-muted shadow-none hover:bg-accent/50 hover:text-foreground",
-          props.className,
-        )}
-      >
-        {copied ? (
-          <CheckIcon className="size-3.5 text-success" aria-hidden />
-        ) : (
-          <CopyIcon className="size-3.5" aria-hidden />
-        )}
-        <span>{copied ? "Copied" : "Copy"}</span>
-      </Button>
-    );
-  }
+  return { status, copy };
+}
+
+function MessageCopyAction(props: { text: string; className?: string; prominent?: boolean }) {
+  const { status, copy } = useClipboardCopy();
+  const label = copyStatusLabel(status, "Copy message");
 
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-xs"
-      onClick={() => void handleCopy()}
-      aria-label={copied ? "Copied" : "Copy message"}
+      onClick={() => {
+        void copy(props.text);
+      }}
+      aria-label={label}
+      title={label}
       data-slot="message-copy-action"
       className={cn(
         "opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+        status !== "idle" && "opacity-100",
         props.className,
       )}
     >
-      {copied ? (
-        <CheckIcon data-icon="inline-start" className="text-success" />
-      ) : (
-        <CopyIcon data-icon="inline-start" />
-      )}
-      <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+      <CopyStatusIcon status={status} />
+      <span className="sr-only">{copyStatusSrOnly(status)}</span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {copyLiveAnnouncement(status)}
+      </span>
     </Button>
   );
 }
 
 function ErrorFeedRow(props: { message: string }) {
-  const [copied, setCopied] = useState(false);
+  const { status, copy } = useClipboardCopy();
   const [expanded, setExpanded] = useState(false);
-  const copyTimeoutRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current !== null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopy = async () => {
-    try {
-      await writeClipboardText(props.message);
-      setCopied(true);
-      if (copyTimeoutRef.current !== null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard unavailable — fail silently.
-    }
-  };
+  const copyLabel = copyStatusLabel(status, "Copy error");
   return (
     <Card
       role="alert"
@@ -162,16 +203,21 @@ function ErrorFeedRow(props: { message: string }) {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={handleCopy}
-              aria-label={copied ? "Copied" : "Copy error"}
+              onClick={() => {
+                void copy(props.message);
+              }}
+              aria-label={copyLabel}
+              title={copyLabel}
               className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {copied ? (
+              {status === "copied" ? (
                 <CheckIcon className="size-3 text-success" />
+              ) : status === "failed" ? (
+                <AlertCircleIcon className="size-3 text-destructive" />
               ) : (
                 <CopyIcon className="size-3" />
               )}
-              {copied ? "Copied" : "Copy"}
+              {copyButtonCaption(status)}
             </button>
             <button
               type="button"
@@ -200,14 +246,14 @@ function ErrorFeedRow(props: { message: string }) {
 export function CanvasRequestBody(props: { request: CanvasRequest; catalog: MentionCatalog }) {
   const { request, catalog } = props;
   const FileGlyph = request.surface === "spreadsheet" ? FileSpreadsheetIcon : FileTextIcon;
-  const fallbackName = request.surface === "spreadsheet" ? "Spreadsheet" : "Document";
+  const fallbackName = canvasFallbackName(request.surface);
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 select-none">
         <span className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 app-type-caption font-medium app-text-emphasis">
           <FileGlyph className="size-3 shrink-0 text-primary/80" />
-          <span className="max-w-[200px] truncate" title={request.fileName ?? undefined}>
+          <span className="max-w-[200px] truncate" title={request.fileName ?? fallbackName}>
             {request.fileName ?? fallbackName}
           </span>
         </span>
@@ -242,7 +288,7 @@ export function CanvasRequestBody(props: { request: CanvasRequest; catalog: Ment
 
 function attachmentIconForFilename(fileName: string) {
   if (/\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName)) return FileAudioIcon;
-  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(fileName)) return FileImageIcon;
+  if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(fileName)) return FileImageIcon;
   if (/\.(mp4|mov|avi|mkv|webm)$/i.test(fileName)) return FileVideoIcon;
   if (/\.pdf$/i.test(fileName)) return FileTextIcon;
   return FileIcon;
@@ -253,11 +299,42 @@ function attachmentTypeForFilename(fileName: string): string {
   return extension && extension !== fileName ? extension.toUpperCase() : "FILE";
 }
 
-function attachmentPreviewSrc(fileName: string): string | null {
-  if (!isAbsoluteDesktopPath(fileName) || !isDesktopMediaImagePath(fileName)) {
+const WORKSPACE_UPLOADS_DIR = "User Uploads";
+const URL_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+function hasUnsafeAttachmentPreviewScheme(fileName: string): boolean {
+  const trimmed = fileName.trim();
+  if (!trimmed) return true;
+  return URL_SCHEME_RE.test(trimmed) && !isAbsoluteDesktopPath(trimmed);
+}
+
+function isSafeAttachmentPreviewSrc(src: string): boolean {
+  return src.startsWith("cowork-media:");
+}
+
+export function resolveUserAttachmentPreviewSrc(
+  fileName: string,
+  desktopBasePath?: string | null,
+): string | null {
+  if (!isDesktopMediaImagePath(fileName) || hasUnsafeAttachmentPreviewScheme(fileName)) {
     return null;
   }
-  return encodeDesktopMediaUrl(fileName);
+
+  const absolute = encodeDesktopMediaUrl(fileName);
+  if (absolute && isSafeAttachmentPreviewSrc(absolute)) return absolute;
+  if (!desktopBasePath) return null;
+
+  const normalized = fileName.replace(/\\/g, "/");
+  const candidates =
+    normalized.includes("/") || normalized.includes(":")
+      ? [normalized]
+      : [`${WORKSPACE_UPLOADS_DIR}/${normalized}`, normalized];
+
+  for (const candidate of candidates) {
+    const rewritten = rewriteDesktopImageUrl(candidate, desktopBasePath);
+    if (rewritten && isSafeAttachmentPreviewSrc(rewritten)) return rewritten;
+  }
+  return null;
 }
 
 function keyedAttachmentFileNames(fileNames: readonly string[]) {
@@ -269,13 +346,19 @@ function keyedAttachmentFileNames(fileNames: readonly string[]) {
   });
 }
 
-function UserAttachmentGroup(props: { fileNames: readonly string[] }) {
-  if (props.fileNames.length === 0) return null;
+function UserAttachmentGroup(props: {
+  attachments: readonly VisibleUserAttachment[];
+  desktopBasePath?: string | null;
+}) {
+  if (props.attachments.length === 0) return null;
+  const fileNames = props.attachments.map((attachment) => attachment.fileName);
   return (
-    <AttachmentGroup className="max-w-full">
-      {keyedAttachmentFileNames(props.fileNames).map(({ fileName, key }) => {
-        const previewSrc = attachmentPreviewSrc(fileName);
-        const IconComponent = attachmentIconForFilename(fileName);
+    <AttachmentGroup className="max-w-full" aria-label="Attached files">
+      {keyedAttachmentFileNames(fileNames).map(({ fileName, key }, index) => {
+        const attachment = props.attachments[index];
+        const displayName = attachment?.displayName ?? fileName;
+        const previewSrc = resolveUserAttachmentPreviewSrc(fileName, props.desktopBasePath);
+        const IconComponent = attachmentIconForFilename(displayName);
         return (
           <Attachment key={key} size="sm">
             <AttachmentMedia variant={previewSrc ? "image" : "icon"}>
@@ -286,25 +369,16 @@ function UserAttachmentGroup(props: { fileNames: readonly string[] }) {
               )}
             </AttachmentMedia>
             <AttachmentContent>
-              <AttachmentTitle title={fileName}>{fileName}</AttachmentTitle>
-              <AttachmentDescription>{attachmentTypeForFilename(fileName)}</AttachmentDescription>
+              <AttachmentTitle title={displayName}>{displayName}</AttachmentTitle>
+              <AttachmentDescription>
+                {attachmentTypeForFilename(displayName)}
+              </AttachmentDescription>
             </AttachmentContent>
           </Attachment>
         );
       })}
     </AttachmentGroup>
   );
-}
-
-function resolveUserCopyText(opts: {
-  canvasRequest: CanvasRequest | null;
-  cleanText: string;
-  rawText: string;
-}): string {
-  if (opts.canvasRequest) {
-    return opts.canvasRequest.userRequest || opts.cleanText || opts.rawText;
-  }
-  return opts.cleanText || opts.rawText;
 }
 
 export const FeedRow = memo(function FeedRow(props: {
@@ -328,16 +402,8 @@ export const FeedRow = memo(function FeedRow(props: {
       // action special rendering removed (feature fully stripped)
     }
 
-    const userMessage = item.role === "user" ? parseUserMessageAttachments(item.text) : null;
-    const canvasRequest = userMessage ? parseCanvasRequest(userMessage.cleanText) : null;
-    const copyText =
-      item.role === "user" && userMessage
-        ? resolveUserCopyText({
-            canvasRequest,
-            cleanText: userMessage.cleanText,
-            rawText: item.text,
-          })
-        : item.text;
+    const visibleUserMessage = item.role === "user" ? buildVisibleUserMessage(item.text) : null;
+    const copyText = visibleUserMessage?.copyText ?? item.text;
     const isStreamingAssistant = item.role === "assistant" && props.isStreaming === true;
     if (isStreamingAssistant) {
       recordDesktopRenderMetric("streaming-markdown", item.id);
@@ -383,34 +449,45 @@ export const FeedRow = memo(function FeedRow(props: {
             >
               <BubbleContent className="cursor-text select-text rounded-2xl rounded-br-md px-3.5 py-2.5 app-type-body-lg whitespace-pre-wrap selection:bg-primary/20">
                 <div className="flex flex-col gap-2">
-                  {canvasRequest ? (
-                    <CanvasRequestBody request={canvasRequest} catalog={mentionCatalog} />
-                  ) : userMessage?.cleanText ? (
-                    <MentionText text={userMessage.cleanText} catalog={mentionCatalog} />
+                  {visibleUserMessage?.canvas ? (
+                    <CanvasRequestBody
+                      request={visibleUserMessage.canvas}
+                      catalog={mentionCatalog}
+                    />
+                  ) : visibleUserMessage?.bodyText ? (
+                    <MentionText text={visibleUserMessage.bodyText} catalog={mentionCatalog} />
                   ) : null}
-                  {userMessage && userMessage.fileNames.length > 0 ? (
-                    <UserAttachmentGroup fileNames={userMessage.fileNames} />
+                  {visibleUserMessage && visibleUserMessage.attachments.length > 0 ? (
+                    <UserAttachmentGroup
+                      attachments={visibleUserMessage.attachments}
+                      desktopBasePath={props.desktopBasePath}
+                    />
                   ) : null}
                 </div>
               </BubbleContent>
             </Bubble>
           )}
 
-          <div
-            className={cn(
-              "mt-1.5 flex flex-wrap items-center gap-1.5",
-              item.role === "user" ? "justify-end" : "justify-start",
-            )}
-            data-slot="message-actions"
-          >
-            {hasSources && !hasInlineCitationChip && props.citationSources ? (
-              <CitationSourcesCarousel
-                sources={props.citationSources}
-                onOpenSource={openExternalSource}
-              />
-            ) : null}
-            <MessageCopyAction text={copyText} prominent={item.role === "assistant"} />
-          </div>
+          {hasSources && !hasInlineCitationChip && props.citationSources ? (
+            <CitationSourcesCarousel
+              sources={props.citationSources}
+              onOpenSource={openExternalSource}
+            />
+          ) : null}
+
+          {copyText ? (
+            <div
+              className={cn(
+                "pointer-events-none -mt-2 flex h-6 items-center",
+                item.role === "user" ? "justify-end" : "justify-start",
+              )}
+              data-slot="message-actions"
+            >
+              <div className="pointer-events-auto">
+                <MessageCopyAction text={copyText} prominent={item.role === "assistant"} />
+              </div>
+            </div>
+          ) : null}
         </MessageContent>
       </Message>
     );

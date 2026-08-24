@@ -6,6 +6,7 @@ import path from "node:path";
 import { OAUTH_LOOPBACK_HOST } from "../src/auth/oauth-server";
 import { __internal as connectInternal } from "../src/connect";
 import { parseConnectionStoreJson } from "../src/store/connections";
+import { resolveAuthHomeDir } from "../src/utils/authHome";
 
 const mockedAuthorizeUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=${encodeURIComponent(`http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`)}&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&code_challenge=mock-challenge&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=mock-state&originator=codex_cli_rs`;
 
@@ -67,6 +68,7 @@ describe("connect helpers", () => {
       expect(paths.rootDir).toBe(path.join(configuredHome, ".cowork"));
       expect(paths.authDir).toBe(path.join(configuredHome, ".cowork", "auth"));
       expect(paths.sessionsDir).toBe(path.join(configuredHome, ".cowork", "sessions"));
+      expect(resolveAuthHomeDir()).toBe(configuredHome);
     } finally {
       if (previousOverride === undefined) {
         delete process.env.COWORK_HOME_OVERRIDE;

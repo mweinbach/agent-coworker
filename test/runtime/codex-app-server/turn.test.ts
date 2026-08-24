@@ -1448,6 +1448,268 @@ describe("codex app-server turn lifecycle", () => {
     }
   });
 
+  test.serial("matches nested dynamic tools to the correct overlapping exec", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-overlap-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Run overlapping code-mode tools" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => streamParts.push(part),
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const emitItem = (method: string, item: Record<string, unknown>) => {
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", item },
+        });
+      };
+
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-todo",
+        name: "exec",
+        input: "await tools.todo_write({ todos: [] })",
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-read",
+        name: "exec",
+        input: "await tools.read_file({ file_path: 'README.md' })",
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-todo",
+        tool: "todoWrite",
+        arguments: { todos: [] },
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-todo",
+        tool: "todoWrite",
+        arguments: { todos: [] },
+        status: "completed",
+        result: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-todo",
+        output: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-read",
+        output: "README contents",
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "dynamic-todo",
+          toolName: "todoWrite",
+          input: { todos: [] },
+        },
+        {
+          type: "tool-result",
+          toolCallId: "dynamic-todo",
+          toolName: "todoWrite",
+          output: { updated: true },
+        },
+        {
+          type: "tool-call",
+          toolCallId: "exec-read",
+          toolName: "read_file",
+          input: "await tools.read_file({ file_path: 'README.md' })",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-read",
+          toolName: "read_file",
+          output: "README contents",
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.serial("deduplicates dynamic tools throughout yielded exec continuations", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-code-mode-yield-dedupe-"),
+    );
+    const controlled = createControlledCodexTurnClient();
+    const streamParts: unknown[] = [];
+    let turnPromise: Promise<unknown> | undefined;
+
+    codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+    try {
+      const runtime = createRuntime(makeConfig(dir));
+      turnPromise = runtime.runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        messages: [{ role: "user", content: "Run code-mode tools after yielding" }],
+        tools: {},
+        maxSteps: 1,
+        onModelStreamPart: (part) => streamParts.push(part),
+      });
+
+      await controlled.turnStartEntered;
+      controlled.resolveTurnStart({
+        turn: { id: "turn_1", status: "inProgress", items: [] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const emitItem = (method: string, item: Record<string, unknown>) => {
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", item },
+        });
+      };
+      const source = "await tools.todo_write({}); await tools.web_search({})";
+
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call",
+        call_id: "exec-1",
+        name: "exec",
+        input: source,
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "custom_tool_call_output",
+        call_id: "exec-1",
+        output: "Script running with cell ID cell-1. Continue with wait.",
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-before-wait",
+        tool: "todoWrite",
+        arguments: {},
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-before-wait",
+        tool: "todoWrite",
+        arguments: {},
+        status: "completed",
+        result: { updated: true },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "function_call",
+        call_id: "wait-1",
+        name: "wait",
+        arguments: '{"cell_id":"cell-1"}',
+      });
+      emitItem("item/started", {
+        type: "dynamicToolCall",
+        id: "dynamic-during-wait",
+        tool: "webSearch",
+        arguments: {},
+        status: "inProgress",
+      });
+      emitItem("item/completed", {
+        type: "dynamicToolCall",
+        id: "dynamic-during-wait",
+        tool: "webSearch",
+        arguments: {},
+        status: "completed",
+        result: {
+          contentItems: [
+            {
+              type: "inputText",
+              text: "Search source (https://example.com/source)\nciteturn0search7 Search result.",
+            },
+          ],
+        },
+      });
+      emitItem("rawResponseItem/completed", {
+        type: "function_call_output",
+        call_id: "wait-1",
+        output: "Summarized result",
+      });
+      controlled.emitNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread_1",
+          turn: {
+            id: "turn_1",
+            threadId: "thread_1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "assistant-1", text: "Done" }],
+            error: null,
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toMatchObject({ text: "Done" });
+      expect(streamParts.filter((part: any) => part.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-call",
+          toolCallId: "exec-1",
+          toolName: "todo_write + web_search",
+          input: source,
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec-1",
+          toolName: "todo_write + web_search",
+          output: {
+            contentItems: "Summarized result",
+            citationSources: [
+              {
+                referenceId: "turn0search7",
+                title: "Search source",
+                url: "https://example.com/source",
+              },
+            ],
+          },
+          providerExecuted: true,
+        },
+      ]);
+    } finally {
+      controlled.resolveTurnStart();
+      await turnPromise?.catch(() => {});
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test.serial("projects requestUserInput, todoList, and fileChange events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-app-server-events-"));
     process.env.COWORK_CODEX_APP_SERVER_ARGS = "eventful";

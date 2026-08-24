@@ -20,6 +20,19 @@ describe("Codex code-mode tool display", () => {
     expect(codeModeDisplayToolName(source)).toBe("read_file + grep_files");
   });
 
+  test("extracts tool calls from nested template literal interpolations", () => {
+    const source = [
+      "`literal tools.ignored()`;",
+      "`escaped \\${tools.also_ignored()}`;",
+      "`file: ${await tools.read_file({ file_path: 'README.md' })}`;",
+      "`nested ${`inner ${await tools.grep_files({ pattern: '}' })}`}`;",
+      "`object ${JSON.stringify({ value: await tools['web_fetch']({ url: 'https://example.com' }) })}`;",
+    ].join("\n");
+
+    expect(codeModeNestedToolNames(source)).toEqual(["read_file", "grep_files", "web_fetch"]);
+    expect(codeModeDisplayToolName(source)).toBe("read_file + 2 more");
+  });
+
   test("uses compact labels and a safe fallback", () => {
     expect(
       codeModeDisplayToolName(

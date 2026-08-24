@@ -33,6 +33,66 @@ function skipBlockComment(source: string, start: number): number {
   return end === -1 ? source.length : end + 2;
 }
 
+function findTemplateInterpolationEnd(source: string, start: number): number | null {
+  let index = start;
+  let depth = 1;
+
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"' || char === "'") {
+      index = skipQuoted(source, index, char);
+      continue;
+    }
+    if (char === "`") {
+      index = skipTemplateLiteral(source, index);
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "/") {
+      index = skipLineComment(source, index);
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      index = skipBlockComment(source, index);
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+    index += 1;
+  }
+
+  return null;
+}
+
+function skipTemplateLiteral(
+  source: string,
+  start: number,
+  onInterpolation?: (expression: string) => void,
+): number {
+  let index = start + 1;
+
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (source[index] === "`") return index + 1;
+    if (source[index] === "$" && source[index + 1] === "{") {
+      const expressionStart = index + 2;
+      const expressionEnd = findTemplateInterpolationEnd(source, expressionStart);
+      if (expressionEnd === null) return source.length;
+      onInterpolation?.(source.slice(expressionStart, expressionEnd));
+      index = expressionEnd + 1;
+      continue;
+    }
+    index += 1;
+  }
+
+  return source.length;
+}
+
 function skipTrivia(source: string, start: number): number {
   let index = start;
   while (index < source.length) {
@@ -80,18 +140,19 @@ function codeModeSource(input: unknown): string | null {
   return asString(record?.code) ?? asString(record?.source) ?? null;
 }
 
-export function codeModeNestedToolNames(input: unknown): string[] {
-  const source = codeModeSource(input);
-  if (!source) return [];
-
-  const names: string[] = [];
-  const seen = new Set<string>();
+function collectCodeModeNestedToolNames(source: string, names: string[], seen: Set<string>): void {
   let index = 0;
 
   while (index < source.length) {
     const char = source[index];
-    if (char === '"' || char === "'" || char === "`") {
+    if (char === '"' || char === "'") {
       index = skipQuoted(source, index, char);
+      continue;
+    }
+    if (char === "`") {
+      index = skipTemplateLiteral(source, index, (expression) => {
+        collectCodeModeNestedToolNames(expression, names, seen);
+      });
       continue;
     }
     if (char === "/" && source[index + 1] === "/") {
@@ -132,7 +193,14 @@ export function codeModeNestedToolNames(input: unknown): string[] {
       names.push(property.value);
     }
   }
+}
 
+export function codeModeNestedToolNames(input: unknown): string[] {
+  const source = codeModeSource(input);
+  if (!source) return [];
+
+  const names: string[] = [];
+  collectCodeModeNestedToolNames(source, names, new Set<string>());
   return names;
 }
 

@@ -3,11 +3,15 @@ import type {
   CodexAppServerCloseInfo,
   CodexAppServerJsonRpcNotification,
 } from "../../providers/codexAppServerClient";
-import { extractReferencedCitationSourcesFromToolResult } from "../../shared/providerCitationSources";
+import {
+  type CitationSource,
+  extractReferencedCitationSourcesFromToolResult,
+} from "../../shared/providerCitationSources";
 import { asArray, asRecord, asString } from "../../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
 import {
   codeModeDisplayToolName,
+  codeModeNestedToolNames,
   codeModeWaitCellId,
   runningCodeModeCellId,
 } from "./codeModeToolDisplay";
@@ -63,8 +67,20 @@ function dynamicToolErrorText(item: Record<string, unknown>): string {
   return contentText ?? "dynamic tool failed";
 }
 
-function projectedToolOutput(output: unknown): unknown {
+function projectedToolOutput(
+  output: unknown,
+  additionalCitationSources: readonly CitationSource[] = [],
+): unknown {
   const citationSources = extractReferencedCitationSourcesFromToolResult(output);
+  const seenCitationSources = new Set(
+    citationSources.map((source) => source.referenceId ?? source.url),
+  );
+  for (const source of additionalCitationSources) {
+    const key = source.referenceId ?? source.url;
+    if (seenCitationSources.has(key)) continue;
+    seenCitationSources.add(key);
+    citationSources.push(source);
+  }
   return citationSources.length > 0 ? { contentItems: output, citationSources } : output;
 }
 
@@ -252,13 +268,32 @@ export type CodexTurnNotificationRouter = {
 type PendingCodeModeExec = {
   toolName: string;
   input: unknown;
+  nestedToolNames: ReadonlySet<string>;
   nestedToolObserved: boolean;
 };
 
 type CodeModeContinuation = {
   visibleToolCallId: string | null;
   toolName: string;
+  nestedToolNames: ReadonlySet<string>;
+  citationSources: CitationSource[];
 };
+
+function normalizedCodeModeToolName(name: string): string {
+  return name.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function matchesNestedCodeModeTool(
+  execution: Pick<PendingCodeModeExec, "nestedToolNames">,
+  dynamicToolName: string,
+): boolean {
+  return (
+    execution.nestedToolNames.has(normalizedCodeModeToolName(dynamicToolName)) ||
+    execution.nestedToolNames.has(
+      normalizedCodeModeToolName(coworkToolNameFromCodexDynamicName(dynamicToolName)),
+    )
+  );
+}
 
 export function createCodexTurnNotificationRouter(
   client: CodexAppServerClient,
@@ -278,7 +313,7 @@ export function createCodexTurnNotificationRouter(
   const pendingCodeModeExecByCallId = new Map<string, PendingCodeModeExec>();
   const codeModeContinuationByCellId = new Map<string, CodeModeContinuation>();
   const codeModeContinuationByWaitCallId = new Map<string, CodeModeContinuation>();
-  let activeCodeModeExecCallId: string | null = null;
+  const suppressedCodeModeDynamicToolByCallId = new Map<string, CodeModeContinuation>();
 
   const ensureAssistantItem = (id: string | undefined, initialText = ""): string | null => {
     if (!id) return null;
@@ -430,13 +465,43 @@ export function createCodexTurnNotificationRouter(
     if (!targetsActiveCodexTurn(payload, target)) return;
     if (completion.abortSignal?.aborted) return;
 
-    if (
-      notification.method === "item/started" &&
-      item?.type === "dynamicToolCall" &&
-      activeCodeModeExecCallId
-    ) {
-      const pending = pendingCodeModeExecByCallId.get(activeCodeModeExecCallId);
-      if (pending) pending.nestedToolObserved = true;
+    if (item?.type === "dynamicToolCall") {
+      const dynamicToolCallId = asString(item.id) ?? asString(item.callId);
+      if (notification.method === "item/completed" && dynamicToolCallId) {
+        const continuation = suppressedCodeModeDynamicToolByCallId.get(dynamicToolCallId);
+        if (continuation) {
+          suppressedCodeModeDynamicToolByCallId.delete(dynamicToolCallId);
+          continuation.citationSources.push(
+            ...extractReferencedCitationSourcesFromToolResult(
+              item.result ?? item.contentItems ?? null,
+            ),
+          );
+          return;
+        }
+      }
+
+      const dynamicToolName = asString(item.tool);
+      if (notification.method === "item/started" && dynamicToolName) {
+        const pending = [...pendingCodeModeExecByCallId.values()].find((candidate) =>
+          matchesNestedCodeModeTool(candidate, dynamicToolName),
+        );
+        if (pending) {
+          pending.nestedToolObserved = true;
+        } else if (dynamicToolCallId) {
+          const continuation = [
+            ...codeModeContinuationByCellId.values(),
+            ...codeModeContinuationByWaitCallId.values(),
+          ].find(
+            (candidate) =>
+              candidate.visibleToolCallId !== null &&
+              matchesNestedCodeModeTool(candidate, dynamicToolName),
+          );
+          if (continuation) {
+            suppressedCodeModeDynamicToolByCallId.set(dynamicToolCallId, continuation);
+            return;
+          }
+        }
+      }
     }
 
     if (notification.method === "rawResponseItem/completed") {
@@ -449,9 +514,11 @@ export function createCodexTurnNotificationRouter(
           pendingCodeModeExecByCallId.set(callId, {
             toolName: codeModeDisplayToolName(input),
             input,
+            nestedToolNames: new Set(
+              codeModeNestedToolNames(input).map((name) => normalizedCodeModeToolName(name)),
+            ),
             nestedToolObserved: false,
           });
-          activeCodeModeExecCallId = callId;
           return;
         }
       }
@@ -470,6 +537,8 @@ export function createCodexTurnNotificationRouter(
           const fallbackContinuation = {
             visibleToolCallId: callId,
             toolName: "codeExecution",
+            nestedToolNames: new Set<string>(),
+            citationSources: [],
           };
           codeModeContinuationByWaitCallId.set(callId, fallbackContinuation);
           void params.onModelStreamPart?.({
@@ -490,12 +559,13 @@ export function createCodexTurnNotificationRouter(
         const pending = pendingCodeModeExecByCallId.get(callId);
         if (!pending) return;
         pendingCodeModeExecByCallId.delete(callId);
-        if (activeCodeModeExecCallId === callId) activeCodeModeExecCallId = null;
         const output = item?.output ?? item?.result ?? item?.contentItems ?? null;
         const cellId = runningCodeModeCellId(output);
         const continuation = {
           visibleToolCallId: pending.nestedToolObserved ? null : callId,
           toolName: pending.toolName,
+          nestedToolNames: pending.nestedToolNames,
+          citationSources: [],
         };
         if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
         if (pending.nestedToolObserved) return;
@@ -529,7 +599,7 @@ export function createCodexTurnNotificationRouter(
           type: "tool-result",
           toolCallId: continuation.visibleToolCallId,
           toolName: continuation.toolName,
-          output: projectedToolOutput(output),
+          output: projectedToolOutput(output, continuation.citationSources),
           providerExecuted: true,
         });
         return;

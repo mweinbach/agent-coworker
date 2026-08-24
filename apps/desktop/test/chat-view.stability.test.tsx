@@ -252,6 +252,69 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("new chat landing truthfully allows immediate send while runtime setup finishes", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: null,
+      selectedThreadId: null,
+      workspaces: [],
+      threads: [],
+      workspaceRuntimeById: {},
+      threadRuntimeById: {},
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForNewChatTarget({ kind: "oneOff" }),
+        "Start as soon as setup finishes",
+      ),
+      providerDefaultModelByProvider: {},
+      preflightCreation: async () => ({
+        ready: true,
+        checks: [
+          {
+            id: "runtime_ready",
+            status: "pending",
+            message: "Downloading the Cowork runtime — 62%.",
+          },
+        ],
+      }),
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Finishing setup — send now and your chat will start automatically.");
+      const sendButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Send message"]',
+      );
+      expect(sendButton?.disabled).toBe(false);
+
+      await act(async () => {
+        sendButton?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(useAppStore.getState().threads[0]?.title).toBe("Start as soon as setup finishes");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("new chat landing starts a no-project chat on submit", async () => {
     useAppStore.setState({
       ready: true,

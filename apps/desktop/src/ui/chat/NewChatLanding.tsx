@@ -503,7 +503,7 @@ export function NewChatLanding() {
                 : readinessBlocked
                   ? "Setup required"
                   : readinessPending
-                    ? "Finishing setup — you can send in a moment."
+                    ? "Finishing setup — send now and your chat will start automatically."
                     : readiness.checking && !readiness.result
                       ? "Validating readiness…"
                       : null}

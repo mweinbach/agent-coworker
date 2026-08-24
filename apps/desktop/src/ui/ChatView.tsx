@@ -138,6 +138,9 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const composerText = composerDraft.text;
   const pendingAttachments = composerDraft.attachments;
   const composerWorkspaceId = thread?.workspaceId ?? "";
+  const workspaceReconnecting = useAppStore(
+    (s) => s.workspaceRuntimeById[composerWorkspaceId]?.reconnecting === true,
+  );
   const workspaceSkills = useAppStore((s) => s.workspaceRuntimeById[composerWorkspaceId]?.skills);
   const workspacePluginsCatalog = useAppStore(
     (s) => s.workspaceRuntimeById[composerWorkspaceId]?.pluginsCatalog ?? null,
@@ -850,13 +853,25 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   const placeholder = transcriptOnly
     ? "Continue in a new thread..."
     : disconnected
-      ? "Reconnect to continue..."
+      ? workspaceReconnecting
+        ? "Reconnecting automatically... Keep writing."
+        : "Write a message to reconnect..."
       : busy
         ? "Steer..."
         : pendingTurnStart
           ? "Sending..."
           : "Message...";
-  const composerHint = composerBusyHint(composerSubmitState);
+  const composerHint = disconnected
+    ? workspaceReconnecting
+      ? pendingTurnStart
+        ? "Reconnecting automatically. Your queued message will send when the connection returns."
+        : busy
+          ? "Reconnecting automatically. Your current response and draft are safe."
+          : "Reconnecting automatically. Your draft is safe."
+      : busy
+        ? "Reconnect to continue the current response. Your draft is safe."
+        : "Your draft is safe. Send a message to reconnect."
+    : composerBusyHint(composerSubmitState);
 
   return (
     <ChatViewContext.Provider value={contextValue}>

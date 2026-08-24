@@ -125,7 +125,9 @@ function setupChatViewJsdom() {
 }
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
+const { defaultThreadRuntime, defaultWorkspaceRuntime, RUNTIME } = await import(
+  "../src/app/store.helpers/runtimeState"
+);
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 const { setDesktopRenderMetricObserver } = await import("../src/ui/renderDiagnostics");
 
@@ -1569,6 +1571,110 @@ describe("desktop chat view stability", () => {
       if (root) {
         await act(async () => {
           root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("offline composer truthfully distinguishes automatic recovery from send-to-reconnect", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "disconnected",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          reconnecting: true,
+        },
+      },
+      threadRuntimeById: {
+        "thread-1": {
+          ...defaultThreadRuntime(),
+          connected: false,
+          sessionId: "session-1",
+          config: { provider: "openai", model: "gpt-5.4" },
+        },
+      },
+      composerDraftsByKey: composerDraftsWithText(
+        composerDraftKeyForThread("thread-1"),
+        "Send this when the connection returns",
+      ),
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.querySelector("textarea")?.placeholder).toContain(
+        "Reconnecting automatically",
+      );
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Reconnecting automatically");
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(false);
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          workspaceRuntimeById: {
+            ...state.workspaceRuntimeById,
+            "ws-1": {
+              ...state.workspaceRuntimeById["ws-1"]!,
+              reconnecting: false,
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelector("textarea")?.placeholder).toBe(
+        "Write a message to reconnect...",
+      );
+      expect(
+        container.querySelector('[data-slot="message-composer-status"]')?.textContent,
+      ).toContain("Send a message to reconnect");
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(false);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
         });
       }
       harness.restore();

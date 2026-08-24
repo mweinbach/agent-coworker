@@ -1060,7 +1060,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
   });
 
   test("preserves active work and pending delivery while a lost connection is retrying", async () => {
-    const { threadId } = seedStore();
+    const { threadId, workspaceId } = seedStore();
 
     await useAppStore.getState().reconnectThread(threadId);
     await flushAsyncWork();
@@ -1106,6 +1106,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     await flushAsyncWork();
 
     const reconnecting = useAppStore.getState();
+    expect(reconnecting.workspaceRuntimeById[workspaceId]?.reconnecting).toBe(true);
     expect(reconnecting.threadRuntimeById[activeThreadId]).toMatchObject({
       connected: false,
       busy: true,
@@ -1123,6 +1124,7 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     await flushAsyncWork();
 
     const exhausted = useAppStore.getState();
+    expect(exhausted.workspaceRuntimeById[workspaceId]?.reconnecting).toBe(false);
     expect(exhausted.threadRuntimeById[activeThreadId]).toMatchObject({
       connected: false,
       busy: false,

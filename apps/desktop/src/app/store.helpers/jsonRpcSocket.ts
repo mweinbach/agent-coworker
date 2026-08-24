@@ -277,6 +277,7 @@ function syncWorkspaceSocketState(workspaceId: string, isOpen: boolean) {
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
         controlSessionId: isOpen ? `jsonrpc:${workspaceId}` : null,
+        reconnecting: false,
       },
     },
   }));
@@ -290,10 +291,25 @@ function markWorkspaceSocketReconnecting(workspaceId: string) {
       [workspaceId]: {
         ...s.workspaceRuntimeById[workspaceId],
         controlSessionId: null,
+        reconnecting: true,
       },
     },
   }));
   emitWorkspaceReconnectLifecycle(workspaceId, "reconnecting");
+}
+
+function markWorkspaceSocketReconnectExhausted(workspaceId: string) {
+  getWorkspaceStoreSet(workspaceId)((s) => ({
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        controlSessionId: null,
+        reconnecting: false,
+      },
+    },
+  }));
+  emitWorkspaceReconnectLifecycle(workspaceId, "reconnectExhausted");
 }
 
 function isActiveWorkspaceJsonRpcSocketGeneration(
@@ -510,7 +526,7 @@ export function ensureWorkspaceJsonRpcSocket(
         serverUrl: safeServerUrl(url),
         reason,
       });
-      emitWorkspaceReconnectLifecycle(workspaceId, "reconnectExhausted");
+      markWorkspaceSocketReconnectExhausted(workspaceId);
     },
     onClose: () => {
       socket.__coworkOpened = false;

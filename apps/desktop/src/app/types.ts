@@ -504,6 +504,7 @@ export type MarketplaceDetail = Extract<SessionEvent, { type: "marketplace_detai
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
+  reconnecting?: boolean;
   startupProgress: CoworkRuntimeBootstrapProgress | null;
   error: string | null;
   controlSessionId: string | null;

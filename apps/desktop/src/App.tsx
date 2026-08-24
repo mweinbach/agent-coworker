@@ -581,6 +581,11 @@ const ChatShell = memo(function ChatShell({
       ) : null}
       {!startupError && !bootstrapLoading && selectedThreadId ? (
         <ConnectionRecoveryBanner
+          automaticallyReconnecting={
+            activeWorkspaceId
+              ? workspaceRuntimeById[activeWorkspaceId]?.reconnecting === true
+              : false
+          }
           disconnected={showReconnectBanner}
           operation={reconnectOperation}
           reconnect={() => reconnectThreadWithFeedback(selectedThreadId)}

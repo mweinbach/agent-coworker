@@ -315,6 +315,7 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
   return {
     serverUrl: null,
     starting: false,
+    reconnecting: false,
     startupProgress: null,
     error: null,
     controlSessionId: null,

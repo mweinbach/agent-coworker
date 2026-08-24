@@ -159,18 +159,25 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
  * skipped.
  */
 let _lastPersistedJson: string | null = null;
-let _persistWriteTail: Promise<void> = Promise.resolve();
+let _persistWriteTail: Promise<void> | null = null;
 
 function enqueuePersistedState(state: PersistedState): Promise<void> {
   const serialized = JSON.stringify(state);
-  const write = _persistWriteTail.then(async () => {
+  const save = async () => {
     if (serialized === _lastPersistedJson) return;
     await saveState(state);
     _lastPersistedJson = serialized;
-  });
+  };
+  const write = _persistWriteTail ? _persistWriteTail.then(save) : save();
 
   // A failed write must not poison either deduplication or later queued writes.
-  _persistWriteTail = write.catch(() => {});
+  const tail = write.catch(() => {});
+  _persistWriteTail = tail;
+  void tail.then(() => {
+    if (_persistWriteTail === tail) {
+      _persistWriteTail = null;
+    }
+  });
   return write;
 }
 

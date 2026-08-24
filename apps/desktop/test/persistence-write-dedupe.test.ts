@@ -67,6 +67,15 @@ describe("persisted state writes", () => {
     expect(saveState).toHaveBeenCalledTimes(1);
   });
 
+  test("starts an idle durable write immediately without delaying dependent startup", async () => {
+    const write = persistNow(getState);
+
+    expect(saveState).toHaveBeenCalledTimes(1);
+
+    await write;
+    expect(savedStates).toHaveLength(1);
+  });
+
   test("writes again as soon as the projection actually changes", async () => {
     await persistNow(getState);
     expect(saveState).toHaveBeenCalledTimes(1);

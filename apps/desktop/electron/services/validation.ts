@@ -50,7 +50,9 @@ export async function assertWorkspaceDirectory(workspacePath: string): Promise<v
   try {
     stat = await fsp.stat(workspacePath);
   } catch {
-    throw new Error(`Workspace path does not exist: ${workspacePath}`);
+    throw new Error(
+      `Workspace folder is unavailable: ${workspacePath}. Reconnect its drive or restore access, then retry.`,
+    );
   }
 
   if (!stat.isDirectory()) {

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox";
+import { WorkspaceRootsController } from "../electron/ipc/workspaceRoots";
+import { assertWorkspaceDirectory } from "../electron/services/validation";
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -252,6 +257,115 @@ describe("workspace IPC", () => {
 
     expect(callOrder).toEqual(["saveState", "setApprovedWorkspaceRoots"]);
     expect(approvedRoots).toEqual(["/tmp/ws-1"]);
+  });
+
+  test("saves trusted offline projects and starts them again after their drive is reconnected", async () => {
+    const temporaryDirectory = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-ipc-offline-project-"),
+    );
+    const projectPath = path.join(await fs.realpath(temporaryDirectory), "external-project");
+    const detachedPath = path.join(await fs.realpath(temporaryDirectory), "detached-project");
+    await fs.mkdir(projectPath);
+
+    try {
+      const handlers = new Map<
+        string,
+        (event: unknown, args?: unknown) => Promise<unknown> | unknown
+      >();
+      let persistedState = {
+        version: 2,
+        workspaces: [
+          {
+            id: "ws-external",
+            name: "External project",
+            path: projectPath,
+            workspaceKind: "project" as const,
+            createdAt: "2026-08-24T00:00:00.000Z",
+            lastOpenedAt: "2026-08-24T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: false,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            id: "thread-external",
+            workspaceId: "ws-external",
+            title: "Preserved conversation",
+            createdAt: "2026-08-24T00:00:00.000Z",
+            lastMessageAt: "2026-08-24T00:00:00.000Z",
+            status: "disconnected" as const,
+            sessionId: "session-external",
+            messageCount: 4,
+            lastEventSeq: 7,
+          },
+        ],
+        developerMode: false,
+      };
+      const persistence = {
+        async loadState() {
+          return persistedState;
+        },
+        async saveState(next: typeof persistedState) {
+          persistedState = next;
+        },
+      };
+      const workspaceRoots = new WorkspaceRootsController(persistence as never);
+
+      registerWorkspaceIpc({
+        deps: {
+          mobileRelayBridge: { isActiveForWorkspace: () => false },
+          persistence,
+          serverManager: {
+            async startWorkspaceServer(input: { workspacePath: string }) {
+              await assertWorkspaceDirectory(input.workspacePath);
+              return { url: "ws://127.0.0.1:7337/ws" };
+            },
+            async stopWorkspaceServer() {},
+          },
+          updater: {} as never,
+        } as never,
+        workspaceRoots,
+        handleDesktopInvoke(channel, handler) {
+          handlers.set(channel, handler as never);
+        },
+        parseWithSchema(_schema, value) {
+          return value as never;
+        },
+      });
+
+      const loadState = handlers.get(DESKTOP_IPC_CHANNELS.loadState);
+      const saveState = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
+      const startServer = handlers.get(DESKTOP_IPC_CHANNELS.startWorkspaceServer);
+      if (!loadState || !saveState || !startServer) {
+        throw new Error("workspace IPC handlers were not registered");
+      }
+
+      await loadState({});
+      await fs.rename(projectPath, detachedPath);
+
+      await expect(
+        saveState({}, { ...persistedState, developerMode: true }),
+      ).resolves.toBeUndefined();
+      expect(persistedState.developerMode).toBe(true);
+      expect(persistedState.workspaces[0]?.path).toBe(projectPath);
+      expect(persistedState.threads[0]?.title).toBe("Preserved conversation");
+
+      await loadState({});
+      const sender = { sender: { isDestroyed: () => false, send: () => {} } };
+      const serverInput = { workspaceId: "ws-external", workspacePath: projectPath };
+      await expect(startServer(sender, serverInput)).rejects.toThrow(
+        "Reconnect its drive or restore access",
+      );
+
+      await fs.rename(detachedPath, projectPath);
+
+      await expect(startServer(sender, serverInput)).resolves.toEqual({
+        url: "ws://127.0.0.1:7337/ws",
+      });
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   test("popup saveState preserves newer persisted data and merges popup threads", async () => {

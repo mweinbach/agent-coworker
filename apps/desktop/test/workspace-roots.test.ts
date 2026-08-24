@@ -58,4 +58,74 @@ describe("desktop workspace root approvals", () => {
       otherWorkspacePath,
     );
   });
+
+  test("keeps only a trusted persisted project approved while its drive is unavailable", async () => {
+    const workspaceParent = await createWorkspaceDirectory();
+    const workspacePath = path.join(workspaceParent, "external-project");
+    const detachedPath = path.join(workspaceParent, "external-project-detached");
+    await fs.mkdir(workspacePath);
+    const persisted = { workspaces: [{ path: workspacePath }] };
+    const persistence = { loadState: async () => persisted };
+    const roots = new WorkspaceRootsController(persistence as never);
+
+    await roots.refreshApprovedWorkspaceRootsFromState(persisted as never);
+    await fs.rename(workspacePath, detachedPath);
+
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).resolves.toBe(workspacePath);
+    await roots.refreshApprovedWorkspaceRootsFromState(persisted as never);
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).resolves.toBe(workspacePath);
+    await expect(
+      roots.assertApprovedWorkspacePath(path.join(workspaceParent, "never-approved")),
+    ).rejects.toThrow();
+
+    await fs.rename(detachedPath, workspacePath);
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).resolves.toBe(workspacePath);
+
+    roots.setApprovedWorkspaceRoots([]);
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).rejects.toThrow(
+      "Workspace path is not approved",
+    );
+  });
+
+  test("does not grant unavailable-path access to an approval that was never persisted", async () => {
+    const workspaceParent = await createWorkspaceDirectory();
+    const workspacePath = path.join(workspaceParent, "not-yet-persisted");
+    await fs.mkdir(workspacePath);
+    const roots = new WorkspaceRootsController({
+      loadState: async () => ({ workspaces: [] }),
+    } as never);
+
+    await roots.addApprovedWorkspacePath(workspacePath);
+    await fs.rm(workspacePath, { recursive: true });
+
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).rejects.toThrow();
+  });
+
+  test("rejects a remounted project that becomes a symlink outside its approved root", async () => {
+    const workspaceParent = await createWorkspaceDirectory();
+    const workspacePath = path.join(workspaceParent, "external-project");
+    const detachedPath = path.join(workspaceParent, "external-project-detached");
+    const outsidePath = await createWorkspaceDirectory();
+    await fs.mkdir(workspacePath);
+    const persisted = { workspaces: [{ path: workspacePath }] };
+    const persistence = { loadState: async () => persisted };
+    const roots = new WorkspaceRootsController(persistence as never);
+
+    await roots.refreshApprovedWorkspaceRootsFromState(persisted as never);
+    await fs.rename(workspacePath, detachedPath);
+    await roots.refreshApprovedWorkspaceRootsFromState(persisted as never);
+    await fs.symlink(outsidePath, workspacePath, "junction");
+
+    await expect(roots.assertApprovedWorkspacePath(workspacePath)).rejects.toThrow(
+      "Workspace path is not approved",
+    );
+    await expect(roots.assertApprovedWorkspacePath(outsidePath)).rejects.toThrow(
+      "Workspace path is not approved",
+    );
+    await expect(
+      roots.assertApprovedWorkspacePath(
+        path.join(workspacePath, "..", "external-project-detached"),
+      ),
+    ).rejects.toThrow("Workspace path is not approved");
+  });
 });

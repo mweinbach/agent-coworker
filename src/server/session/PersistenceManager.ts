@@ -3,6 +3,9 @@ import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { PersistedSessionMutation, SessionDb } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
 
+const MAX_SNAPSHOT_PERSIST_ATTEMPTS = 3;
+const SNAPSHOT_PERSIST_RETRY_DELAY_MS = 10;
+
 export class PersistenceManager {
   private queue: Promise<void> = Promise.resolve();
   private pendingReasons = new Set<string>();
@@ -47,42 +50,15 @@ export class PersistenceManager {
     const run = async () => {
       try {
         while (this.pendingReasons.size > 0) {
-          const startedAt = Date.now();
-          const updatedAt = new Date().toISOString();
           const reasons = [...this.pendingReasons];
           this.pendingReasons.clear();
           const primaryReason = reasons.at(-1) ?? reason;
-          if (this.opts.sessionDb) {
-            const lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
-              sessionId: this.opts.sessionId,
-              eventType: primaryReason,
-              eventTs: updatedAt,
-              direction: "system",
-              payload: { reason: primaryReason, reasons },
-              snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
-            });
-            await this.opts.sessionDb.persistSessionSnapshot(
-              this.opts.sessionId,
-              this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
-            );
-            this.opts.onPersistedLastEventSeq?.(lastEventSeq);
-          } else {
-            const snapshot = this.opts.buildPersistedSnapshotAt(updatedAt);
-            await this.opts.writePersistedSessionSnapshot({
-              paths: this.opts.getCoworkPaths(),
-              snapshot,
-            });
+          try {
+            await this.persistReasons(primaryReason, reasons);
+          } catch (error) {
+            this.pendingReasons = new Set([...reasons, ...this.pendingReasons]);
+            throw error;
           }
-          this.opts.emitTelemetry(
-            "session.snapshot.persist",
-            "ok",
-            {
-              sessionId: this.opts.sessionId,
-              reason: primaryReason,
-              coalescedReasonCount: reasons.length,
-            },
-            Date.now() - startedAt,
-          );
         }
         this.lastError = null;
       } finally {
@@ -111,14 +87,64 @@ export class PersistenceManager {
           });
         }
         this.opts.emitError(`Failed to persist session state: ${formattedError}`);
-        if (this.pendingReasons.size > 0 && !this.flushQueued) {
-          this.queuePersistSessionSnapshot([...this.pendingReasons].at(-1) ?? reason);
-        }
       });
   }
 
+  private async persistReasons(primaryReason: string, reasons: string[]): Promise<void> {
+    const startedAt = Date.now();
+    const updatedAt = new Date().toISOString();
+    let lastEventSeq: number | undefined;
+
+    for (let attempt = 1; attempt <= MAX_SNAPSHOT_PERSIST_ATTEMPTS; attempt += 1) {
+      try {
+        if (this.opts.sessionDb) {
+          if (lastEventSeq === undefined) {
+            lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
+              sessionId: this.opts.sessionId,
+              eventType: primaryReason,
+              eventTs: updatedAt,
+              direction: "system",
+              payload: { reason: primaryReason, reasons },
+              snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
+            });
+          }
+          await this.opts.sessionDb.persistSessionSnapshot(
+            this.opts.sessionId,
+            this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
+          );
+          this.opts.onPersistedLastEventSeq?.(lastEventSeq);
+        } else {
+          await this.opts.writePersistedSessionSnapshot({
+            paths: this.opts.getCoworkPaths(),
+            snapshot: this.opts.buildPersistedSnapshotAt(updatedAt),
+          });
+        }
+        this.opts.emitTelemetry(
+          "session.snapshot.persist",
+          "ok",
+          {
+            sessionId: this.opts.sessionId,
+            reason: primaryReason,
+            coalescedReasonCount: reasons.length,
+          },
+          Date.now() - startedAt,
+        );
+        return;
+      } catch (error) {
+        if (attempt === MAX_SNAPSHOT_PERSIST_ATTEMPTS) throw error;
+        await new Promise((resolve) =>
+          setTimeout(resolve, attempt * SNAPSHOT_PERSIST_RETRY_DELAY_MS),
+        );
+      }
+    }
+  }
+
   async waitForIdle(opts: { throwOnError?: boolean } = {}) {
-    await this.queue.catch(() => {});
+    while (true) {
+      const pending = this.queue;
+      await pending.catch(() => {});
+      if (pending === this.queue) break;
+    }
     if (opts.throwOnError && this.lastError) {
       throw this.lastError;
     }

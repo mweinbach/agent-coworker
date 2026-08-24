@@ -168,6 +168,38 @@ describe("SessionDbWriteCoordinator", () => {
     expect(order).toEqual(Array.from({ length: 12 }, (_, index) => `writer-${index}`));
   });
 
+  test("unblocks the next local writer when releasing the previous lock fails", async () => {
+    const paths = await makeTmpCoworkHome();
+    const coordinator = new SessionDbWriteCoordinator({ rootDir: paths.rootDir });
+    const releaseError = new Error("session DB lock directory could not be removed");
+    const injectedCoordinator = coordinator as unknown as {
+      acquire: (operation: string) => Promise<{ release: () => Promise<void> }>;
+    };
+    injectedCoordinator.acquire = async (operation) => ({
+      release: async () => {
+        if (operation === "first_writer") throw releaseError;
+      },
+    });
+
+    await expect(coordinator.runExclusive("first_writer", async () => "first")).rejects.toBe(
+      releaseError,
+    );
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const nextWriter = coordinator.runExclusive("second_writer", async () => "second");
+      const result = await Promise.race([
+        nextWriter,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("next local writer deadlocked")), 100);
+        }),
+      ]);
+      expect(result).toBe("second");
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  });
+
   test("recovers stale lock owners and records stale recovery telemetry", async () => {
     const paths = await makeTmpCoworkHome();
     const telemetry: TelemetryEvent[] = [];

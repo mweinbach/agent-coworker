@@ -185,10 +185,13 @@ export class SessionDbWriteCoordinator {
       }
       throw error;
     } finally {
-      if (handle) {
-        await handle.release();
+      try {
+        if (handle) {
+          await handle.release();
+        }
+      } finally {
+        releaseLocalWriter();
       }
-      releaseLocalWriter();
     }
   }
 

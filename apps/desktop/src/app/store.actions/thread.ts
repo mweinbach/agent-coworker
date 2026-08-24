@@ -1646,6 +1646,10 @@ export function createThreadActions(
         ? state.threads.find((thread) => thread.id === parentThreadId)
         : null;
       if (!parentThread || parentThread.sessionKind === "agent") return;
+      const previousViewerThreadId = state.agentViewerThreadId;
+      if (previousViewerThreadId && previousViewerThreadId !== normalizedAgentId) {
+        closeThreadSession(previousViewerThreadId);
+      }
       const parentRuntime = state.threadRuntimeById[parentThread.id];
       const agent = parentRuntime?.agents.find(
         (candidate) => candidate.agentId === normalizedAgentId,
@@ -1691,11 +1695,16 @@ export function createThreadActions(
         .catch(() => {
           // The viewer surfaces the disconnected state; reopening retries.
         });
+      if (get().agentViewerThreadId !== normalizedAgentId) {
+        closeThreadSession(normalizedAgentId);
+      }
     },
 
     closeAgentViewer: () => {
-      if (get().agentViewerThreadId === null) return;
+      const viewerThreadId = get().agentViewerThreadId;
+      if (viewerThreadId === null) return;
       set({ agentViewerThreadId: null });
+      closeThreadSession(viewerThreadId);
     },
 
     reconnectThread: async (

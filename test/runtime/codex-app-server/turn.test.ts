@@ -770,6 +770,89 @@ describe("codex app-server turn lifecycle", () => {
     }
   });
 
+  for (const status of ["cancelled", "interrupted"] as const) {
+    test.serial(
+      `surfaces an externally ${status} provider turn as a retryable failure instead of success`,
+      async () => {
+        const dir = await fs.mkdtemp(
+          path.join(scratchRoots()[0] ?? "/tmp", `cowork-codex-external-${status}-`),
+        );
+        const controlled = createControlledCodexTurnClient();
+        const modelErrors: unknown[] = [];
+        const streamParts: Array<{ type?: string }> = [];
+        let turnPromise: Promise<unknown> | undefined;
+
+        codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+
+        try {
+          const runtime = createRuntime(makeConfig(dir));
+          turnPromise = runtime.runTurn({
+            config: makeConfig(dir),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Finish the requested task" }],
+            tools: {},
+            maxSteps: 1,
+            onModelError: async (error) => {
+              modelErrors.push(error);
+            },
+            onModelStreamPart: async (part) => {
+              streamParts.push(part as { type?: string });
+            },
+          });
+
+          await controlled.turnStartEntered;
+          controlled.emitNotification({
+            method: "item/started",
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_external",
+              item: { type: "agentMessage", id: "partial-external", text: "" },
+            },
+          });
+          controlled.emitNotification({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_external",
+              itemId: "partial-external",
+              delta: "unfinished answer",
+            },
+          });
+          controlled.emitNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread_1",
+              turn: {
+                id: "turn_external",
+                threadId: "thread_1",
+                status,
+                items: [
+                  { type: "agentMessage", id: "partial-external", text: "unfinished answer" },
+                ],
+                error: { message: "Provider execution was interrupted elsewhere." },
+              },
+            },
+          });
+
+          await expect(turnPromise).rejects.toThrow(
+            `Codex app-server turn was ${status} before completion`,
+          );
+          expect(modelErrors).toHaveLength(1);
+          expect(modelErrors[0]).toMatchObject({
+            code: "provider_error",
+            source: "provider",
+            responseMessages: [{ role: "assistant", content: "unfinished answer" }],
+          });
+          expect(streamParts.some((part) => part.type === "finish")).toBe(false);
+        } finally {
+          controlled.rejectTurnStart(new Error("late start rejection after provider interruption"));
+          await turnPromise?.catch(() => {});
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
+
   for (const mode of [
     { label: "ordinary", params: {} },
     { label: "yolo danger-full-access", params: { yolo: true, shellPolicy: "full" as const } },

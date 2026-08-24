@@ -453,9 +453,31 @@ export function createCodexTurnNotificationRouter(
         return;
       }
       flushPendingUsage(expectedTurnId ?? completedTurnId);
-      if (turn?.status === "failed") {
-        const error = asRecord(turn.error);
-        settleReject(new Error(asString(error?.message) ?? "codex app-server turn failed."));
+      const status = asString(turn?.status);
+      if (status === "failed") {
+        const error = asRecord(turn?.error);
+        settleReject(
+          Object.assign(new Error(asString(error?.message) ?? "codex app-server turn failed."), {
+            code: "provider_error" as const,
+            source: "provider" as const,
+          }),
+        );
+        return;
+      }
+      if (
+        (status === "cancelled" || status === "canceled" || status === "interrupted") &&
+        !completion.abortSignal?.aborted
+      ) {
+        const error = asRecord(turn?.error);
+        const detail = asString(error?.message);
+        settleReject(
+          Object.assign(
+            new Error(
+              `Codex app-server turn was ${status} before completion${detail ? `: ${detail}` : "."}`,
+            ),
+            { code: "provider_error" as const, source: "provider" as const },
+          ),
+        );
         return;
       }
       settleResolve(turn);

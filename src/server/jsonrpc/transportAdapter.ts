@@ -155,11 +155,14 @@ export function createJsonRpcTransportAdapter({
         };
       }
       const { approved, decision } = parsed.data;
+      const rejected = approved === false || decision === "reject" || decision === "decline";
       return {
         ok: true,
         response: {
           kind: "approval",
-          approved: approved === true || decision === "accept" || decision === "acceptForSession",
+          approved:
+            !rejected &&
+            (approved === true || decision === "accept" || decision === "acceptForSession"),
         },
       };
     }
@@ -454,7 +457,7 @@ export function createJsonRpcTransportAdapter({
 
     if (!pending) return;
     const runtime = getThreadBinding(pending.threadId)?.runtime;
-    let accepted = runtime === null || runtime === undefined;
+    let accepted = false;
     if (runtime && parsedResponse.response.kind === "approval") {
       accepted = runtime.lifecycle.handleApprovalResponse(
         pending.requestId,

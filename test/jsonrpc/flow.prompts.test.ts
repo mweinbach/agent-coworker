@@ -175,6 +175,128 @@ describe("server JSON-RPC flows", () => {
 
   test.each([
     {
+      scenario: "an explicit false approval overrides an accept decision",
+      response: { approved: false, decision: "accept" },
+    },
+    {
+      scenario: "an explicit reject decision overrides a true approval",
+      response: { approved: true, decision: "reject" },
+    },
+  ] as const)("denies command execution when $scenario", async ({ response }) => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const approved = await params.approveCommand("rm -rf /tmp/contradictory-approval");
+          return { text: approved ? "approved" : "denied", responseMessages: [] };
+        }) as any,
+      }),
+    );
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "reject the contradictory approval" }],
+      });
+      const request = await rpc.waitFor(
+        (message) => message.method === "item/commandExecution/requestApproval",
+      );
+
+      rpc.sendResponse(request.id, response);
+      const resolved = await rpc.waitFor(
+        (message) =>
+          message.method === "serverRequest/resolved" &&
+          message.params.requestId === request.params.requestId,
+      );
+      const completed = await rpc.waitFor(
+        (message) =>
+          message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+
+      expect(resolved.params.response).toEqual({ kind: "approval", approved: false });
+      expect(completed.params.item.text).toBe("denied");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "This answer cannot be delivered" },
+    },
+  ] as const)(
+    "rejects a stale $kind response after its unsubscribed thread is deleted",
+    async ({ kind, method, response }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            if (kind === "approval") {
+              await params.approveCommand("rm -rf /tmp/deleted-thread");
+            } else {
+              await params.askUser("Answer before the thread is deleted");
+            }
+            return { text: "interaction handled", responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let rpc: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        rpc = await connectJsonRpc(url);
+        const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await rpc.waitFor((message) => message.method === "thread/started");
+        await rpc.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "wait for an interaction before deletion" }],
+        });
+        const request = await rpc.waitFor((message) => message.method === method);
+
+        const unsubscribed = await rpc.sendRequest("thread/unsubscribe", { threadId });
+        expect(unsubscribed.result.status).toBe("unsubscribed");
+        const deleted = await rpc.sendRequest("cowork/session/delete", {
+          cwd: tmpDir,
+          targetSessionId: threadId,
+        });
+        expect(deleted.result.event.targetSessionId).toBe(threadId);
+
+        rpc.sendResponse(request.id, response);
+        const outcome = await rpc.waitFor(
+          (message) =>
+            (message.id === request.id && message.error) ||
+            (message.method === "serverRequest/resolved" &&
+              message.params.requestId === request.params.requestId),
+        );
+
+        expect(outcome.error).toMatchObject({
+          code: -32600,
+          data: {
+            category: "interaction_response_not_pending",
+            requestId: request.params.requestId,
+            threadId,
+          },
+        });
+      } finally {
+        rpc?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
+  test.each([
+    {
       kind: "approval",
       method: "item/commandExecution/requestApproval",
       response: { decision: "accept" },

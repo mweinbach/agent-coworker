@@ -112,6 +112,37 @@ describe("reasoningConfigFromCatalog", () => {
     });
     expect(reasoningConfigFromCatalog([], "codex-cli", "future-model")).toBeNull();
   });
+
+  test("uses every advertised reasoning effort for app-server-only models", () => {
+    expect(
+      reasoningConfigFromCatalog(
+        [
+          {
+            id: "codex-cli",
+            name: "Codex",
+            defaultModel: "solstice-alpha",
+            models: [
+              {
+                id: "solstice-alpha",
+                displayName: "Solstice Alpha",
+                knowledgeCutoff: "Unknown",
+                supportsImageInput: true,
+                reasoning: {
+                  defaultEffort: "medium",
+                  availableEfforts: ["low", "medium", "high", "xhigh"],
+                },
+              },
+            ],
+          },
+        ],
+        "codex-cli",
+        "solstice-alpha",
+      ),
+    ).toEqual({
+      defaultEffort: "medium",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
 });
 
 describe("modelOptionsForProvider", () => {

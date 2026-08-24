@@ -150,7 +150,11 @@ function normalizeAccount(value: unknown): CodexAppServerAccount | null {
 function normalizeReasoningEfforts(value: unknown): CatalogReasoningEffort[] | undefined {
   const out: CatalogReasoningEffort[] = [];
   for (const entry of asArray(value)) {
-    const normalized = asString(entry)?.trim().toLowerCase();
+    const option = asRecord(entry);
+    const normalized =
+      asString(entry)?.trim().toLowerCase() ??
+      asString(option?.reasoningEffort)?.trim().toLowerCase() ??
+      asString(option?.reasoning_effort)?.trim().toLowerCase();
     if (!isCatalogReasoningEffort(normalized) || out.includes(normalized)) continue;
     out.push(normalized);
   }

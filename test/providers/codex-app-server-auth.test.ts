@@ -136,6 +136,21 @@ describe("codex app-server auth", () => {
                   },
                   isDefault: true,
                 },
+                {
+                  id: "solstice-alpha",
+                  model: "solstice-alpha",
+                  displayName: "Solstice Alpha",
+                  defaultReasoningEffort: "medium",
+                  supportedReasoningEfforts: [
+                    { reasoningEffort: "low", description: "Fastest responses" },
+                    { reasoningEffort: "medium", description: "Balanced responses" },
+                    { reasoningEffort: "high", description: "Deeper reasoning" },
+                    { reasoningEffort: "xhigh", description: "Most thorough reasoning" },
+                    { reasoningEffort: "high", description: "Duplicate effort" },
+                    { reasoningEffort: "unsupported", description: "Unknown effort" },
+                  ],
+                  isDefault: false,
+                },
               ],
             };
           }
@@ -166,6 +181,14 @@ describe("codex app-server auth", () => {
           reasoningSummary: "concise",
         },
         isDefault: true,
+      },
+      {
+        id: "solstice-alpha",
+        model: "solstice-alpha",
+        displayName: "Solstice Alpha",
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+        reasoningDefaultEffort: "medium",
+        isDefault: false,
       },
     ]);
   });

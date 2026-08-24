@@ -340,14 +340,28 @@ async function discoverProviderModelsWithCache(opts: {
   message?: string;
 }> {
   const cached = await readModelDiscoveryCache(opts.paths, opts.adapter.provider);
-  if (cached && !opts.forceRefresh && isModelDiscoveryCacheFresh(cached)) {
+  const missingAdvertisedReasoningEfforts =
+    cached?.source === "app-server" &&
+    cached.models.some(
+      (model) => model.reasoning?.defaultEffort && !model.reasoning.availableEfforts?.length,
+    );
+  if (
+    cached &&
+    !opts.forceRefresh &&
+    !missingAdvertisedReasoningEfforts &&
+    isModelDiscoveryCacheFresh(cached)
+  ) {
     return { discovery: modelDiscoveryResultFromCache(cached), stale: false };
   }
 
   try {
     const discovery = await opts.adapter.discover({
       reason: opts.forceRefresh ? "manual" : cached ? "ttl" : "catalog",
-      force: opts.forceRefresh || !cached || !isModelDiscoveryCacheFresh(cached),
+      force:
+        opts.forceRefresh ||
+        missingAdvertisedReasoningEfforts ||
+        !cached ||
+        !isModelDiscoveryCacheFresh(cached),
     });
     if (discovery.source === "static" && cached && cached.source !== "static") {
       return {

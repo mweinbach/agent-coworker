@@ -1451,6 +1451,53 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).toContain("codex-cli");
   });
 
+  test("refreshes fresh app-server caches that lost advertised reasoning efforts", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0], "connection-catalog-codex-efforts-"),
+    );
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeModelDiscoveryCache(paths, "codex-cli", {
+      provider: "codex-cli",
+      source: "app-server",
+      models: [
+        {
+          id: "solstice-alpha",
+          model: "solstice-alpha",
+          displayName: "Solstice Alpha",
+          reasoning: { defaultEffort: "medium" },
+        },
+      ],
+    });
+    const listCodexAppServerModelsImpl = mock(async () => [
+      {
+        id: "solstice-alpha",
+        model: "solstice-alpha",
+        displayName: "Solstice Alpha",
+        reasoningEfforts: ["low", "medium", "high", "xhigh"] as const,
+        reasoningDefaultEffort: "medium" as const,
+        isDefault: true,
+      },
+    ]);
+
+    const payload = await getProviderCatalog({
+      paths,
+      env: {},
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      readStore: async () => emptyConnectionStore(),
+      readCodexAppServerAccountImpl: async () => ({
+        account: { type: "chatgpt", email: "tester@example.com" },
+        requiresOpenaiAuth: false,
+      }),
+      listCodexAppServerModelsImpl,
+    });
+
+    expect(listCodexAppServerModelsImpl).toHaveBeenCalledTimes(1);
+    expect(payload.all.find((entry) => entry.id === "codex-cli")?.models[0]?.reasoning).toEqual({
+      defaultEffort: "medium",
+      availableEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
+
   test("refreshed codex-cli catalog refreshes the account before listing app-server models", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-codex-refresh-"));
     const paths = getAiCoworkerPaths({ homedir: home });

@@ -608,19 +608,6 @@ export class SessionDbRepository {
 
   reconcileStaleExecutionStates(workingDirectory?: string | null): number {
     const reconcile = this.db.transaction((workspacePath: string | null) => {
-      if (!workspacePath) {
-        const result = this.db
-          .query(
-            sql([
-              "UPDATE sessions",
-              "       SET execution_state = 'errored'",
-              "       WHERE execution_state IN ('running', 'pending_init')",
-            ]),
-          )
-          .run();
-        return Number(result.changes ?? 0);
-      }
-
       const candidates = this.db
         .query(
           sql([
@@ -633,15 +620,35 @@ export class SessionDbRepository {
       const update = this.db.query(
         sql([
           "UPDATE sessions",
-          "       SET execution_state = 'errored'",
+          "       SET execution_state = 'errored',",
+          "           has_pending_ask = 0,",
+          "           has_pending_approval = 0",
           "       WHERE session_id = ?",
           "         AND execution_state IN ('running', 'pending_init')",
         ]),
       );
+      const updateSnapshot = this.db.query(
+        sql([
+          "UPDATE session_snapshots",
+          "       SET snapshot_json = json_set(",
+          "         snapshot_json,",
+          "         '$.executionState', 'errored',",
+          "         '$.hasPendingAsk', json('false'),",
+          "         '$.hasPendingApproval', json('false')",
+          "       )",
+          "       WHERE session_id = ?",
+          "         AND json_valid(snapshot_json)",
+        ]),
+      );
       let reconciled = 0;
       for (const candidate of candidates) {
-        if (!sameWorkspacePath(candidate.working_directory, workspacePath)) continue;
-        reconciled += Number(update.run(candidate.session_id).changes ?? 0);
+        if (workspacePath && !sameWorkspacePath(candidate.working_directory, workspacePath)) {
+          continue;
+        }
+        const updated = Number(update.run(candidate.session_id).changes ?? 0);
+        if (updated === 0) continue;
+        updateSnapshot.run(candidate.session_id);
+        reconciled += updated;
       }
       return reconciled;
     });

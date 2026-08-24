@@ -6,6 +6,7 @@ import path from "node:path";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import { runStartupMaintenance } from "../src/server/runtime/startupMaintenance";
 import { ServerFileLog, shouldEnableServerFileLog } from "../src/server/serverFileLog";
+import { createLegacySessionSnapshot } from "../src/server/session/SessionSnapshotProjector";
 import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
 import { sweepStaleSessionTmpFiles } from "../src/server/sessionStore";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
@@ -28,6 +29,8 @@ function makeMutation(opts: {
   executionState?: AgentExecutionState | null;
   updatedAt?: string;
   workingDirectory?: string;
+  hasPendingAsk?: boolean;
+  hasPendingApproval?: boolean;
 }): PersistedSessionMutation {
   const now = new Date().toISOString();
   const updatedAt = opts.updatedAt ?? now;
@@ -51,8 +54,8 @@ function makeMutation(opts: {
       createdAt: updatedAt,
       updatedAt,
       status: "active",
-      hasPendingAsk: false,
-      hasPendingApproval: false,
+      hasPendingAsk: opts.hasPendingAsk ?? false,
+      hasPendingApproval: opts.hasPendingApproval ?? false,
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       providerState: null,
@@ -127,6 +130,88 @@ describe("startup maintenance", () => {
     }
   });
 
+  test("crash recovery atomically clears impossible prompts and stale snapshots only in its workspace", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const candidates = [
+        {
+          sessionId: "workspace-a-live-approval",
+          executionState: "running" as const,
+          workingDirectory: "/tmp/project-a",
+          hasPendingAsk: true,
+          hasPendingApproval: true,
+        },
+        {
+          sessionId: "workspace-b-crashed-approval",
+          executionState: "running" as const,
+          workingDirectory: "/tmp/project-b",
+          hasPendingAsk: true,
+          hasPendingApproval: true,
+        },
+        {
+          sessionId: "workspace-b-crashed-init",
+          executionState: "pending_init" as const,
+          workingDirectory: "/tmp/project-b/./",
+          hasPendingAsk: false,
+          hasPendingApproval: true,
+        },
+        {
+          sessionId: "workspace-b-completed",
+          executionState: "completed" as const,
+          workingDirectory: "/tmp/project-b",
+          hasPendingAsk: true,
+          hasPendingApproval: false,
+        },
+      ];
+      for (const candidate of candidates) {
+        await db.persistSessionMutation(makeMutation(candidate));
+        const record = db.getSessionRecord(candidate.sessionId);
+        expect(record).not.toBeNull();
+        await db.persistSessionSnapshot(candidate.sessionId, createLegacySessionSnapshot(record!));
+      }
+
+      expect(await db.reconcileStaleExecutionStates("/tmp/project-b")).toBe(2);
+
+      for (const sessionId of ["workspace-b-crashed-approval", "workspace-b-crashed-init"]) {
+        expect(db.getSessionRecord(sessionId)).toMatchObject({
+          executionState: "errored",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        });
+        expect(db.getSessionSnapshot(sessionId)).toMatchObject({
+          executionState: "errored",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        });
+      }
+
+      expect(db.getSessionRecord("workspace-a-live-approval")).toMatchObject({
+        executionState: "running",
+        hasPendingAsk: true,
+        hasPendingApproval: true,
+      });
+      expect(db.getSessionSnapshot("workspace-a-live-approval")).toMatchObject({
+        executionState: "running",
+        hasPendingAsk: true,
+        hasPendingApproval: true,
+      });
+      expect(db.getSessionRecord("workspace-b-completed")).toMatchObject({
+        executionState: "completed",
+        hasPendingAsk: true,
+        hasPendingApproval: false,
+      });
+      expect(db.getSessionSnapshot("workspace-b-completed")).toMatchObject({
+        executionState: "completed",
+        hasPendingAsk: true,
+        hasPendingApproval: false,
+      });
+      expect(await db.reconcileStaleExecutionStates("/tmp/project-b")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   test("starting another workspace preserves its active sessions and working tasks", async () => {
     const paths = await makeTmpCoworkHome();
     const workspaceA = path.join(paths.home, "project-a");
@@ -164,6 +249,8 @@ describe("startup maintenance", () => {
           sessionId: "workspace-a-live-task",
           executionState: "running",
           workingDirectory: workspaceA,
+          hasPendingAsk: true,
+          hasPendingApproval: true,
         }),
       );
       await db.persistSessionMutation(
@@ -171,8 +258,15 @@ describe("startup maintenance", () => {
           sessionId: "workspace-b-stale-task",
           executionState: "running",
           workingDirectory: workspaceB,
+          hasPendingAsk: true,
+          hasPendingApproval: true,
         }),
       );
+      for (const sessionId of ["workspace-a-live-task", "workspace-b-stale-task"]) {
+        const record = db.getSessionRecord(sessionId);
+        expect(record).not.toBeNull();
+        await db.persistSessionSnapshot(sessionId, createLegacySessionSnapshot(record!));
+      }
 
       runtime = await createAgentServerRuntime({
         cwd: workspaceB,
@@ -191,6 +285,24 @@ describe("startup maintenance", () => {
 
       expect(db.getSessionRecord("workspace-a-live-task")?.executionState).toBe("running");
       expect(db.getSessionRecord("workspace-b-stale-task")?.executionState).toBe("errored");
+      expect(db.getSessionRecord("workspace-a-live-task")).toMatchObject({
+        hasPendingAsk: true,
+        hasPendingApproval: true,
+      });
+      expect(db.getSessionSnapshot("workspace-a-live-task")).toMatchObject({
+        executionState: "running",
+        hasPendingAsk: true,
+        hasPendingApproval: true,
+      });
+      expect(db.getSessionRecord("workspace-b-stale-task")).toMatchObject({
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      });
+      expect(db.getSessionSnapshot("workspace-b-stale-task")).toMatchObject({
+        executionState: "errored",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      });
       expect(coordinator.get(liveTask.task.id, workspaceA)?.status).toBe("working");
       expect(coordinator.get(interruptedTask.task.id, workspaceB)?.status).toBe("failed");
     } finally {

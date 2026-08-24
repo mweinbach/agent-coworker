@@ -6,9 +6,18 @@ import type { PersistedSessionSnapshot } from "../sessionStore";
 const MAX_SNAPSHOT_PERSIST_ATTEMPTS = 3;
 const SNAPSHOT_PERSIST_RETRY_DELAY_MS = 10;
 
+type PendingCanonicalSnapshot = {
+  primaryReason: string;
+  reasons: string[];
+  updatedAt: string;
+  lastEventSeq: number;
+  snapshot: SessionSnapshot;
+};
+
 export class PersistenceManager {
   private queue: Promise<void> = Promise.resolve();
   private pendingReasons = new Set<string>();
+  private pendingCanonicalSnapshot: PendingCanonicalSnapshot | null = null;
   private flushQueued = false;
   private lastError: unknown = null;
 
@@ -91,15 +100,33 @@ export class PersistenceManager {
   }
 
   private async persistReasons(primaryReason: string, reasons: string[]): Promise<void> {
+    const pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
+    if (pendingCanonicalSnapshot) {
+      await this.persistReasonBatch(
+        pendingCanonicalSnapshot.primaryReason,
+        pendingCanonicalSnapshot.reasons,
+      );
+
+      const completedReasons = new Set(pendingCanonicalSnapshot.reasons);
+      const remainingReasons = reasons.filter((reason) => !completedReasons.has(reason));
+      reasons.splice(0, reasons.length, ...remainingReasons);
+      if (remainingReasons.length === 0) return;
+      primaryReason = remainingReasons.at(-1) ?? primaryReason;
+    }
+
+    await this.persistReasonBatch(primaryReason, reasons);
+  }
+
+  private async persistReasonBatch(primaryReason: string, reasons: string[]): Promise<void> {
     const startedAt = Date.now();
-    const updatedAt = new Date().toISOString();
-    let lastEventSeq: number | undefined;
+    const updatedAt = this.pendingCanonicalSnapshot?.updatedAt ?? new Date().toISOString();
 
     for (let attempt = 1; attempt <= MAX_SNAPSHOT_PERSIST_ATTEMPTS; attempt += 1) {
       try {
         if (this.opts.sessionDb) {
-          if (lastEventSeq === undefined) {
-            lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
+          let pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
+          if (!pendingCanonicalSnapshot) {
+            const lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
               sessionId: this.opts.sessionId,
               eventType: primaryReason,
               eventTs: updatedAt,
@@ -107,12 +134,21 @@ export class PersistenceManager {
               payload: { reason: primaryReason, reasons },
               snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
             });
+            pendingCanonicalSnapshot = {
+              primaryReason,
+              reasons: [...reasons],
+              updatedAt,
+              lastEventSeq,
+              snapshot: this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
+            };
+            this.pendingCanonicalSnapshot = pendingCanonicalSnapshot;
           }
           await this.opts.sessionDb.persistSessionSnapshot(
             this.opts.sessionId,
-            this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
+            pendingCanonicalSnapshot.snapshot,
           );
-          this.opts.onPersistedLastEventSeq?.(lastEventSeq);
+          this.opts.onPersistedLastEventSeq?.(pendingCanonicalSnapshot.lastEventSeq);
+          this.pendingCanonicalSnapshot = null;
         } else {
           await this.opts.writePersistedSessionSnapshot({
             paths: this.opts.getCoworkPaths(),

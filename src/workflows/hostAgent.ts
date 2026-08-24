@@ -31,6 +31,17 @@ export class WorkflowAgentError extends Error {
   }
 }
 
+type WorkflowAgentDeadline = {
+  expiresAt: number;
+  label: string;
+};
+
+class WorkflowAgentTimeoutError extends WorkflowAgentError {
+  constructor(agentId: string | null, label: string) {
+    super(`agent ${agentId ?? `"${label}"`} timed out`, agentId);
+  }
+}
+
 function isKnownRole(value: string): value is AgentRole {
   return (AGENT_ROLE_VALUES as readonly string[]).includes(value);
 }
@@ -54,6 +65,10 @@ export async function runWorkflowAgent(opts: {
   onAgentId: (agentId: string) => void;
 }): Promise<HostAgentOutcome> {
   const { ctx, control, options } = opts;
+  const deadline: WorkflowAgentDeadline = {
+    expiresAt: Date.now() + (options.timeoutMs ?? 600_000),
+    label: opts.label,
+  };
   const schema = options.schema;
   const message = schema ? `${opts.prompt}\n${buildSchemaInstruction(schema)}` : opts.prompt;
 
@@ -83,9 +98,17 @@ export async function runWorkflowAgent(opts: {
     ...(options.briefing ? { briefing: options.briefing } : {}),
   });
   try {
-    spawned = await raceWithAbort(spawnPromise, opts.abortSignal ?? ctx.abortSignal, null);
+    spawned = await raceWithAbort(
+      spawnPromise,
+      opts.abortSignal ?? ctx.abortSignal,
+      null,
+      deadline,
+    );
   } catch (error) {
-    if (error instanceof WorkflowAgentError && error.fatal) {
+    if (
+      error instanceof WorkflowAgentTimeoutError ||
+      (error instanceof WorkflowAgentError && error.fatal)
+    ) {
       void spawnPromise
         .then(async (lateSpawn) => {
           try {
@@ -109,7 +132,7 @@ export async function runWorkflowAgent(opts: {
       ctx,
       control,
       agentId: spawned.agentId,
-      timeoutMs: options.timeoutMs ?? 600_000,
+      deadline,
       abortSignal: opts.abortSignal,
     });
 
@@ -128,12 +151,13 @@ export async function runWorkflowAgent(opts: {
           }),
           opts.abortSignal ?? ctx.abortSignal,
           spawned.agentId,
+          deadline,
         );
         const repaired = await waitSliced({
           ctx,
           control,
           agentId: spawned.agentId,
-          timeoutMs: options.timeoutMs ?? 600_000,
+          deadline,
           abortSignal: opts.abortSignal,
         });
         validation = validateAgainstJsonSchema(schema, extractResultEnvelope(repaired));
@@ -228,18 +252,16 @@ async function waitSliced(opts: {
   ctx: ToolContext;
   control: AgentControl;
   agentId: string;
-  timeoutMs: number;
+  deadline: WorkflowAgentDeadline;
   abortSignal?: AbortSignal;
 }): Promise<string> {
-  const deadline = Date.now() + opts.timeoutMs;
-
   for (;;) {
     if (opts.abortSignal?.aborted || opts.ctx.abortSignal?.aborted) {
       throw new WorkflowAgentError("workflow cancelled", opts.agentId, true);
     }
-    const remaining = deadline - Date.now();
+    const remaining = opts.deadline.expiresAt - Date.now();
     if (remaining <= 0) {
-      throw new WorkflowAgentError(`agent ${opts.agentId} timed out`, opts.agentId);
+      throw new WorkflowAgentTimeoutError(opts.agentId, opts.deadline.label);
     }
 
     let waited: Awaited<ReturnType<AgentControl["wait"]>>;
@@ -253,6 +275,7 @@ async function waitSliced(opts: {
         }),
         opts.abortSignal ?? opts.ctx.abortSignal,
         opts.agentId,
+        opts.deadline,
       );
     } catch (error) {
       // A task lock means the parent became unwritable. That is systemic, so it
@@ -293,20 +316,43 @@ async function raceWithAbort<T>(
   pending: Promise<T>,
   signal: AbortSignal | undefined,
   agentId: string | null,
+  deadline?: WorkflowAgentDeadline,
 ): Promise<T> {
-  if (!signal) return await pending;
-  if (signal.aborted) {
+  if (!signal && !deadline) return await pending;
+  if (signal?.aborted) {
     throw new WorkflowAgentError("workflow cancelled", agentId, true);
   }
 
   let onAbort: (() => void) | null = null;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new WorkflowAgentError("workflow cancelled", agentId, true));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const racing: Array<Promise<T>> = [pending];
+  if (signal) {
+    racing.push(
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(new WorkflowAgentError("workflow cancelled", agentId, true));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    );
+  }
+  if (deadline) {
+    const remaining = deadline.expiresAt - Date.now();
+    if (remaining <= 0) {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+      throw new WorkflowAgentTimeoutError(agentId, deadline.label);
+    }
+    racing.push(
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new WorkflowAgentTimeoutError(agentId, deadline.label)),
+          remaining,
+        );
+      }),
+    );
+  }
   try {
-    return await Promise.race([pending, aborted]);
+    return await Promise.race(racing);
   } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    if (timeout) clearTimeout(timeout);
   }
 }

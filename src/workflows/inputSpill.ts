@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { MODEL_SCRATCHPAD_DIRNAME } from "../shared/toolOutputOverflow";
@@ -51,12 +52,7 @@ export async function spillWorkflowPromptToFile(opts: {
   await fs.mkdir(inputDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   await assertSafeInputDirectories(opts.workingDirectory);
   await opts.assertCanMutate?.("workflowInputSpill");
-  let existing: string | null = null;
-  try {
-    existing = await fs.readFile(absolutePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+  const existing = await readExistingWorkflowInput(absolutePath);
   if (existing !== null && existing !== opts.prompt) {
     throw new Error(`workflow input hash collision at ${absolutePath}`);
   }
@@ -65,17 +61,25 @@ export async function spillWorkflowPromptToFile(opts: {
     await fs.writeFile(temporaryPath, opts.prompt, {
       encoding: "utf8",
       mode: READ_ONLY_FILE_MODE,
+      flag: "wx",
     });
     try {
       await fs.rename(temporaryPath, absolutePath);
     } catch (error) {
-      const concurrent = await fs.readFile(absolutePath, "utf8").catch(() => null);
+      const concurrent = await readExistingWorkflowInput(absolutePath).catch(() => null);
       if (concurrent !== opts.prompt) throw error;
     } finally {
       await fs.rm(temporaryPath, { force: true }).catch(() => {});
     }
   }
-  await fs.chmod(absolutePath, READ_ONLY_FILE_MODE).catch(() => {});
+  const persistedInput = await openSafeWorkflowInput(absolutePath);
+  try {
+    // Change permissions on the already-verified descriptor. A path-based
+    // chmod follows symlinks and can mutate files outside the workspace.
+    await persistedInput.chmod(READ_ONLY_FILE_MODE).catch(() => {});
+  } finally {
+    await persistedInput.close();
+  }
 
   return {
     prompt: [
@@ -90,6 +94,44 @@ export async function spillWorkflowPromptToFile(opts: {
     chars: opts.prompt.length,
     format,
   };
+}
+
+async function readExistingWorkflowInput(absolutePath: string): Promise<string | null> {
+  let file: FileHandle;
+  try {
+    file = await openSafeWorkflowInput(absolutePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+
+  try {
+    return await file.readFile("utf8");
+  } finally {
+    await file.close();
+  }
+}
+
+async function openSafeWorkflowInput(absolutePath: string): Promise<FileHandle> {
+  const expected = await fs.lstat(absolutePath);
+  if (expected.isSymbolicLink()) {
+    throw new Error(`${absolutePath} must not be a symbolic link`);
+  }
+  if (!expected.isFile()) {
+    throw new Error(`${absolutePath} must be a regular file`);
+  }
+
+  const file = await fs.open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const actual = await file.stat();
+    if (!actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
+      throw new Error(`${absolutePath} changed while it was being opened`);
+    }
+    return file;
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
 }
 
 async function assertSafeInputDirectories(workingDirectory: string): Promise<void> {

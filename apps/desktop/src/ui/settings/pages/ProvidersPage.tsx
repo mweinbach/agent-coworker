@@ -10,7 +10,7 @@ import {
   RefreshCcwIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { operationKey } from "../../../app/store.helpers";
@@ -246,10 +246,14 @@ export function ProvidersPage({
     [checkCodexAppServerStatus, refreshProviderStatus],
   );
 
+  const automaticallyRefreshedWorkspaceId = useRef<string | null>(null);
+  const refreshWorkspaceId = selectedWorkspaceId ?? workspaces[0]?.id ?? null;
   useEffect(() => {
-    if (!canConnectProvider) return;
+    if (!canConnectProvider || !refreshWorkspaceId) return;
+    if (automaticallyRefreshedWorkspaceId.current === refreshWorkspaceId) return;
+    automaticallyRefreshedWorkspaceId.current = refreshWorkspaceId;
     void refreshProviderAndRuntimeStatus();
-  }, [canConnectProvider, refreshProviderAndRuntimeStatus]);
+  }, [canConnectProvider, refreshProviderAndRuntimeStatus, refreshWorkspaceId]);
 
   const settingsChrome = useOptionalSettingsChrome();
   useEffect(() => {

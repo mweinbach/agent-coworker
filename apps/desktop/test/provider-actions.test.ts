@@ -177,8 +177,8 @@ describe("provider actions", () => {
         id: "note-1",
         ts: "2026-03-21T00:00:00.000Z",
         kind: "error",
-        title: "Not connected",
-        detail: "Unable to refresh provider status.",
+        title: "Provider status unavailable",
+        detail: "Unable to refresh provider status. Try again.",
       },
     ]);
   });
@@ -236,5 +236,81 @@ describe("provider actions", () => {
     ]);
     expect(harness.state.providerStatusRefreshing).toBe(false);
     expect(harness.state.notifications).toEqual([]);
+  });
+
+  test("a superseded provider refresh cannot surface a stale connection failure", async () => {
+    const harness = createHarness();
+    let statusRequests = 0;
+    let failOlderStatusRefresh: ((value: boolean) => void) | null = null;
+    const overrides = {
+      makeId: () => "stale-provider-error",
+      nowIso: () => "2026-08-24T12:00:00.000Z",
+      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+      requestJsonRpcControlEvent: ((...args: any[]) => {
+        if (args[3] === "cowork/provider/status/refresh" && ++statusRequests === 1) {
+          return new Promise<boolean>((resolve) => {
+            failOlderStatusRefresh = resolve;
+          });
+        }
+        return Promise.resolve(true);
+      }) as any,
+    };
+
+    const olderRefresh = refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      overrides,
+    );
+    await Promise.resolve();
+
+    await refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      overrides,
+    );
+    failOlderStatusRefresh?.(false);
+    await olderRefresh;
+
+    expect(harness.state.providerStatusRefreshing).toBe(false);
+    expect(harness.state.notifications).toEqual([]);
+  });
+
+  test("foreground provider refresh preserves the server's actionable failure", async () => {
+    const harness = createHarness();
+    const actionableFailure = "Provider authorization expired. Sign in again to refresh models.";
+
+    await refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      {
+        makeId: () => "provider-error",
+        nowIso: () => "2026-08-24T12:00:00.000Z",
+        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+        requestJsonRpcControlEvent: ((...args: any[]) => {
+          if (args[3] !== "cowork/provider/status/refresh") {
+            return Promise.resolve(true);
+          }
+          const errorDetail = args[5] as { message?: string } | undefined;
+          if (errorDetail) errorDetail.message = actionableFailure;
+          return Promise.resolve(false);
+        }) as any,
+      },
+    );
+
+    expect(harness.state.notifications).toEqual([
+      {
+        id: "provider-error",
+        ts: "2026-08-24T12:00:00.000Z",
+        kind: "error",
+        title: "Provider status unavailable",
+        detail: actionableFailure,
+      },
+    ]);
   });
 });

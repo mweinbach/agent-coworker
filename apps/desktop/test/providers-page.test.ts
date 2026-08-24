@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -411,6 +411,34 @@ describe("desktop providers page", () => {
             root.unmount();
           });
         } catch {}
+      }
+      harness.restore();
+    }
+  });
+
+  test("StrictMode mounting performs only one foreground provider refresh", async () => {
+    const refreshProviderStatus = mock(async () => {});
+    const checkCodexAppServerStatus = mock(async () => {});
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({ refreshProviderStatus, checkCodexAppServerStatus });
+        root?.render(createElement(StrictMode, null, createElement(ProvidersPage)));
+      });
+
+      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
+      expect(checkCodexAppServerStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
       }
       harness.restore();
     }

@@ -57,6 +57,9 @@ export async function refreshProviderStatusForWorkspace(
   const addNotification = overrides.pushNotification ?? pushNotification;
   const sendControlEvent = overrides.requestJsonRpcControlEvent ?? requestJsonRpcControlEvent;
   const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
+  const statusRefreshError: { message?: string } = {};
+  const catalogError: { message?: string } = {};
+  const authMethodsError: { message?: string } = {};
   set({ providerStatusRefreshing: true });
   const statusRefreshPromise = sendControlEvent(
     get,
@@ -67,24 +70,40 @@ export async function refreshProviderStatusForWorkspace(
       cwd: path,
       ...(opts.refreshBedrockDiscovery ? { refreshBedrockDiscovery: true } : {}),
     },
+    statusRefreshError,
   );
   const catalogPromise = opts.refreshBedrockDiscovery
     ? statusRefreshPromise.then(() =>
-        sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
+        sendControlEvent(
+          get,
+          set,
+          workspaceId,
+          "cowork/provider/catalog/read",
+          {
+            cwd: path,
+            refresh: true,
+          },
+          catalogError,
+        ),
+      )
+    : sendControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/provider/catalog/read",
+        {
           cwd: path,
           refresh: true,
-        }),
-      )
-    : sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
-        cwd: path,
-        refresh: true,
-      });
+        },
+        catalogError,
+      );
   const authMethodsPromise = sendControlEvent(
     get,
     set,
     workspaceId,
     "cowork/provider/authMethods/read",
     { cwd: path },
+    authMethodsError,
   );
   const results = await Promise.allSettled([
     statusRefreshPromise,
@@ -92,22 +111,36 @@ export async function refreshProviderStatusForWorkspace(
     authMethodsPromise,
   ]);
   const allSucceeded = results.every((result) => result.status === "fulfilled" && result.value);
-  set((s) => ({
-    ...(refreshGeneration === RUNTIME.providerStatusRefreshGeneration
-      ? { providerStatusRefreshing: false }
-      : {}),
-    ...(!allSucceeded
-      ? {
-          notifications: addNotification(s.notifications, {
-            id: createId(),
-            ts: getNowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to refresh provider status.",
-          }),
-        }
-      : {}),
-  }));
+  const rejectedResult = results.find((result) => result.status === "rejected");
+  const rejectedMessage =
+    rejectedResult?.status === "rejected"
+      ? rejectedResult.reason instanceof Error
+        ? rejectedResult.reason.message
+        : typeof rejectedResult.reason === "string"
+          ? rejectedResult.reason
+          : null
+      : null;
+  const failureDetail =
+    [statusRefreshError, catalogError, authMethodsError].find((entry) => entry.message)?.message ??
+    rejectedMessage ??
+    "Unable to refresh provider status. Try again.";
+  set((s) => {
+    if (refreshGeneration !== RUNTIME.providerStatusRefreshGeneration) return {};
+    return {
+      providerStatusRefreshing: false,
+      ...(!allSucceeded
+        ? {
+            notifications: addNotification(s.notifications, {
+              id: createId(),
+              ts: getNowIso(),
+              kind: "error",
+              title: "Provider status unavailable",
+              detail: failureDetail,
+            }),
+          }
+        : {}),
+    };
+  });
 }
 
 export function createProviderActions(

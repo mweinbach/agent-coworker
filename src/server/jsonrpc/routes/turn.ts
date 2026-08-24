@@ -9,7 +9,6 @@ import {
   type JsonRpcSessionError,
   sendSessionMutationError,
 } from "./outcomes";
-import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 type JsonRpcTurnStartOutcome =
@@ -294,8 +293,16 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
     },
 
     "turn/interrupt": (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const parsed = jsonRpcThreadTurnRequestSchemas["turn/interrupt"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, includeSubagents } = parsed.data;
       const runtime = context.threads.getLive(threadId)?.runtime;
       if (!runtime) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -304,7 +311,11 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
-      runtime.turns.cancel();
+      if (includeSubagents === undefined) {
+        runtime.turns.cancel();
+      } else {
+        runtime.turns.cancel({ includeSubagents });
+      }
       context.jsonrpc.sendResult(ws, message.id, {});
     },
   };

@@ -259,6 +259,12 @@ must remain disabled after that fallback.
 
 For `turn/steer`, `clientMessageId` is an idempotency key for the active thread session. Retrying the exact turn id, text, attachments, input parts, and references replays `{ turnId, steerRequestId, replayed: true }` without admitting a second steer; changing that payload rejects the reused key. The first accepted result is `{ turnId, steerRequestId }`. `steerRequestId` remains stable through the accepted notification, projected user-message materialization, and any later projected dropped-steer error. If an accepted queued steer is dropped before materialization, the server releases its provisional claim so the client can retry the exact draft. Clients must retain the same key and payload until the steer materializes or reports a correlated error.
 
+`turn/interrupt` accepts `{ threadId, includeSubagents? }`. Omitting
+`includeSubagents`, or explicitly passing `false`, cancels only the thread's own active turn.
+Passing `includeSubagents: true` also cancels its running descendant agents, including when the
+parent thread is already idle. Clients must forward the user's explicit cancellation choice instead
+of silently interrupting only the parent.
+
 After negotiating `toolRetryLineage`, `turn/start` also accepts
 `retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server
 resolves each ID against the current bounded session snapshot, requires the target to remain failed

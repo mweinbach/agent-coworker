@@ -804,6 +804,53 @@ describe("composer draft clear after send", () => {
     expect(useAppStore.getState().threadRuntimeById["thread-a"]?.interruptPending).toBe(true);
   });
 
+  test("preserves the requested parent-only or parent-and-subagents stop scope", async () => {
+    const interruptions: Array<Record<string, unknown>> = [];
+    const request = mock(async (method: string, params: unknown) => {
+      expect(method).toBe("turn/interrupt");
+      interruptions.push(params as Record<string, unknown>);
+      return {};
+    });
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      __coworkUrl: "ws://mock",
+      __coworkOpened: true,
+      connect: () => {},
+      request,
+    } as never);
+
+    const resetActiveTurn = () => {
+      useAppStore.setState((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          "thread-a": {
+            ...state.threadRuntimeById["thread-a"]!,
+            busy: true,
+            activeTurnId: "turn-a",
+            interruptPending: false,
+          },
+        },
+      }));
+    };
+
+    resetActiveTurn();
+    expect(useAppStore.getState().cancelThread("thread-a")).toBe(true);
+    await flushAsyncWork();
+
+    resetActiveTurn();
+    expect(useAppStore.getState().cancelThread("thread-a", { includeSubagents: false })).toBe(true);
+    await flushAsyncWork();
+
+    resetActiveTurn();
+    expect(useAppStore.getState().cancelThread("thread-a", { includeSubagents: true })).toBe(true);
+    await flushAsyncWork();
+
+    expect(interruptions).toEqual([
+      { threadId: "session-a" },
+      { threadId: "session-a", includeSubagents: false },
+      { threadId: "session-a", includeSubagents: true },
+    ]);
+  });
+
   test("releases a failed interrupt claim so Stop can retry", async () => {
     let attempts = 0;
     const request = mock(async (method: string) => {

@@ -186,6 +186,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "turn/interrupt": z
     .object({
       threadId: nonEmptyTrimmedStringSchema,
+      includeSubagents: z.boolean().optional(),
     })
     .strict(),
 } as const;

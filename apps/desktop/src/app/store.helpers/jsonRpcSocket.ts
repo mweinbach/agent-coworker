@@ -783,8 +783,14 @@ export async function interruptJsonRpcTurn(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
+  options: { includeSubagents?: boolean } = {},
 ): Promise<unknown> {
-  return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", { threadId });
+  return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", {
+    threadId,
+    ...(options.includeSubagents !== undefined
+      ? { includeSubagents: options.includeSubagents }
+      : {}),
+  });
 }
 
 export async function uploadJsonRpcWorkspaceFile(

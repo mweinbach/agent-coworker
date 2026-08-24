@@ -185,7 +185,11 @@ export function createMessagingModule(
     const message = build(sessionId);
     if (message.type === "cancel") {
       return beginWorkspaceRequest(() =>
-        interruptJsonRpcTurn(get, undefined, workspaceId, sessionId),
+        interruptJsonRpcTurn(get, undefined, workspaceId, sessionId, {
+          ...(message.includeSubagents !== undefined
+            ? { includeSubagents: message.includeSubagents }
+            : {}),
+        }),
       );
     }
     if (message.type === "session_close") {

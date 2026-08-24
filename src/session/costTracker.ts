@@ -461,8 +461,8 @@ export class SessionCostTracker {
 
     this.recordSessionCost(usdCost, usageCostBreakdownFromUnattributedCost(usdCost));
     this.updatedAt = new Date().toISOString();
-    this.emit({ type: "usage_changed", cumulative: this.getSnapshot() });
     this.checkBudget();
+    this.emit({ type: "usage_changed", cumulative: this.getSnapshot() });
   }
 
   // ── Budget management ──────────────────────────────────────────────

@@ -26,6 +26,37 @@ describe("SessionCostTracker", () => {
     expect(updates).toEqual([1.25]);
   });
 
+  test("emits authoritative budget flags when unattributed spend crosses thresholds", () => {
+    const tracker = new SessionCostTracker("session-1", { warnAtUsd: 0.5, stopAtUsd: 1 });
+    const updates: SessionUsageSnapshot["budgetStatus"][] = [];
+    const alerts: string[] = [];
+
+    tracker.addListener((event) => {
+      if (event.type === "usage_changed") {
+        updates.push(event.cumulative.budgetStatus);
+      } else if (event.type === "budget_warning" || event.type === "budget_exceeded") {
+        alerts.push(event.type);
+      }
+    });
+
+    tracker.recordUnattributedCost(1.25);
+    tracker.recordUnattributedCost(0.25);
+
+    expect(updates).toEqual([
+      expect.objectContaining({
+        warningTriggered: true,
+        stopTriggered: true,
+        currentCostUsd: 1.25,
+      }),
+      expect.objectContaining({
+        warningTriggered: true,
+        stopTriggered: true,
+        currentCostUsd: 1.5,
+      }),
+    ]);
+    expect(alerts).toEqual(["budget_warning", "budget_exceeded"]);
+  });
+
   test("clears stop-triggered state when hard-stop threshold is removed", () => {
     const tracker = new SessionCostTracker("session-1");
 

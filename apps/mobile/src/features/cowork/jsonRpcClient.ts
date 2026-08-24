@@ -513,11 +513,11 @@ export class CoworkJsonRpcClient {
   }
 
   async respondServerRequest(id: JsonRpcId, result: unknown): Promise<void> {
-    await this.sendTransport(JSON.stringify({ id, result }));
+    await this.sendWithoutResponse(JSON.stringify({ id, result }), "server response");
   }
 
   async rejectServerRequest(id: JsonRpcId, message: string): Promise<void> {
-    await this.sendTransport(
+    await this.sendWithoutResponse(
       JSON.stringify({
         id,
         error: {
@@ -525,6 +525,7 @@ export class CoworkJsonRpcClient {
           message,
         },
       }),
+      "server response",
     );
   }
 
@@ -576,12 +577,30 @@ export class CoworkJsonRpcClient {
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
-    await this.sendTransport(
+    await this.sendWithoutResponse(
       JSON.stringify({
         method,
         ...(params !== undefined ? { params } : {}),
       }),
+      method,
     );
+  }
+
+  private async sendWithoutResponse(text: string, operation: string): Promise<void> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<void>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`JSON-RPC send timed out: ${operation}`));
+      }, this.requestTimeoutMs);
+    });
+
+    try {
+      await Promise.race([Promise.resolve(this.sendTransport(text)), timeout]);
+    } finally {
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   }
 
   private ensureInitialized(): Promise<void> | null {

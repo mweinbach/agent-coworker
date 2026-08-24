@@ -1588,6 +1588,64 @@ describe("mobile cowork jsonrpc client", () => {
     }
   });
 
+  test("bounds a permanently stalled approval response so the user can retry", async () => {
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send() {
+        return new Promise<void>(() => {});
+      },
+      requestTimeoutMs: 5,
+    });
+
+    const outcome = await Promise.race([
+      client.respondServerRequest(7, { decision: "accept" }).then(
+        () => "unexpected success",
+        (error: unknown) => error,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("response remained pending"), 50)),
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("JSON-RPC send timed out: server response");
+  });
+
+  test("bounds a permanently stalled initialization acknowledgment", async () => {
+    let client!: CoworkJsonRpcClient;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        const message = JSON.parse(text);
+        if (message.method === "initialize") {
+          queueMicrotask(() => {
+            void client.handleIncoming(JSON.stringify({ id: message.id, result: {} }));
+          });
+          return;
+        }
+        return new Promise<void>(() => {});
+      },
+      requestTimeoutMs: 5,
+    });
+
+    const outcome = await Promise.race([
+      client.initialize().then(
+        () => "unexpected success",
+        (error: unknown) => error,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("initialization remained pending"), 50),
+      ),
+    ]);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("JSON-RPC send timed out: initialized");
+  });
+
   test("ignores malformed incoming payloads", async () => {
     const notifications: Array<{ method: string; params?: unknown }> = [];
     const client = new CoworkJsonRpcClient({

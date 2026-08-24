@@ -717,11 +717,18 @@ rl.on("line", (line) => {
       "Codex app-server handles shell, filesystem, sandboxing, approvals, and native web search/fetch for this turn.",
     );
     expect(startParams?.developerInstructions).toContain(
-      "Cowork exposes workflows, coordination tools, session/thread management, and Cowork MCP as dynamic tools.",
+      "Available Cowork dynamic tools for this turn: `spawnAgent`, `cowork_mcp__srv__custom`.",
     );
     expect(startParams?.developerInstructions).toContain(
-      "Use Cowork dynamic tools for workflows, tasks, subagents, session/thread management, memory, skills, and todos.",
+      "Use only the listed Cowork dynamic tools for capabilities described in their tool definitions.",
     );
+    expect(startParams?.developerInstructions).toContain("Cowork MCP tools are exposed");
+    expect(startParams?.developerInstructions).toContain(
+      "Never call the native `request_user_input` tool",
+    );
+    expect(startParams?.developerInstructions).not.toContain("`workflow`");
+    expect(startParams?.developerInstructions).not.toContain("`list_threads`");
+    expect(startParams?.developerInstructions).not.toContain("`AskUserQuestion`");
   });
 
   test.serial("handles Codex dynamic tool call server requests", async () => {

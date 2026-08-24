@@ -12,7 +12,7 @@ import { spillWorkflowPromptToFile, WORKFLOW_INLINE_PROMPT_CHARS } from "./input
 import { digestAgentCall, hashWorkflowArgs, WorkflowJournal } from "./journal";
 import { AgentScheduler, resolveWorkflowConcurrency } from "./scheduler";
 import { workflowAgentCallSchema, workflowHostMessageSchema, workflowMetaSchema } from "./schema";
-import type { WorkflowCompileFailure, WorkflowRunSummary } from "./types";
+import type { WorkflowCompileFailure, WorkflowJournalEntry, WorkflowRunSummary } from "./types";
 import { WORKFLOW_WORKER_BOOTSTRAP } from "./workerBootstrap";
 
 /** Hard backstop against a runaway loop authoring unbounded agents. */
@@ -110,6 +110,16 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     persist: !opts.dryRun,
     ...(opts.resumeFromRunId ? { resumeFromRunId: opts.resumeFromRunId } : {}),
   });
+  const persistCheckpoint = async (entry: WorkflowJournalEntry): Promise<void> => {
+    if (opts.dryRun) return;
+    try {
+      await journal.append(entry);
+    } catch (error) {
+      opts.ctx.log(
+        `tool! workflow ${runId} journal checkpoint failed: ${workflowErrorText(error)}`,
+      );
+    }
+  };
 
   const budgetStatus = opts.ctx.costTracker?.getBudgetStatus?.() ?? null;
   const budgetStopAtUsd = budgetStatus?.stopAtUsd ?? null;
@@ -401,9 +411,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       emitProgress();
       // Re-record under this run's journal so a later resume of THIS run still
       // has the prefix. Dry runs never persist.
-      if (!opts.dryRun) {
-        await journal.append({ ...cached, index, digest });
-      }
+      await persistCheckpoint({ ...cached, index, digest });
       postWorker({
         t: "agentResult",
         callId,
@@ -469,17 +477,15 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       emitProgress();
 
       // Dry-run stubs must not become a resumable journal prefix.
-      if (!opts.dryRun) {
-        await journal.append({
-          index,
-          digest,
-          phase,
-          label,
-          result: outcome.value,
-          agentId: outcome.agentId,
-          usdCost: outcome.usdCost,
-        });
-      }
+      await persistCheckpoint({
+        index,
+        digest,
+        phase,
+        label,
+        result: outcome.value,
+        agentId: outcome.agentId,
+        usdCost: outcome.usdCost,
+      });
 
       postWorker({
         t: "agentResult",
@@ -512,8 +518,8 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       }
 
       if (options.onError === "null") {
-        if (!opts.dryRun && row.agentId !== null) {
-          await journal.append({
+        if (row.agentId !== null) {
+          await persistCheckpoint({
             index,
             digest,
             phase,

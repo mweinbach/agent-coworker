@@ -13,6 +13,7 @@ import {
   isReasoningEffortValue,
   sanitizePersistedComposerDrafts,
 } from "../../src/app/composerDrafts";
+import { sanitizePersistedCreationDrafts } from "../../src/app/creationDrafts";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import {
@@ -453,6 +454,9 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     providerUiState,
     ...(onboarding ? { onboarding } : {}),
     composerDrafts: sanitizePersistedComposerDrafts(value.composerDrafts),
+    ...(isRecord(value.creationDrafts)
+      ? { creationDrafts: sanitizePersistedCreationDrafts(value.creationDrafts) }
+      : {}),
   };
 }
 

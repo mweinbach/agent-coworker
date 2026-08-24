@@ -4,6 +4,7 @@ import {
   hydrateComposerDrafts,
   mergeComposerDraftsByRevision,
   type PersistedComposerDraft,
+  sanitizePersistedComposerDrafts,
   serializeComposerDrafts,
 } from "./composerDrafts";
 
@@ -141,6 +142,25 @@ export function hydrateCreationDrafts(value: unknown): HydratedCreationDrafts {
     researchCreationError,
     taskCreationDraft,
     taskCreationError,
+  };
+}
+
+export function sanitizePersistedCreationDrafts(value: unknown): PersistedCreationDrafts {
+  const record = isRecord(value) ? value : {};
+  const research = sanitizePersistedComposerDrafts({
+    [RESEARCH_DRAFT_KEY]: record.research,
+  })[RESEARCH_DRAFT_KEY];
+  const task = sanitizeTaskCreationDraft(record.task);
+  const researchError = research
+    ? sanitizeCreationDraftError(record.researchError, research.revision)
+    : null;
+  const taskError = sanitizeCreationDraftError(record.taskError, task.revision);
+
+  return {
+    ...(research ? { research } : {}),
+    ...(researchError ? { researchError } : {}),
+    task,
+    ...(taskError ? { taskError } : {}),
   };
 }
 

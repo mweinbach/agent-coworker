@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { pinHome } from "../../../test/helpers/platform";
+import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { isStandardChatThread } from "../src/app/threadFilters";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -232,6 +233,86 @@ describe("desktop persistence state validation", () => {
       provider: "openai",
       model: "gpt-5.4",
       reasoningEffort: "high",
+    });
+  });
+
+  test("saveState round-trips research and task creation drafts with their retry state", async () => {
+    const persistence = new PersistenceService();
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(6, "ws_drafts"),
+      updatedAt: TS,
+      idempotencyKey: "stable-task-creation-key",
+      title: "Prepare the launch checklist",
+      objective: "Keep my full unsent brief after restarting.",
+      workItems: [
+        {
+          id: "work-item-1",
+          key: "step-1",
+          title: "Inspect current status",
+          description: "Review all open reliability issues.",
+          dependencies: "",
+          expectedOutputs: "A prioritized checklist",
+        },
+      ],
+    };
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      creationDrafts: {
+        research: {
+          revision: 4,
+          generation: 2,
+          updatedAt: TS,
+          text: "Compare failure-recovery strategies",
+          attachments: [
+            {
+              filename: "notes.txt",
+              mimeType: "text/plain",
+              size: 5,
+              lastModified: 7,
+              signature: "research-notes",
+              contentBase64: "bm90ZXM=",
+            },
+          ],
+          references: [{ kind: "skill", name: "documents" }],
+          provider: "openai",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+        },
+        researchError: { revision: 4, message: "Research submission can be retried." },
+        task: taskDraft,
+        taskError: { revision: 6, message: "Task submission can be retried." },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.creationDrafts).toEqual({
+      research: {
+        revision: 4,
+        generation: 2,
+        updatedAt: TS,
+        text: "Compare failure-recovery strategies",
+        attachments: [
+          {
+            filename: "notes.txt",
+            mimeType: "text/plain",
+            size: 5,
+            lastModified: 7,
+            signature: "research-notes",
+            contentBase64: "bm90ZXM=",
+          },
+        ],
+        references: [{ kind: "skill", name: "documents" }],
+        provider: "openai",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      },
+      researchError: { revision: 4, message: "Research submission can be retried." },
+      task: taskDraft,
+      taskError: { revision: 6, message: "Task submission can be retried." },
     });
   });
 

@@ -105,7 +105,9 @@ export async function refreshAgentSessionSystemPromptWithSkills(
     const result = await promptState.context.deps.loadSystemPromptWithSkillsImpl(
       promptState.state.config,
     );
-    promptState.state.system = result.prompt;
+    if ((promptState.state.sessionInfo.sessionKind ?? "root") === "root") {
+      promptState.state.system = result.prompt;
+    }
     promptState.state.discoveredSkills = result.discoveredSkills;
     promptState.state.systemPromptMetadataLoaded = true;
     await recordAgentSessionSkillCatalogMtimeSnapshot(promptState);

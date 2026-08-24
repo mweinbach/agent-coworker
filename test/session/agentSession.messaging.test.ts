@@ -777,6 +777,77 @@ describe("AgentSession", () => {
       expect(skillsListIdx).toBeGreaterThan(busyFalseIdx);
     });
 
+    test("refreshes child-agent skills without replacing its role, profile, or workflow prompt", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "child-skill-refresh-"));
+      const config = makeConfig(workspaceDir);
+      const skillDir = path.join(config.skillsDirs[0]!, "refreshed-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: refreshed-skill\ndescription: Refreshed skill\n---\n\n# Refreshed skill\n",
+      );
+      const childSystemPrompt = [
+        "Research role instructions",
+        "Specialized subagent profile policy",
+        "Workflow structured-output mode",
+      ].join("\n\n");
+      const refreshedSkills = [{ name: "refreshed-skill", description: "Refreshed skill" }];
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: refreshedSkills,
+      }));
+      const { session, events } = makeSession({
+        config,
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.refreshSkillStateFromExternalMutation("skills.shared_refresh");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect((session as any).state.discoveredSkills).toEqual(refreshedSkills);
+      expect((session as any).state.systemPromptMetadataLoaded).toBe(true);
+      expect(events.some((event) => event.type === "skills_list")).toBe(true);
+    });
+
+    test("preserves child-agent prompts when the skill catalog changes before a turn", async () => {
+      const childSystemPrompt = "Research role instructions\n\nWorkflow structured-output mode";
+      const refreshedSkills = [{ name: "new-skill", description: "New skill" }];
+      const readSkillCatalogMtimeSnapshotImpl = mock(async () => "updated-skill-catalog");
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: refreshedSkills,
+      }));
+      const { session } = makeSession({
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        initialSkillCatalogMtimeSnapshot: "previous-skill-catalog",
+        readSkillCatalogMtimeSnapshotImpl,
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.sendUserMessage("Use the refreshed skill catalog.");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(mockRunTurn.mock.calls[0]?.[0]).toMatchObject({
+        system: childSystemPrompt,
+        discoveredSkills: refreshedSkills,
+        agentRole: "research",
+      });
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect((session as any).state.systemPromptMetadataLoaded).toBe(true);
+    });
+
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {
       const { session, events } = makeSession();
 

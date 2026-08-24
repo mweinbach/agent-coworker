@@ -151,12 +151,13 @@ export function buildThreadHomeViewModel({
     ? threads.filter(
         (thread) =>
           thread.title.toLowerCase().includes(query) ||
-          thread.preview.toLowerCase().includes(query),
+          thread.preview.toLowerCase().includes(query) ||
+          thread.composerDraft.toLowerCase().includes(query),
       )
     : threads;
 
   const chatList = sortThreadsByUpdatedAt(
-    filteredThreads.filter((thread) => thread.workspaceKind === "oneOffChat"),
+    filteredThreads.filter((thread) => thread.workspaceKind !== "project"),
   );
 
   const oneOffWorkspaces = sortWorkspacesByLastOpened(
@@ -180,7 +181,7 @@ export function buildThreadHomeViewModel({
 
   const threadsByWorkspaceId = new Map<string, MobileThreadSummary[]>();
   for (const thread of filteredThreads) {
-    if (thread.workspaceKind === "oneOffChat" || !thread.workspaceId) {
+    if (thread.workspaceKind !== "project" || !thread.workspaceId) {
       continue;
     }
     const bucket = threadsByWorkspaceId.get(thread.workspaceId);

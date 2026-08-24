@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkspaceSummary } from "../apps/mobile/src/features/cowork/protocolTypes";
 import {
+  buildThreadHomeListSections,
+  describeThreadHomeAttention,
+} from "../apps/mobile/src/features/cowork/threadHomeListModel";
+import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
   getVisibleListSlice,
@@ -21,6 +25,8 @@ function makeThread(partial: Partial<MobileThreadSummary> & Pick<MobileThreadSum
     workspaceKind: partial.workspaceKind ?? null,
     feed: partial.feed ?? [],
     composerDraft: "",
+    composerAttachments: [],
+    composerSubmission: null,
     pendingPrompt: false,
     pendingServerRequest: null,
     ...partial,
@@ -102,5 +108,128 @@ describe("thread home model", () => {
     expect(viewModel.projects[0]?.canLoadMoreFromServer).toBe(true);
     expect(viewModel.projects[0]?.serverTotal).toBe(8);
     expect(viewModel.sectionOrder).toEqual(["chats", "projects"]);
+  });
+
+  test("keeps durable local drafts and orphaned conversations discoverable on home", () => {
+    const localDraft = makeThread({
+      id: "draft-offline-1",
+      title: "Offline conversation",
+      workspaceKind: null,
+      composerDraft: "recover this after the app restarts",
+    });
+    const orphanedRemote = makeThread({
+      id: "orphaned-remote-1",
+      title: "Recovered desktop conversation",
+      workspaceKind: null,
+    });
+    const viewModel = buildThreadHomeViewModel({
+      threads: [localDraft, orphanedRemote],
+      workspaces: [],
+      searchQuery: "",
+      ui: defaultThreadHomeUiState(),
+    });
+
+    expect(viewModel.visibleChats.map((thread) => thread.id)).toEqual([
+      "draft-offline-1",
+      "orphaned-remote-1",
+    ]);
+    expect(viewModel.isEmpty).toBe(false);
+
+    const draftSearch = buildThreadHomeViewModel({
+      threads: [localDraft],
+      workspaces: [],
+      searchQuery: "recover this",
+      ui: defaultThreadHomeUiState(),
+    });
+    expect(draftSearch.visibleChats.map((thread) => thread.id)).toEqual(["draft-offline-1"]);
+  });
+
+  test("prioritizes approvals, failed sends, sending, and durable drafts on home rows", () => {
+    const thread = makeThread({
+      id: "attention-chat",
+      composerDraft: "an unsent draft",
+      composerSubmission: {
+        clientMessageId: "stable-message-1",
+        text: "an unsent draft",
+        attachments: [],
+        status: "failed",
+        error: "Connection interrupted",
+      },
+      pendingPrompt: true,
+    });
+
+    expect(describeThreadHomeAttention(thread)).toEqual({
+      label: "Needs response",
+      tone: "warning",
+    });
+    expect(describeThreadHomeAttention({ ...thread, pendingPrompt: false })).toEqual({
+      label: "Send failed",
+      tone: "danger",
+    });
+    expect(
+      describeThreadHomeAttention({
+        ...thread,
+        pendingPrompt: false,
+        composerSubmission: { ...thread.composerSubmission!, status: "submitting", error: null },
+      }),
+    ).toEqual({ label: "Sending", tone: "primary" });
+    expect(
+      describeThreadHomeAttention({
+        ...thread,
+        pendingPrompt: false,
+        composerSubmission: null,
+      }),
+    ).toEqual({ label: "Draft", tone: "primary" });
+    expect(
+      describeThreadHomeAttention({
+        ...thread,
+        pendingPrompt: false,
+        composerSubmission: null,
+        composerDraft: "",
+      }),
+    ).toBeNull();
+  });
+
+  test("invalidates only changed home rows when drafts or submission state change", () => {
+    function rowRevisions(threads: MobileThreadSummary[]): Map<string, string> {
+      const viewModel = buildThreadHomeViewModel({
+        threads,
+        workspaces: [],
+        searchQuery: "",
+        ui: defaultThreadHomeUiState(),
+      });
+      const sections = buildThreadHomeListSections({
+        viewModel,
+        homeLoadPending: { chats: false, projects: {} },
+        chatsError: null,
+        projectErrors: {},
+      });
+      return new Map(
+        sections.flatMap((section) => section.data.map((row) => [row.key, row.revision])),
+      );
+    }
+
+    const changing = makeThread({ id: "changing-chat", workspaceKind: "oneOffChat" });
+    const stable = makeThread({ id: "stable-chat", workspaceKind: "oneOffChat" });
+    const idle = rowRevisions([changing, stable]);
+    const drafted = rowRevisions([{ ...changing, composerDraft: "saved draft" }, stable]);
+    const failed = rowRevisions([
+      {
+        ...changing,
+        composerDraft: "saved draft",
+        composerSubmission: {
+          clientMessageId: "message-1",
+          text: "saved draft",
+          attachments: [],
+          status: "failed",
+          error: "offline",
+        },
+      },
+      stable,
+    ]);
+
+    expect(drafted.get("chat:changing-chat")).not.toBe(idle.get("chat:changing-chat"));
+    expect(failed.get("chat:changing-chat")).not.toBe(drafted.get("chat:changing-chat"));
+    expect(failed.get("chat:stable-chat")).toBe(idle.get("chat:stable-chat"));
   });
 });

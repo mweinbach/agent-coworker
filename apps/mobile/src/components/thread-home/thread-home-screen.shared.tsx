@@ -21,6 +21,7 @@ import {
 } from "react-native";
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
+import { StatusPill } from "@/components/ui/status-pill";
 import {
   minimumTouchTarget,
   runAccessibleLayoutAnimation,
@@ -31,6 +32,8 @@ import type { MobilePlatformContract } from "@/features/cowork/mobilePerformance
 import { getMobileListPerformanceContract } from "@/features/cowork/mobilePerformanceContracts";
 import {
   buildThreadHomeListSections,
+  describeThreadHomeAttention,
+  type ThreadHomeAttention,
   type ThreadHomeListRow,
   type ThreadHomeListSection,
 } from "@/features/cowork/threadHomeListModel";
@@ -111,22 +114,25 @@ function RowTextContent({
   title,
   preview,
   age,
+  attention,
   indent = false,
 }: {
   title: string;
   preview?: string;
   age: string;
+  attention: ThreadHomeAttention | null;
   indent?: boolean;
 }) {
   const theme = useAppTheme();
+  const hasSupportingContent = Boolean(preview) || attention !== null;
   return (
     <View
       style={{
-        minHeight: preview ? 62 : minimumTouchTarget(),
+        minHeight: hasSupportingContent ? 62 : minimumTouchTarget(),
         justifyContent: "center",
         paddingLeft: indent ? 45 : 16,
         paddingRight: 16,
-        paddingVertical: preview ? 10 : 0,
+        paddingVertical: hasSupportingContent ? 10 : 0,
         gap: 3,
       }}
     >
@@ -164,6 +170,11 @@ function RowTextContent({
         >
           {preview}
         </Text>
+      ) : null}
+      {attention ? (
+        <View style={{ alignItems: "flex-start", paddingLeft: indent ? 0 : 29, paddingTop: 4 }}>
+          <StatusPill label={attention.label} tone={attention.tone} />
+        </View>
       ) : null}
     </View>
   );
@@ -235,12 +246,13 @@ function ThreadHomeRow({
         row.thread.preview && row.thread.preview !== "No activity yet."
           ? row.thread.preview
           : undefined;
+      const attention = describeThreadHomeAttention(row.thread);
       return (
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open chat ${row.thread.title}${
-              row.thread.pendingPrompt ? ", needs response" : ""
+              attention ? `, ${attention.label.toLowerCase()}` : ""
             }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
@@ -252,6 +264,7 @@ function ThreadHomeRow({
               title={row.thread.title}
               preview={preview}
               age={formatThreadRelativeAge(row.thread.updatedAt)}
+              attention={attention}
             />
           </Pressable>
         </View>
@@ -311,13 +324,14 @@ function ThreadHomeRow({
           </Pressable>
         </View>
       );
-    case "project-thread":
+    case "project-thread": {
+      const attention = describeThreadHomeAttention(row.thread);
       return (
         <View style={shellStyle}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Open chat ${row.thread.title}${
-              row.thread.pendingPrompt ? ", needs response" : ""
+              attention ? `, ${attention.label.toLowerCase()}` : ""
             }`}
             onPress={() => actions.onOpenThread(row.thread.id)}
             style={({ pressed }) => [
@@ -328,11 +342,13 @@ function ThreadHomeRow({
             <RowTextContent
               title={row.thread.title}
               age={formatThreadRelativeAge(row.thread.updatedAt)}
+              attention={attention}
               indent
             />
           </Pressable>
         </View>
       );
+    }
     case "empty":
       return (
         <View style={[shellStyle, separatorStyle]}>

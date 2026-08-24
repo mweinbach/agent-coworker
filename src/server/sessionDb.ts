@@ -459,9 +459,9 @@ export class SessionDb {
     return this.readRepository.listModelStreamChunks(sessionId, turnId);
   }
 
-  async reconcileStaleExecutionStates(): Promise<number> {
+  async reconcileStaleExecutionStates(workingDirectory?: string | null): Promise<number> {
     return await this.writeCoordinator.runExclusive("reconcile_stale_execution_states", async () =>
-      this.repository.reconcileStaleExecutionStates(),
+      this.repository.reconcileStaleExecutionStates(workingDirectory),
     );
   }
 

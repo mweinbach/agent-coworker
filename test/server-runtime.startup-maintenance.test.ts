@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import { runStartupMaintenance } from "../src/server/runtime/startupMaintenance";
 import { ServerFileLog, shouldEnableServerFileLog } from "../src/server/serverFileLog";
 import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
 import { sweepStaleSessionTmpFiles } from "../src/server/sessionStore";
+import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
 import type { AgentExecutionState } from "../src/shared/agents";
 
 async function makeTmpCoworkHome(prefix = "startup-maintenance-test-"): Promise<{
@@ -25,6 +27,7 @@ function makeMutation(opts: {
   sessionId: string;
   executionState?: AgentExecutionState | null;
   updatedAt?: string;
+  workingDirectory?: string;
 }): PersistedSessionMutation {
   const now = new Date().toISOString();
   const updatedAt = opts.updatedAt ?? now;
@@ -42,7 +45,7 @@ function makeMutation(opts: {
       titleModel: null,
       provider: "google",
       model: "gemini-3-flash-preview",
-      workingDirectory: "/tmp/project",
+      workingDirectory: opts.workingDirectory ?? "/tmp/project",
       enableMcp: false,
       backupsEnabledOverride: null,
       createdAt: updatedAt,
@@ -84,6 +87,114 @@ describe("startup maintenance", () => {
 
       expect(await db.reconcileStaleExecutionStates()).toBe(0);
     } finally {
+      db.close();
+    }
+  });
+
+  test("workspace startup never interrupts active sessions belonging to another workspace", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      await db.persistSessionMutation(
+        makeMutation({
+          sessionId: "workspace-a-active",
+          executionState: "running",
+          workingDirectory: "/tmp/project-a",
+        }),
+      );
+      await db.persistSessionMutation(
+        makeMutation({
+          sessionId: "workspace-b-interrupted",
+          executionState: "running",
+          workingDirectory: "/tmp/project-b",
+        }),
+      );
+      await db.persistSessionMutation(
+        makeMutation({
+          sessionId: "workspace-b-pending",
+          executionState: "pending_init",
+          workingDirectory: "/tmp/project-b/./",
+        }),
+      );
+
+      expect(await db.reconcileStaleExecutionStates("/tmp/project-b")).toBe(2);
+      expect(db.getSessionRecord("workspace-a-active")?.executionState).toBe("running");
+      expect(db.getSessionRecord("workspace-b-interrupted")?.executionState).toBe("errored");
+      expect(db.getSessionRecord("workspace-b-pending")?.executionState).toBe("errored");
+      expect(await db.reconcileStaleExecutionStates("/tmp/project-b")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("starting another workspace preserves its active sessions and working tasks", async () => {
+    const paths = await makeTmpCoworkHome();
+    const workspaceA = path.join(paths.home, "project-a");
+    const workspaceB = path.join(paths.home, "project-b");
+    await Promise.all([
+      fs.mkdir(workspaceA, { recursive: true }),
+      fs.mkdir(workspaceB, { recursive: true }),
+    ]);
+    const db = await SessionDb.create({ paths });
+    let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | undefined;
+
+    try {
+      const coordinator = new TaskCoordinator({ sessionDb: db });
+      const createWorkingTask = async (workingDirectory: string, sessionId: string) =>
+        await coordinator.createPlanned({
+          workspacePath: workingDirectory,
+          sessionId,
+          sourceSessionId: null,
+          creationOrigin: "manual",
+          workspaceDisposition: "existing_project",
+          creation: {
+            idempotencyKey: `startup-${sessionId}`,
+            title: `Task ${sessionId}`,
+            objective: "Keep workspace-owned recovery isolated.",
+            context: "Another workspace may still have a live sidecar.",
+            requirements: [{ kind: "acceptance_criterion", text: "Live tasks remain working." }],
+            workItems: [{ key: "run", title: "Run", expectedOutputs: ["A finished task"] }],
+          },
+        });
+
+      const liveTask = await createWorkingTask(workspaceA, "workspace-a-live-task");
+      const interruptedTask = await createWorkingTask(workspaceB, "workspace-b-stale-task");
+      await db.persistSessionMutation(
+        makeMutation({
+          sessionId: "workspace-a-live-task",
+          executionState: "running",
+          workingDirectory: workspaceA,
+        }),
+      );
+      await db.persistSessionMutation(
+        makeMutation({
+          sessionId: "workspace-b-stale-task",
+          executionState: "running",
+          workingDirectory: workspaceB,
+        }),
+      );
+
+      runtime = await createAgentServerRuntime({
+        cwd: workspaceB,
+        homedir: paths.home,
+        preloadSystemPrompt: false,
+        ensureCoworkRuntimeReadyImpl: async () => null,
+        ensureDefaultGlobalSkillsReadyImpl: async () => null,
+        env: {
+          AGENT_WORKING_DIR: workspaceB,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "false",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_ENABLE_TASKS: "1",
+        },
+      });
+
+      expect(db.getSessionRecord("workspace-a-live-task")?.executionState).toBe("running");
+      expect(db.getSessionRecord("workspace-b-stale-task")?.executionState).toBe("errored");
+      expect(coordinator.get(liveTask.task.id, workspaceA)?.status).toBe("working");
+      expect(coordinator.get(interruptedTask.task.id, workspaceB)?.status).toBe("failed");
+    } finally {
+      await runtime?.stop();
       db.close();
     }
   });

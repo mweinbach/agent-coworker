@@ -262,7 +262,7 @@ export async function createAgentServerRuntime(
   // Must complete before any session can start a turn: flips execution states
   // left as running/pending_init by a previous process that died mid-turn.
   try {
-    const reconciled = await sessionDb.reconcileStaleExecutionStates();
+    const reconciled = await sessionDb.reconcileStaleExecutionStates(config.workingDirectory);
     if (reconciled > 0) {
       console.warn(`[maintenance] reconciled ${reconciled} stale session execution state(s)`);
     }
@@ -520,8 +520,8 @@ export async function createAgentServerRuntime(
     return { sessionId: runtime.id };
   });
   tasks.setContinuationDispatcher(async (input) => await registry.dispatchTaskContinuation(input));
-  await tasks.reconcileFailedRuns();
-  await tasks.reconcilePendingArtifactRevisionSettlements();
+  await tasks.reconcileFailedRuns(config.workingDirectory);
+  await tasks.reconcilePendingArtifactRevisionSettlements(config.workingDirectory);
 
   const refreshLocalSkillState = async ({
     workingDirectory,

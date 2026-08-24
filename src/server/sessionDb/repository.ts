@@ -596,21 +596,47 @@ export class SessionDbRepository {
       );
   }
 
-  reconcileStaleExecutionStates(): number {
-    // Sessions killed mid-turn (crash, force-quit) persist execution_state
-    // 'running'/'pending_init' forever; nothing is live at boot, so any such
-    // state is stale. Terminal 'errored' keeps them out of busy checks and
-    // stops thread-list force-inclusion.
-    const result = this.db
-      .query(
+  reconcileStaleExecutionStates(workingDirectory?: string | null): number {
+    const reconcile = this.db.transaction((workspacePath: string | null) => {
+      if (!workspacePath) {
+        const result = this.db
+          .query(
+            sql([
+              "UPDATE sessions",
+              "       SET execution_state = 'errored'",
+              "       WHERE execution_state IN ('running', 'pending_init')",
+            ]),
+          )
+          .run();
+        return Number(result.changes ?? 0);
+      }
+
+      const candidates = this.db
+        .query(
+          sql([
+            "SELECT session_id, working_directory",
+            "       FROM sessions",
+            "       WHERE execution_state IN ('running', 'pending_init')",
+          ]),
+        )
+        .all() as Array<{ session_id: string; working_directory: string }>;
+      const update = this.db.query(
         sql([
           "UPDATE sessions",
           "       SET execution_state = 'errored'",
-          "       WHERE execution_state IN ('running', 'pending_init')",
+          "       WHERE session_id = ?",
+          "         AND execution_state IN ('running', 'pending_init')",
         ]),
-      )
-      .run();
-    return Number(result.changes ?? 0);
+      );
+      let reconciled = 0;
+      for (const candidate of candidates) {
+        if (!sameWorkspacePath(candidate.working_directory, workspacePath)) continue;
+        reconciled += Number(update.run(candidate.session_id).changes ?? 0);
+      }
+      return reconciled;
+    });
+
+    return reconcile(workingDirectory?.trim() || null);
   }
 
   pruneModelStreamChunksForStaleSessions(cutoffIso: string): number {

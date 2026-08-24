@@ -1472,6 +1472,7 @@ describe("providers/connectionCatalog", () => {
       refresh: true,
       env: {},
       lmstudioFetchImpl: unavailableLmStudioFetch,
+      modelDiscoveryFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",
@@ -1527,6 +1528,7 @@ describe("providers/connectionCatalog", () => {
       env: {},
       refresh: true,
       lmstudioFetchImpl: unavailableLmStudioFetch,
+      modelDiscoveryFetchImpl: unavailableLmStudioFetch,
       readStore: async () => ({
         version: 1,
         updatedAt: "2026-02-17T00:00:00.000Z",

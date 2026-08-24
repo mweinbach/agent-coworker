@@ -108,7 +108,11 @@ export function createCodexAppServerRuntime(): LlmRuntime {
         const sandboxPolicy = codexSandboxPolicy(preparedParams);
         const threadConfig = codexThreadConfig(preparedParams);
         const dynamicTools = codexDynamicToolSpecs(params.tools);
-        const developerInstructions = codexDeveloperInstructions(params.system, appServerEnv);
+        const developerInstructions = codexDeveloperInstructions(
+          params.system,
+          appServerEnv,
+          dynamicTools,
+        );
         const resumeState = currentState?.model === effectiveModel ? currentState : null;
         let resumedThread = resumeState !== null;
         const startThread = async () =>

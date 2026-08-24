@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  codexDeveloperInstructions,
   normalizeEffort,
   normalizeSummaryForModel,
   resolveEffectiveCodexModel,
@@ -14,6 +15,47 @@ function modelListClient(models: unknown[]) {
     },
   } as never;
 }
+
+describe("codex app-server developer tool boundary", () => {
+  test("does not advertise unavailable root, workflow, MCP, or clarification tools", () => {
+    const dynamicTools = ["skill", "todoWrite"].map((name) => ({
+      name,
+      description: name,
+      inputSchema: {},
+    }));
+    const instructions = codexDeveloperInstructions("Restricted child system", {}, dynamicTools);
+
+    expect(instructions).toContain("`skill`");
+    expect(instructions).toContain("`todoWrite`");
+    expect(instructions).not.toContain("workflow");
+    expect(instructions).not.toContain("session/thread management");
+    expect(instructions).not.toContain("AskUserQuestion");
+    expect(instructions).not.toContain("cowork_mcp__");
+    expect(instructions).toContain("Never call the native `request_user_input` tool");
+  });
+
+  test("advertises only root capabilities actually exposed as dynamic tools", () => {
+    const names = [
+      "workflow",
+      "createTask",
+      "spawnAgent",
+      "list_threads",
+      "AskUserQuestion",
+      "cowork_mcp__docs__search",
+    ];
+    const dynamicTools = names.map((name) => ({
+      name,
+      description: name,
+      inputSchema: {},
+    }));
+    const instructions = codexDeveloperInstructions("Root system", {}, dynamicTools);
+
+    for (const name of names) expect(instructions).toContain(`\`${name}\``);
+    expect(instructions).toContain("For user clarification");
+    expect(instructions).toContain("Cowork MCP tools are exposed");
+    expect(instructions).toContain("Never call the native `request_user_input` tool");
+  });
+});
 
 describe("codex app-server model resolution", () => {
   test("passes the GPT-5.6 max effort through to app-server", () => {

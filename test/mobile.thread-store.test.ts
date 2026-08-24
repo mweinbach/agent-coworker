@@ -63,6 +63,111 @@ describe("mobile thread store offline draft preservation", () => {
     expect(remainingThreads[0].id).toBe(draftId);
   });
 
+  test("durably restores local drafts and converts interrupted sends into exact retryable submissions", async () => {
+    const store = useThreadStore.getState();
+    store.seedThread();
+    const draftId = useThreadStore.getState().selectedThreadId!;
+    store.setComposerDraft(draftId, "keep this draft after the app restarts");
+    store.beginComposerSubmission(draftId, "stable-client-message-1");
+
+    await flushMicrotasks();
+    const cached = await loadThreadOfflineCache();
+    expect(cached?.threads.find((thread) => thread.id === draftId)).toMatchObject({
+      composerDraft: "keep this draft after the app restarts",
+      composerSubmission: {
+        clientMessageId: "stable-client-message-1",
+        text: "keep this draft after the app restarts",
+        status: "failed",
+      },
+    });
+
+    useThreadStore.setState({
+      snapshots: {},
+      threads: [],
+      selectedThreadId: null,
+      pendingRequests: {},
+      pendingRequestQueues: {},
+    });
+    useThreadStore.getState().hydrateOfflineCache(cached!);
+    expect(useThreadStore.getState().getThread(draftId)?.composerSubmission).toMatchObject({
+      clientMessageId: "stable-client-message-1",
+      status: "failed",
+    });
+
+    expect(useThreadStore.getState().retryComposerSubmission(draftId)).toMatchObject({
+      clientMessageId: "stable-client-message-1",
+      text: "keep this draft after the app restarts",
+      status: "submitting",
+    });
+  });
+
+  test("never lets late offline hydration overwrite live conversations or pending approvals", async () => {
+    const store = useThreadStore.getState();
+    const snapshot: SessionSnapshotLike = {
+      sessionId: "live-thread",
+      title: "Live Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 1,
+      lastEventSeq: 12,
+      feed: [
+        {
+          id: "live-message",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-09T00:00:00.000Z",
+          text: "Fresh authoritative answer",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    };
+    store.hydrate(snapshot);
+    store.setPendingRequest({
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      threadId: "live-thread",
+      itemId: "approval-1",
+      requestId: 7,
+      requestFingerprint: "live-approval",
+      command: "echo live",
+      reason: "Approve live work",
+      dangerous: false,
+    });
+
+    await flushMicrotasks();
+    const cached = await loadThreadOfflineCache();
+    expect(cached).not.toBeNull();
+    const staleCache = {
+      ...cached!,
+      threads: cached!.threads.map((thread) => ({
+        ...thread,
+        title: "Stale cached title",
+        feed: [],
+      })),
+      snapshots: {
+        "live-thread": {
+          ...snapshot,
+          title: "Stale cached title",
+          feed: [],
+          lastEventSeq: 2,
+        },
+      },
+    };
+
+    store.hydrateOfflineCache(staleCache);
+
+    expect(store.getThread("live-thread")?.title).toBe("Live Thread");
+    expect(store.currentFeed("live-thread")).toEqual(snapshot.feed);
+    expect(store.getPendingRequest("live-thread")?.requestFingerprint).toBe("live-approval");
+  });
+
   test("removes a rejected optimistic message by client id", () => {
     useThreadStore.getState().hydrate({
       sessionId: "remote-send",

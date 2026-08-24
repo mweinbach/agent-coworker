@@ -152,9 +152,22 @@ describe("mobile offline cache", () => {
               text: "Last cached reply",
             },
           ],
-          composerDraft: "do not persist drafts",
-          composerAttachments: [],
-          composerSubmission: null,
+          composerDraft: "keep this exact draft after restart",
+          composerAttachments: [
+            {
+              type: "uploadedFile",
+              filename: "notes.txt",
+              path: "/path/1/notes.txt",
+              mimeType: "text/plain",
+            },
+          ],
+          composerSubmission: {
+            clientMessageId: "stable-pending-message",
+            text: "keep this exact draft after restart",
+            attachments: [],
+            status: "submitting",
+            error: null,
+          },
           pendingPrompt: true,
           pendingServerRequest: {
             kind: "ask",
@@ -201,7 +214,20 @@ describe("mobile offline cache", () => {
     const cached = await loadThreadOfflineCache();
     expect(cached?.threads[0]).toMatchObject({
       id: "thread-cache-1",
-      composerDraft: "",
+      composerDraft: "keep this exact draft after restart",
+      composerAttachments: [
+        {
+          type: "uploadedFile",
+          filename: "notes.txt",
+          path: "/path/1/notes.txt",
+          mimeType: "text/plain",
+        },
+      ],
+      composerSubmission: {
+        clientMessageId: "stable-pending-message",
+        text: "keep this exact draft after restart",
+        status: "failed",
+      },
       pendingPrompt: false,
       pendingServerRequest: null,
     });
@@ -210,6 +236,13 @@ describe("mobile offline cache", () => {
     useThreadStore.getState().hydrateOfflineCache(cached!);
     expect(useThreadStore.getState().threads[0]?.title).toBe("Cached Thread");
     expect(useThreadStore.getState().threads[0]?.feed[0]?.id).toBe("msg-1");
+    expect(useThreadStore.getState().threads[0]?.composerDraft).toBe(
+      "keep this exact draft after restart",
+    );
+    expect(useThreadStore.getState().threads[0]?.composerSubmission).toMatchObject({
+      clientMessageId: "stable-pending-message",
+      status: "failed",
+    });
     expect(useThreadStore.getState().expandedWorkspaceIds.w1).toBe(true);
   });
 });

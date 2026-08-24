@@ -153,6 +153,8 @@ type ThreadStoreState = {
 };
 
 let threadCachePersistQueued = false;
+let threadCachePersistInFlight = false;
+let threadCachePersistDirty = false;
 
 function recordFeedMutation(
   state: ThreadStoreState,
@@ -169,12 +171,16 @@ function recordFeedMutation(
 }
 
 function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
-  if (threadCachePersistQueued) {
+  threadCachePersistDirty = true;
+  if (threadCachePersistQueued || threadCachePersistInFlight) {
     return;
   }
   threadCachePersistQueued = true;
   queueMicrotask(() => {
     threadCachePersistQueued = false;
+    if (threadCachePersistInFlight || !threadCachePersistDirty) return;
+    threadCachePersistDirty = false;
+    threadCachePersistInFlight = true;
     const state = getState();
     void saveThreadOfflineCache({
       threads: state.threads,
@@ -187,7 +193,16 @@ function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
       projectThreadFetchLimits: state.projectThreadFetchLimits,
       projectThreadTotals: state.projectThreadTotals,
       oneOffChatWorkspaceLoadLimit: state.oneOffChatWorkspaceLoadLimit,
-    });
+    })
+      .catch((error: unknown) => {
+        console.warn("[threadStore] Failed to persist offline conversations.", error);
+      })
+      .finally(() => {
+        threadCachePersistInFlight = false;
+        if (threadCachePersistDirty) {
+          scheduleThreadCachePersist(getState);
+        }
+      });
   });
 }
 
@@ -328,15 +343,8 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   homeLoadPending: { chats: false, projects: {} },
   hydrateOfflineCache(cache) {
     set((state) => {
-      const existingDraftThreads = state.threads.filter((thread) => thread.id.startsWith("draft-"));
-      const existingDraftSnapshots = Object.fromEntries(
-        Object.entries(state.snapshots).filter(([threadId]) => threadId.startsWith("draft-")),
-      );
       const cachedThreads = cache.threads.map((thread) => ({
         ...thread,
-        composerDraft: "",
-        composerAttachments: [],
-        composerSubmission: null,
         pendingPrompt: false,
         pendingServerRequest: null,
       }));
@@ -344,23 +352,26 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       const cachedSnapshots = Object.fromEntries(
         Object.entries(cache.snapshots).filter(([threadId]) => cachedIds.has(threadId)),
       );
+      const existingIds = new Set(state.threads.map((thread) => thread.id));
+      const mergedThreads = [
+        ...state.threads,
+        ...cachedThreads.filter((thread) => !existingIds.has(thread.id)),
+      ];
       return {
         snapshots: {
-          ...existingDraftSnapshots,
           ...cachedSnapshots,
+          ...state.snapshots,
         },
-        threads: [...existingDraftThreads, ...cachedThreads],
+        threads: mergedThreads,
         selectedThreadId:
           state.selectedThreadId &&
-          [...existingDraftThreads, ...cachedThreads].some(
-            (thread) => thread.id === state.selectedThreadId,
-          )
+          mergedThreads.some((thread) => thread.id === state.selectedThreadId)
             ? state.selectedThreadId
-            : (cachedThreads[0]?.id ?? existingDraftThreads[0]?.id ?? null),
-        pendingRequests: {},
-        pendingRequestQueues: {},
-        activeTurnStartedAt: {},
-        lastFeedMutationByThread: {},
+            : (mergedThreads[0]?.id ?? null),
+        pendingRequests: state.pendingRequests,
+        pendingRequestQueues: state.pendingRequestQueues,
+        activeTurnStartedAt: state.activeTurnStartedAt,
+        lastFeedMutationByThread: state.lastFeedMutationByThread,
         expandedWorkspaceIds: {
           ...state.expandedWorkspaceIds,
           ...cache.expandedWorkspaceIds,
@@ -536,6 +547,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       threads: updateThreadList(state, threadId, nextSnapshot),
       selectedThreadId: threadId,
     }));
+    scheduleThreadCachePersist(get);
   },
   promoteDraftThread(draftThreadId, remoteThread) {
     set((state) => {
@@ -681,6 +693,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       ),
       selectedThreadId: threadId,
     }));
+    scheduleThreadCachePersist(get);
   },
   setComposerAttachments(threadId, attachments) {
     set((state) => ({
@@ -694,6 +707,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       ),
       selectedThreadId: threadId,
     }));
+    scheduleThreadCachePersist(get);
   },
   beginComposerSubmission(threadId, clientMessageId) {
     const thread = get().threads.find((entry) => entry.id === threadId);
@@ -714,6 +728,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         entry.id === threadId ? { ...entry, composerSubmission: submission } : entry,
       ),
     }));
+    scheduleThreadCachePersist(get);
     return submission;
   },
   retryComposerSubmission(threadId) {
@@ -734,6 +749,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         entry.id === threadId ? { ...entry, composerSubmission: submission } : entry,
       ),
     }));
+    scheduleThreadCachePersist(get);
     return submission;
   },
   failComposerSubmission(threadId, clientMessageId, error) {
@@ -751,6 +767,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           : thread,
       ),
     }));
+    scheduleThreadCachePersist(get);
   },
   cancelComposerSubmission(threadId, clientMessageId) {
     let cancelled = false;
@@ -766,6 +783,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         return { ...thread, composerSubmission: null };
       }),
     }));
+    if (cancelled) scheduleThreadCachePersist(get);
     return cancelled;
   },
   acceptComposerSubmission(threadId, clientMessageId) {
@@ -788,6 +806,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         };
       }),
     }));
+    scheduleThreadCachePersist(get);
   },
   submitComposer(threadId) {
     const state = get();
@@ -818,6 +837,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         lastFeedMutationByThread: recordFeedMutation(current, threadId, "local"),
       };
     });
+    scheduleThreadCachePersist(get);
   },
   appendOptimisticUserMessage(threadId, text, clientMessageId) {
     const userItem: SessionFeedItem = {

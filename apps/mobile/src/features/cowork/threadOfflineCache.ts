@@ -42,16 +42,27 @@ type ThreadOfflineCacheInput = Pick<
 >;
 
 function sanitizeThreads(threads: MobileThreadSummary[]): MobileThreadSummary[] {
-  return threads
-    .filter((thread) => !thread.id.startsWith("draft-"))
-    .map((thread) => ({
+  return threads.map((thread) => {
+    const submission = thread.composerSubmission;
+    return {
       ...thread,
-      composerDraft: "",
-      composerAttachments: [],
-      composerSubmission: null,
+      composerAttachments: thread.composerAttachments.map((attachment) => ({ ...attachment })),
+      composerSubmission: submission
+        ? {
+            ...submission,
+            attachments: submission.attachments.map((attachment) => ({ ...attachment })),
+            ...(submission.status === "submitting"
+              ? {
+                  status: "failed" as const,
+                  error: "Sending was interrupted. Retry to continue.",
+                }
+              : {}),
+          }
+        : null,
       pendingPrompt: false,
       pendingServerRequest: null,
-    }));
+    };
+  });
 }
 
 function normalizeCache(cache: Partial<ThreadOfflineCache>): ThreadOfflineCache {

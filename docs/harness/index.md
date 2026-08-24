@@ -16,6 +16,7 @@ Project Task mode is also distinct from the legacy per-session harness context. 
 
 - `config.md`: harness config precedence, environment variables, and config-file keys.
 - `observability.md`: Langfuse-only telemetry wiring and runtime behavior.
+- `reliability.md`: product reliability guarantees, failure boundaries, recovery invariants, and regression coverage.
 - `context.md`: harness context schema and WebSocket interaction flow.
 - `slo.md`: historical SLO doc status (query/SLO protocol paths are removed).
 - `runbook.md`: operator guide for running harness scenarios and viewing artifacts.

@@ -435,10 +435,16 @@ export class CoworkJsonRpcClient {
     return coworkThreadReadResultSchema.parse(result);
   }
 
-  async resumeThread(threadId: string): Promise<CoworkThreadResumeResult> {
+  async resumeThread(
+    threadId: string,
+    options?: { afterSeq?: number },
+  ): Promise<CoworkThreadResumeResult> {
     const initializing = this.ensureInitialized();
     if (initializing) await initializing;
-    const result = await this.request("thread/resume", { threadId });
+    const result = await this.request("thread/resume", {
+      threadId,
+      ...(options?.afterSeq !== undefined ? { afterSeq: options.afterSeq } : {}),
+    });
     return coworkThreadResumeResultSchema.parse(result);
   }
 

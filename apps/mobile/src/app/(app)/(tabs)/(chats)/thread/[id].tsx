@@ -272,7 +272,10 @@ export default function ThreadDetailScreen() {
     }
     setIsLoadingThread(true);
     try {
-      await runtimeClient.resumeThread(threadId);
+      const lastEventSeq = useThreadStore.getState().snapshots?.[threadId]?.lastEventSeq;
+      await runtimeClient.resumeThread(threadId, {
+        ...(lastEventSeq !== undefined ? { afterSeq: lastEventSeq } : {}),
+      });
       if (requestId !== loadRequestIdRef.current) return;
       const reread = await runtimeClient.readThread(threadId, { includeTurns: true });
       if (requestId !== loadRequestIdRef.current) return;

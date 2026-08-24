@@ -490,7 +490,7 @@ describe("mobile cowork jsonrpc client", () => {
       },
     });
 
-    const resumePromise = client.resumeThread("thread-1");
+    const resumePromise = client.resumeThread("thread-1", { afterSeq: 17 });
     const initializePayload = JSON.parse(sent[0]!);
     expect(initializePayload.method).toBe("initialize");
 
@@ -522,6 +522,7 @@ describe("mobile cowork jsonrpc client", () => {
       method: "thread/resume",
       params: {
         threadId: "thread-1",
+        afterSeq: 17,
       },
     });
 

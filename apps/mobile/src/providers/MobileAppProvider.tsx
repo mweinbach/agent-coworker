@@ -253,23 +253,14 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
-        if (state.status === "error") {
-          sessionBootstrap.resetClientSession();
-          return;
-        }
-        if (!isWorkspaceConnectionReady(state)) {
-          return;
-        }
-        void sessionBootstrap.ensureConnectedSession();
+        sessionBootstrap.handleTransportState(state);
       },
     });
 
     void defaultSecureTransportClient
       .getSnapshot()
       .then((snapshot) => {
-        if (isWorkspaceConnectionReady(snapshot)) {
-          void sessionBootstrap.ensureConnectedSession();
-        }
+        sessionBootstrap.handleTransportState(snapshot);
       })
       .catch(() => {});
 

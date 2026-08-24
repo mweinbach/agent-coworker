@@ -157,6 +157,7 @@ const mockMarkTurnStarted = mock((_threadId: string, _startedAt: string) => {});
 const mockMarkTurnCompleted = mock((_threadId: string) => {});
 let mockActiveTurnStartedAt: string | null = null;
 let mockPendingRequest: any = null;
+let mockSnapshots: Record<string, { lastEventSeq: number }> = {};
 const mockThread = {
   id: "test-thread-123",
   title: "Test Thread",
@@ -177,7 +178,7 @@ const threadStoreMock = () => ({
   useThreadStore: Object.assign(
     (fn: any) => {
       const state = {
-        snapshots: {},
+        snapshots: mockSnapshots,
         getThread: () => mockThread,
         getPendingRequest: () => mockPendingRequest,
         getActiveTurnStartedAt: () => mockActiveTurnStartedAt,
@@ -199,6 +200,7 @@ const threadStoreMock = () => ({
     },
     {
       getState: () => ({
+        snapshots: mockSnapshots,
         hydrate: mockHydrate,
         getPendingRequest: () => mockPendingRequest,
         getActiveTurnStartedAt: () => mockActiveTurnStartedAt,
@@ -332,6 +334,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockThread.composerSubmission = null;
     mockActiveTurnStartedAt = null;
     mockPendingRequest = null;
+    mockSnapshots = {};
     latestComposerProps = null;
     latestPendingRequestProps = null;
     mockResumeThread.mockClear();
@@ -398,6 +401,7 @@ describe("mobile ThreadDetailScreen", () => {
   });
 
   test("resumes, reads, and hydrates the store on navigation when connected", async () => {
+    mockSnapshots = { "test-thread-123": { lastEventSeq: 23 } };
     const harness = setupJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -412,7 +416,7 @@ describe("mobile ThreadDetailScreen", () => {
       // Allow async function inside useEffect to run
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(mockResumeThread).toHaveBeenCalledWith("test-thread-123");
+      expect(mockResumeThread).toHaveBeenCalledWith("test-thread-123", { afterSeq: 23 });
       expect(mockResumeThread).toHaveBeenCalledTimes(1);
       expect(mockReadThread).toHaveBeenCalledWith("test-thread-123", { includeTurns: true });
       expect(mockReadThread).toHaveBeenCalledTimes(1);

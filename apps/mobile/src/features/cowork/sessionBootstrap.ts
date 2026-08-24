@@ -27,6 +27,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   let sessionBootstrapInFlight = false;
   let sessionRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let sessionBootstrapGeneration = 0;
+  let transportReady = false;
 
   const clearSessionRetry = () => {
     if (sessionRetryTimeout) {
@@ -56,6 +57,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     sessionBootstrapGeneration += 1;
     sessionReady = false;
     sessionBootstrapInFlight = false;
+    transportReady = false;
     clearSessionRetry();
     options.client.resetTransportSession();
     options.clearThreads();
@@ -93,8 +95,21 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     }
   };
 
+  const handleTransportState = (snapshot: TransportSnapshot) => {
+    if (!options.isTransportReady(snapshot)) {
+      if (transportReady || sessionReady || sessionBootstrapInFlight) {
+        resetClientSession();
+      }
+      return;
+    }
+
+    transportReady = true;
+    void ensureConnectedSession();
+  };
+
   return {
     ensureConnectedSession,
+    handleTransportState,
     resetClientSession,
     dispose: clearSessionRetry,
   };

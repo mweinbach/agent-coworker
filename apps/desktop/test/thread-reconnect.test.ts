@@ -15,7 +15,14 @@ class MockJsonRpcSocket {
   closed = false;
   private closeDeferred = false;
 
-  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void }) {
+  constructor(
+    public readonly opts: {
+      onOpen?: () => void;
+      onClose?: () => void;
+      onReconnecting?: (event: unknown) => void;
+      onReconnectExhausted?: (reason: string) => void;
+    },
+  ) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -53,6 +60,21 @@ class MockJsonRpcSocket {
 
   reopen() {
     this.opts.onOpen?.();
+  }
+
+  reconnecting() {
+    this.opts.onReconnecting?.({
+      attempt: 1,
+      maxAttempts: 10,
+      delayMs: 500,
+      reason: "websocket closed",
+      queuedOperationCount: 1,
+      pendingRequestCount: 1,
+    });
+  }
+
+  reconnectExhausted() {
+    this.opts.onReconnectExhausted?.("Reconnect attempts exhausted.");
   }
 }
 
@@ -964,6 +986,83 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
         terminalTaskConversation: false,
       }),
     ).toBe(false);
+  });
+
+  test("preserves active work and pending delivery while a lost connection is retrying", async () => {
+    const { threadId } = seedStore();
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [activeThreadId]: {
+          ...state.threadRuntimeById[activeThreadId],
+          busy: true,
+          busySince: "2026-08-24T12:00:00.000Z",
+          activeTurnId: "turn-running",
+          pendingTurnStart: {
+            clientMessageId: "durable-message-1",
+            text: "Keep this delivery alive",
+            status: "sending",
+          },
+          pendingSteer: {
+            clientMessageId: "durable-steer-1",
+            text: "Keep this guidance visible",
+            status: "sending",
+          },
+          interruptPending: true,
+        },
+      },
+      interactionsByThread: {
+        ...state.interactionsByThread,
+        [activeThreadId]: [
+          {
+            kind: "ask",
+            requestId: "approval-running",
+            receivedSequence: 1,
+            question: "Keep waiting for this answer?",
+            status: "responding",
+          },
+        ],
+      },
+    }));
+
+    const socket = MockJsonRpcSocket.instances[0];
+    socket.reconnecting();
+    await flushAsyncWork();
+
+    const reconnecting = useAppStore.getState();
+    expect(reconnecting.threadRuntimeById[activeThreadId]).toMatchObject({
+      connected: false,
+      busy: true,
+      busySince: "2026-08-24T12:00:00.000Z",
+      activeTurnId: "turn-running",
+      pendingTurnStart: { clientMessageId: "durable-message-1", status: "sending" },
+      pendingSteer: { clientMessageId: "durable-steer-1", status: "sending" },
+      interruptPending: true,
+    });
+    expect(reconnecting.interactionsByThread[activeThreadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-running", status: "responding" }),
+    ]);
+
+    socket.reconnectExhausted();
+    await flushAsyncWork();
+
+    const exhausted = useAppStore.getState();
+    expect(exhausted.threadRuntimeById[activeThreadId]).toMatchObject({
+      connected: false,
+      busy: false,
+      activeTurnId: null,
+      pendingTurnStart: null,
+      pendingSteer: null,
+      interruptPending: false,
+    });
+    expect(exhausted.interactionsByThread[activeThreadId]).toEqual([
+      expect.objectContaining({ requestId: "approval-running", status: "failed" }),
+    ]);
   });
 
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {

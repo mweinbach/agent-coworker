@@ -389,8 +389,8 @@ describe("control socket helpers over JSON-RPC", () => {
       retryOnDisconnect: true,
     });
     expect(jsonRpcRequests.at(-3)?.options).toEqual({
-      retryable: false,
-      retryOnDisconnect: false,
+      retryable: true,
+      retryOnDisconnect: true,
     });
     expect(jsonRpcRequests.at(-2)?.options).toEqual({
       retryable: false,
@@ -400,6 +400,39 @@ describe("control socket helpers over JSON-RPC", () => {
       retryable: false,
       retryOnDisconnect: false,
     });
+  });
+
+  test("retries a turn start only when its durable client message identity is stable", async () => {
+    const workspaceId = "ws-turn-start-retry-identity";
+    const { get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "turn/start", {
+      threadId: "thread-1",
+      clientMessageId: "durable-message-1",
+      input: [],
+    });
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "turn/start", {
+      threadId: "thread-1",
+      input: [],
+    });
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "turn/start", {
+      threadId: "thread-1",
+      clientMessageId: "   ",
+      input: [],
+    });
+
+    expect(
+      jsonRpcRequests
+        .filter((request) => request.method === "turn/start")
+        .map((request) => request.options),
+    ).toEqual([
+      { retryable: true, retryOnDisconnect: true },
+      { retryable: false, retryOnDisconnect: false },
+      { retryable: false, retryOnDisconnect: false },
+    ]);
   });
 
   test("server-request responses are not marked retryable across reconnects", () => {

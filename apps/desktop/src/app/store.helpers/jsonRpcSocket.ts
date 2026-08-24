@@ -591,6 +591,9 @@ function getJsonRpcRequestRetryOptions(
   if (method === "thread/start" && hasStableStringKey(params, "clientThreadId")) {
     return { retryable: true, retryOnDisconnect: true };
   }
+  if (method === "turn/start" && hasStableStringKey(params, "clientMessageId")) {
+    return { retryable: true, retryOnDisconnect: true };
+  }
   if (method === "research/start" && hasStableStringKey(params, "clientResearchId")) {
     return { retryable: true, retryOnDisconnect: true };
   }

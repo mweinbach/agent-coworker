@@ -993,9 +993,10 @@ describe("files IPC", () => {
 
   test("readFileForPreview authorizes one exact external file without broadening read access", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
-    const tempWorkspaceRaw = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-preview-auth-ws-"));
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-auth-ws-"));
     const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-preview-auth-outside-"));
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-auth-outside-"));
     const outsideFile = path.join(outsideDir, "screenshot.png");
     await fs.writeFile(outsideFile, new Uint8Array([1, 2, 3, 4]));
 
@@ -1057,6 +1058,152 @@ describe("files IPC", () => {
     showMessageBoxMock.mockImplementation(async () => ({ response: 0, checkboxChecked: false }));
     const otherSenderEvent = { sender: { id: 10 }, processId: 11, frameId: 12 };
     await expect(previewHandler?.(otherSenderEvent, { path: outsideFile })).rejects.toThrow(
+      "outside allowed workspace roots",
+    );
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview retries external authorization after its dialog fails", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-retry-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-retry-outside-"));
+    const outsideFile = path.join(outsideDir, "screenshot.png");
+    await fs.writeFile(outsideFile, new Uint8Array([1, 2, 3, 4]));
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    expect(previewHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementationOnce(async () => {
+      throw new Error("Authorization dialog failed");
+    });
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+
+    const event = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    await expect(previewHandler?.(event, { path: outsideFile })).rejects.toThrow(
+      "Authorization dialog failed",
+    );
+    await expect(previewHandler?.(event, { path: outsideFile })).resolves.toMatchObject({
+      byteLength: 4,
+      truncated: false,
+    });
+    expect(showMessageBoxMock).toHaveBeenCalledTimes(2);
+
+    await fs.rm(tempWorkspace, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  test("readFileForPreview reauthorizes external files rewritten with their original mtime", async () => {
+    const registerFilesIpc = await loadRegisterFilesIpc();
+    const scratchRoot = scratchRoots()[0] ?? "/tmp";
+    const tempWorkspaceRaw = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-ctime-ws-"));
+    const tempWorkspace = await fs.realpath(tempWorkspaceRaw);
+    const outsideDir = await fs.mkdtemp(path.join(scratchRoot, "cowork-preview-ctime-outside-"));
+    const outsideFile = path.join(outsideDir, "notes.txt");
+    const originalModifiedAt = new Date("2020-01-01T00:00:00.000Z");
+    await fs.writeFile(outsideFile, "allowed!", "utf8");
+    await fs.utimes(outsideFile, originalModifiedAt, originalModifiedAt);
+
+    const handlers = new Map<
+      string,
+      (event: unknown, args?: unknown) => Promise<unknown> | unknown
+    >();
+    registerFilesIpc({
+      deps: {} as never,
+      workspaceRoots: {
+        async ensureApprovedWorkspaceRoots() {},
+        async refreshApprovedWorkspaceRootsFromState() {},
+        async assertApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        async addApprovedWorkspacePath(workspacePath: string) {
+          return workspacePath;
+        },
+        setApprovedWorkspaceRoots() {},
+        getApprovedWorkspaceRoots() {
+          return [tempWorkspace];
+        },
+      },
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as never);
+      },
+      parseWithSchema(schema, value, label) {
+        const parsed = schema.safeParse(value);
+        if (parsed.success) {
+          return parsed.data as never;
+        }
+        throw new Error(`${label} ${parsed.error.issues[0]?.message ?? "is invalid"}`);
+      },
+    });
+
+    const previewHandler = handlers.get(DESKTOP_IPC_CHANNELS.readFileForPreview);
+    expect(previewHandler).toBeDefined();
+
+    showMessageBoxMock.mockClear();
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 1,
+      checkboxChecked: false,
+    }));
+    showMessageBoxMock.mockImplementationOnce(async () => ({
+      response: 0,
+      checkboxChecked: false,
+    }));
+
+    const event = { sender: { id: 7 }, processId: 8, frameId: 9 };
+    await expect(previewHandler?.(event, { path: outsideFile })).resolves.toMatchObject({
+      byteLength: 8,
+      truncated: false,
+    });
+    const authorizedStat = await fs.stat(outsideFile);
+
+    await fs.writeFile(outsideFile, "blocked!", "utf8");
+    await fs.utimes(outsideFile, originalModifiedAt, originalModifiedAt);
+    const rewrittenStat = await fs.stat(outsideFile);
+    expect(rewrittenStat.ino).toBe(authorizedStat.ino);
+    expect(rewrittenStat.size).toBe(authorizedStat.size);
+    expect(rewrittenStat.mtimeMs).toBe(authorizedStat.mtimeMs);
+
+    await expect(previewHandler?.(event, { path: outsideFile })).rejects.toThrow(
       "outside allowed workspace roots",
     );
     expect(showMessageBoxMock).toHaveBeenCalledTimes(2);

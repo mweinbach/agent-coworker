@@ -89,6 +89,7 @@ type AuthorizedUploadSource = {
   ino: number;
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
 };
 type AuthorizedUploadSources = Map<
   UploadAuthorizationOwnerKey,
@@ -136,12 +137,14 @@ function uploadSourceIdentityFromStat(stat: {
   ino: number;
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
 }): AuthorizedUploadSource {
   return {
     dev: stat.dev,
     ino: stat.ino,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
   };
 }
 
@@ -153,7 +156,8 @@ function uploadSourceIdentityMatches(
     expected.dev === actual.dev &&
     expected.ino === actual.ino &&
     expected.size === actual.size &&
-    expected.mtimeMs === actual.mtimeMs
+    expected.mtimeMs === actual.mtimeMs &&
+    expected.ctimeMs === actual.ctimeMs
   );
 }
 
@@ -368,14 +372,10 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
         pendingExternalFileAuthorizations.set(authorizationKey, pendingAuthorization);
       }
 
-      if (!(await pendingAuthorization)) {
-        if (pendingExternalFileAuthorizations.get(authorizationKey) === pendingAuthorization) {
-          pendingExternalFileAuthorizations.delete(authorizationKey);
-        }
-        throw boundaryError;
-      }
-
       try {
+        if (!(await pendingAuthorization)) {
+          throw boundaryError;
+        }
         const confirmedFile = await readExternalFileIdentity(externalFile.path);
         if (!uploadSourceIdentityMatches(externalFile.identity, confirmedFile.identity)) {
           throw new Error("File changed while access was being authorized");

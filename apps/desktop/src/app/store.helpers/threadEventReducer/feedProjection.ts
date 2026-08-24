@@ -732,11 +732,25 @@ export function createFeedProjectionModule(
       return true;
     }
 
-    if (!runtimeBusy) {
+    if (normalizeEventSeq(snapshot.lastEventSeq) >= normalizeEventSeq(threadLastEventSeq)) {
       return false;
     }
 
-    return normalizeEventSeq(snapshot.lastEventSeq) < normalizeEventSeq(threadLastEventSeq);
+    if (runtimeBusy) {
+      return true;
+    }
+
+    return currentFeed.some(
+      (currentItem) =>
+        !snapshotFeed.some(
+          (snapshotItem) =>
+            snapshotItem.id === currentItem.id ||
+            (currentItem.kind === "message" &&
+              currentItem.role === "user" &&
+              typeof snapshotItem.id === "string" &&
+              snapshotItem.id.endsWith(`:${currentItem.id}`)),
+        ),
+    );
   }
 
   function applyJsonRpcThreadSnapshot(

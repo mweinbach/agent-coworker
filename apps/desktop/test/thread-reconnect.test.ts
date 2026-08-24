@@ -724,6 +724,77 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/resume");
   });
 
+  test("an older reconnect snapshot cannot erase a response that already finished", async () => {
+    const { threadId } = seedStore(
+      {
+        lastEventSeq: 12,
+        messageCount: 4,
+        lastMessageAt: "2024-01-01T00:00:12.000Z",
+      },
+      {
+        busy: false,
+        lastEventSeq: 12,
+        feed: [
+          {
+            id: "assistant-finished-after-read-began",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:12.000Z",
+            text: "The completed answer must remain visible.",
+          },
+        ],
+      },
+    );
+
+    jsonRpcHandlers.set("thread/list", async () => ({
+      threads: [
+        {
+          ...threadMeta("session-1"),
+          updatedAt: "2024-01-01T00:00:12.000Z",
+          messageCount: 4,
+          lastEventSeq: 12,
+        },
+      ],
+    }));
+    jsonRpcHandlers.set("thread/read", async () => ({
+      coworkSnapshot: {
+        ...threadSnapshot("session-1"),
+        lastEventSeq: 4,
+        messageCount: 2,
+        updatedAt: "2024-01-01T00:00:04.000Z",
+        feed: [
+          {
+            id: "snapshot-before-response-finished",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:04.000Z",
+            text: "A stale response from before the request completed.",
+          },
+        ],
+      },
+    }));
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    const state = useAppStore.getState();
+    expect(state.threadRuntimeById[activeThreadId]?.busy).toBe(false);
+    expect(state.threadRuntimeById[activeThreadId]?.lastEventSeq).toBeGreaterThanOrEqual(12);
+    expect(state.threadRuntimeById[activeThreadId]?.feed).toEqual([
+      expect.objectContaining({
+        id: "assistant-finished-after-read-began",
+        text: "The completed answer must remain visible.",
+      }),
+    ]);
+    const restoredThread = state.threads.find((thread) => thread.id === activeThreadId);
+    expect(restoredThread?.lastEventSeq).toBeGreaterThanOrEqual(12);
+    expect(restoredThread).toMatchObject({
+      messageCount: 4,
+      lastMessageAt: "2024-01-01T00:00:12.000Z",
+    });
+  });
+
   test("reconnectThread replaces stale feed when replay health requires a snapshot", async () => {
     const { threadId } = seedStore(
       {

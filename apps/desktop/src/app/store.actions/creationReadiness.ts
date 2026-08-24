@@ -45,6 +45,7 @@ export function createCreationReadinessActions(
 > {
   let quickChatReleaseRequested = false;
   let quickChatPreparationPending = false;
+  let quickChatPreparationPromise: ReturnType<typeof createOneOffWorkspaceRecord> | null = null;
   const releasePreparedQuickChatWorkspace = async (): Promise<void> => {
     const workspaceId = get().quickChatPreparedWorkspaceId;
     if (!workspaceId) {
@@ -96,6 +97,42 @@ export function createCreationReadinessActions(
     }
   };
 
+  const prepareQuickChatWorkspace = async () => {
+    const preparedWorkspaceId = get().quickChatPreparedWorkspaceId;
+    const prepared = preparedWorkspaceId
+      ? get().workspaces.find((workspace) => workspace.id === preparedWorkspaceId)
+      : null;
+    if (prepared) {
+      return prepared;
+    }
+
+    if (!quickChatPreparationPromise) {
+      quickChatPreparationPending = true;
+      quickChatPreparationPromise = (async () => {
+        try {
+          const workspace = await createOneOffWorkspaceRecord(get, "Quick chat readiness");
+          set((state) => ({
+            workspaces: [workspace, ...state.workspaces],
+            quickChatPreparedWorkspaceId: workspace.id,
+          }));
+          ensureWorkspaceRuntime(get, set, workspace.id);
+          if (quickChatReleaseRequested) {
+            await releasePreparedQuickChatWorkspace();
+            const error = new Error("Creation cancelled.");
+            error.name = "AbortError";
+            throw error;
+          }
+          return workspace;
+        } finally {
+          quickChatPreparationPending = false;
+          quickChatPreparationPromise = null;
+        }
+      })();
+    }
+
+    return await quickChatPreparationPromise;
+  };
+
   return {
     preflightCreation: async (
       request: CreationPreflightRequest,
@@ -104,33 +141,7 @@ export function createCreationReadinessActions(
       let workspaceId = resolveTransportWorkspaceId(get, request.workspaceId);
       if (!workspaceId) {
         if (request.kind === "chat" && !request.cwd) {
-          const prepared = get().quickChatPreparedWorkspaceId
-            ? get().workspaces.find(
-                (workspace) => workspace.id === get().quickChatPreparedWorkspaceId,
-              )
-            : null;
-          let workspace = prepared;
-          if (!workspace) {
-            quickChatPreparationPending = true;
-            try {
-              workspace = await createOneOffWorkspaceRecord(get, "Quick chat readiness");
-            } finally {
-              quickChatPreparationPending = false;
-            }
-          }
-          if (!prepared) {
-            set((state) => ({
-              workspaces: [workspace, ...state.workspaces],
-              quickChatPreparedWorkspaceId: workspace.id,
-            }));
-            ensureWorkspaceRuntime(get, set, workspace.id);
-            if (quickChatReleaseRequested) {
-              await releasePreparedQuickChatWorkspace();
-              const error = new Error("Creation cancelled.");
-              error.name = "AbortError";
-              throw error;
-            }
-          }
+          const workspace = await prepareQuickChatWorkspace();
           workspaceId = workspace.id;
         } else {
           return {

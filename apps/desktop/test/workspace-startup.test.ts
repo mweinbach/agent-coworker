@@ -396,6 +396,131 @@ describe("workspace startup flow", () => {
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
+  test("concurrent quick-chat readiness checks share one prepared workspace and server", async () => {
+    class ReadyPreflightSocket extends MockJsonRpcSocket {
+      override async request(method: string) {
+        if (method === "cowork/creation/preflight") {
+          return { ready: true, checks: [] };
+        }
+        return await super.request(method);
+      }
+    }
+    setJsonRpcSocketOverride(ReadyPreflightSocket);
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+
+    const first = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const second = useAppStore.getState().preflightCreation({ kind: "chat" });
+    await flushAsyncWork();
+    const allocationCount = oneOffWorkspaceCalls.length;
+
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/shared-quick-chat" });
+    await waitForCondition(() => startCalls.length === allocationCount);
+    for (const deferred of startDeferreds) {
+      deferred.resolve({ url: "ws://shared-quick-chat" });
+    }
+    await Promise.allSettled([first, second]);
+
+    expect(allocationCount).toBe(1);
+    expect(startCalls).toHaveLength(1);
+    expect(oneOffWorkspaceCalls).toEqual([{ titleHint: "Quick chat readiness" }]);
+    expect(useAppStore.getState().workspaces).toHaveLength(1);
+    expect(useAppStore.getState().quickChatPreparedWorkspaceId).toBe(
+      useAppStore.getState().workspaces[0]?.id,
+    );
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ready: true, checks: [] },
+      { ready: true, checks: [] },
+    ]);
+  });
+
+  test("aborting one shared quick-chat readiness check keeps the other check alive", async () => {
+    class ReadyPreflightSocket extends MockJsonRpcSocket {
+      override async request(method: string) {
+        if (method === "cowork/creation/preflight") {
+          return { ready: true, checks: [] };
+        }
+        return await super.request(method);
+      }
+    }
+    setJsonRpcSocketOverride(ReadyPreflightSocket);
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+    const controller = new AbortController();
+
+    const aborted = useAppStore
+      .getState()
+      .preflightCreation({ kind: "chat" }, { signal: controller.signal })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    const active = useAppStore.getState().preflightCreation({ kind: "chat" });
+    controller.abort();
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/shared-quick-chat" });
+    await waitForCondition(() => startCalls.length === 1);
+    startDeferreds[0]?.resolve({ url: "ws://shared-quick-chat" });
+
+    const abortedError = await aborted;
+    expect(abortedError).toBeInstanceOf(Error);
+    expect((abortedError as Error).name).toBe("AbortError");
+    await expect(active).resolves.toEqual({ ready: true, checks: [] });
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(useAppStore.getState().workspaces).toHaveLength(1);
+    expect(trashPathCalls).toEqual([]);
+  });
+
+  test("releasing an in-flight shared quick-chat preparation removes its only workspace", async () => {
+    const workspaceCreation = createDeferred<{ name: string; path: string }>();
+    __internalOneOffWorkspaceRecord.setCreateOneOffChatWorkspaceOverride(async (options) => {
+      oneOffWorkspaceCalls.push(options ?? {});
+      return await workspaceCreation.promise;
+    });
+    useAppStore.setState({
+      workspaces: [],
+      selectedWorkspaceId: null,
+      quickChatPreparedWorkspaceId: null,
+    });
+
+    const first = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const second = useAppStore.getState().preflightCreation({ kind: "chat" });
+    const outcomes = Promise.allSettled([first, second]);
+    await useAppStore.getState().releasePreparedQuickChatWorkspace();
+    workspaceCreation.resolve({ name: "Quick chat readiness", path: "/tmp/released-quick-chat" });
+
+    const results = await outcomes;
+
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect((result.reason as Error).name).toBe("AbortError");
+      }
+    }
+    expect(oneOffWorkspaceCalls).toHaveLength(1);
+    expect(startCalls).toEqual([]);
+    expect(stopCalls).toHaveLength(1);
+    expect(trashPathCalls).toEqual(["/tmp/released-quick-chat"]);
+    expect(useAppStore.getState().workspaces).toEqual([]);
+    expect(useAppStore.getState().quickChatPreparedWorkspaceId).toBeNull();
+  });
+
   test("addWorkspace persists once before starting the new workspace server", async () => {
     pickedWorkspaceDirectory = "/tmp/new-workspace";
 

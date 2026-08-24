@@ -638,6 +638,9 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
           await drainInflightCalls();
           if (!claimTerminal("completed")) return;
           clearTimeout(runTimer);
+          // All legitimate calls have settled. Release any timed-out child
+          // cleanup waiters before teardown retries their background closes.
+          runAbortController.abort();
           await teardown("");
           emitProgress("completed");
           settle({

@@ -174,7 +174,12 @@ export async function runWorkflowAgent(opts: {
 
     // CORRECTION 3: `AgentWaitInspection` carries no usage fields, so `wait()`
     // alone cannot fund `budget.spent()`. Inspect once, here, before close().
-    usdCost = await readAgentUsdCost(control, spawned.agentId, opts.abortSignal ?? ctx.abortSignal);
+    usdCost = await readAgentUsdCost(
+      control,
+      spawned.agentId,
+      opts.abortSignal ?? ctx.abortSignal,
+      deadline,
+    );
     return { value, agentId: spawned.agentId, usdCost };
   } catch (error) {
     // Errored agents still spent tokens — capture cost so the host budget can
@@ -184,6 +189,7 @@ export async function runWorkflowAgent(opts: {
         control,
         spawned.agentId,
         opts.abortSignal ?? ctx.abortSignal,
+        deadline,
       );
     }
     if (isAgentControlTaskLockError(error)) {
@@ -200,15 +206,13 @@ export async function runWorkflowAgent(opts: {
     );
   } finally {
     try {
-      if (opts.closeAgent) {
-        await opts.closeAgent(spawned.agentId);
-      } else {
-        await raceWithAbort(
-          control.close({ agentId: spawned.agentId }),
-          opts.abortSignal ?? ctx.abortSignal,
-          spawned.agentId,
-        );
-      }
+      const closing: Promise<unknown> = opts.closeAgent
+        ? opts.closeAgent(spawned.agentId)
+        : control.close({ agentId: spawned.agentId });
+      // A timed-out close still owns the real child-cleanup operation. Observe
+      // its eventual rejection even after this caller stops waiting for it.
+      void closing.catch(() => {});
+      await raceWithAbort(closing, opts.abortSignal ?? ctx.abortSignal, spawned.agentId, deadline);
     } catch (error) {
       ctx.log(
         `tool! workflow agent cleanup failed: ${
@@ -223,9 +227,16 @@ async function readAgentUsdCost(
   control: AgentControl,
   agentId: string,
   abortSignal?: AbortSignal,
+  deadline?: WorkflowAgentDeadline,
 ): Promise<number | null> {
+  if (deadline && deadline.expiresAt <= Date.now()) return null;
   try {
-    const inspected = await raceWithAbort(control.inspect({ agentId }), abortSignal, agentId);
+    const inspected = await raceWithAbort(
+      control.inspect({ agentId }),
+      abortSignal,
+      agentId,
+      deadline,
+    );
     return inspected.sessionUsage?.estimatedTotalCostUsd ?? null;
   } catch (error) {
     if (error instanceof WorkflowAgentError && error.fatal) throw error;

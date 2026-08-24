@@ -441,7 +441,9 @@ function createThreadReadHarness(snapshotOverride?: any) {
   };
 
   return {
+    context,
     sent,
+    thread,
     waitForIdleCalls,
     router: createJsonRpcRequestRouter(context),
   };
@@ -675,6 +677,46 @@ describe("JSON-RPC request router", () => {
       },
     ]);
   });
+
+  test.each(["thread/read", "thread/hydrate"])(
+    "%s samples its snapshot and thread summary after the durable journal barrier",
+    async (method) => {
+      const staleSnapshot = {
+        feed: [{ id: "assistant-stale", kind: "message", role: "assistant", text: "before" }],
+      };
+      const freshSnapshot = {
+        feed: [{ id: "assistant-fresh", kind: "message", role: "assistant", text: "after" }],
+      };
+      const harness = createThreadReadHarness(staleSnapshot);
+      let currentSnapshot = staleSnapshot;
+      let title = "Before journal flush";
+      harness.context.threads.readSnapshot = () => currentSnapshot as any;
+      harness.context.utils.buildThreadFromSession = () => ({ ...harness.thread, title });
+      harness.context.journal.waitForIdle = async () => {
+        currentSnapshot = freshSnapshot;
+        title = "After journal flush";
+      };
+
+      await harness.router({} as any, {
+        id: 31,
+        method,
+        params: { threadId: "thread-1", includeTurns: true },
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 31,
+          result: expect.objectContaining({
+            thread: expect.objectContaining({ title: "After journal flush" }),
+            coworkSnapshot: expect.objectContaining({
+              feed: [expect.objectContaining({ id: "assistant-fresh", text: "after" })],
+            }),
+            journalTailSeq: 0,
+          }),
+        },
+      ]);
+    },
+  );
 
   test("thread/read uses cached citation annotations when available", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");

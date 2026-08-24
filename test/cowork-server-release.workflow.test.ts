@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/cowork-server-release.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
+const serverBuildScriptPath = new URL("../scripts/build_cowork_server_binary.ts", import.meta.url);
+const serverBuildScript = readFileSync(serverBuildScriptPath, "utf8");
 
 describe("cowork-server release workflow", () => {
   test("runs validation for tag-triggered releases before builds", () => {
@@ -31,7 +33,17 @@ describe("cowork-server release workflow", () => {
     expect(workflow).toContain("launcher_path: dist/cowork-server-windows-x64/cowork-server.exe");
     expect(workflow).toContain("label: Windows ARM64");
     expect(workflow).toContain("artifact_name: cowork-server-windows-arm64");
-    expect(workflow).toContain("launcher_path: dist/cowork-server-windows-arm64/cowork-server.cmd");
+    expect(workflow).toContain("launcher_path: dist/cowork-server-windows-arm64/cowork-server.exe");
+    expect(workflow).not.toContain("cowork-server.cmd");
+  });
+
+  test("compiles target-native standalone executables without bundling a separate Bun runtime", () => {
+    expect(serverBuildScript).toContain("resolveBunCompileTarget(target.platform, target.arch)");
+    expect(serverBuildScript).not.toContain("ensureBundledBunRuntime");
+    expect(serverBuildScript).not.toContain("buildBunBundle");
+    expect(serverBuildScript).not.toContain('env: "inline"');
+    expect(serverBuildScript).not.toContain("--windows-hide-console");
+    expect(serverBuildScript).not.toContain("Cross-compiling cowork-server is unsupported");
   });
 
   test("passes target-aware build inputs and packages runnable bundles instead of loose binaries", () => {
@@ -44,10 +56,14 @@ describe("cowork-server release workflow", () => {
     expect(workflow).toContain("Compress-Archive -Path $bundleDir -DestinationPath");
   });
 
-  test("verifies the ARM64 Windows server launcher on native ARM hardware before publish", () => {
+  test("verifies the ARM64 Windows executable directly on native ARM hardware before publish", () => {
     expect(workflow).toContain("name: Smoke cowork-server Windows ARM64");
     expect(workflow).toContain("runs-on: windows-11-arm");
-    expect(workflow).toContain("cowork-server.cmd");
+    expect(workflow).toContain('-Filter "cowork-server.exe"');
+    expect(workflow).toContain("Start-Process -FilePath $launcher.FullName");
+    expect(workflow).not.toContain('Start-Process -FilePath "cmd.exe"');
+    expect(workflow).toContain("$peSignature -ne 0x00004550");
+    expect(workflow).toContain("$machine -ne 0xAA64");
     expect(workflow).toContain("--json");
     expect(workflow).toContain("server_listening");
   });

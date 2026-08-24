@@ -59,7 +59,7 @@ jobs:
           - os: windows-latest
             label: Windows ARM64
             artifact_name: cowork-server-windows-arm64
-            launcher_path: dist/cowork-server-windows-arm64/cowork-server.cmd
+            launcher_path: dist/cowork-server-windows-arm64/cowork-server.exe
             zip_path: dist/cowork-server-windows-arm64.zip
             target_platform: win32
             target_arch: arm64
@@ -111,7 +111,7 @@ jobs:
           name: cowork-server-windows-arm64
           path: release-assets
 
-      - name: Verify ARM64 cowork-server launcher
+      - name: Verify ARM64 cowork-server executable
         shell: pwsh
         run: |
           $zipPath = Get-ChildItem "release-assets" -Recurse -Filter "*.zip" | Select-Object -First 1
@@ -129,13 +129,27 @@ jobs:
 
           Expand-Archive -Path $zipPath.FullName -DestinationPath $extractDir -Force
 
-          $launcher = Get-ChildItem $extractDir -Recurse -Filter "cowork-server.cmd" | Select-Object -First 1
+          $launcher = Get-ChildItem $extractDir -Recurse -Filter "cowork-server.exe" | Select-Object -First 1
           if (-not $launcher) {
-            throw "Unable to locate cowork-server.cmd in the extracted ARM64 bundle"
+            throw "Unable to locate cowork-server.exe in the extracted ARM64 bundle"
           }
 
-          $process = Start-Process -FilePath "cmd.exe" `
-            -ArgumentList "/c", $launcher.FullName, "--json", "--dir", $workspace, "--port", "0" `
+          $reader = [System.IO.BinaryReader]::new([System.IO.File]::OpenRead($launcher.FullName))
+          try {
+            $reader.BaseStream.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $peHeaderOffset = $reader.ReadInt32()
+            $reader.BaseStream.Seek($peHeaderOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $peSignature = $reader.ReadUInt32()
+            $machine = $reader.ReadUInt16()
+            if ($peSignature -ne 0x00004550 -or $machine -ne 0xAA64) {
+              throw ("Expected an ARM64 PE executable; got signature 0x{0:X8}, machine 0x{1:X4}" -f $peSignature, $machine)
+            }
+          } finally {
+            $reader.Dispose()
+          }
+
+          $process = Start-Process -FilePath $launcher.FullName `
+            -ArgumentList "--json", "--dir", $workspace, "--port", "0" `
             -PassThru `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath

@@ -38,9 +38,15 @@ Compile the server to a standalone binary and ship it alongside your app. This i
 bun run build:server-binary
 # Output: dist/cowork-server (or dist/cowork-server.exe on Windows)
 # Also copies: dist/prompts/, dist/config/, dist/docs/
+
+# Cross-compile a native Windows ARM64 executable from another supported host:
+bun run build:server-binary -- \
+  --platform win32 \
+  --arch arm64 \
+  --outfile dist/cowork-server-windows-arm64/cowork-server.exe
 ```
 
-The build script (`scripts/build_cowork_server_binary.ts`) uses `bun build --compile` and copies the required resource directories (`prompts/`, `config/`, `docs/`) next to the binary.
+The build script (`scripts/build_cowork_server_binary.ts`) uses `bun build --compile` for macOS, Windows, and Linux x64/ARM64 targets and copies the required resource directories (`prompts/`, `config/`, `docs/`) next to the binary. Every target, including Windows ARM64, receives one native executable; no separate Bun installation, JavaScript entrypoint, or launcher script is needed. Use `--platform` / `--arch` or `COWORK_BUILD_PLATFORM` / `COWORK_BUILD_ARCH` to select a different target.
 
 **Spawn as a subprocess:**
 

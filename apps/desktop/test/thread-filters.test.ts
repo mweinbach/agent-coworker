@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { isStandardChatThread } from "./threadFilters";
+import { isStandardChatThread } from "../src/app/threadFilters";
 
 describe("isStandardChatThread", () => {
   test("hides agent sessions from normal chat lists", () => {

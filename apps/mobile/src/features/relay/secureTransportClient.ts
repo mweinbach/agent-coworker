@@ -254,6 +254,19 @@ export class SecureTransportClient {
     return this.snapshot();
   }
 
+  async recoverForegroundSession(): Promise<SecureTransportSnapshot> {
+    await this.loadTrustedState();
+    if (!this.activeSession || this.connectionStatus === "error") {
+      return this.snapshot();
+    }
+
+    this.clearReconnectTimer();
+    this.lastError = null;
+    this.setConnectionStatus("reconnecting");
+    this.openEventStream();
+    return this.snapshot();
+  }
+
   async connectFromQrPayload(payload: PairingQrPayload): Promise<SecureTransportSnapshot> {
     if (payload.scheme !== "h3") {
       throw new Error("Unsupported pairing payload.");

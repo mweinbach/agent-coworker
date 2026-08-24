@@ -385,6 +385,38 @@ describe("mobile secure transport client", () => {
     });
   });
 
+  test("forces a fresh event stream after foregrounding a stale connected session", async () => {
+    const states: string[] = [];
+    const cleanup = mock(() => {});
+    const streams = mock(async () => cleanup);
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request: { url: string }) => {
+        if (request.url.endsWith("/pair")) {
+          return Response.json({ sessionToken: "session-token" }) as unknown as Response;
+        }
+        return new Response("", { status: 404 });
+      }) as never,
+    );
+    __internal.setPinnedHttpsStreamForTesting(streams);
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onStateChanged(snapshot) {
+        states.push(snapshot.status);
+      },
+    });
+
+    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => states.includes("connected"));
+
+    const snapshot = await client.recoverForegroundSession();
+
+    expect(snapshot.status).toBe("reconnecting");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    await waitFor(() => streams.mock.calls.length === 2);
+    await waitFor(() => states.filter((status) => status === "connected").length === 2);
+    expect(states).toEqual(["pairing", "connecting", "connected", "reconnecting", "connected"]);
+  });
+
   test("reopens the event stream when restoring a persisted active session snapshot", async () => {
     const streamUrls: string[] = [];
     __internal.setPinnedHttpsFetchForTesting(

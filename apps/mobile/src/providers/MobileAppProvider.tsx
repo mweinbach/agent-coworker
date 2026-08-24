@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
+import { AppState } from "react-native";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
 import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
@@ -21,6 +22,7 @@ import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "../features/preferences/displayPreferencesStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
+import { createForegroundRecoveryController } from "../features/relay/foregroundRecovery";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
 const queryClient = new QueryClient({
@@ -260,6 +262,16 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       },
     });
 
+    const foregroundRecovery = createForegroundRecoveryController({
+      initialState: AppState.currentState,
+      recover: async () => await defaultSecureTransportClient.recoverForegroundSession(),
+    });
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      void foregroundRecovery.handleAppStateChange(state).catch((error: unknown) => {
+        console.warn("[MobileAppProvider] Failed to recover the desktop connection.", error);
+      });
+    });
+
     void defaultSecureTransportClient
       .getSnapshot()
       .then((snapshot) => {
@@ -268,6 +280,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       .catch(() => {});
 
     return () => {
+      appStateSubscription.remove();
+      foregroundRecovery.dispose();
       unsubscribeTransport();
       sessionBootstrap.dispose();
       sessionBootstrap.resetClientSession();

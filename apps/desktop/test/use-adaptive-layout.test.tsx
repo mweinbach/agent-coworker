@@ -47,9 +47,9 @@ test.serial(
       expect(output?.dataset.primary).toBe("692");
 
       for (const [width, tier, primary] of [
-        [1_024, "compact", "776"],
-        [800, "compact", "552"],
-        [640, "narrow", "640"],
+        [1_024, "compact", "476"],
+        [800, "compact", "320"],
+        [640, "narrow", "340"],
         [1_240, "full", "692"],
       ] as const) {
         await act(async () => {

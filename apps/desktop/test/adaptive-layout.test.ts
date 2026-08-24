@@ -20,9 +20,9 @@ const DEFAULT_LAYOUT = {
 
 describe("adaptive desktop layout", () => {
   test.each([
-    [640, "narrow", true, true],
-    [800, "compact", false, true],
-    [1_024, "compact", false, true],
+    [640, "narrow", true, false],
+    [800, "compact", false, false],
+    [1_024, "compact", false, false],
     [1_240, "full", false, false],
   ] as const)(
     "maps %ipx to the %s tier with the expected overlay rails",
@@ -32,22 +32,37 @@ describe("adaptive desktop layout", () => {
       expect(layout.tier).toBe(tier);
       expect(layout.leftOverlay).toBe(leftOverlay);
       expect(layout.rightOverlay).toBe(rightOverlay);
-      expect(layout.primaryWidth).toBeGreaterThanOrEqual(MIN_PRIMARY_WORKSPACE_WIDTH);
+      expect(layout.primaryWidth).toBeGreaterThanOrEqual(viewportWidth < 1_120 ? 320 : 520);
     },
   );
 
-  test("keeps automatic overlay behavior separate from saved collapse preferences", () => {
+  test("keeps the context rail inline at compact widths without changing saved preferences", () => {
     const compact = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth: 800 });
     expect(compact.leftInline).toBe(true);
-    expect(compact.rightInline).toBe(false);
+    expect(compact.rightInline).toBe(true);
     expect(compact.leftWidth).toBe(248);
-    expect(compact.rightWidth).toBe(0);
+    expect(compact.rightWidth).toBe(232);
 
     const wideAgain = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth: 1_240 });
     expect(wideAgain.leftInline).toBe(true);
     expect(wideAgain.rightInline).toBe(true);
     expect(wideAgain.leftWidth).toBe(248);
     expect(wideAgain.rightWidth).toBe(300);
+  });
+
+  test("keeps narrow context rails inline while allowing immersive surfaces to opt into overlays", () => {
+    const context = resolveAdaptiveLayout({ ...DEFAULT_LAYOUT, viewportWidth: 640 });
+    expect(context.rightInline).toBe(true);
+    expect(context.rightOverlay).toBe(false);
+    expect(context.rightWidth).toBe(300);
+
+    const canvas = resolveAdaptiveLayout({
+      ...DEFAULT_LAYOUT,
+      rightSidebarOverlayAllowed: true,
+      viewportWidth: 640,
+    });
+    expect(canvas.rightInline).toBe(false);
+    expect(canvas.rightOverlay).toBe(true);
   });
 
   test("respects explicit collapsed preferences when their rails can be inline", () => {
@@ -80,7 +95,7 @@ describe("adaptive desktop layout", () => {
     expect(layout.rightMaximumWidth).toBe(320);
   });
 
-  test("clamps the compact left rail against the available primary width", () => {
+  test("clamps both compact rails against the available primary width", () => {
     const layout = resolveAdaptiveLayout({
       ...DEFAULT_LAYOUT,
       leftSidebarWidth: 440,
@@ -89,7 +104,8 @@ describe("adaptive desktop layout", () => {
 
     expect(layout.tier).toBe("compact");
     expect(layout.leftWidth).toBe(240);
-    expect(layout.primaryWidth).toBe(MIN_PRIMARY_WORKSPACE_WIDTH);
+    expect(layout.rightWidth).toBe(200);
+    expect(layout.primaryWidth).toBe(320);
     expect(layout.leftMaximumWidth).toBe(240);
   });
 

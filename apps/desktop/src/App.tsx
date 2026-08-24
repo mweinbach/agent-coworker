@@ -294,6 +294,7 @@ const ChatShell = memo(function ChatShell({
     leftSidebarWidth: sidebarWidth,
     rightSidebarMaximumWidth: rightRailSizing.maximumWidth,
     rightSidebarMinimumWidth: rightRailSizing.minimumWidth,
+    rightSidebarOverlayAllowed: rightRailKind !== "context",
     rightSidebarWidth: rightRailSizing.preferredWidth,
     sidebarCollapsed,
   });

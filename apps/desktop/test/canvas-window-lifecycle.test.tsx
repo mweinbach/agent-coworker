@@ -172,7 +172,7 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("keeps canvas chrome available when a resize hides the overlay rail", async () => {
+  test.serial("restores an inline context rail after closing a compact canvas overlay", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -220,11 +220,14 @@ describe("canvas window lifecycle", () => {
       });
 
       expect(useAppStore.getState().filePreview).toBeNull();
+      const context = harness.dom.window.document.querySelector(
+        '[role="region"][aria-label="Context"]',
+      );
+      expect(context?.getAttribute("data-presentation")).toBe("inline");
+      expect(context?.getAttribute("data-active")).toBe("true");
       expect(
-        harness.dom.window.document
-          .querySelector('[role="dialog"][aria-label="Context"]')
-          ?.getAttribute("aria-hidden"),
-      ).toBe("true");
+        harness.dom.window.document.querySelector('[data-slot="adaptive-rail-backdrop"]'),
+      ).toBeNull();
     } finally {
       if (root) {
         const mountedRoot = root;
@@ -284,7 +287,7 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("keeps a manually opened context overlay open after closing canvas", async () => {
+  test.serial("keeps an inline context rail open after closing a narrow canvas overlay", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -303,11 +306,7 @@ describe("canvas window lifecycle", () => {
         createdRoot.render(createElement(App));
         await flushUi();
       });
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>('button[aria-label="Show context"]')?.click();
-        await flushUi();
-      });
-      const context = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]');
+      const context = container.querySelector<HTMLElement>('[role="region"][aria-label="Context"]');
       expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
       await act(async () => {
@@ -322,6 +321,7 @@ describe("canvas window lifecycle", () => {
       });
 
       expect(useAppStore.getState().filePreview).toBeNull();
+      expect(context?.getAttribute("data-presentation")).toBe("inline");
       expect(context?.hasAttribute("aria-hidden")).toBe(false);
     } finally {
       if (root) {
@@ -332,7 +332,7 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("closes a canvas-owned overlay after switching canvas files", async () => {
+  test.serial("restores the inline context rail after switching and closing canvas files", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -365,7 +365,9 @@ describe("canvas window lifecycle", () => {
       });
 
       expect(useAppStore.getState().filePreview).toBeNull();
-      expect(context?.getAttribute("aria-hidden")).toBe("true");
+      expect(context?.getAttribute("role")).toBe("region");
+      expect(context?.getAttribute("data-presentation")).toBe("inline");
+      expect(context?.hasAttribute("aria-hidden")).toBe(false);
     } finally {
       if (root) {
         const mountedRoot = root;
@@ -425,7 +427,7 @@ describe("canvas window lifecycle", () => {
     },
   );
 
-  test.serial("clears canvas overlay ownership when canvas closes at full width", async () => {
+  test.serial("keeps context inline after closing canvas at full width and resizing", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     let root: ReturnType<typeof createRoot> | null = null;
     try {
@@ -457,11 +459,7 @@ describe("canvas window lifecycle", () => {
         harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize"));
         await flushUi();
       });
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>('button[aria-label="Show context"]')?.click();
-        await flushUi();
-      });
-      const context = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]');
+      const context = container.querySelector<HTMLElement>('[role="region"][aria-label="Context"]');
       expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
       await act(async () => {
@@ -476,6 +474,7 @@ describe("canvas window lifecycle", () => {
       });
 
       expect(useAppStore.getState().filePreview).toBeNull();
+      expect(context?.getAttribute("data-presentation")).toBe("inline");
       expect(context?.hasAttribute("aria-hidden")).toBe(false);
     } finally {
       if (root) {

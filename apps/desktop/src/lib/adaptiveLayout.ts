@@ -1,6 +1,7 @@
 export const MAIN_WINDOW_MIN_WIDTH = 640;
 export const MAIN_WINDOW_MIN_HEIGHT = 560;
 export const MIN_PRIMARY_WORKSPACE_WIDTH = 520;
+const MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH = 320;
 
 export const DESKTOP_LAYOUT_BREAKPOINTS = {
   narrow: 720,
@@ -25,6 +26,7 @@ export type AdaptiveLayoutInput = {
   leftSidebarWidth: number;
   rightSidebarMaximumWidth: number;
   rightSidebarMinimumWidth: number;
+  rightSidebarOverlayAllowed?: boolean;
   rightSidebarWidth: number;
   sidebarCollapsed: boolean;
   viewportWidth: number;
@@ -91,19 +93,24 @@ export function resolveDesktopLayoutTier(viewportWidth: number): DesktopLayoutTi
 /**
  * Resolves transient renderer layout without changing persisted rail preferences.
  *
- * Compact windows move the context rail into an overlay first. Narrow windows
- * move both rails into overlays. Inline widths are clamped around a protected
- * primary workspace, and the saved preferences become effective again when
- * the viewport has room for them.
+ * Context rails stay embedded in the main layout at every window width. Canvas
+ * and task surfaces can opt into overlays when the window becomes compact.
+ * Inline widths are clamped around a protected primary workspace, with a
+ * smaller minimum on compact windows that also show an embedded context rail.
  */
 export function resolveAdaptiveLayout(input: AdaptiveLayoutInput): AdaptiveLayout {
   const viewportWidth = Math.max(0, input.viewportWidth);
   const tier = resolveDesktopLayoutTier(viewportWidth);
   const leftOverlay = tier === "narrow";
-  const rightOverlay = input.hasContextSidebar && tier !== "full";
+  const rightOverlay =
+    input.hasContextSidebar && input.rightSidebarOverlayAllowed === true && tier !== "full";
   const leftInline = !leftOverlay && !input.sidebarCollapsed;
   const rightInline = input.hasContextSidebar && !rightOverlay && !input.contextSidebarCollapsed;
-  const railCapacity = Math.max(0, viewportWidth - MIN_PRIMARY_WORKSPACE_WIDTH);
+  const minimumPrimaryWidth =
+    rightInline && tier !== "full"
+      ? MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH
+      : MIN_PRIMARY_WORKSPACE_WIDTH;
+  const railCapacity = Math.max(0, viewportWidth - minimumPrimaryWidth);
 
   const requestedRightMinimum = Math.max(0, input.rightSidebarMinimumWidth);
   const requestedRightMaximum = Math.max(requestedRightMinimum, input.rightSidebarMaximumWidth);

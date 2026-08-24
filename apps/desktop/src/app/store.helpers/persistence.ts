@@ -20,6 +20,7 @@ import { getEffectiveThreadLastEventSeq, RUNTIME } from "./runtimeState";
 
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
+const MAX_DEFERRED_PERSIST_RETRIES = 3;
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
@@ -150,7 +151,7 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
 }
 
 /**
- * Serialized form of the last state handed to the main process. Store updates
+ * Serialized form of the last state successfully saved by the main process. Store updates
  * arrive continuously (control events, provider refreshes, thread deltas) and
  * most leave the persisted projection identical, so without this the debounce
  * re-armed and rewrote the whole state file several times a second while idle.
@@ -158,22 +159,42 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
  * skipped.
  */
 let _lastPersistedJson: string | null = null;
+let _persistWriteTail: Promise<void> = Promise.resolve();
 
-function shouldWriteState(state: PersistedState): boolean {
+function enqueuePersistedState(state: PersistedState): Promise<void> {
   const serialized = JSON.stringify(state);
-  if (serialized === _lastPersistedJson) return false;
-  _lastPersistedJson = serialized;
-  return true;
+  const write = _persistWriteTail.then(async () => {
+    if (serialized === _lastPersistedJson) return;
+    await saveState(state);
+    _lastPersistedJson = serialized;
+  });
+
+  // A failed write must not poison either deduplication or later queued writes.
+  _persistWriteTail = write.catch(() => {});
+  return write;
+}
+
+function schedulePersist(get: () => AppStoreState, retryAttempt = 0) {
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(
+    () => {
+      _persistTimer = null;
+      const state = syncDesktopStateCacheNow(get);
+      void enqueuePersistedState(state).catch(() => {
+        if (retryAttempt < MAX_DEFERRED_PERSIST_RETRIES) {
+          schedulePersist(get, retryAttempt + 1);
+          return;
+        }
+
+        console.error("Unable to save desktop state after multiple attempts.");
+      });
+    },
+    PERSIST_DEBOUNCE_MS * 2 ** retryAttempt,
+  );
 }
 
 export function persist(get: () => AppStoreState) {
-  if (_persistTimer) clearTimeout(_persistTimer);
-  _persistTimer = setTimeout(() => {
-    _persistTimer = null;
-    const state = syncDesktopStateCacheNow(get);
-    if (!shouldWriteState(state)) return;
-    void saveState(state);
-  }, PERSIST_DEBOUNCE_MS);
+  schedulePersist(get);
 }
 
 export async function persistNow(get: () => AppStoreState) {
@@ -182,8 +203,7 @@ export async function persistNow(get: () => AppStoreState) {
     _persistTimer = null;
   }
   const state = syncDesktopStateCacheNow(get);
-  if (!shouldWriteState(state)) return;
-  await saveState(state);
+  await enqueuePersistedState(state);
 }
 
 export const __internal = {

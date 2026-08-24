@@ -79,4 +79,53 @@ describe("persisted state writes", () => {
     await persistNow(getState);
     expect(saveState).toHaveBeenCalledTimes(2);
   });
+
+  test("retries an unchanged projection after its previous write failed", async () => {
+    saveState.mockImplementationOnce(async () => {
+      throw new Error("The desktop state file is temporarily unavailable.");
+    });
+
+    await expect(persistNow(getState)).rejects.toThrow("temporarily unavailable");
+    expect(saveState).toHaveBeenCalledTimes(1);
+
+    await persistNow(getState);
+
+    expect(saveState).toHaveBeenCalledTimes(2);
+    expect(savedStates).toHaveLength(1);
+    expect(savedStates[0]).toMatchObject({ developerMode: false });
+  });
+
+  test("serializes overlapping writes and preserves the most recent projection", async () => {
+    let releaseFirstWrite: (() => void) | undefined;
+    let notifyFirstWriteStarted: (() => void) | undefined;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      notifyFirstWriteStarted = resolve;
+    });
+    saveState.mockImplementationOnce(async (snapshot: unknown) => {
+      notifyFirstWriteStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseFirstWrite = resolve;
+      });
+      savedStates.push(snapshot);
+    });
+
+    const first = persistNow(getState);
+    await firstWriteStarted;
+
+    state.developerMode = true;
+    const second = persistNow(getState);
+    state.developerMode = false;
+    const third = persistNow(getState);
+
+    expect(saveState).toHaveBeenCalledTimes(1);
+
+    releaseFirstWrite?.();
+    await Promise.all([first, second, third]);
+
+    expect(savedStates.map((snapshot) => (snapshot as MutableState).developerMode)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
 });

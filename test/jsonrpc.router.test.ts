@@ -11,6 +11,7 @@ import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
 import { jsonRpcNotificationSchemas } from "../src/server/jsonrpc/schema";
 import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
+import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
 function createRuntime(session: any) {
   return {
@@ -105,7 +106,9 @@ function createRouterHarness(
       listPersisted: () =>
         (opts.persistedRecords ?? []).map((record) => ({
           ...record,
-          sessionKind: "primary",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
         })) as any,
       listLiveRoot: () => [],
       subscribe: (_ws, threadId) => {
@@ -675,6 +678,7 @@ describe("JSON-RPC request router", () => {
 
   test("thread/read uses cached citation annotations when available", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     let fetchCalls = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
@@ -784,6 +788,7 @@ describe("JSON-RPC request router", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }
@@ -792,6 +797,7 @@ describe("JSON-RPC request router", () => {
 
   test("thread/read returns immediately and primes citation metadata in the background", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     const fetchStarted = Promise.withResolvers<void>();
     const responseGate = Promise.withResolvers<Response>();
     let fetchCalls = 0;
@@ -962,6 +968,7 @@ describe("JSON-RPC request router", () => {
       ]);
     } finally {
       citationMetadataInternal.clearCitationResolutionCache();
+      webSafetyInternal.resetDnsLookup();
       if (originalFetchDescriptor) {
         Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
       }

@@ -354,25 +354,31 @@ describe("loadSystemPrompt", () => {
   });
 
   test("falls back to the generic system prompt for dynamic LM Studio models", async () => {
-    const config = makeConfig({
-      provider: "lmstudio",
-      model: "local/qwen-2.5",
-      preferredChildModel: "local/qwen-2.5",
-      knowledgeCutoff: "Unknown",
-    });
+    const { tmp, home } = await makeTmpDirs();
+    try {
+      const config = makeConfig({
+        provider: "lmstudio",
+        model: "local/qwen-2.5",
+        preferredChildModel: "local/qwen-2.5",
+        knowledgeCutoff: "Unknown",
+        userCoworkDir: path.join(home, ".cowork"),
+      });
 
-    const prompt = await withMockedFetch(
-      (async () => {
-        throw new Error("connect ECONNREFUSED");
-      }) as typeof fetch,
-      async () => await loadSystemPrompt(config),
-    );
+      const prompt = await withMockedFetch(
+        (async () => {
+          throw new Error("connect ECONNREFUSED");
+        }) as typeof fetch,
+        async () => await loadSystemPrompt(config),
+      );
 
-    expect(prompt).toContain("local/qwen-2.5");
-    expect(prompt).toContain("Available model overrides for the current provider (LM Studio):");
-    expect(prompt).toContain(
-      "No enabled child model overrides are currently available for this provider.",
-    );
+      expect(prompt).toContain("local/qwen-2.5");
+      expect(prompt).toContain("Available model overrides for the current provider (LM Studio):");
+      expect(prompt).toContain(
+        "No enabled child model overrides are currently available for this provider.",
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   test("renders spawnAgent role catalog from AGENT_ROLE_DEFINITIONS across prompt formats", async () => {
@@ -521,16 +527,27 @@ describe("loadSystemPrompt", () => {
   });
 
   test("lists effective Baseten model ids in the spawnAgent summary", async () => {
-    const config = makeConfig({
-      provider: "baseten",
-      model: "moonshotai/Kimi-K2.5",
-      preferredChildModel: "moonshotai/Kimi-K2.5",
-    });
-    const prompt = await loadSystemPrompt(config);
+    const { tmp, home } = await makeTmpDirs();
+    try {
+      const config = makeConfig({
+        provider: "baseten",
+        model: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
+        userCoworkDir: path.join(home, ".cowork"),
+      });
+      const prompt = await withMockedFetch(
+        (async () => {
+          throw new Error("connect ECONNREFUSED");
+        }) as typeof fetch,
+        async () => await loadSystemPrompt(config),
+      );
 
-    expect(prompt).toContain("Available model overrides for the current provider (Baseten):");
-    expect(prompt).toContain("baseten:moonshotai/Kimi-K2.5");
-    expect(prompt).not.toContain("No user-facing child model overrides are available");
+      expect(prompt).toContain("Available model overrides for the current provider (Baseten):");
+      expect(prompt).toContain("baseten:moonshotai/Kimi-K2.5");
+      expect(prompt).not.toContain("No user-facing child model overrides are available");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   test("uses only enabled current-provider models and connected allowlisted targets", () => {

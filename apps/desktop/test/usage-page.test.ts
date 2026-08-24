@@ -203,6 +203,168 @@ describe("desktop usage page", () => {
     expect(google.models[0].totalReasoningOutputTokens).toBe(50);
   });
 
+  test("opening an already-accounted-for child agent does not inflate independent session usage", () => {
+    const createRuntime = (opts: {
+      sessionId: string;
+      sessionKind: "root" | "agent" | null;
+      parentSessionId: string | null;
+      provider: string;
+      model: string;
+      promptTokens: number;
+      completionTokens: number;
+      costUsd: number;
+    }) => {
+      const totalTokens = opts.promptTokens + opts.completionTokens;
+      const modelUsage = {
+        provider: opts.provider,
+        model: opts.model,
+        turns: 1,
+        totalPromptTokens: opts.promptTokens,
+        totalCompletionTokens: opts.completionTokens,
+        totalCachedPromptTokens: opts.promptTokens / 10,
+        totalCacheWritePromptTokens: opts.promptTokens / 20,
+        totalReasoningOutputTokens: opts.completionTokens / 2,
+        totalTokens,
+        estimatedCostUsd: opts.costUsd,
+      };
+
+      return {
+        sessionId: opts.sessionId,
+        sessionKind: opts.sessionKind,
+        parentSessionId: opts.parentSessionId,
+        sessionUsage: {
+          sessionId: opts.sessionId,
+          totalTurns: 1,
+          totalPromptTokens: opts.promptTokens,
+          totalCompletionTokens: opts.completionTokens,
+          totalCachedPromptTokens: modelUsage.totalCachedPromptTokens,
+          totalCacheWritePromptTokens: modelUsage.totalCacheWritePromptTokens,
+          totalReasoningOutputTokens: modelUsage.totalReasoningOutputTokens,
+          totalTokens,
+          estimatedTotalCostUsd: opts.costUsd,
+          costTrackingAvailable: true,
+          byModel: [modelUsage],
+        },
+      };
+    };
+
+    const independentRuntimes = {
+      "workflow-parent": createRuntime({
+        sessionId: "parent-session",
+        sessionKind: "root",
+        parentSessionId: null,
+        provider: "openai",
+        model: "gpt-parent",
+        promptTokens: 800,
+        completionTokens: 200,
+        costUsd: 0.2,
+      }),
+      "ordinary-thread": createRuntime({
+        sessionId: "ordinary-session",
+        sessionKind: "root",
+        parentSessionId: null,
+        provider: "anthropic",
+        model: "claude-independent",
+        promptTokens: 240,
+        completionTokens: 60,
+        costUsd: 0.03,
+      }),
+      "legacy-independent-thread": createRuntime({
+        sessionId: "legacy-session",
+        sessionKind: null,
+        parentSessionId: null,
+        provider: "openai",
+        model: "gpt-parent",
+        promptTokens: 160,
+        completionTokens: 40,
+        costUsd: 0.02,
+      }),
+    };
+    const openedChildRuntime = createRuntime({
+      sessionId: "child-session",
+      sessionKind: "agent",
+      parentSessionId: "parent-session",
+      provider: "openai",
+      model: "gpt-child",
+      promptTokens: 320,
+      completionTokens: 80,
+      costUsd: 0.05,
+    });
+
+    const usageBeforeOpeningChild = aggregateUsageFromRuntimes(independentRuntimes as any);
+    const usageAfterOpeningChild = aggregateUsageFromRuntimes({
+      ...independentRuntimes,
+      "opened-child-thread": openedChildRuntime,
+    } as any);
+
+    expect(usageAfterOpeningChild).toMatchObject({
+      totalSessions: 3,
+      totalTurns: 3,
+      totalTokens: 1500,
+      totalPromptTokens: 1200,
+      totalCompletionTokens: 300,
+      totalCachedPromptTokens: 120,
+      totalCacheWritePromptTokens: 60,
+      totalReasoningOutputTokens: 150,
+      totalCostUsd: 0.25,
+    });
+    expect(usageAfterOpeningChild).toEqual(usageBeforeOpeningChild);
+    expect(usageAfterOpeningChild.providers).toHaveLength(2);
+    expect(
+      usageAfterOpeningChild.providers
+        .find((provider) => provider.provider === "openai")
+        ?.models.map(({ model, sessions }) => ({ model, sessions })),
+    ).toEqual([{ model: "gpt-parent", sessions: 2 }]);
+    expect(
+      usageAfterOpeningChild.providers.find((provider) => provider.provider === "anthropic")
+        ?.totalTokens,
+    ).toBe(300);
+
+    const transcriptOnlyChildRuntime = {
+      ...openedChildRuntime,
+      sessionKind: null,
+      parentSessionId: null,
+    };
+    const usageWithTranscriptOnlyChild = aggregateUsageFromRuntimes(
+      {
+        ...independentRuntimes,
+        "opened-child-thread": transcriptOnlyChildRuntime,
+      } as any,
+      [
+        { id: "workflow-parent", sessionKind: "root", parentSessionId: null },
+        { id: "ordinary-thread", sessionKind: "root", parentSessionId: null },
+        { id: "legacy-independent-thread" },
+        {
+          id: "opened-child-thread",
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+        },
+      ],
+    );
+
+    expect(usageWithTranscriptOnlyChild).toEqual(usageBeforeOpeningChild);
+
+    const usageWithRuntimeParentLineage = aggregateUsageFromRuntimes({
+      ...independentRuntimes,
+      "opened-child-thread": {
+        ...transcriptOnlyChildRuntime,
+        parentSessionId: "parent-session",
+      },
+    } as any);
+
+    expect(usageWithRuntimeParentLineage).toEqual(usageBeforeOpeningChild);
+
+    const usageWithPersistedParentLineage = aggregateUsageFromRuntimes(
+      {
+        ...independentRuntimes,
+        "opened-child-thread": transcriptOnlyChildRuntime,
+      } as any,
+      [{ id: "opened-child-thread", parentSessionId: "parent-session" }],
+    );
+
+    expect(usageWithPersistedParentLineage).toEqual(usageBeforeOpeningChild);
+  });
+
   test("renders aggregate usage breakdown with provider groups and the estimate notice popup", () => {
     const html = renderToStaticMarkup(
       createElement(UsagePage, {

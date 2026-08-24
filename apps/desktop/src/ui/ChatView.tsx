@@ -983,11 +983,14 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
             onEditSubmission={editAcceptedSubmission}
             onDismissSubmission={dismissSubmission}
             onStop={
-              composerSubmission?.phase === "preparing" || composerSubmission?.phase === "sending"
-                ? cancelSubmission
-                : selectedThreadId
-                  ? handleStop
-                  : undefined
+              busy && selectedThreadId
+                ? handleStop
+                : composerSubmission?.phase === "preparing" ||
+                    composerSubmission?.phase === "sending"
+                  ? cancelSubmission
+                  : selectedThreadId
+                    ? handleStop
+                    : undefined
             }
           />
         )}

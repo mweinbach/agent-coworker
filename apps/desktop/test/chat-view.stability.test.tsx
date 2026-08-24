@@ -2011,6 +2011,8 @@ describe("desktop chat view stability", () => {
 
   test("keeps attachment-only steers until the captured submission succeeds", async () => {
     const originalState = useAppStore.getState();
+    const cancelThread = mock(() => true);
+    const draftKey = composerDraftKeyForThread("thread-1");
     let submittedAttachmentSignature = "";
     let resolveSend: (() => void) | undefined;
     const sendGate = new Promise<void>((resolve) => {
@@ -2074,6 +2076,7 @@ describe("desktop chat view stability", () => {
         },
       },
       composerDraftsByKey: {},
+      cancelThread,
       sendMessage: async (
         text: string,
         busyPolicy?: "reject" | "steer",
@@ -2138,12 +2141,22 @@ describe("desktop chat view stability", () => {
         await Promise.resolve();
       });
 
-      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      const stopDuringPreparation = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stop current response"]',
+      );
+      expect(stopDuringPreparation).not.toBeNull();
       expect(
         container.querySelector('[aria-label="Sending guidance to current response"]'),
       ).not.toBeNull();
       expect(container.querySelector('[data-slot="composer-preparing"]')).not.toBeNull();
       expect(container.textContent).toContain("Uploading and preparing message…");
+
+      await act(async () => {
+        stopDuringPreparation?.click();
+      });
+      expect(cancelThread).toHaveBeenCalledWith("thread-1");
+      expect(useAppStore.getState().composerSubmissionsByKey[draftKey]?.phase).toBe("preparing");
+
       await act(async () => {
         resolvePreparation?.(new Uint8Array([1, 2, 3]).buffer);
         await preparationGate;
@@ -2177,8 +2190,17 @@ describe("desktop chat view stability", () => {
       );
       expect(pendingSteerButton).not.toBeNull();
       expect((pendingSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
-      expect(container.querySelector('[aria-label="Stop current response"]')).not.toBeNull();
+      const stopDuringSend = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stop current response"]',
+      );
+      expect(stopDuringSend).not.toBeNull();
       expect(container.textContent).toContain("Sending guidance. Stop remains available.");
+
+      await act(async () => {
+        stopDuringSend?.click();
+      });
+      expect(cancelThread).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().composerSubmissionsByKey[draftKey]?.phase).toBe("sending");
 
       await act(async () => {
         resolveSend?.();

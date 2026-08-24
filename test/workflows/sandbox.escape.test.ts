@@ -127,6 +127,12 @@ describe("workflow sandbox: determinism traps", () => {
     expect(await expectThrows("Math.random()")).toContain("Math.random()");
   });
 
+  test("calling Date as a function cannot expose the current wall-clock time", async () => {
+    expect(await expectThrows("Date()")).toContain("Date()");
+    expect(await expectThrows("Date.call(null)")).toContain("Date()");
+    expect(await expectThrows("Reflect.apply(Date, null, [])")).toContain("Date()");
+  });
+
   test("the Date prototype cannot be used to walk back to the real clock", async () => {
     // Without trapping Date.prototype.constructor this reads the wall clock
     // straight through the Proxy.

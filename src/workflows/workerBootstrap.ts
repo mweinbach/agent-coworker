@@ -140,6 +140,7 @@ const SEAL_SOURCE = `
   // authoring model actually reads, so it names the reason and the alternative.
   const RealDate = Date;
   const TrappedDate = new Proxy(RealDate, {
+    apply: () => deny("Date()")(),
     construct: (t, a) => (a.length === 0 ? deny("new Date()")() : Reflect.construct(t, a)),
     get: (t, p) => (p === "now" ? deny("Date.now()")() : Reflect.get(t, p)),
   });

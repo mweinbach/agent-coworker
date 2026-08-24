@@ -7,6 +7,7 @@ import {
   listWorkflowDefinitions,
   resolveWorkflowDefinition,
   saveWorkflowDefinition,
+  WORKFLOW_DEFINITION_MAX_BYTES,
 } from "../../src/workflows/registry";
 import { metaHeader, workflowTmpDir } from "./harness";
 
@@ -104,6 +105,22 @@ describe("saved workflow registry", () => {
     ).rejects.toThrow("must match meta.name");
   });
 
+  test("rejects definitions that exceed the size limit after newline normalization", async () => {
+    const config = await makeConfig();
+    const prefix = `${workflowSource("maximum-size", "value")}\n//`;
+    const source = `${prefix}${"x".repeat(WORKFLOW_DEFINITION_MAX_BYTES - Buffer.byteLength(prefix))}`;
+    expect(Buffer.byteLength(source)).toBe(WORKFLOW_DEFINITION_MAX_BYTES);
+
+    await expect(
+      saveWorkflowDefinition({
+        config,
+        name: "maximum-size",
+        scope: "project",
+        source,
+      }),
+    ).rejects.toThrow(`${WORKFLOW_DEFINITION_MAX_BYTES}-byte limit`);
+  });
+
   test("an invalid project definition shadows a valid global definition", async () => {
     const config = await makeConfig();
     await saveWorkflowDefinition({
@@ -142,6 +159,41 @@ describe("saved workflow registry", () => {
         overwrite: true,
       }),
     ).rejects.toThrow("regular file");
+  });
+
+  test("refuses to save workflows through a symlinked scope directory", async () => {
+    const config = await makeConfig();
+    const outsideDir = path.join(config.userCoworkDir, "outside");
+    const workflowDir = path.join(config.projectCoworkDir, "workflows");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.mkdir(config.projectCoworkDir, { recursive: true });
+    await fs.symlink(outsideDir, workflowDir, "dir");
+
+    await expect(
+      saveWorkflowDefinition({
+        config,
+        name: "escaped-write",
+        scope: "project",
+        source: workflowSource("escaped-write", "outside"),
+      }),
+    ).rejects.toThrow("symlink");
+    expect(await fs.readdir(outsideDir)).toEqual([]);
+  });
+
+  test("does not resolve or list workflows through a symlinked scope directory", async () => {
+    const config = await makeConfig();
+    const outsideDir = path.join(config.userCoworkDir, "outside");
+    const workflowDir = path.join(config.projectCoworkDir, "workflows");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.mkdir(config.projectCoworkDir, { recursive: true });
+    await fs.writeFile(
+      path.join(outsideDir, "escaped-read.ts"),
+      workflowSource("escaped-read", "outside"),
+    );
+    await fs.symlink(outsideDir, workflowDir, "dir");
+
+    await expect(resolveWorkflowDefinition(config, "escaped-read")).rejects.toThrow("symlink");
+    expect(await listWorkflowDefinitions(config)).toEqual({ workflows: [], diagnostics: [] });
   });
 
   test("discovers the bundled deep-research workflow", async () => {

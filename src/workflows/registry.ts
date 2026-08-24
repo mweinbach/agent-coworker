@@ -59,6 +59,18 @@ function definitionPath(dir: string, name: string): string {
   return path.join(dir, `${assertWorkflowDefinitionName(name)}.ts`);
 }
 
+async function assertSafeWorkflowDirectory(dir: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error("workflow definition directory must be a real directory, not a symlink");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await fs.access(targetPath);
@@ -106,6 +118,7 @@ async function inspectDefinition(opts: {
 
 async function listNames(dir: string): Promise<string[]> {
   try {
+    await assertSafeWorkflowDirectory(dir);
     const entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" });
     return entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
@@ -164,6 +177,7 @@ export async function resolveWorkflowDefinition(
 ): Promise<ResolvedWorkflowDefinition> {
   const safeName = assertWorkflowDefinitionName(name);
   for (const root of workflowDefinitionRoots(config)) {
+    await assertSafeWorkflowDirectory(root.dir);
     const targetPath = definitionPath(root.dir, safeName);
     if (await pathExists(targetPath)) {
       return await inspectDefinition({ name: safeName, scope: root.scope, path: targetPath });
@@ -180,11 +194,12 @@ export async function saveWorkflowDefinition(opts: {
   overwrite?: boolean;
 }): Promise<WorkflowCatalogEntry> {
   const name = assertWorkflowDefinitionName(opts.name);
-  if (Buffer.byteLength(opts.source, "utf8") > WORKFLOW_DEFINITION_MAX_BYTES) {
+  const source = `${opts.source.trimEnd()}\n`;
+  if (Buffer.byteLength(source, "utf8") > WORKFLOW_DEFINITION_MAX_BYTES) {
     throw new Error(`workflow definition exceeds the ${WORKFLOW_DEFINITION_MAX_BYTES}-byte limit`);
   }
 
-  const inspected = await inspectWorkflowSource(opts.source);
+  const inspected = await inspectWorkflowSource(source);
   if (!inspected.ok) {
     throw new Error(inspected.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
   }
@@ -197,8 +212,8 @@ export async function saveWorkflowDefinition(opts: {
   const root = workflowDefinitionRoots(opts.config).find((entry) => entry.scope === opts.scope);
   if (!root) throw new Error(`workflow scope "${opts.scope}" is not writable`);
   await fs.mkdir(root.dir, { recursive: true });
+  await assertSafeWorkflowDirectory(root.dir);
   const targetPath = definitionPath(root.dir, name);
-  const source = `${opts.source.trimEnd()}\n`;
 
   if (!opts.overwrite) {
     try {

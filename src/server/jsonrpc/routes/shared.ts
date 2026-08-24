@@ -234,6 +234,8 @@ export function buildJsonRpcThreadFromSession(runtime: SessionRuntime): JsonRpcT
     updatedAt: info.updatedAt,
     messageCount: snapshot.messageCount,
     lastEventSeq: snapshot.lastEventSeq,
+    hasPendingAsk: snapshot.hasPendingAsk,
+    hasPendingApproval: snapshot.hasPendingApproval,
     status: {
       type: runtime.read.isBusy ? "running" : "loaded",
     },
@@ -252,6 +254,8 @@ export function buildJsonRpcThreadFromRecord(record: PersistedSessionRecord): Js
     updatedAt: record.updatedAt,
     messageCount: record.messageCount,
     lastEventSeq: record.lastEventSeq,
+    hasPendingAsk: record.hasPendingAsk,
+    hasPendingApproval: record.hasPendingApproval,
     status: {
       type: "notLoaded",
     },

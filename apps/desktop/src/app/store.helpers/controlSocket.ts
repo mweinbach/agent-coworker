@@ -180,6 +180,8 @@ export function createControlSocketHelpers(
         sessionId: session.sessionId,
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
+        hasPendingAsk: session.hasPendingAsk,
+        hasPendingApproval: session.hasPendingApproval,
         draft: false,
         archived: existing?.archived ?? false,
         archivedAt: existing?.archivedAt,
@@ -721,8 +723,8 @@ export function createControlSocketHelpers(
             updatedAt,
             messageCount: thread.messageCount ?? existingThread?.messageCount ?? 0,
             lastEventSeq: thread.lastEventSeq ?? existingThread?.lastEventSeq ?? 0,
-            hasPendingAsk: false,
-            hasPendingApproval: false,
+            hasPendingAsk: thread.hasPendingAsk === true,
+            hasPendingApproval: thread.hasPendingApproval === true,
           },
         ];
       });

@@ -150,6 +150,8 @@ export type ThreadRecord = {
   sessionId: string | null;
   messageCount: number;
   lastEventSeq: number;
+  hasPendingAsk?: boolean;
+  hasPendingApproval?: boolean;
   legacyTranscriptId?: string | null;
   draft?: boolean;
   archived?: boolean;

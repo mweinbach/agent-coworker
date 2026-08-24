@@ -259,6 +259,72 @@ describe("server JSON-RPC flows", () => {
     {
       kind: "approval",
       method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+      flags: { hasPendingAsk: false, hasPendingApproval: true },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "Proceed" },
+      flags: { hasPendingAsk: true, hasPendingApproval: false },
+    },
+  ] as const)(
+    "surfaces a pending $kind in thread summaries without requiring thread subscription",
+    async ({ kind, method, response, flags }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            if (kind === "approval") {
+              await params.approveCommand("rm -rf /tmp/background-approval");
+            } else {
+              await params.askUser("Background thread needs your answer");
+            }
+            return { text: "request handled", responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      let desktop: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      let homeScreen: Awaited<ReturnType<typeof connectJsonRpc>> | null = null;
+      try {
+        desktop = await connectJsonRpc(url);
+        homeScreen = await connectJsonRpc(url);
+        const started = await desktop.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await desktop.waitFor((message) => message.method === "thread/started");
+        await desktop.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "wait for a background interaction" }],
+        });
+        const request = await desktop.waitFor((message) => message.method === method);
+
+        const listed = await homeScreen.sendRequest("thread/list", { cwd: tmpDir });
+        expect(
+          listed.result.threads.find((thread: { id: string }) => thread.id === threadId),
+        ).toMatchObject(flags);
+        const read = await homeScreen.sendRequest("thread/read", { threadId });
+        expect(read.result.thread).toMatchObject(flags);
+
+        desktop.sendResponse(request.id, response);
+        await desktop.waitFor((message) => message.method === "turn/completed");
+
+        const settled = await homeScreen.sendRequest("thread/list", { cwd: tmpDir });
+        expect(
+          settled.result.threads.find((thread: { id: string }) => thread.id === threadId),
+        ).toMatchObject({ hasPendingAsk: false, hasPendingApproval: false });
+      } finally {
+        desktop?.close();
+        homeScreen?.close();
+        await stopTestServer(server);
+      }
+    },
+  );
+
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
     },
     {
       kind: "ask",

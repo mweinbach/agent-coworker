@@ -65,6 +65,17 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
   const interactionCount = useAppStore((state) =>
     countOutstandingInteractions(state.interactionsByThread[thread.id]),
   );
+  const hasHydratedInteractions = useAppStore(
+    (state) => (state.interactionsByThread[thread.id]?.length ?? 0) > 0,
+  );
+  const pendingSummaryLabel =
+    interactionCount === 0 && !hasHydratedInteractions
+      ? thread.hasPendingApproval
+        ? "Approval needed"
+        : thread.hasPendingAsk
+          ? "Needs input"
+          : null
+      : null;
 
   if (isEditing) {
     return (
@@ -122,6 +133,15 @@ export const SidebarThreadItem = memo(function SidebarThreadItem({
               aria-label={`${interactionCount} pending ${interactionCount === 1 ? "interaction" : "interactions"}`}
             >
               {interactionCount}
+            </Badge>
+          ) : pendingSummaryLabel ? (
+            <Badge
+              variant="secondary"
+              className="h-5 min-w-5 justify-center px-1.5 text-xs"
+              aria-label={pendingSummaryLabel}
+              title={pendingSummaryLabel}
+            >
+              !
             </Badge>
           ) : busy ? (
             <span className="flex items-center" role="status" aria-label="Working" title="Working">

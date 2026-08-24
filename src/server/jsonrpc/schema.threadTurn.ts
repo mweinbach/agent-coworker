@@ -23,6 +23,8 @@ export const jsonRpcThreadSchema = z
     updatedAt: z.string(),
     messageCount: z.number().int().nonnegative(),
     lastEventSeq: z.number().int().nonnegative(),
+    hasPendingAsk: z.boolean().optional(),
+    hasPendingApproval: z.boolean().optional(),
     status: z
       .object({
         type: z.string(),

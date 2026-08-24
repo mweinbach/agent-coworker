@@ -231,6 +231,26 @@ function ensureThreadSnapshot(
   );
 }
 
+export function createThreadSummarySnapshot(thread: CoworkThread): SessionSnapshotLike {
+  return {
+    sessionId: thread.id,
+    title: thread.title,
+    titleSource: "manual",
+    provider: thread.modelProvider,
+    model: thread.model,
+    sessionKind: "primary",
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    messageCount: thread.messageCount,
+    lastEventSeq: 0,
+    feed: [],
+    agents: [],
+    todos: [],
+    hasPendingAsk: thread.hasPendingAsk ?? false,
+    hasPendingApproval: thread.hasPendingApproval ?? false,
+  };
+}
+
 function resolveThreadWorkspace(
   cwd: string | null,
   workspaceByPath?: Map<string, WorkspaceSummary>,
@@ -1031,30 +1051,19 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         const existingSnapshot = state.snapshots[rt.id];
         const existingThread = state.threads.find((t) => t.id === rt.id);
 
-        const now = new Date().toISOString();
-        const baseSnapshot = existingSnapshot ?? {
-          sessionId: rt.id,
-          title: rt.title,
-          titleSource: "manual",
-          provider: "opencode",
-          model: "remote-session",
-          sessionKind: "primary",
-          createdAt: now,
-          updatedAt: now,
-          messageCount: 0,
-          lastEventSeq: 0,
-          feed: [],
-          agents: [],
-          todos: [],
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        };
+        const baseSnapshot = existingSnapshot ?? createThreadSummarySnapshot(rt);
 
         const snapshot: SessionSnapshotLike = {
           ...baseSnapshot,
           title: rt.title,
-          updatedAt: rt.updatedAt || baseSnapshot.updatedAt,
+          provider: rt.modelProvider,
+          model: rt.model,
+          createdAt: rt.createdAt,
+          updatedAt: rt.updatedAt,
+          messageCount: rt.messageCount,
           lastEventSeq: existingSnapshot?.lastEventSeq ?? 0,
+          hasPendingAsk: rt.hasPendingAsk ?? baseSnapshot.hasPendingAsk,
+          hasPendingApproval: rt.hasPendingApproval ?? baseSnapshot.hasPendingApproval,
         };
 
         nextSnapshots[rt.id] = snapshot;

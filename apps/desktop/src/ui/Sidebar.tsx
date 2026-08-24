@@ -21,7 +21,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { countAllOutstandingInteractions, nextInteractionThreadId } from "../app/interactionQueue";
+import {
+  countAllOutstandingInteractions,
+  countOutstandingInteractions,
+  nextInteractionThreadId,
+} from "../app/interactionQueue";
 import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
 import { isResearchAvailable, resolveResearchAwareView } from "../app/researchAvailability";
 import { publishForegroundNotification, useAppStore } from "../app/store";
@@ -91,7 +95,20 @@ export const Sidebar = memo(function Sidebar() {
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [threadSearch, setThreadSearch] = useState("");
-  const interactionCount = countAllOutstandingInteractions(interactionsByThread);
+  const summaryOnlyAttentionThreads = useMemo(
+    () =>
+      threads.filter((thread) => {
+        if (!thread.hasPendingAsk && !thread.hasPendingApproval) return false;
+        const interactions = interactionsByThread[thread.id];
+        return (
+          countOutstandingInteractions(interactions) === 0 &&
+          (!interactions || interactions.length === 0)
+        );
+      }),
+    [interactionsByThread, threads],
+  );
+  const interactionCount =
+    countAllOutstandingInteractions(interactionsByThread) + summaryOnlyAttentionThreads.length;
   const {
     expandedWorkspaceSections,
     setExpandedWorkspaceSections,
@@ -259,7 +276,14 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const handleOpenNextInteraction = useCallback(async () => {
-    const threadId = nextInteractionThreadId(interactionsByThread, selectedThreadId);
+    const nextHydratedThreadId = nextInteractionThreadId(interactionsByThread, selectedThreadId);
+    const nextSummaryThreadId =
+      summaryOnlyAttentionThreads.find((thread) => thread.id !== selectedThreadId)?.id ??
+      summaryOnlyAttentionThreads[0]?.id;
+    const threadId =
+      nextHydratedThreadId && nextHydratedThreadId !== selectedThreadId
+        ? nextHydratedThreadId
+        : (nextSummaryThreadId ?? nextHydratedThreadId);
     if (!threadId) return;
     const thread = threads.find((candidate) => candidate.id === threadId);
     if (thread?.archived) {
@@ -287,6 +311,7 @@ export const Sidebar = memo(function Sidebar() {
     selectTaskThread,
     selectThread,
     selectedThreadId,
+    summaryOnlyAttentionThreads,
     tasksById,
     threads,
   ]);

@@ -27,6 +27,8 @@ export type JsonRpcThread = {
   updatedAt: string;
   messageCount: number;
   lastEventSeq: number;
+  hasPendingAsk?: boolean;
+  hasPendingApproval?: boolean;
   status: {
     type: "running" | "loaded" | "notLoaded";
   };

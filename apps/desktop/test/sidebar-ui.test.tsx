@@ -327,6 +327,73 @@ describe("desktop sidebar", () => {
   );
 
   test.serial(
+    "surfaces unopened approval summaries without inventing request details",
+    async () => {
+      const harness = setupSidebarJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+      const selectThread = mock(async () => {});
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+        await act(async () => {
+          const threads = makeThreads(2);
+          resetAppStore({
+            workspaces: [makeWorkspace()],
+            threads: [threads[0], { ...threads[1], hasPendingApproval: true }],
+            selectedWorkspaceId: "ws-1",
+            selectedThreadId: "thread-1",
+            interactionsByThread: {},
+            selectThread,
+          });
+          root?.render(createElement(Sidebar));
+        });
+
+        expect(container.querySelector('[aria-label="Approval needed"]')).not.toBeNull();
+        const inboxButton = container.querySelector<HTMLButtonElement>(
+          '[aria-label="Open next chat needing input, 1 pending"]',
+        );
+        expect(inboxButton?.textContent).toContain("Needs input");
+
+        await act(async () => {
+          inboxButton?.click();
+          await Promise.resolve();
+        });
+        expect(selectThread).toHaveBeenCalledWith("thread-2");
+
+        await act(async () => {
+          useAppStore.setState({
+            interactionsByThread: {
+              "thread-2": [
+                {
+                  kind: "approval",
+                  approvalKind: "manual",
+                  requestId: "approval-real",
+                  command: "bun run verify",
+                  dangerous: false,
+                  reasonCode: "requires_manual_review",
+                  receivedSequence: 1,
+                  status: "pending",
+                },
+              ],
+            },
+          });
+        });
+
+        expect(container.querySelector('[aria-label="Approval needed"]')).toBeNull();
+        expect(container.querySelector('[aria-label="1 pending interaction"]')).not.toBeNull();
+        expect(
+          container.querySelector('[aria-label="Open next chat needing input, 1 pending"]'),
+        ).not.toBeNull();
+      } finally {
+        if (root) await act(async () => root?.unmount());
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
     "expands the selected workspace and caps the compact visible thread list",
     async () => {
       const harness = setupSidebarJsdom();

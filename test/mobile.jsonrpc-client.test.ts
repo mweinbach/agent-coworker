@@ -4,6 +4,7 @@ import {
   CoworkJsonRpcClient,
   type JsonRpcServerRequest,
 } from "../apps/mobile/src/features/cowork/jsonRpcClient";
+import { coworkThreadSchema } from "../apps/mobile/src/features/cowork/protocolTypes";
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -31,6 +32,31 @@ function createDeferred<T>() {
 }
 
 describe("mobile cowork jsonrpc client", () => {
+  test("accepts authoritative pending interaction flags in strict canonical thread summaries", () => {
+    const thread = coworkThreadSchema.parse({
+      id: "unsubscribed-thread",
+      title: "Needs attention",
+      preview: "Waiting on approval",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      lastEventSeq: 28,
+      status: { type: "running" },
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+
+    expect(thread).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+  });
+
   test("performs initialize handshake and sends initialized", async () => {
     const sent: string[] = [];
     const notifications: Array<{ method: string; params?: unknown }> = [];

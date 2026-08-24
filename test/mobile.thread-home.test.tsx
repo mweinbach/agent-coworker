@@ -9,7 +9,10 @@ import {
   buildThreadHomeViewModel,
   defaultThreadHomeUiState,
 } from "../apps/mobile/src/features/cowork/threadHomeModel";
-import type { MobileThreadSummary } from "../apps/mobile/src/features/cowork/threadStore";
+import {
+  type MobileThreadSummary,
+  useThreadStore,
+} from "../apps/mobile/src/features/cowork/threadStore";
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => any) {
   mock.module(alias, factory);
@@ -319,6 +322,67 @@ describe("mobile thread-home attention and draft recovery", () => {
         );
         expect(recovered?.textContent).toContain("Draft");
         expect(recovered?.textContent).not.toContain("Send failed");
+      } finally {
+        if (root) {
+          await act(async () => {
+            root!.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
+
+  test.each(["android", "ios"] as const)(
+    "%s exposes an unsubscribed desktop approval from its canonical thread summary",
+    async (platform) => {
+      useThreadStore.setState({
+        threads: [],
+        snapshots: {},
+        pendingRequests: {},
+        pendingRequestQueues: {},
+        selectedThreadId: null,
+      });
+      useThreadStore.getState().syncRemoteThreads([
+        {
+          id: "unsubscribed-approval",
+          title: "Desktop is waiting",
+          preview: "Approve the requested command",
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4",
+          cwd: "/workspace",
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-02T00:00:00.000Z",
+          messageCount: 4,
+          lastEventSeq: 28,
+          status: { type: "running" },
+          hasPendingAsk: false,
+          hasPendingApproval: true,
+        },
+      ]);
+      mockThreads = useThreadStore.getState().threads;
+      const harness = setupJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root container");
+        root = createRoot(container);
+        await act(async () => {
+          root!.render(createElement(SharedThreadHomeScreen, { platform }));
+        });
+
+        const approval = container.querySelector(
+          '[aria-label="Open chat Desktop is waiting, needs response"]',
+        );
+        expect(approval?.textContent).toContain("Needs response");
+        if (!(approval instanceof harness.dom.window.HTMLElement)) {
+          throw new Error("missing pending desktop approval row");
+        }
+        await act(async () => {
+          approval.click();
+        });
+        expect(mockRouterPush).toHaveBeenCalledWith("/thread/unsubscribed-approval");
       } finally {
         if (root) {
           await act(async () => {

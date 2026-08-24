@@ -309,6 +309,8 @@ export const coworkThreadSchema = z
         type: z.string(),
       })
       .strict(),
+    hasPendingAsk: z.boolean().optional(),
+    hasPendingApproval: z.boolean().optional(),
   })
   .strict();
 

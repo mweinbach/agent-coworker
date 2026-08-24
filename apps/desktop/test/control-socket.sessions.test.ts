@@ -64,6 +64,50 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(persistCalls).toBe(1);
   });
 
+  test("requestWorkspaceSessions preserves unopened thread input and approval summaries", async () => {
+    const workspaceId = "ws-pending-summaries";
+    const { state, get, set } = createState(workspaceId);
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [
+          { ...makeThreadListEntry("session-ask"), hasPendingAsk: true, hasPendingApproval: false },
+          {
+            ...makeThreadListEntry("session-approval"),
+            hasPendingAsk: false,
+            hasPendingApproval: true,
+          },
+        ],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const sessions = await helpers.requestWorkspaceSessions(
+      get as never,
+      set as never,
+      workspaceId,
+    );
+
+    expect(sessions).toEqual([
+      expect.objectContaining({
+        sessionId: "session-ask",
+        hasPendingAsk: true,
+        hasPendingApproval: false,
+      }),
+      expect.objectContaining({
+        sessionId: "session-approval",
+        hasPendingAsk: false,
+        hasPendingApproval: true,
+      }),
+    ]);
+    expect(state.threads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "session-ask", hasPendingAsk: true }),
+        expect.objectContaining({ id: "session-approval", hasPendingApproval: true }),
+      ]),
+    );
+  });
+
   test("requestWorkspaceSessions preserves task-owned records without selecting them as ordinary chat", async () => {
     const workspaceId = "ws-task-thread-refresh";
     const { state, get, set } = createState(workspaceId, {

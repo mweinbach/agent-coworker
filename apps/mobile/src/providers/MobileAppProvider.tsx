@@ -5,7 +5,7 @@ import { AppState } from "react-native";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
 import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
-import type { CoworkThread, SessionSnapshotLike } from "../features/cowork/protocolTypes";
+import type { CoworkThread } from "../features/cowork/protocolTypes";
 import {
   buildWorkspaceLookup,
   loadBoundedRemoteThreads,
@@ -13,7 +13,7 @@ import {
 import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { loadThreadOfflineCache } from "../features/cowork/threadOfflineCache";
-import { useThreadStore } from "../features/cowork/threadStore";
+import { createThreadSummarySnapshot, useThreadStore } from "../features/cowork/threadStore";
 import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
@@ -32,31 +32,6 @@ const queryClient = new QueryClient({
     },
   },
 });
-
-function createThreadSnapshot(thread: {
-  id: string;
-  title: string;
-  lastEventSeq: number;
-}): SessionSnapshotLike {
-  const now = new Date().toISOString();
-  return {
-    sessionId: thread.id,
-    title: thread.title,
-    titleSource: "manual",
-    provider: "opencode",
-    model: "remote-session",
-    sessionKind: "primary",
-    createdAt: now,
-    updatedAt: now,
-    messageCount: 0,
-    lastEventSeq: thread.lastEventSeq,
-    feed: [],
-    agents: [],
-    todos: [],
-    hasPendingAsk: false,
-    hasPendingApproval: false,
-  };
-}
 
 export function MobileAppProvider({ children }: PropsWithChildren) {
   const bootstrapPairing = usePairingStore((state) => state.bootstrap);
@@ -96,7 +71,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         const threadStore = useThreadStore.getState();
         switch (notification.method) {
           case "thread/started":
-            threadStore.hydrate(createThreadSnapshot(notification.params.thread));
+            threadStore.hydrate(createThreadSummarySnapshot(notification.params.thread));
             break;
           case "workspace/listChanged":
             void scheduleRemoteHydration();

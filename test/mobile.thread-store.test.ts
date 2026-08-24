@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
 import type { SessionSnapshotLike } from "../apps/mobile/src/features/cowork/protocolTypes";
 import { loadThreadOfflineCache } from "../apps/mobile/src/features/cowork/threadOfflineCache";
-import { useThreadStore } from "../apps/mobile/src/features/cowork/threadStore";
+import {
+  createThreadSummarySnapshot,
+  useThreadStore,
+} from "../apps/mobile/src/features/cowork/threadStore";
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -426,6 +429,115 @@ describe("mobile thread store offline draft preservation", () => {
     expect(updatedRemote.feed.length).toBe(1);
     expect(updatedRemote.feed[0].id).toBe("msg-1");
     expect(useThreadStore.getState().snapshots["remote-1"]?.lastEventSeq).toBe(1);
+  });
+
+  test.each([
+    { label: "question", hasPendingAsk: true, hasPendingApproval: false },
+    { label: "approval", hasPendingAsk: false, hasPendingApproval: true },
+  ])("projects an unsubscribed $label from authoritative canonical thread summaries", (flags) => {
+    const summary = {
+      id: `unsubscribed-${flags.label}`,
+      title: "Needs your response",
+      preview: "Paused until answered",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      lastEventSeq: 28,
+      status: { type: "running" },
+      hasPendingAsk: flags.hasPendingAsk,
+      hasPendingApproval: flags.hasPendingApproval,
+    };
+
+    useThreadStore.getState().syncRemoteThreads([summary]);
+
+    expect(useThreadStore.getState().getThread(summary.id)).toMatchObject({
+      pendingPrompt: true,
+      pendingServerRequest: null,
+    });
+    expect(useThreadStore.getState().snapshots[summary.id]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 4,
+      hasPendingAsk: flags.hasPendingAsk,
+      hasPendingApproval: flags.hasPendingApproval,
+      lastEventSeq: 0,
+      feed: [],
+    });
+
+    useThreadStore
+      .getState()
+      .syncRemoteThreads([{ ...summary, hasPendingAsk: false, hasPendingApproval: false }]);
+    expect(useThreadStore.getState().getThread(summary.id)?.pendingPrompt).toBe(false);
+  });
+
+  test("resumed thread notifications retain their real model and only the applied replay cursor", () => {
+    const threadId = "resumed-conversation";
+    useThreadStore.getState().hydrate({
+      sessionId: threadId,
+      title: "Earlier title",
+      titleSource: "manual",
+      provider: "openai",
+      model: "gpt-4.1",
+      sessionKind: "primary",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      messageCount: 1,
+      lastEventSeq: 7,
+      feed: [
+        {
+          id: "applied-message-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-07-02T00:00:00.000Z",
+          text: "Already downloaded",
+        },
+      ],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const summary = {
+      id: threadId,
+      title: "Resumed desktop conversation",
+      preview: "Already downloaded",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4",
+      cwd: "/workspace",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 18,
+      lastEventSeq: 99,
+      status: { type: "running" },
+      hasPendingAsk: true,
+      hasPendingApproval: false,
+    };
+
+    expect(createThreadSummarySnapshot(summary)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      messageCount: 18,
+      hasPendingAsk: true,
+      lastEventSeq: 0,
+      feed: [],
+    });
+    useThreadStore.getState().hydrate(createThreadSummarySnapshot(summary));
+
+    expect(useThreadStore.getState().snapshots[threadId]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      hasPendingAsk: true,
+      lastEventSeq: 7,
+      feed: [expect.objectContaining({ id: "applied-message-1" })],
+    });
+    expect(useThreadStore.getState().getThread(threadId)?.pendingPrompt).toBe(true);
   });
 
   test("promotes a local draft into its authoritative remote thread without losing its send", () => {

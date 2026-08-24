@@ -11,6 +11,15 @@ function sourceDedupeKey(source: CitationSource): string {
   return JSON.stringify(source);
 }
 
+function referencesProviderSource(text: string, sources: readonly CitationSource[]): boolean {
+  const referenceIds = new Set(
+    sources.flatMap((source) => (source.referenceId ? [source.referenceId] : [])),
+  );
+  return [...text.matchAll(/(turn\d+[a-z]+\d+)/gi)].some((match) =>
+    referenceIds.has(match[1] ?? ""),
+  );
+}
+
 /**
  * Preserve citation metadata for every assistant while appending earlier turn
  * sources to the final assistant after its own index-aligned source entries.
@@ -23,6 +32,7 @@ export function promoteCitationSourcesToFinalAssistants(
   let turnSources: CitationSource[] = [];
   let seenKeys = new Set<string>();
   let lastAssistantId: string | null = null;
+  let pendingAssistantSources: Array<Extract<FeedItem, { kind: "message" }>> = [];
 
   const flush = () => {
     if (lastAssistantId && turnSources.length > 0) {
@@ -40,6 +50,7 @@ export function promoteCitationSourcesToFinalAssistants(
     turnSources = [];
     seenKeys = new Set();
     lastAssistantId = null;
+    pendingAssistantSources = [];
   };
 
   const pushSources = (sources: readonly CitationSource[]) => {
@@ -60,9 +71,21 @@ export function promoteCitationSourcesToFinalAssistants(
       lastAssistantId = item.id;
       const existing = sourcesByMessageId.get(item.id);
       if (existing && existing.length > 0) {
+        for (const pending of pendingAssistantSources) {
+          if (referencesProviderSource(pending.text, existing)) {
+            result.set(pending.id, existing);
+          }
+        }
+        pendingAssistantSources = [];
         result.set(item.id, existing);
         pushSources(existing);
+      } else if (item.text.includes("cite")) {
+        pendingAssistantSources.push(item);
       }
+      continue;
+    }
+    if (item.kind !== "reasoning") {
+      pendingAssistantSources = [];
     }
   }
   flush();

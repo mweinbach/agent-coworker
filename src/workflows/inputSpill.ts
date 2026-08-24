@@ -127,6 +127,9 @@ async function openSafeWorkflowInput(absolutePath: string): Promise<FileHandle> 
     if (!actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
       throw new Error(`${absolutePath} changed while it was being opened`);
     }
+    if (actual.nlink !== 1) {
+      throw new Error(`${absolutePath} must not have hard links`);
+    }
     return file;
   } catch (error) {
     await file.close();

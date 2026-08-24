@@ -40,4 +40,27 @@ describe("workflow input file safety", () => {
       expect((await fs.lstat(seeded.absolutePath)).isSymbolicLink()).toBe(true);
     },
   );
+
+  test.skipIf(hostPlatform() === "win32")(
+    "rejects a planted input-file hard link without changing an outside file",
+    async () => {
+      const root = await workflowTmpDir();
+      const workingDirectory = path.join(root, "workspace");
+      const externalFile = path.join(root, "outside-workspace.txt");
+      const prompt = "known contents from outside the workspace";
+      await fs.mkdir(workingDirectory, { recursive: true });
+      await fs.writeFile(externalFile, prompt, { mode: 0o600 });
+      const seeded = await spillWorkflowPromptToFile({ prompt, workingDirectory });
+      await fs.rm(seeded.absolutePath);
+      await fs.link(externalFile, seeded.absolutePath);
+      const originalMode = (await fs.stat(externalFile)).mode & 0o777;
+
+      await expect(spillWorkflowPromptToFile({ prompt, workingDirectory })).rejects.toThrow(
+        /hard link/i,
+      );
+
+      expect((await fs.stat(externalFile)).mode & 0o777).toBe(originalMode);
+      expect((await fs.stat(externalFile)).nlink).toBe(2);
+    },
+  );
 });

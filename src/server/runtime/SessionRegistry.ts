@@ -172,7 +172,7 @@ export class SessionRegistry {
 
   removeBindingSink(binding: SessionBinding, sinkId: string): void {
     binding.sinks.delete(sinkId);
-    if (binding.runtime && binding.sinks.size === 0) {
+    if (binding.runtime && this.countLiveConnectionSinks(binding) === 0) {
       this.sessionIdleSince.set(binding.runtime.id, Date.now());
     }
   }
@@ -184,7 +184,7 @@ export class SessionRegistry {
   disposeBinding(
     binding: SessionBinding,
     reason: string,
-    opts: { closeSharedCodexClient?: boolean } = {},
+    opts: { closeSharedCodexClient?: boolean } = { closeSharedCodexClient: false },
   ): void {
     if (!binding.runtime) return;
     try {
@@ -436,10 +436,14 @@ export class SessionRegistry {
   evictIdleSessionBindings(idleTimeoutMs: number): void {
     const now = Date.now();
     for (const [sessionId, binding] of this.sessionBindings) {
-      if (binding.runtime && binding.sinks.size === 0 && !binding.runtime.read.isBusy) {
+      if (
+        binding.runtime &&
+        this.countLiveConnectionSinks(binding) === 0 &&
+        !binding.runtime.read.isBusy
+      ) {
         const idleSince = this.sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > idleTimeoutMs) {
-          binding.runtime.lifecycle.dispose("idle eviction");
+          this.disposeBinding(binding, "idle eviction", { closeSharedCodexClient: false });
           this.sessionBindings.delete(sessionId);
           this.sessionIdleSince.delete(sessionId);
         }

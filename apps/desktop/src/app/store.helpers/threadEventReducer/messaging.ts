@@ -162,7 +162,7 @@ export function createMessagingModule(
     get: StoreGet,
     threadId: string,
     build: (sessionId: string) => ThreadOutboundMessage,
-    options?: { onSettled?: (error?: unknown) => void },
+    options?: { onSettled?: (error?: unknown, result?: unknown) => void },
   ): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
@@ -173,7 +173,7 @@ export function createMessagingModule(
         return false;
       }
       void run()
-        .then(() => options?.onSettled?.())
+        .then((result) => options?.onSettled?.(undefined, result))
         .catch((error) => {
           options?.onSettled?.(error);
           // Callers without a lifecycle callback surface connection errors

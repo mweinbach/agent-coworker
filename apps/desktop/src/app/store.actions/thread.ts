@@ -2127,10 +2127,12 @@ export function createThreadActions(
 
     cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => {
       let claimed = false;
+      let interruptedTurnId: string | null = null;
       set((state) => {
         const runtime = state.threadRuntimeById[threadId];
         if (!runtime?.busy || runtime.interruptPending) return {};
         claimed = true;
+        interruptedTurnId = runtime.activeTurnId ?? null;
         return {
           threadRuntimeById: {
             ...state.threadRuntimeById,
@@ -2154,8 +2156,46 @@ export function createThreadActions(
             : {}),
         }),
         {
-          onSettled: (error) => {
-            if (!error) return;
+          onSettled: (error, result) => {
+            if (!error) {
+              if (
+                !result ||
+                typeof result !== "object" ||
+                (result as { interrupted?: unknown }).interrupted !== false
+              ) {
+                return;
+              }
+
+              let clearedStaleTurn = false;
+              set((state) => {
+                const runtime = state.threadRuntimeById[threadId];
+                if (!runtime?.interruptPending) return {};
+                const sameTurn = (runtime.activeTurnId ?? null) === interruptedTurnId;
+                clearedStaleTurn = sameTurn;
+                return {
+                  threadRuntimeById: {
+                    ...state.threadRuntimeById,
+                    [threadId]: {
+                      ...runtime,
+                      interruptPending: false,
+                      ...(sameTurn
+                        ? {
+                            busy: false,
+                            busySince: null,
+                            activeTurnId: null,
+                            pendingSteer: null,
+                          }
+                        : {}),
+                    },
+                  },
+                };
+              });
+              if (clearedStaleTurn) {
+                clearPendingThreadSteers(threadId);
+              }
+              return;
+            }
+
             set((state) => {
               const runtime = state.threadRuntimeById[threadId];
               if (!runtime?.interruptPending) return {};

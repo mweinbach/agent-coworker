@@ -376,5 +376,5 @@ export const jsonRpcThreadTurnResultSchemas = {
       replayed: z.boolean().optional(),
     })
     .strict(),
-  "turn/interrupt": z.object({}).strict(),
+  "turn/interrupt": z.object({ interrupted: z.boolean().optional() }).strict(),
 } as const;

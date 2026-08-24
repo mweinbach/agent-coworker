@@ -530,6 +530,68 @@ describe("desktop JSON-RPC event mapping", () => {
     ).toBe(true);
   });
 
+  test("settles a stale Stop when the server confirms no parent response is running", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+    jsonRpcHandlers.set("turn/interrupt", async () => ({ interrupted: false }));
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-already-finished", status: "inProgress", items: [] },
+    });
+    await flushAsyncWork();
+
+    act(() => {
+      expect(useAppStore.getState().cancelThread(threadId)).toBe(true);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.interruptPending).toBe(true);
+    });
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+      busy: false,
+      busySince: null,
+      activeTurnId: null,
+      interruptPending: false,
+    });
+    expect(
+      harness?.dom.window.document.querySelector('[aria-label="Stop current response"]'),
+    ).toBeNull();
+    expect(
+      harness?.dom.window.document.querySelector('[aria-label="Send message"]'),
+    ).not.toBeNull();
+    expect(useAppStore.getState().notifications).toEqual([]);
+  });
+
+  test("keeps Stop pending until terminal events for active and legacy interrupt acknowledgements", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    for (const [index, response] of [{ interrupted: true }, {}].entries()) {
+      jsonRpcHandlers.set("turn/interrupt", async () => response);
+      const activeTurnId = `turn-confirmed-active-${index}`;
+      socket.notify("turn/started", {
+        threadId: sessionId,
+        turn: { id: activeTurnId, status: "inProgress", items: [] },
+      });
+      await flushAsyncWork();
+
+      act(() => {
+        expect(useAppStore.getState().cancelThread(threadId)).toBe(true);
+      });
+      await flushAsyncWork();
+
+      expect(useAppStore.getState().threadRuntimeById[threadId]).toMatchObject({
+        busy: true,
+        activeTurnId,
+        interruptPending: true,
+      });
+
+      socket.notify("turn/completed", {
+        threadId: sessionId,
+        turn: { id: activeTurnId, status: "interrupted" },
+      });
+      await flushAsyncWork();
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.interruptPending).toBe(false);
+    }
+  });
+
   test("a delayed completion cannot stop a newer turn or resolve its approval", async () => {
     const socket = await reconnectThreadAndGetSocket();
 

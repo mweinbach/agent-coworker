@@ -263,7 +263,13 @@ For `turn/steer`, `clientMessageId` is an idempotency key for the active thread 
 `includeSubagents`, or explicitly passing `false`, cancels only the thread's own active turn.
 Passing `includeSubagents: true` also cancels its running descendant agents, including when the
 parent thread is already idle. Clients must forward the user's explicit cancellation choice instead
-of silently interrupting only the parent.
+of silently interrupting only the parent. The result includes `{ interrupted: boolean }`, indicating
+whether the parent thread had an active turn immediately before cancellation. An idle or already
+completed parent returns `{ interrupted: false }` even when descendant cancellation was requested;
+clients must immediately clear stale parent stopping indicators instead of waiting for a terminal
+event that cannot arrive. Running parents return `{ interrupted: true }`, and clients should await
+their authoritative `turn/completed` notification. Older servers may return `{}`; clients should
+preserve their existing event-driven behavior when `interrupted` is absent.
 
 After negotiating `toolRetryLineage`, `turn/start` also accepts
 `retry: { "toolItemIds": string[] }` with 1–16 exact failed projected tool item IDs. The server

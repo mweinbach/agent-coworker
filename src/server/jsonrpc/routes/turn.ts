@@ -311,12 +311,13 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
+      const interrupted = runtime.read.isBusy;
       if (includeSubagents === undefined) {
         runtime.turns.cancel();
       } else {
         runtime.turns.cancel({ includeSubagents });
       }
-      context.jsonrpc.sendResult(ws, message.id, {});
+      context.jsonrpc.sendResult(ws, message.id, { interrupted });
     },
   };
 }

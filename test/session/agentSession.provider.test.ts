@@ -78,6 +78,36 @@ describe("AgentSession", () => {
       }
     });
 
+    test("emitProviderCatalog preserves child-agent role and workflow prompts", async () => {
+      const childSystemPrompt = "Research role instructions\n\nWorkflow structured-output mode";
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [],
+        default: {},
+        connected: [],
+      }));
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Root-session instructions that must not replace the child prompt.",
+        discoveredSkills: [],
+      }));
+      const { session, events } = makeSession({
+        system: childSystemPrompt,
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "parent-session",
+          role: "research",
+        },
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.emitProviderCatalog();
+
+      expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      expect((session as any).state.system).toBe(childSystemPrompt);
+      expect(events.some((event) => event.type === "provider_catalog")).toBe(true);
+    });
+
     test("emitProviderAuthMethods emits provider_auth_methods event", () => {
       const { session, events } = makeSession();
       session.emitProviderAuthMethods();

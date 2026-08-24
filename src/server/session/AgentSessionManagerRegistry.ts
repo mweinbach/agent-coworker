@@ -125,8 +125,12 @@ export class AgentSessionManagerRegistry {
         emitTelemetry: (name, status, attributes, durationMs) =>
           this.host.emitTelemetry(name, status, attributes, durationMs),
         formatError: (err) => this.host.formatErrorMessage(err),
-        onCatalogChanged: async () =>
-          await this.host.refreshSystemPromptWithSkills("provider.catalog_updated"),
+        onCatalogChanged: async () => {
+          if ((this.host.state.sessionInfo.sessionKind ?? "root") !== "root") {
+            return;
+          }
+          await this.host.refreshSystemPromptWithSkills("provider.catalog_updated");
+        },
       });
     }
     return this.providerCatalogManager;

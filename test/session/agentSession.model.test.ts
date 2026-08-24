@@ -52,6 +52,13 @@ function createDeferred<T>() {
   };
 }
 
+async function loadModelTestSystemPrompt() {
+  return {
+    prompt: "You are a test assistant.",
+    discoveredSkills: [],
+  };
+}
+
 describe("AgentSession", () => {
   beforeEach(async () => {
     await resetAgentSessionMocks();
@@ -64,7 +71,9 @@ describe("AgentSession", () => {
 
   describe("setModel", () => {
     test("updates model in-session and emits config_updated", async () => {
-      const { session, events } = makeSession();
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
       await session.setModel("gemini-3-flash-preview");
 
       expect(session.getPublicConfig().provider).toBe("google");
@@ -81,7 +90,9 @@ describe("AgentSession", () => {
     });
 
     test("updates provider+model in-session and emits config_updated", async () => {
-      const { session, events } = makeSession();
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
       await session.setModel("claude-sonnet-4-5", "anthropic");
 
       expect(session.getPublicConfig().provider).toBe("anthropic");
@@ -404,7 +415,10 @@ describe("AgentSession", () => {
         "anthropic",
         "claude-custom-20260704",
       );
-      const { session, events } = makeSession({ config });
+      const { session, events } = makeSession({
+        config,
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
 
       await session.setModel("claude-custom-20260704", "anthropic");
 
@@ -430,7 +444,10 @@ describe("AgentSession", () => {
         "openai",
         "gpt-4o",
       );
-      const { session, events } = makeSession({ config });
+      const { session, events } = makeSession({
+        config,
+        loadSystemPromptWithSkillsImpl: loadModelTestSystemPrompt,
+      });
 
       await session.setModel("gpt-4o", "openai");
 

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import { home as resolveCoworkHomeDirectory } from "../platform/paths";
 import { type ProviderName, resolveProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
@@ -137,7 +137,7 @@ export function parseConnectionStoreJson(raw: string, filePath: string): Connect
 }
 
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
-  const home = opts.homedir ?? os.homedir();
+  const home = opts.homedir ?? resolveCoworkHomeDirectory();
   const rootDir = path.join(home, ".cowork");
   const authDir = path.join(rootDir, "auth");
   const configDir = path.join(rootDir, "config");

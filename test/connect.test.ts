@@ -57,6 +57,25 @@ function makeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("connect helpers", () => {
+  test("keeps credentials and sessions inside the configured Cowork home", () => {
+    const configuredHome = path.join(process.cwd(), "configured-cowork-home");
+    const previousOverride = process.env.COWORK_HOME_OVERRIDE;
+    process.env.COWORK_HOME_OVERRIDE = configuredHome;
+
+    try {
+      const paths = getAiCoworkerPaths();
+      expect(paths.rootDir).toBe(path.join(configuredHome, ".cowork"));
+      expect(paths.authDir).toBe(path.join(configuredHome, ".cowork", "auth"));
+      expect(paths.sessionsDir).toBe(path.join(configuredHome, ".cowork", "sessions"));
+    } finally {
+      if (previousOverride === undefined) {
+        delete process.env.COWORK_HOME_OVERRIDE;
+      } else {
+        process.env.COWORK_HOME_OVERRIDE = previousOverride;
+      }
+    }
+  });
+
   test("maskApiKey masks long keys", () => {
     expect(maskApiKey("sk-1234567890abcdef")).toBe("sk-1...cdef");
   });

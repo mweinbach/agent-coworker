@@ -3,7 +3,7 @@
     "approvalBusyControls": [
       {
         "role": "button",
-        "label": "Approving command",
+        "label": "Starting command with full access",
         "minHeight": 44,
         "state": {
           "busy": true,
@@ -12,7 +12,7 @@
       },
       {
         "role": "button",
-        "label": "Decline command",
+        "label": "Keep blocked",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -62,7 +62,7 @@
       },
       {
         "role": "group",
-        "label": "Dangerous command. rm temp.txt. Clean generated files",
+        "label": "Full access required. This command is blocked by the sandbox. rm temp.txt. Clean generated files",
         "live": "assertive",
         "state": {
           "busy": false
@@ -70,7 +70,7 @@
       },
       {
         "role": "button",
-        "label": "Approve command",
+        "label": "Run with full access",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -79,7 +79,7 @@
       },
       {
         "role": "button",
-        "label": "Decline command",
+        "label": "Keep blocked",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -157,7 +157,7 @@
       },
       {
         "scale": 2,
-        "text": "Dangerous command"
+        "text": "Full access required"
       },
       {
         "scale": 2,
@@ -169,11 +169,11 @@
       },
       {
         "scale": 2,
-        "text": "Approve"
+        "text": "Run with full access"
       },
       {
         "scale": 2,
-        "text": "Decline"
+        "text": "Keep blocked"
       },
       {
         "scale": 2,
@@ -243,7 +243,7 @@
     "rejectionBusyControls": [
       {
         "role": "button",
-        "label": "Approve command",
+        "label": "Run with full access",
         "minHeight": 44,
         "state": {
           "busy": false,
@@ -252,7 +252,7 @@
       },
       {
         "role": "button",
-        "label": "Declining command",
+        "label": "Keeping command blocked",
         "minHeight": 44,
         "state": {
           "busy": true,

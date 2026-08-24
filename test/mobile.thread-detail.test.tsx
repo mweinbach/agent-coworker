@@ -236,17 +236,18 @@ const mockStartTurn = mock(
 );
 const mockInterruptTurn = mock(async (_threadId: string) => {});
 const mockRespondServerRequest = mock(async (_requestId: string | number, _result: unknown) => {});
+const mockRuntimeClient = {
+  resumeThread: mockResumeThread,
+  readThread: mockReadThread,
+  startTurn: mockStartTurn,
+  interruptTurn: mockInterruptTurn,
+  respondServerRequest: mockRespondServerRequest,
+};
 mockLocalModule(
   "@/features/cowork/runtimeClient",
   "apps/mobile/src/features/cowork/runtimeClient",
   () => ({
-    getActiveCoworkJsonRpcClient: () => ({
-      resumeThread: mockResumeThread,
-      readThread: mockReadThread,
-      startTurn: mockStartTurn,
-      interruptTurn: mockInterruptTurn,
-      respondServerRequest: mockRespondServerRequest,
-    }),
+    getActiveCoworkJsonRpcClient: () => mockRuntimeClient,
   }),
 );
 
@@ -412,7 +413,9 @@ describe("mobile ThreadDetailScreen", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(mockResumeThread).toHaveBeenCalledWith("test-thread-123");
+      expect(mockResumeThread).toHaveBeenCalledTimes(1);
       expect(mockReadThread).toHaveBeenCalledWith("test-thread-123", { includeTurns: true });
+      expect(mockReadThread).toHaveBeenCalledTimes(1);
       expect(mockHydrate).toHaveBeenCalled();
       expect(mockHydrate.mock.calls[0]?.[0]).toEqual({
         sessionId: "test-thread-123",

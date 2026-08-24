@@ -898,7 +898,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       });
       expect(groupedSwitch?.getAttribute("aria-checked")).toBe("false");
 
-      const approve = container.querySelector<HTMLElement>('[aria-label="Approve command"]');
+      const approve = container.querySelector<HTMLElement>('[aria-label="Run with full access"]');
       await act(async () => {
         approve?.click();
         approve?.click();
@@ -907,14 +907,15 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(approveCount).toBe(1);
       const approvalBusyControls = serializeControls(container).filter(
         (control) =>
-          control.label.includes("command") &&
-          (control.label.includes("Approving") || control.label.includes("Decline")),
+          control.label === "Starting command with full access" || control.label === "Keep blocked",
       );
       expect(
-        container.querySelector('[aria-label="Approving command"]')?.getAttribute("aria-busy"),
+        container
+          .querySelector('[aria-label="Starting command with full access"]')
+          ?.getAttribute("aria-busy"),
       ).toBe("true");
       expect(
-        container.querySelector('[aria-label="Decline command"]')?.getAttribute("aria-disabled"),
+        container.querySelector('[aria-label="Keep blocked"]')?.getAttribute("aria-disabled"),
       ).toBe("true");
       resolveApproval?.(true);
       await act(async () => {
@@ -922,7 +923,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
         await Promise.resolve();
       });
 
-      const decline = container.querySelector<HTMLElement>('[aria-label="Decline command"]');
+      const decline = container.querySelector<HTMLElement>('[aria-label="Keep blocked"]');
       await act(async () => {
         decline?.click();
         decline?.click();
@@ -931,14 +932,17 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(rejectCount).toBe(1);
       const rejectionBusyControls = serializeControls(container).filter(
         (control) =>
-          control.label.includes("command") &&
-          (control.label.includes("Declining") || control.label.includes("Approve")),
+          control.label === "Keeping command blocked" || control.label === "Run with full access",
       );
       expect(
-        container.querySelector('[aria-label="Declining command"]')?.getAttribute("aria-busy"),
+        container
+          .querySelector('[aria-label="Keeping command blocked"]')
+          ?.getAttribute("aria-busy"),
       ).toBe("true");
       expect(
-        container.querySelector('[aria-label="Approve command"]')?.getAttribute("aria-disabled"),
+        container
+          .querySelector('[aria-label="Run with full access"]')
+          ?.getAttribute("aria-disabled"),
       ).toBe("true");
       resolveRejection?.(true);
       await act(async () => {
@@ -947,10 +951,10 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       });
       expect(announcements).toEqual(
         expect.arrayContaining([
-          "Approving command",
-          "Command approved",
-          "Declining command",
-          "Command declined",
+          "Starting command with full access",
+          "Command started with full access",
+          "Keeping command blocked",
+          "Command kept blocked",
         ]),
       );
 

@@ -204,10 +204,7 @@ export const ContextSidebar = memo(function ContextSidebar({
               </div>
             </div>
           ) : (
-            <div
-              className={compactSectionScrollerClassName}
-              data-sidebar-section="subagents"
-            >
+            <div className={compactSectionScrollerClassName} data-sidebar-section="subagents">
               <div className="flex flex-col gap-1.5">
                 {agents.map((agent) => {
                   const usageLabel = agentUsageLabel(agent);

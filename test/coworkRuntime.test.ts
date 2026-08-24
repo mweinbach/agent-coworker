@@ -6,7 +6,6 @@ import path from "node:path";
 
 import { loadConfig } from "../src/config";
 import {
-  __internal as runtimeIntegrityInternal,
   buildRuntimeEnv,
   ensureCoworkRuntimeReady,
   installRuntimeArchive,
@@ -17,6 +16,7 @@ import {
   resolveRuntimeAssetForHost,
   runtimeAssetFileName,
   runtimeAttestationPath,
+  __internal as runtimeIntegrityInternal,
   sha256File,
   verifyRuntime,
 } from "../src/coworkRuntime";
@@ -732,12 +732,7 @@ describe("Cowork unified runtime", () => {
       return run();
     });
 
-    const verifyPromise = buildRuntimeEnv(
-      installed.runtimeDir,
-      {},
-      hostPlatform(),
-      trustedKeys,
-    );
+    const verifyPromise = buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
     const deadline = Date.now() + 2_000;
     while (!verificationStarted) {
       if (Date.now() >= deadline) {

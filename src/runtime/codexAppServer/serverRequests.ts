@@ -159,9 +159,7 @@ export async function handleServerRequest(
   if (method === "mcpServer/elicitation/request") {
     const requestParams = asRecord(request.params);
     const serverName = asString(requestParams?.serverName) ?? "unknown MCP server";
-    params.log?.(
-      `[codex-app-server] Declined unsupported MCP elicitation from ${serverName}.`,
-    );
+    params.log?.(`[codex-app-server] Declined unsupported MCP elicitation from ${serverName}.`);
     return { action: "decline", content: null, _meta: null };
   }
   if (method === "item/tool/requestUserInput" || method === "requestUserInput") {

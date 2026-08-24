@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { scratchRoots } from "../../src/platform/sandbox";
 import type { TaskStatus } from "../../src/shared/tasks";
 import type { TodoItem } from "./agentSession.harness";
 import {
@@ -778,7 +779,7 @@ describe("AgentSession", () => {
     });
 
     test("refreshes child-agent skills without replacing its role, profile, or workflow prompt", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "child-skill-refresh-"));
+      const workspaceDir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "child-skill-refresh-"));
       const config = makeConfig(workspaceDir);
       const skillDir = path.join(config.skillsDirs[0]!, "refreshed-skill");
       await fs.mkdir(skillDir, { recursive: true });

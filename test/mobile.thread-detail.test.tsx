@@ -80,9 +80,11 @@ const toolbarMock = Object.assign(
     Button: () => null,
   },
 );
+let mockRouteThreadId = "test-thread-123";
+const mockRouterReplace = mock((_href: string) => {});
 const expoRouterMock = () => ({
-  useLocalSearchParams: () => ({ id: "test-thread-123" }),
-  useRouter: () => ({ back: () => {} }),
+  useLocalSearchParams: () => ({ id: mockRouteThreadId }),
+  useRouter: () => ({ back: () => {}, replace: mockRouterReplace }),
   Stack: {
     Screen: () => null,
     Toolbar: toolbarMock,
@@ -153,6 +155,9 @@ const mockFailComposerSubmission = mock(
 );
 const mockCancelComposerSubmission = mock((_threadId: string, _clientMessageId: string) => true);
 const mockAcceptComposerSubmission = mock((_threadId: string, _clientMessageId: string) => {});
+const mockPromoteDraftThread = mock((_draftThreadId: string, remoteThread: { id: string }) => {
+  mockThread.id = remoteThread.id;
+});
 const mockMarkTurnStarted = mock((_threadId: string, _startedAt: string) => {});
 const mockMarkTurnCompleted = mock((_threadId: string) => {});
 let mockActiveTurnStartedAt: string | null = null;
@@ -186,6 +191,7 @@ const threadStoreMock = () => ({
         markTurnCompleted: mockMarkTurnCompleted,
         setComposerDraft: mockSetComposerDraft,
         submitComposer: () => {},
+        promoteDraftThread: mockPromoteDraftThread,
         beginComposerSubmission: mockBeginComposerSubmission,
         retryComposerSubmission: mockRetryComposerSubmission,
         failComposerSubmission: mockFailComposerSubmission,
@@ -221,7 +227,7 @@ mockLocalModule(
   "@/features/cowork/workspaceStore",
   "apps/mobile/src/features/cowork/workspaceStore",
   () => ({
-    useWorkspaceStore: (fn: any) => fn({ controlSnapshot: null }),
+    useWorkspaceStore: (fn: any) => fn({ activeWorkspaceCwd: "/workspace", controlSnapshot: null }),
   }),
 );
 
@@ -236,11 +242,27 @@ const mockReadThread = mock(async (threadId: string) => ({
 const mockStartTurn = mock(
   async (_threadId: string, _input: unknown, _clientMessageId: string) => {},
 );
+const mockStartThread = mock(async (_options: { cwd?: string; clientThreadId: string }) => ({
+  thread: {
+    id: "remote-promoted",
+    title: "Remote conversation",
+    preview: "",
+    modelProvider: "opencode",
+    model: "gpt-5",
+    cwd: "/workspace",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    messageCount: 0,
+    lastEventSeq: 0,
+    status: { type: "idle" },
+  },
+}));
 const mockInterruptTurn = mock(async (_threadId: string) => {});
 const mockRespondServerRequest = mock(async (_requestId: string | number, _result: unknown) => {});
 const mockRuntimeClient = {
   resumeThread: mockResumeThread,
   readThread: mockReadThread,
+  startThread: mockStartThread,
   startTurn: mockStartTurn,
   interruptTurn: mockInterruptTurn,
   respondServerRequest: mockRespondServerRequest,
@@ -324,10 +346,12 @@ const ThreadDetailScreen = (await import("../apps/mobile/src/app/(app)/(tabs)/(c
 
 describe("mobile ThreadDetailScreen", () => {
   beforeEach(() => {
+    mockRouteThreadId = "test-thread-123";
     mockConnectionState = {
       status: "connected",
       transportMode: "native",
     };
+    mockThread.id = "test-thread-123";
     mockThread.feed = [];
     mockThread.composerDraft = "";
     mockThread.composerAttachments = [];
@@ -345,6 +369,9 @@ describe("mobile ThreadDetailScreen", () => {
     }));
     mockStartTurn.mockClear();
     mockStartTurn.mockImplementation(async () => {});
+    mockStartThread.mockClear();
+    mockPromoteDraftThread.mockClear();
+    mockRouterReplace.mockClear();
     mockHydrate.mockClear();
     mockSetComposerDraft.mockClear();
     mockBeginComposerSubmission.mockClear();
@@ -459,6 +486,54 @@ describe("mobile ThreadDetailScreen", () => {
       });
 
       expect(mockMarkTurnStarted).toHaveBeenCalledWith("test-thread-123", expect.any(String));
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("creates and sends a connected mobile draft as one real idempotent conversation", async () => {
+    mockRouteThreadId = "draft-mobile-1";
+    mockThread.id = "draft-mobile-1";
+    mockThread.composerDraft = "Send this to the desktop agent";
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+
+      await act(async () => {
+        await latestComposerProps?.onSubmit();
+      });
+
+      expect(mockStartThread).toHaveBeenCalledWith({
+        cwd: "/workspace",
+        clientThreadId: "draft-mobile-1",
+      });
+      expect(mockPromoteDraftThread).toHaveBeenCalledWith(
+        "draft-mobile-1",
+        expect.objectContaining({ id: "remote-promoted" }),
+      );
+      expect(mockStartTurn).toHaveBeenCalledTimes(1);
+      expect(mockStartTurn.mock.calls[0]).toEqual([
+        "remote-promoted",
+        [{ type: "text", text: "Send this to the desktop agent" }],
+        expect.any(String),
+      ]);
+      expect(mockAcceptComposerSubmission).toHaveBeenCalledWith(
+        "remote-promoted",
+        mockStartTurn.mock.calls[0]?.[2],
+      );
+      expect(mockRouterReplace).toHaveBeenCalledWith("/thread/remote-promoted");
     } finally {
       if (root) {
         await act(async () => {

@@ -320,6 +320,46 @@ describe("mobile thread store offline draft preservation", () => {
     // Feed must be preserved!
     expect(updatedRemote.feed.length).toBe(1);
     expect(updatedRemote.feed[0].id).toBe("msg-1");
+    expect(useThreadStore.getState().snapshots["remote-1"]?.lastEventSeq).toBe(1);
+  });
+
+  test("promotes a local draft into its authoritative remote thread without losing its send", () => {
+    const store = useThreadStore.getState();
+    store.seedThread();
+    const draftId = useThreadStore.getState().selectedThreadId!;
+    store.setComposerDraft(draftId, "  send this exactly once\n");
+    store.beginComposerSubmission(draftId, "client-message-1");
+
+    const remoteThread = {
+      id: "remote-promoted",
+      title: "New conversation",
+      preview: "",
+      modelProvider: "opencode",
+      model: "remote-session",
+      cwd: "/workspace",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 8,
+      status: { type: "idle" },
+    };
+
+    store.promoteDraftThread(draftId, remoteThread);
+
+    expect(useThreadStore.getState().getThread(draftId)).toBeNull();
+    expect(useThreadStore.getState().selectedThreadId).toBe("remote-promoted");
+    expect(useThreadStore.getState().getThread("remote-promoted")).toMatchObject({
+      id: "remote-promoted",
+      cwd: "/workspace",
+      composerDraft: "  send this exactly once\n",
+      composerSubmission: {
+        clientMessageId: "client-message-1",
+        text: "  send this exactly once\n",
+        status: "submitting",
+      },
+    });
+    expect(useThreadStore.getState().snapshots["remote-promoted"]?.lastEventSeq).toBe(0);
+    expect(useThreadStore.getState().snapshots[draftId]).toBeUndefined();
   });
 
   test("hydrate merges empty feed with existing feed", () => {

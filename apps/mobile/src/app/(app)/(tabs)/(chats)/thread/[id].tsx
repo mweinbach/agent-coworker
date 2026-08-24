@@ -162,6 +162,7 @@ export default function ThreadDetailScreen() {
     (state) => state.controlSnapshot?.config?.provider ?? null,
   );
   const defaultModel = useWorkspaceStore((state) => state.controlSnapshot?.config?.model ?? null);
+  const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const providerCatalog = useProviderStore((state) => state.catalog);
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
@@ -171,6 +172,7 @@ export default function ThreadDetailScreen() {
   );
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
+  const promoteDraftThread = useThreadStore((state) => state.promoteDraftThread);
   const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
   const retryComposerSubmission = useThreadStore((state) => state.retryComposerSubmission);
   const failComposerSubmission = useThreadStore((state) => state.failComposerSubmission);
@@ -641,12 +643,15 @@ export default function ThreadDetailScreen() {
     }
   }
 
-  async function sendComposerSubmission(submission: ComposerSubmission) {
+  async function sendComposerSubmission(
+    submission: ComposerSubmission,
+    targetThreadId = activeThread.id,
+  ) {
     const attempt = ++submissionAttemptRef.current;
     const client = getActiveCoworkJsonRpcClient();
     const optimisticText =
       submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
-    appendOptimisticUserMessage(activeThread.id, optimisticText, submission.clientMessageId);
+    appendOptimisticUserMessage(targetThreadId, optimisticText, submission.clientMessageId);
     setActionError((current) => (current?.kind === "send" ? null : current));
     forceFollowNextRowsRef.current = true;
     applyScrollEvent({ type: "jump" });
@@ -655,22 +660,22 @@ export default function ThreadDetailScreen() {
         throw new Error("Desktop connection is unavailable.");
       }
       await client.startTurn(
-        activeThread.id,
+        targetThreadId,
         toComposerTurnInput(submission),
         submission.clientMessageId,
       );
       if (attempt !== submissionAttemptRef.current) {
         if (submissionAttemptRef.current === attempt + 1) {
-          await client.interruptTurn(activeThread.id).catch(() => {});
+          await client.interruptTurn(targetThreadId).catch(() => {});
         }
         return;
       }
-      acceptComposerSubmission(activeThread.id, submission.clientMessageId);
+      acceptComposerSubmission(targetThreadId, submission.clientMessageId);
     } catch (error) {
       if (attempt !== submissionAttemptRef.current) return;
       const message = describeError(error, "Failed to send message.");
-      removeOptimisticUserMessage(activeThread.id, submission.clientMessageId);
-      failComposerSubmission(activeThread.id, submission.clientMessageId, message);
+      removeOptimisticUserMessage(targetThreadId, submission.clientMessageId);
+      failComposerSubmission(targetThreadId, submission.clientMessageId, message);
       setActionError({ kind: "send", message });
     }
   }
@@ -683,19 +688,39 @@ export default function ThreadDetailScreen() {
   }
 
   async function handleSubmitComposer() {
-    if (isDraftThread) {
-      submitComposer(activeThread.id);
+    if (!isConnected || !runtimeClient) {
+      if (isDraftThread) {
+        submitComposer(activeThread.id);
+      }
       return;
     }
-    if (!isConnected || !runtimeClient) return;
     const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
       ?.randomUUID
       ? (globalThis as { crypto: { randomUUID: () => string } }).crypto.randomUUID()
       : `local-${Date.now()}`;
     const submission = beginComposerSubmission(activeThread.id, clientMessageId);
-    if (submission) {
-      await sendComposerSubmission(submission);
+    if (!submission) return;
+
+    if (isDraftThread) {
+      const draftThreadId = activeThread.id;
+      try {
+        const started = await runtimeClient.startThread({
+          ...(activeWorkspaceCwd ? { cwd: activeWorkspaceCwd } : {}),
+          clientThreadId: draftThreadId,
+        });
+        promoteDraftThread(draftThreadId, started.thread);
+        const pendingSend = sendComposerSubmission(submission, started.thread.id);
+        router.replace(`/thread/${started.thread.id}` as const);
+        await pendingSend;
+      } catch (error) {
+        const message = describeError(error, "Failed to start this conversation.");
+        failComposerSubmission(draftThreadId, submission.clientMessageId, message);
+        setActionError({ kind: "send", message });
+      }
+      return;
     }
+
+    await sendComposerSubmission(submission);
   }
 
   async function retryFailedToolCalls(toolItemIds: string[]) {
@@ -743,7 +768,9 @@ export default function ThreadDetailScreen() {
   const sessionHelperText = isOfflineReadOnly
     ? "Showing cached messages. Connect to your desktop to send."
     : isDraftThread
-      ? "This draft stays local until you pair with a desktop."
+      ? isConnected
+        ? "Send to start this conversation on your desktop."
+        : "This draft stays local until you pair with a desktop."
       : null;
   const composerHelperText = [sessionHelperText, describeComposerCapabilityAvailability(capability)]
     .filter((value): value is string => value !== null)

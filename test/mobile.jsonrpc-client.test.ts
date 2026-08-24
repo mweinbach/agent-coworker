@@ -566,6 +566,61 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("starts a durable remote thread with the stable local draft identity", async () => {
+    const sent: string[] = [];
+    let client!: CoworkJsonRpcClient;
+    client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send(text) {
+        sent.push(text);
+        const message = JSON.parse(text);
+        if (message.id === undefined) return;
+        queueMicrotask(() => {
+          void client.handleIncoming(
+            JSON.stringify({
+              id: message.id,
+              result:
+                message.method === "initialize"
+                  ? {}
+                  : {
+                      thread: {
+                        id: "remote-thread-1",
+                        title: "Remote thread",
+                        preview: "",
+                        modelProvider: "opencode",
+                        model: "gpt-5",
+                        cwd: "/workspace",
+                        createdAt: "2026-01-01T00:00:00.000Z",
+                        updatedAt: "2026-01-01T00:00:00.000Z",
+                        messageCount: 0,
+                        lastEventSeq: 0,
+                        status: { type: "idle" },
+                      },
+                    },
+            }),
+          );
+        });
+      },
+    });
+
+    const result = await client.startThread({
+      cwd: "/workspace",
+      clientThreadId: "draft-mobile-1",
+    });
+
+    expect(result.thread.id).toBe("remote-thread-1");
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({
+      method: "thread/start",
+      params: {
+        cwd: "/workspace",
+        clientThreadId: "draft-mobile-1",
+      },
+    });
+  });
+
   test("readThread retries after server-side initialization state is lost", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({
@@ -1460,13 +1515,21 @@ describe("mobile cowork jsonrpc client", () => {
       });
 
       const initialize = client.initialize();
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      const outcome = await Promise.race([
+        initialize.then(
+          () => "unexpected success",
+          (error: unknown) => error,
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve("request remained pending"), 50)),
+      ]);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe("JSON-RPC request timed out: initialize");
       slowSend.resolve();
-      await expect(initialize).rejects.toThrow("JSON-RPC request timed out: initialize");
       await flushMicrotasks();
       expect(unhandled).toEqual([]);
       expect((client as any).pending.size).toBe(0);
     } finally {
+      slowSend.resolve();
       process.off("unhandledRejection", onUnhandled);
     }
   });

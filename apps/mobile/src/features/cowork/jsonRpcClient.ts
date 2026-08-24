@@ -7,6 +7,7 @@ import type {
   CoworkThreadListResult,
   CoworkThreadReadResult,
   CoworkThreadResumeResult,
+  CoworkThreadStartResult,
   CoworkTurnCompletedNotification,
   CoworkTurnStartedNotification,
 } from "./protocolTypes";
@@ -17,6 +18,7 @@ import {
   coworkThreadListResultSchema,
   coworkThreadReadResultSchema,
   coworkThreadResumeResultSchema,
+  coworkThreadStartResultSchema,
   coworkTurnCompletedNotificationSchema,
   coworkTurnStartedNotificationSchema,
 } from "./protocolTypes";
@@ -422,6 +424,18 @@ export class CoworkJsonRpcClient {
     return coworkThreadListResultSchema.parse(result);
   }
 
+  async startThread(options: {
+    cwd?: string;
+    clientThreadId: string;
+    provider?: string;
+    model?: string;
+  }): Promise<CoworkThreadStartResult> {
+    const initializing = this.ensureInitialized();
+    if (initializing) await initializing;
+    const result = await this.request("thread/start", options);
+    return coworkThreadStartResultSchema.parse(result);
+  }
+
   async readThread(
     threadId: string,
     options?: { includeTurns?: boolean },
@@ -582,17 +596,25 @@ export class CoworkJsonRpcClient {
     // bootstrap retry as an uncaught promise before this method reaches `await promise`.
     promise.catch(() => {});
     try {
-      await this.sendTransport(
-        JSON.stringify({
-          id,
-          method,
-          ...(params !== undefined ? { params } : {}),
-        }),
-      );
-    } catch (error) {
-      this.rejectPending(id, error);
-    }
-    try {
+      let sendPromise: Promise<void>;
+      try {
+        sendPromise = Promise.resolve(
+          this.sendTransport(
+            JSON.stringify({
+              id,
+              method,
+              ...(params !== undefined ? { params } : {}),
+            }),
+          ),
+        );
+      } catch (error) {
+        this.rejectPending(id, error);
+        sendPromise = Promise.resolve();
+      }
+      const settledSend = sendPromise.catch((error: unknown) => {
+        this.rejectPending(id, error);
+      });
+      await Promise.race([settledSend, promise]);
       return await promise;
     } catch (error) {
       if (

@@ -351,6 +351,12 @@ export const coworkThreadListResultSchema = z
   })
   .strict();
 
+export const coworkThreadStartResultSchema = z
+  .object({
+    thread: coworkThreadSchema,
+  })
+  .strict();
+
 export const coworkThreadResumeResultSchema = z
   .object({
     thread: coworkThreadSchema,
@@ -550,6 +556,7 @@ export const backupListResultSchema = z.object({
 export type CoworkThread = z.infer<typeof coworkThreadSchema>;
 export type CoworkThreadListResult = z.infer<typeof coworkThreadListResultSchema>;
 export type CoworkThreadReadResult = z.infer<typeof coworkThreadReadResultSchema>;
+export type CoworkThreadStartResult = z.infer<typeof coworkThreadStartResultSchema>;
 export type CoworkThreadResumeResult = z.infer<typeof coworkThreadResumeResultSchema>;
 export type CoworkTurnStartedNotification = z.infer<typeof coworkTurnStartedNotificationSchema>;
 export type CoworkItemNotification = z.infer<typeof coworkItemNotificationSchema>;

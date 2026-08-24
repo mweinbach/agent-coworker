@@ -107,6 +107,7 @@ type ThreadStoreState = {
   ): void;
   currentFeed(threadId: string): SessionFeedItem[];
   seedThread(): void;
+  promoteDraftThread(draftThreadId: string, remoteThread: CoworkThread): void;
   getThread(threadId: string): MobileThreadSummary | null;
   getPendingRequest(threadId: string): PendingServerRequest | null;
   setPendingRequest(request: PendingServerRequest): void;
@@ -378,6 +379,10 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         ...snapshot,
         feed:
           snapshot.feed.length === 0 && existingSnapshot ? existingSnapshot.feed : snapshot.feed,
+        lastEventSeq:
+          snapshot.feed.length === 0 && existingSnapshot
+            ? existingSnapshot.lastEventSeq
+            : snapshot.lastEventSeq,
         todos:
           snapshot.todos.length === 0 && existingSnapshot ? existingSnapshot.todos : snapshot.todos,
         agents:
@@ -528,6 +533,63 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       threads: updateThreadList(state, threadId, nextSnapshot),
       selectedThreadId: threadId,
     }));
+  },
+  promoteDraftThread(draftThreadId, remoteThread) {
+    set((state) => {
+      const draft = state.threads.find((thread) => thread.id === draftThreadId);
+      if (!draft) return state;
+
+      const existingRemote = state.threads.find((thread) => thread.id === remoteThread.id);
+      const existingSnapshot = state.snapshots[remoteThread.id];
+      const snapshot: SessionSnapshotLike = {
+        ...ensureThreadSnapshot(remoteThread.id, existingSnapshot),
+        sessionId: remoteThread.id,
+        title: remoteThread.title,
+        provider: remoteThread.modelProvider,
+        model: remoteThread.model,
+        createdAt: remoteThread.createdAt,
+        updatedAt: remoteThread.updatedAt,
+        messageCount: remoteThread.messageCount,
+        lastEventSeq: existingSnapshot?.feed.length ? existingSnapshot.lastEventSeq : 0,
+      };
+      const promoted = buildThreadSummary(
+        remoteThread.id,
+        snapshot,
+        draft.composerDraft,
+        draft.composerAttachments,
+        draft.composerSubmission,
+        state.pendingRequests[remoteThread.id] ?? null,
+        remoteThread.cwd,
+        undefined,
+        remoteThread.preview,
+      );
+
+      return {
+        snapshots: {
+          ...Object.fromEntries(
+            Object.entries(state.snapshots).filter(([threadId]) => threadId !== draftThreadId),
+          ),
+          [remoteThread.id]: snapshot,
+        },
+        threads: [
+          {
+            ...promoted,
+            workspaceId: existingRemote?.workspaceId ?? draft.workspaceId,
+            workspaceName: existingRemote?.workspaceName ?? draft.workspaceName,
+            workspaceKind: existingRemote?.workspaceKind ?? draft.workspaceKind,
+          },
+          ...state.threads.filter(
+            (thread) => thread.id !== draftThreadId && thread.id !== remoteThread.id,
+          ),
+        ],
+        selectedThreadId:
+          state.selectedThreadId === draftThreadId ? remoteThread.id : state.selectedThreadId,
+        pendingRequests: Object.fromEntries(
+          Object.entries(state.pendingRequests).filter(([threadId]) => threadId !== draftThreadId),
+        ),
+      };
+    });
+    scheduleThreadCachePersist(get);
   },
   getThread(threadId) {
     return get().threads.find((entry) => entry.id === threadId) ?? null;
@@ -872,7 +934,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           createdAt: now,
           updatedAt: now,
           messageCount: 0,
-          lastEventSeq: rt.lastEventSeq,
+          lastEventSeq: 0,
           feed: [],
           agents: [],
           todos: [],
@@ -884,7 +946,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
           ...baseSnapshot,
           title: rt.title,
           updatedAt: rt.updatedAt || baseSnapshot.updatedAt,
-          lastEventSeq: rt.lastEventSeq,
+          lastEventSeq: existingSnapshot?.lastEventSeq ?? 0,
         };
 
         nextSnapshots[rt.id] = snapshot;

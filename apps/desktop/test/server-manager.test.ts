@@ -1188,6 +1188,53 @@ describe("desktop server manager bun crash detection", () => {
     expect(child.exitCode).toBe(0);
   });
 
+  test("allows the sidecar's complete durable shutdown window before forced termination", () => {
+    expect(__internal.GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS).toBeGreaterThan(10_000);
+  });
+
+  test("waits for delayed graceful shutdown and does not send an unnecessary kill signal", async () => {
+    const child = createFakeChild();
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    child.kill = (signal) => {
+      signals.push(signal);
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      }, 10);
+      return true;
+    };
+
+    await __internal.gracefulKill(child as any, {
+      gracefulTimeoutMs: 40,
+      forceKillTimeoutMs: 10,
+    });
+
+    expect(signals).toEqual([__internal.getServerTerminationSignal() ?? undefined]);
+    expect(child.listenerCount("exit")).toBe(0);
+  });
+
+  test("escalates only after the graceful shutdown budget is exhausted", async () => {
+    const child = createFakeChild();
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    child.kill = (signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") {
+        child.signalCode = "SIGKILL";
+        queueMicrotask(() => {
+          child.emit("exit", null, "SIGKILL");
+        });
+      }
+      return true;
+    };
+
+    await __internal.gracefulKill(child as any, {
+      gracefulTimeoutMs: 5,
+      forceKillTimeoutMs: 10,
+    });
+
+    expect(signals).toEqual([__internal.getServerTerminationSignal() ?? undefined, "SIGKILL"]);
+  });
+
   test("getWorkspaceServerStatus verifies the named health endpoint", async () => {
     const child = createFakeChild();
     const requestedUrls: string[] = [];

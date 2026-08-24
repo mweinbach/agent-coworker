@@ -58,6 +58,8 @@ const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 120_000;
 const PACKAGED_SERVER_STARTUP_TIMEOUT_MS = 300_000;
 const MIN_SERVER_STARTUP_TIMEOUT_MS = 5_000;
 const MAX_SERVER_STARTUP_TIMEOUT_MS = 300_000;
+const GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS = 12_000;
+const FORCED_SERVER_SHUTDOWN_TIMEOUT_MS = 1_000;
 const SERVER_HEALTH_TIMEOUT_MS = 1_500;
 const WINDOWS_SANDBOX_PROBE_TIMEOUT_MS = 15_000;
 const WINDOWS_SANDBOX_SETUP_TIMEOUT_MS = 60_000;
@@ -630,7 +632,13 @@ function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<bool
   });
 }
 
-async function gracefulKill(child: ServerChildProcess): Promise<void> {
+async function gracefulKill(
+  child: ServerChildProcess,
+  options: {
+    gracefulTimeoutMs?: number;
+    forceKillTimeoutMs?: number;
+  } = {},
+): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -646,7 +654,10 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
     // ignore; process may already be gone
   }
 
-  const exited = await waitForExit(child, 3_000);
+  const exited = await waitForExit(
+    child,
+    options.gracefulTimeoutMs ?? GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS,
+  );
   if (exited) {
     return;
   }
@@ -657,7 +668,7 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
     // ignore
   }
 
-  await waitForExit(child, 1_000);
+  await waitForExit(child, options.forceKillTimeoutMs ?? FORCED_SERVER_SHUTDOWN_TIMEOUT_MS);
 }
 
 function getServerStartupTimeoutMs(
@@ -1779,6 +1790,7 @@ export class ServerManager {
 }
 
 export const __internal = {
+  GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS,
   buildDesktopCrashReportingEnv,
   buildServerEnv,
   buildSourceEnvForAttempt,
@@ -1789,6 +1801,7 @@ export const __internal = {
   findBundledWindowsAiElectronDir,
   findSidecarLaunchCommand,
   getServerTerminationSignal,
+  gracefulKill,
   getServerLogPath,
   getServerStartupTimeoutMs,
   appendBrowserAccessToken,

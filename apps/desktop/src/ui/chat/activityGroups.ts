@@ -218,6 +218,19 @@ function assistantAsActivityReasoning(
   };
 }
 
+function isCompactAssistantProgress(item: Extract<FeedItem, { kind: "message" }>): boolean {
+  const text = item.text.trim();
+  if (text.length === 0 || text.length > 200 || text.includes("\n")) return false;
+  if (item.annotations && item.annotations.length > 0) return false;
+  if (/cite|[【[]\d+(?::\d+)?†|https?:\/\/|\[[^\]]+\]\([^)]+\)/i.test(text)) {
+    return false;
+  }
+
+  return /\blet me\b|\bi(?:['’]ll| will| am going to|['’]m going to)\b|^(?:(?:i['’]m|i am|we['’]re|we are)\s+)?(?:checking|searching|working|reviewing|inspecting|reading|fetching|looking|analyzing|analysing|investigating|running|gathering|loading|preparing|retrying|trying|waiting)\b/i.test(
+    text,
+  );
+}
+
 function isUserFeedItem(item: ChatRenderItem): item is {
   kind: "feed-item";
   item: Extract<FeedItem, { kind: "message" }> & { role: "user" };
@@ -245,9 +258,8 @@ export function compactProgressNarration(items: ChatRenderItem[]): ChatRenderIte
 }
 
 /**
- * Merge every activity group and intermediate assistant narration inside a
- * user turn into one activity trace. Only the last assistant message of the
- * turn remains a standalone bubble (final answer + sources).
+ * Merge genuine progress narration into adjacent activity without converting
+ * substantive or cited assistant messages into lossy synthetic reasoning.
  */
 export function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
   const out: ChatRenderItem[] = [];
@@ -313,14 +325,19 @@ export function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
       }
 
       if (isAssistantFeedItem(entry)) {
-        if (j === lastAssistantIdx) {
+        const hasAdjacentActivity =
+          segment[j - 1]?.kind === "activity-group" || segment[j + 1]?.kind === "activity-group";
+        if (
+          j === lastAssistantIdx ||
+          !hasAdjacentActivity ||
+          !isCompactAssistantProgress(entry.item)
+        ) {
           flushMerged();
           out.push(entry);
           continue;
         }
-        // Intermediate assistant text (progress, mid-turn narration) belongs
-        // in the activity timeline so the turn stays one expandable row.
-        if (!groupId) groupId = `activity-${entry.item.id}`;
+        // Preserve the first real activity group's identity when its preceding
+        // progress message becomes eligible for compaction mid-stream.
         mergedItems.push(assistantAsActivityReasoning(entry.item));
         continue;
       }

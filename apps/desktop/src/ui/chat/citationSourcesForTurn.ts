@@ -2,19 +2,18 @@ import type { CitationSource } from "../../../../../src/shared/displayCitationMa
 import type { FeedItem } from "../../app/types";
 
 function sourceDedupeKey(source: CitationSource): string {
-  if (typeof source.url === "string" && source.url.trim()) return `url:${source.url.trim()}`;
-  if (typeof source.title === "string" && source.title.trim())
-    return `title:${source.title.trim()}`;
   if (typeof source.referenceId === "string" && source.referenceId.trim()) {
     return `ref:${source.referenceId.trim()}`;
   }
+  if (typeof source.url === "string" && source.url.trim()) return `url:${source.url.trim()}`;
+  if (typeof source.title === "string" && source.title.trim())
+    return `title:${source.title.trim()}`;
   return JSON.stringify(source);
 }
 
 /**
- * Bind all sources gathered during a user turn to that turn's final assistant
- * message only. Intermediate assistant bubbles (progress narration) should not
- * render a SOURCES carousel mid-trace.
+ * Preserve citation metadata for every assistant while appending earlier turn
+ * sources to the final assistant after its own index-aligned source entries.
  */
 export function promoteCitationSourcesToFinalAssistants(
   feed: readonly FeedItem[],
@@ -27,7 +26,16 @@ export function promoteCitationSourcesToFinalAssistants(
 
   const flush = () => {
     if (lastAssistantId && turnSources.length > 0) {
-      result.set(lastAssistantId, turnSources);
+      const finalSources = sourcesByMessageId.get(lastAssistantId) ?? [];
+      const promotedSources = [...finalSources];
+      const finalSourceKeys = new Set(finalSources.map(sourceDedupeKey));
+      for (const source of turnSources) {
+        const key = sourceDedupeKey(source);
+        if (finalSourceKeys.has(key)) continue;
+        finalSourceKeys.add(key);
+        promotedSources.push(source);
+      }
+      result.set(lastAssistantId, promotedSources);
     }
     turnSources = [];
     seenKeys = new Set();
@@ -52,6 +60,7 @@ export function promoteCitationSourcesToFinalAssistants(
       lastAssistantId = item.id;
       const existing = sourcesByMessageId.get(item.id);
       if (existing && existing.length > 0) {
+        result.set(item.id, existing);
         pushSources(existing);
       }
     }

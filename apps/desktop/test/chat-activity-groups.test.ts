@@ -135,6 +135,170 @@ describe("desktop chat activity groups", () => {
     expect(rendered[2]).toEqual({ kind: "feed-item", item: feed[6] });
   });
 
+  test.each([
+    {
+      label: "annotation metadata",
+      text: "Found the source.",
+      annotations: [
+        {
+          type: "url_citation",
+          url: "https://example.com/report",
+          start_index: 0,
+          end_index: 5,
+        },
+      ],
+    },
+    {
+      label: "provider citation markers",
+      text: "The source confirms it. citeturn0search7",
+    },
+    {
+      label: "line citation markers",
+      text: "The source confirms it.[1†L3-L8]",
+    },
+    {
+      label: "Markdown source links",
+      text: "See the [official report](https://example.com/report).",
+    },
+    {
+      label: "substantive Markdown reports",
+      text: "## Findings\n\nThe investigation confirmed the requested result.",
+    },
+    {
+      label: "short substantive answers",
+      text: "The investigation confirmed the requested result.",
+    },
+  ])("preserves intermediate assistants with $label as standalone messages", (assistant) => {
+    const feed: FeedItem[] = [
+      {
+        id: "u1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "research this",
+      },
+      {
+        id: "t1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "webSearch",
+        state: "output-available",
+      },
+      {
+        id: "a1",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: assistant.text,
+        ...(assistant.annotations ? { annotations: assistant.annotations } : {}),
+      },
+      {
+        id: "t2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:03.000Z",
+        name: "read",
+        state: "output-available",
+      },
+      {
+        id: "a2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:04.000Z",
+        text: "Here is the final answer.",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual([
+      { kind: "feed-item", item: feed[0] },
+      {
+        kind: "activity-group",
+        id: "activity-t1",
+        items: [feed[1]],
+        recoveredToolIds: [],
+      },
+      { kind: "feed-item", item: feed[2] },
+      {
+        kind: "activity-group",
+        id: "activity-t2",
+        items: [feed[3]],
+        recoveredToolIds: [],
+      },
+      { kind: "feed-item", item: feed[4] },
+    ]);
+  });
+
+  test("does not invent an activity group for consecutive assistant messages", () => {
+    const feed: FeedItem[] = [
+      {
+        id: "u1",
+        kind: "message",
+        role: "user",
+        ts: "2024-01-01T00:00:00.000Z",
+        text: "start",
+      },
+      {
+        id: "a1",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Searching…",
+      },
+      {
+        id: "a2",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Here is the result.",
+      },
+    ];
+
+    expect(buildChatRenderItems(feed)).toEqual(
+      feed.map((item) => ({ kind: "feed-item" as const, item })),
+    );
+  });
+
+  test("keeps the first real activity group identity when later progress is compacted", () => {
+    const user: FeedItem = {
+      id: "u1",
+      kind: "message",
+      role: "user",
+      ts: "2024-01-01T00:00:00.000Z",
+      text: "research this",
+    };
+    const progress: FeedItem = {
+      id: "a-progress",
+      kind: "message",
+      role: "assistant",
+      ts: "2024-01-01T00:00:01.000Z",
+      text: "Searching…",
+    };
+    const firstTool: FeedItem = {
+      id: "tool-first",
+      kind: "tool",
+      ts: "2024-01-01T00:00:02.000Z",
+      name: "webSearch",
+      state: "output-available",
+    };
+    const finalAssistant: FeedItem = {
+      id: "a-final",
+      kind: "message",
+      role: "assistant",
+      ts: "2024-01-01T00:00:03.000Z",
+      text: "Here is the final answer.",
+    };
+
+    const before = buildChatRenderItems([user, progress, firstTool]);
+    const after = buildChatRenderItems([user, progress, firstTool, finalAssistant]);
+    const beforeGroup = before.find((item) => item.kind === "activity-group");
+    const afterGroup = after.find((item) => item.kind === "activity-group");
+
+    expect(beforeGroup?.id).toBe("activity-tool-first");
+    expect(afterGroup?.id).toBe(beforeGroup?.id);
+    if (afterGroup?.kind === "activity-group") {
+      expect(afterGroup.items.map((item) => item.id)).toEqual(["a-progress", "tool-first"]);
+    }
+  });
+
   test("formatActivityContentSummary collapses tool counts for compact headers", () => {
     expect(
       formatActivityContentSummary([

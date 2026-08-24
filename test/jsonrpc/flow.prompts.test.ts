@@ -173,6 +173,88 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test.each([
+    {
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      response: { decision: "accept" },
+      expected: { kind: "approval", approved: true },
+    },
+    {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      response: { answer: "shared answer" },
+      expected: { kind: "ask", answer: "shared answer" },
+    },
+  ] as const)(
+    "clears a resolved $kind prompt on every subscribed device",
+    async ({ kind, method, response, expected }) => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(
+        serverOpts(tmpDir, {
+          runTurnImpl: (async (params: any) => {
+            const result =
+              kind === "approval"
+                ? await params.approveCommand("rm -rf /tmp/shared-approval")
+                : await params.askUser("Answer from either device");
+            return { text: String(result), responseMessages: [] };
+          }) as any,
+        }),
+      );
+
+      try {
+        const desktop = await connectJsonRpc(url);
+        const mobile = await connectJsonRpc(url);
+        const started = await desktop.sendRequest("thread/start", { cwd: tmpDir });
+        const threadId = started.result.thread.id;
+        await desktop.waitFor((message) => message.method === "thread/started");
+        await mobile.sendRequest("thread/resume", { threadId });
+        await mobile.waitFor((message) => message.method === "thread/started");
+
+        await desktop.sendRequest("turn/start", {
+          threadId,
+          input: [{ type: "text", text: "resolve on either device" }],
+        });
+        const [desktopRequest, mobileRequest] = await Promise.all([
+          desktop.waitFor((message) => message.method === method),
+          mobile.waitFor((message) => message.method === method),
+        ]);
+        expect(mobileRequest.id).toBe(desktopRequest.id);
+
+        desktop.sendResponse(desktopRequest.id, response);
+        const [desktopResolved, mobileResolved] = await Promise.all([
+          desktop.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === desktopRequest.id,
+            2_000,
+          ),
+          mobile.waitFor(
+            (message) =>
+              message.method === "serverRequest/resolved" &&
+              message.params.requestId === mobileRequest.id,
+            2_000,
+          ),
+        ]);
+
+        expect(desktopResolved.params.response).toEqual(expected);
+        expect(mobileResolved.params.response).toEqual(expected);
+
+        mobile.sendResponse(mobileRequest.id, response);
+        const replayed = await mobile.waitFor(
+          (message) =>
+            message.method === "serverRequest/resolved" &&
+            message.params.requestId === mobileRequest.id,
+        );
+        expect(replayed.params.response).toEqual(expected);
+        desktop.close();
+        mobile.close();
+      } finally {
+        await stopTestServer(server);
+      }
+    },
+  );
+
   test("sandbox-denied escalation carries detail + category to the approval request", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(

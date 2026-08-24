@@ -53,6 +53,7 @@ type CreateJsonRpcTransportAdapterDeps = {
   maxPendingRequests: number;
   loadThreadBinding: (threadId: string) => SessionBinding | null;
   getThreadBinding: (threadId: string) => SessionBinding | null | undefined;
+  getThreadSubscribers: (threadId: string) => Iterable<StartServerSocket>;
   addBindingSink: (
     binding: SessionBinding,
     sinkId: string,
@@ -75,6 +76,7 @@ export function createJsonRpcTransportAdapter({
   maxPendingRequests,
   loadThreadBinding,
   getThreadBinding,
+  getThreadSubscribers,
   addBindingSink,
   removeBindingSink,
   countLiveConnectionSinks,
@@ -487,9 +489,13 @@ export function createJsonRpcTransportAdapter({
       response: parsedResponse.response,
       resolvedAt: new Date().toISOString(),
     };
-    ws.data.rpc?.pendingServerRequests.delete(message.id);
     await persistServerRequestReceipt(receipt);
-    emitServerRequestResolved(ws, receipt);
+    const subscribers = new Set(getThreadSubscribers(receipt.threadId));
+    subscribers.add(ws);
+    for (const subscriber of subscribers) {
+      subscriber.data.rpc?.pendingServerRequests.delete(receipt.requestId);
+      emitServerRequestResolved(subscriber, receipt);
+    }
   };
 
   const handleMessage = (

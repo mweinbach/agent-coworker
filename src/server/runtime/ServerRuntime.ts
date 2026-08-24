@@ -703,6 +703,7 @@ export async function createAgentServerRuntime(
     maxPendingRequests: jsonRpcMaxPendingRequests,
     loadThreadBinding: (threadId) => registry.loadThreadBinding(threadId),
     getThreadBinding: (threadId) => registry.sessionBindings.get(threadId),
+    getThreadSubscribers: (threadId) => threadSubscribers.get(threadId)?.values() ?? [],
     addBindingSink: (binding, sinkId, sink) => registry.addBindingSink(binding, sinkId, sink),
     removeBindingSink: (binding, sinkId) => registry.removeBindingSink(binding, sinkId),
     countLiveConnectionSinks: (binding) => registry.countLiveConnectionSinks(binding),

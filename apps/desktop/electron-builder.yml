@@ -19,6 +19,8 @@ extraResources:
     to: dist/config
   - from: ../../dist/skills
     to: dist/skills
+  - from: ../../dist/workflows
+    to: dist/workflows
   - from: build/icon.png
     to: tray/icon.png
   - from: build/icon.ico

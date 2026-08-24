@@ -880,6 +880,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
           busy={busy}
           transcriptOnly={transcriptOnly}
           disconnected={disconnected}
+          reconnecting={workspaceReconnecting}
           visibleFeedLength={visibleFeed.length}
           hydrating={hydrating}
           renderItems={renderItems}

@@ -1646,6 +1646,8 @@ describe("desktop chat view stability", () => {
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.textContent,
       ).toContain("Reconnecting automatically");
+      expect(container.textContent).toContain("Reconnecting automatically. Your draft is safe.");
+      expect(container.textContent).not.toContain("Reconnect from the banner above to continue.");
       expect(
         container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
       ).toBe(false);
@@ -1668,6 +1670,7 @@ describe("desktop chat view stability", () => {
       expect(
         container.querySelector('[data-slot="message-composer-status"]')?.textContent,
       ).toContain("Send a message to reconnect");
+      expect(container.textContent).toContain("Send a message or use Reconnect to continue.");
       expect(
         container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
       ).toBe(false);

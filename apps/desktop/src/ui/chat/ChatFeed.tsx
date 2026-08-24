@@ -612,6 +612,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   busy: boolean;
   transcriptOnly: boolean;
   disconnected: boolean;
+  reconnecting?: boolean;
   visibleFeedLength: number;
   hydrating: boolean;
   renderItems: ChatRenderItem[];
@@ -646,6 +647,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
     busy,
     transcriptOnly,
     disconnected,
+    reconnecting = false,
     visibleFeedLength,
     hydrating,
     renderItems,
@@ -744,13 +746,21 @@ export const ChatFeed = memo(function ChatFeed(props: {
                   )}
                 </EmptyMedia>
                 <EmptyTitle>
-                  {hydrating ? "Loading chat" : disconnected ? "Disconnected" : "No messages yet"}
+                  {hydrating
+                    ? "Loading chat"
+                    : disconnected
+                      ? reconnecting
+                        ? "Reconnecting"
+                        : "Disconnected"
+                      : "No messages yet"}
                 </EmptyTitle>
                 <EmptyDescription>
                   {hydrating
                     ? "Restoring messages and reconnecting the session."
                     : disconnected
-                      ? "Reconnect from the banner above to continue."
+                      ? reconnecting
+                        ? "Reconnecting automatically. Your draft is safe."
+                        : "Send a message or use Reconnect to continue."
                       : "Send a message to start."}
                 </EmptyDescription>
               </EmptyHeader>

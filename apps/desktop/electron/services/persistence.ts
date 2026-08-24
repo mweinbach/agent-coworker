@@ -46,6 +46,15 @@ import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./val
 
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
+const TEMPORARILY_UNAVAILABLE_WORKSPACE_ERROR_CODES = new Set([
+  "EACCES",
+  "EIO",
+  "ENODEV",
+  "ENOENT",
+  "ENXIO",
+  "EPERM",
+  "ESTALE",
+]);
 
 class AsyncLock {
   private pending: Promise<void> = Promise.resolve();
@@ -271,8 +280,14 @@ async function resolveWorkspacePath(
       return null;
     }
     return await fs.realpath(resolved);
-  } catch {
-    return null;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? (error as { code?: unknown }).code
+        : null;
+    return typeof code === "string" && TEMPORARILY_UNAVAILABLE_WORKSPACE_ERROR_CODES.has(code)
+      ? resolved
+      : null;
   }
 }
 

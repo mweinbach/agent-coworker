@@ -68,8 +68,9 @@ describe("desktop persistence state validation", () => {
   test("saveState skips invalid workspaces and orphan threads instead of failing", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");
-    const missingWorkspace = path.join(userDataDir, "workspace-missing");
+    const invalidWorkspace = path.join(userDataDir, "workspace-file.txt");
     await fs.mkdir(validWorkspace, { recursive: true });
+    await fs.writeFile(invalidWorkspace, "A file cannot be used as a workspace.");
 
     await persistence.saveState({
       version: 2,
@@ -86,9 +87,9 @@ describe("desktop persistence state validation", () => {
           yolo: false,
         },
         {
-          id: "ws_missing",
-          name: "Missing workspace",
-          path: missingWorkspace,
+          id: "ws_invalid",
+          name: "Invalid workspace",
+          path: invalidWorkspace,
           createdAt: TS,
           lastOpenedAt: TS,
           defaultEnableMcp: false,
@@ -109,7 +110,7 @@ describe("desktop persistence state validation", () => {
         },
         {
           id: "thread_orphan",
-          workspaceId: "ws_missing",
+          workspaceId: "ws_invalid",
           title: "Orphan thread",
           titleSource: "manual",
           createdAt: TS,
@@ -516,7 +517,7 @@ describe("desktop persistence state validation", () => {
     expect(wsFalse?.yolo).toBe(false);
   });
 
-  test("recreates missing one-off chat folders but still drops missing projects", async () => {
+  test("recreates one-off chat folders while preserving unavailable projects and their history", async () => {
     const persistence = new PersistenceService();
     const missingProject = path.join(userDataDir, "workspace-missing-project");
     const oneOffChat = path.join(
@@ -557,6 +558,17 @@ describe("desktop persistence state validation", () => {
       ],
       threads: [
         {
+          id: "thread_unavailable_project",
+          workspaceId: "ws_missing_project",
+          title: "History on an unavailable drive",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "disconnected",
+          sessionId: "project-session",
+          messageCount: 3,
+          lastEventSeq: 9,
+        },
+        {
           id: "thread_one_off",
           workspaceId: "ws_one_off",
           title: "One-off thread",
@@ -571,15 +583,89 @@ describe("desktop persistence state validation", () => {
     });
 
     const loaded = await persistence.loadState();
-    expect(loaded.workspaces.map((workspace) => workspace.id)).toEqual(["ws_one_off"]);
-    expect(loaded.workspaces[0]?.workspaceKind).toBe("oneOffChat");
-    expect(loaded.threads.map((thread) => thread.id)).toEqual(["thread_one_off"]);
+    expect(loaded.workspaces.map((workspace) => workspace.id)).toEqual([
+      "ws_missing_project",
+      "ws_one_off",
+    ]);
+    expect(loaded.workspaces[0]).toMatchObject({
+      workspaceKind: "project",
+      path: missingProject,
+    });
+    expect(loaded.workspaces[1]?.workspaceKind).toBe("oneOffChat");
+    expect(loaded.threads.map((thread) => thread.id)).toEqual([
+      "thread_unavailable_project",
+      "thread_one_off",
+    ]);
 
     const stat = await fs.stat(oneOffChat);
     expect(stat.isDirectory()).toBe(true);
     if (process.platform !== "win32") {
       expect(stat.mode & 0o777).toBe(0o700);
     }
+  });
+
+  test("keeps a project's conversations across unplug, another save, and remount", async () => {
+    const persistence = new PersistenceService();
+    const projectPath = path.join(userDataDir, "removable-project");
+    const detachedPath = path.join(userDataDir, "removable-project-detached");
+    await fs.mkdir(projectPath, { recursive: true });
+    const canonicalProjectPath = await fs.realpath(projectPath);
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_removable",
+          name: "External project",
+          path: projectPath,
+          workspaceKind: "project",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread_removable",
+          workspaceId: "ws_removable",
+          title: "Do not lose this conversation",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "removable-session",
+          messageCount: 8,
+          lastEventSeq: 21,
+        },
+      ],
+    });
+
+    await fs.rename(projectPath, detachedPath);
+
+    const disconnected = await persistence.loadState();
+    expect(disconnected.workspaces).toEqual([
+      expect.objectContaining({ id: "ws_removable", path: canonicalProjectPath }),
+    ]);
+    expect(disconnected.threads).toEqual([
+      expect.objectContaining({ id: "thread_removable", messageCount: 8, lastEventSeq: 21 }),
+    ]);
+
+    await persistence.saveState({ ...disconnected, developerMode: true });
+    const savedWhileDisconnected = await persistence.loadState();
+    expect(savedWhileDisconnected.workspaces[0]?.id).toBe("ws_removable");
+    expect(savedWhileDisconnected.threads[0]?.id).toBe("thread_removable");
+    expect(savedWhileDisconnected.developerMode).toBe(true);
+
+    await fs.rename(detachedPath, projectPath);
+
+    const remounted = await persistence.loadState();
+    expect(remounted.workspaces).toEqual([
+      expect.objectContaining({ id: "ws_removable", path: canonicalProjectPath }),
+    ]);
+    expect(remounted.threads).toEqual([
+      expect.objectContaining({ id: "thread_removable", sessionId: "removable-session" }),
+    ]);
   });
 
   test("preserves an explicitly promoted project inside the chat workspace root", async () => {

@@ -41,6 +41,7 @@ import { formatThreadRelativeAge } from "@/features/cowork/threadHomeModel";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useThreadHome } from "@/features/cowork/useThreadHome";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 const MENU_ACTIONS = [
@@ -437,19 +438,32 @@ function SectionHeader({
   );
 }
 
-function DisconnectedBanner({ message, onPress }: { message: string; onPress: () => void }) {
+function DisconnectedBanner({
+  title,
+  message,
+  busy,
+  needsAttention,
+  onPress,
+}: {
+  title: string;
+  message: string;
+  busy: boolean;
+  needsAttention: boolean;
+  onPress: () => void;
+}) {
   const theme = useAppTheme();
+  const tone = needsAttention ? theme.danger : theme.warning;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Re-pair Cowork Desktop"
+      accessibilityLabel="Open Remote access connection settings"
       onPress={onPress}
       style={({ pressed }) => ({
         borderRadius: 12,
         borderCurve: "continuous",
         backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.danger,
+        borderColor: tone,
         paddingHorizontal: 14,
         paddingVertical: 12,
         flexDirection: "row",
@@ -458,7 +472,11 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
         marginBottom: 18,
       })}
     >
-      <SFSymbol name="exclamationmark.triangle.fill" size={20} color={theme.danger} />
+      {busy ? (
+        <ActivityIndicator size="small" color={tone} />
+      ) : (
+        <SFSymbol name="exclamationmark.triangle.fill" size={20} color={tone} />
+      )}
       <View style={{ flex: 1 }}>
         <Text
           style={{
@@ -467,7 +485,7 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
             fontWeight: "600",
           }}
         >
-          Cowork Desktop disconnected
+          {title}
         </Text>
         <Text
           selectable
@@ -481,7 +499,7 @@ function DisconnectedBanner({ message, onPress }: { message: string; onPress: ()
           {message}
         </Text>
       </View>
-      <Text style={{ color: theme.primary, fontSize: 15, fontWeight: "600" }}>Re-pair</Text>
+      <Text style={{ color: theme.primary, fontSize: 15, fontWeight: "600" }}>Remote access</Text>
     </Pressable>
   );
 }
@@ -536,14 +554,33 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   const [chatsError, setChatsError] = useState<string | null>(null);
   const [projectErrors, setProjectErrors] = useState<Record<string, string>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const connectionStatus = usePairingStore((state) => state.connectionState.status);
-  const connectionLastError = usePairingStore((state) => state.connectionState.lastError);
+  const connectionState = usePairingStore((state) => state.connectionState);
   const hasTrustedDesktop = usePairingStore((state) => state.trustedMacs.length > 0);
   const performanceContract = getMobileListPerformanceContract(platform, "home");
 
   const projectsFirst = viewModel.sectionOrder[0] === "projects";
-  const showDisconnectedBanner = connectionStatus === "error" && hasTrustedDesktop;
-  const disconnectedMessage = connectionLastError ?? "Tap to open Remote access and reconnect.";
+  const showDisconnectedBanner = hasTrustedDesktop && !isWorkspaceConnectionReady(connectionState);
+  const connectionBusy =
+    connectionState.status === "pairing" ||
+    connectionState.status === "connecting" ||
+    connectionState.status === "reconnecting";
+  const permissionRequired =
+    connectionState.status === "error" &&
+    /\bpermission\b|\benable\b[\s\S]*\bremote access\b/i.test(connectionState.lastError ?? "");
+  const disconnectedTitle = permissionRequired
+    ? "Desktop permission required"
+    : connectionState.status === "reconnecting"
+      ? "Reconnecting to Cowork Desktop"
+      : connectionBusy
+        ? "Connecting to Cowork Desktop"
+        : "Cowork Desktop disconnected";
+  const disconnectedMessage = connectionState.lastError
+    ? `${connectionState.lastError} Your drafts are saved on this phone.`
+    : connectionState.status === "reconnecting"
+      ? "Your conversations and drafts are saved on this phone while your desktop reconnects."
+      : connectionBusy
+        ? "Your conversations are saved on this phone. You can keep drafting while your desktop connects."
+        : "Your conversations and drafts are saved on this phone. Open Remote access to reconnect.";
   const announcedError =
     chatsError ??
     Object.values(projectErrors)[0] ??
@@ -680,7 +717,13 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
   );
 
   const listHeader = showDisconnectedBanner ? (
-    <DisconnectedBanner message={disconnectedMessage} onPress={() => router.push("/(pairing)")} />
+    <DisconnectedBanner
+      title={disconnectedTitle}
+      message={disconnectedMessage}
+      busy={connectionBusy}
+      needsAttention={connectionState.status === "error"}
+      onPress={() => router.push("/(pairing)")}
+    />
   ) : null;
 
   return (

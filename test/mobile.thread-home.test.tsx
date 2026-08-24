@@ -125,14 +125,24 @@ mockLocalModule("@/theme/use-app-theme", "apps/mobile/src/theme/use-app-theme", 
 
 const actualPairingStore = require("../apps/mobile/src/features/pairing/pairingStore");
 const realUsePairingStore = actualPairingStore.usePairingStore;
+let mockConnectionState: {
+  status: "idle" | "pairing" | "connecting" | "reconnecting" | "connected" | "error";
+  transportMode: "native";
+  lastError: string | null;
+} = {
+  status: "connected",
+  transportMode: "native",
+  lastError: null,
+};
+let mockTrustedMacs: Array<{ macDeviceId: string; displayName: string }> = [];
 mockLocalModule(
   "@/features/pairing/pairingStore",
   "apps/mobile/src/features/pairing/pairingStore",
   () => ({
     usePairingStore: (selector: any) =>
       selector({
-        connectionState: { status: "connected", lastError: null },
-        trustedMacs: [],
+        connectionState: mockConnectionState,
+        trustedMacs: mockTrustedMacs,
       }),
   }),
 );
@@ -197,6 +207,8 @@ describe("mobile thread-home attention and draft recovery", () => {
   beforeEach(() => {
     mockThreads = [];
     mockWorkspaces = [];
+    mockConnectionState = { status: "connected", transportMode: "native", lastError: null };
+    mockTrustedMacs = [];
     mockRouterPush.mockClear();
   });
 
@@ -307,6 +319,66 @@ describe("mobile thread-home attention and draft recovery", () => {
         );
         expect(recovered?.textContent).toContain("Draft");
         expect(recovered?.textContent).not.toContain("Send failed");
+      } finally {
+        if (root) {
+          await act(async () => {
+            root!.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
+
+  test.each([
+    { platform: "android", status: "connecting", title: "Connecting to Cowork Desktop" },
+    { platform: "ios", status: "connecting", title: "Connecting to Cowork Desktop" },
+    { platform: "android", status: "reconnecting", title: "Reconnecting to Cowork Desktop" },
+    { platform: "ios", status: "reconnecting", title: "Reconnecting to Cowork Desktop" },
+    { platform: "android", status: "idle", title: "Cowork Desktop disconnected" },
+    { platform: "ios", status: "idle", title: "Cowork Desktop disconnected" },
+    { platform: "android", status: "error", title: "Desktop permission required" },
+    { platform: "ios", status: "error", title: "Desktop permission required" },
+  ] as const)(
+    "$platform makes $status honest and routes recovery without demanding re-pairing",
+    async ({ platform, status, title }) => {
+      const permissionGuidance =
+        "Enable Conversations for this phone in Cowork Desktop > Settings > Remote Access.";
+      mockConnectionState = {
+        status,
+        transportMode: "native",
+        lastError: status === "error" ? permissionGuidance : null,
+      };
+      mockTrustedMacs = [{ macDeviceId: "desktop-1", displayName: "Work Mac" }];
+      mockThreads = [makeThread({ id: "cached-chat", title: "Saved conversation" })];
+      const harness = setupJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root container");
+        root = createRoot(container);
+        await act(async () => {
+          root!.render(createElement(SharedThreadHomeScreen, { platform }));
+        });
+
+        const recovery = container.querySelector(
+          '[aria-label="Open Remote access connection settings"]',
+        );
+        expect(recovery?.textContent).toContain(title);
+        expect(recovery?.textContent?.toLowerCase()).toContain("draft");
+        expect(recovery?.textContent).toContain("Remote access");
+        expect(recovery?.textContent).not.toContain("Re-pair");
+        if (status === "error") {
+          expect(recovery?.textContent).toContain(permissionGuidance);
+        }
+        if (!(recovery instanceof harness.dom.window.HTMLElement)) {
+          throw new Error("missing connection recovery action");
+        }
+        await act(async () => {
+          recovery.click();
+        });
+        expect(mockRouterPush).toHaveBeenCalledWith("/(pairing)");
       } finally {
         if (root) {
           await act(async () => {

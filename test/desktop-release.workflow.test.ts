@@ -123,6 +123,23 @@ describe("desktop release workflow", () => {
     expect(builderConfig).toContain("verifyUpdateCodeSignature: true");
   });
 
+  test("verifies packaged Windows sidecars are native standalone executables", () => {
+    const verificationStep =
+      workflow.match(
+        /- name: Verify Windows release artifacts[\s\S]*?\n {6}- name: Stage Windows desktop release assets/,
+      )?.[0] ?? "";
+
+    expect(verificationStep).toContain("cowork-server-manifest.json");
+    expect(verificationStep).toContain('$sidecarManifest.launch.kind -ne "executable"');
+    expect(verificationStep).toContain('$sidecarManifest.arch -ne "${{ matrix.build_arch }}"');
+    expect(verificationStep).toContain("cowork-server-$expectedSidecarTriple.exe");
+    expect(verificationStep).toContain("$sidecarReader.ReadUInt16()");
+    expect(verificationStep).toContain("0xAA64");
+    expect(verificationStep).toContain("0x8664");
+    expect(verificationStep).toContain("Packaged Windows sidecar has the wrong machine type");
+    expect(verificationStep).toContain("Packaged Windows release contains a legacy Bun runtime");
+  });
+
   test("skips the Cargo cache restore when prebuilt sandbox helpers are available", () => {
     const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
 

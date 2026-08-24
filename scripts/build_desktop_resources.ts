@@ -13,7 +13,6 @@ import {
   SIDECAR_MANIFEST_NAME,
   shouldBundleFoundationModelsSdk,
   shouldBundleWindowsAiElectronPackage,
-  shouldUseBundledBunRuntime,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
 import {
@@ -23,12 +22,10 @@ import {
   WINDOWS_SANDBOX_SETUP_NAME,
 } from "../src/platform/sandbox/windows";
 import {
-  buildBunBundle,
   copyDir,
-  ensureBundledBunRuntime,
   pathExists,
   resolveBuildTarget,
-  resolveBundledBunRuntimeVersion,
+  resolveBunCompileTarget,
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";
@@ -558,6 +555,7 @@ async function main() {
     rawArgs.filter((arg) => arg !== "--force-windows-sandbox-build"),
   );
   const { platform, arch } = target;
+  const bunCompileTarget = resolveBunCompileTarget(platform, arch);
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
   const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
@@ -628,12 +626,7 @@ async function main() {
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
-  const bundledBunPath = path.join(desktopBinariesDir, SIDECAR_BUN_EXECUTABLE_NAME);
-  const bundledEntrypointPath = path.join(desktopBinariesDir, SIDECAR_BUN_ENTRYPOINT_PATH);
-  const useBundledBunRuntime = shouldUseBundledBunRuntime(platform, arch);
-  const bundledBunRuntimeVersion = useBundledBunRuntime
-    ? resolveBundledBunRuntimeVersion(target)
-    : null;
+  const bundledBunRuntimeVersion = null;
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
     cache?.arch !== arch ||
@@ -641,9 +634,7 @@ async function main() {
     cache?.sidecarFingerprint !== sidecarFingerprint ||
     cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
-    (useBundledBunRuntime
-      ? !(await pathExists(bundledBunPath)) || !(await pathExists(bundledEntrypointPath))
-      : !(await pathExists(sidecarOutfile)));
+    !(await pathExists(sidecarOutfile));
 
   if (sidecarNeedsBuild) {
     const entry = path.join(root, "src", "server", "index.ts");
@@ -651,62 +642,29 @@ async function main() {
     await fs.mkdir(desktopBinariesDir, { recursive: true });
 
     const manifest = buildSidecarManifest(platform, arch);
-    if (useBundledBunRuntime) {
-      const bundledEntrypointDir = path.dirname(bundledEntrypointPath);
-      await fs.mkdir(bundledEntrypointDir, { recursive: true });
-      const previousDesktopBundleEnv = process.env.COWORK_DESKTOP_BUNDLE;
-      process.env.COWORK_DESKTOP_BUNDLE = "1";
-      try {
-        await buildBunBundle({
-          entry,
-          env: "COWORK_DESKTOP_BUNDLE*",
-          minify: false,
-          outfile: bundledEntrypointPath,
-        });
-      } finally {
-        if (previousDesktopBundleEnv === undefined) {
-          delete process.env.COWORK_DESKTOP_BUNDLE;
-        } else {
-          process.env.COWORK_DESKTOP_BUNDLE = previousDesktopBundleEnv;
-        }
-      }
-
-      const { executablePath, version } = await ensureBundledBunRuntime(root, target);
-      await fs.copyFile(executablePath, bundledBunPath);
-      console.log(
-        `[resources] sidecar: rebuilt ${path.relative(root, bundledEntrypointPath)} with Bun runtime v${version}`,
-      );
-    } else {
-      if (platform !== process.platform || arch !== process.arch) {
-        throw new Error(
-          `Cross-compiling desktop sidecars is unsupported for ${platform}/${arch} on ${process.platform}/${process.arch}`,
-        );
-      }
-
-      const compileArgs = [
-        "bun",
-        "build",
-        entry,
-        "--compile",
-        "--outfile",
-        sidecarOutfile,
-        "--env",
-        "COWORK_DESKTOP_BUNDLE*",
-        "--target",
-        "bun",
-        "--minify",
-        "--sourcemap=none",
-      ];
-      if (process.platform === "win32") {
-        compileArgs.push("--windows-hide-console");
-      }
-
-      await runCommand(compileArgs, {
-        cwd: root,
-        env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
-      });
-      console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
+    const compileArgs = [
+      "bun",
+      "build",
+      entry,
+      "--compile",
+      "--outfile",
+      sidecarOutfile,
+      "--env",
+      "COWORK_DESKTOP_BUNDLE*",
+      "--target",
+      bunCompileTarget,
+      "--minify",
+      "--sourcemap=none",
+    ];
+    if (platform === "win32") {
+      compileArgs.push("--windows-hide-console");
     }
+
+    await runCommand(compileArgs, {
+      cwd: root,
+      env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
+    });
+    console.log(`[resources] sidecar: rebuilt ${path.relative(root, sidecarOutfile)}`);
 
     await fs.writeFile(sidecarManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   } else {

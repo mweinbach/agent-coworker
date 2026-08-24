@@ -452,6 +452,22 @@ export class SessionRegistry {
   }
 
   async disposeAll(reason: string): Promise<void> {
+    const turnSettlements: Promise<void>[] = [];
+    for (const binding of this.sessionBindings.values()) {
+      if (!binding.runtime) continue;
+      try {
+        turnSettlements.push(
+          binding.runtime.turns.cancelAndWaitForSettlement({
+            includeSubagents: true,
+            timeoutMs: 5_000,
+          }),
+        );
+      } catch {
+        // Continue settling and disposing sibling sessions.
+      }
+    }
+    await Promise.allSettled(turnSettlements);
+
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of this.sessionBindings) {
       if (!binding.runtime) {

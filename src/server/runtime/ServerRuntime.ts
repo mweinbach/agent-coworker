@@ -1031,8 +1031,8 @@ export async function createAgentServerRuntime(
       taskSubscribers.clear();
       threadSubscribers.clear();
       threadSubscriptionsByConnectionId.clear();
-      await threadJournal.close();
       await registry.disposeAll("server stopping");
+      await threadJournal.close();
       await fileLog?.flush();
       try {
         sessionDb.close();

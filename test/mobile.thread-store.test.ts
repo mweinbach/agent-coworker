@@ -791,4 +791,67 @@ describe("mobile thread store offline draft preservation", () => {
     expect(store.getPendingRequest("remote-interactions")).toBeNull();
     expect(store.getThread("remote-interactions")?.pendingPrompt).toBe(false);
   });
+
+  test("expires only interactions owned by a completed turn", () => {
+    const store = useThreadStore.getState();
+    store.hydrate({
+      sessionId: "terminal-interactions",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 0,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: true,
+      hasPendingApproval: true,
+    });
+    store.setPendingRequest({
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      threadId: "terminal-interactions",
+      turnId: "turn-completed",
+      itemId: "ask-1",
+      requestId: 7,
+      requestFingerprint: "request-expired",
+      question: "First?",
+      options: [],
+    });
+    store.setPendingRequest({
+      kind: "approval",
+      method: "item/commandExecution/requestApproval",
+      threadId: "terminal-interactions",
+      turnId: "turn-still-active",
+      itemId: "approval-2",
+      requestId: 8,
+      requestFingerprint: "request-current",
+      command: "echo hello",
+      reason: "Run a command",
+      dangerous: false,
+    });
+
+    store.expirePendingRequestsForTurn("terminal-interactions", "turn-completed");
+
+    expect(store.getPendingRequest("terminal-interactions")?.requestFingerprint).toBe(
+      "request-current",
+    );
+    expect(useThreadStore.getState().snapshots["terminal-interactions"]).toMatchObject({
+      hasPendingAsk: false,
+      hasPendingApproval: true,
+    });
+
+    store.expirePendingRequestsForTurn("terminal-interactions", "turn-still-active");
+
+    expect(store.getPendingRequest("terminal-interactions")).toBeNull();
+    expect(store.getThread("terminal-interactions")?.pendingPrompt).toBe(false);
+    expect(useThreadStore.getState().snapshots["terminal-interactions"]).toMatchObject({
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+  });
 });

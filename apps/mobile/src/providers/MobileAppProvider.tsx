@@ -143,6 +143,10 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             );
             break;
           case "turn/completed":
+            threadStore.expirePendingRequestsForTurn(
+              notification.params.threadId,
+              notification.params.turn.id,
+            );
             threadStore.markTurnCompleted(notification.params.threadId);
             break;
           case "serverRequest/resolved":
@@ -160,6 +164,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             kind: "ask",
             method: request.method,
             threadId: request.params.threadId,
+            turnId: request.params.turnId ?? null,
             itemId: request.params.itemId,
             requestId: request.id,
             requestFingerprint: request.params.requestId,
@@ -172,6 +177,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
           kind: "approval",
           method: request.method,
           threadId: request.params.threadId,
+          turnId: request.params.turnId ?? null,
           itemId: request.params.itemId,
           requestId: request.id,
           requestFingerprint: request.params.requestId,

@@ -206,6 +206,14 @@ export default function ThreadDetailScreen() {
   const respondingRequestFingerprintRef = useRef<string | null>(null);
   const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
+  const visibleActionError: ThreadActionError | null =
+    actionError ??
+    (thread?.composerSubmission?.status === "failed"
+      ? {
+          kind: "send",
+          message: thread.composerSubmission.error ?? "Failed to send message.",
+        }
+      : null);
 
   const isDraftThread = threadId.startsWith("draft-");
   const turnActive = activeTurnStartedAt !== null;
@@ -239,7 +247,7 @@ export default function ThreadDetailScreen() {
   );
   useAccessibilityAnnouncement(thread ? `Opened chat ${thread.title}` : null);
   useAccessibilityAnnouncement(
-    actionError?.message ??
+    visibleActionError?.message ??
       (pendingRequest?.kind === "approval"
         ? "Approval needed"
         : pendingRequest?.kind === "ask"
@@ -699,7 +707,33 @@ export default function ThreadDetailScreen() {
   async function retryFailedComposerSubmission() {
     const submission = retryComposerSubmission(activeThread.id);
     if (submission) {
+      await dispatchComposerSubmission(submission);
+    }
+  }
+
+  async function dispatchComposerSubmission(submission: ComposerSubmission) {
+    if (!isDraftThread) {
       await sendComposerSubmission(submission);
+      return;
+    }
+
+    const draftThreadId = activeThread.id;
+    try {
+      if (!runtimeClient) {
+        throw new Error("Desktop connection is unavailable.");
+      }
+      const started = await runtimeClient.startThread({
+        ...(activeWorkspaceCwd ? { cwd: activeWorkspaceCwd } : {}),
+        clientThreadId: draftThreadId,
+      });
+      promoteDraftThread(draftThreadId, started.thread);
+      const pendingSend = sendComposerSubmission(submission, started.thread.id);
+      router.replace(`/thread/${started.thread.id}` as const);
+      await pendingSend;
+    } catch (error) {
+      const message = describeError(error, "Failed to start this conversation.");
+      failComposerSubmission(draftThreadId, submission.clientMessageId, message);
+      setActionError({ kind: "send", message });
     }
   }
 
@@ -717,26 +751,7 @@ export default function ThreadDetailScreen() {
     const submission = beginComposerSubmission(activeThread.id, clientMessageId);
     if (!submission) return;
 
-    if (isDraftThread) {
-      const draftThreadId = activeThread.id;
-      try {
-        const started = await runtimeClient.startThread({
-          ...(activeWorkspaceCwd ? { cwd: activeWorkspaceCwd } : {}),
-          clientThreadId: draftThreadId,
-        });
-        promoteDraftThread(draftThreadId, started.thread);
-        const pendingSend = sendComposerSubmission(submission, started.thread.id);
-        router.replace(`/thread/${started.thread.id}` as const);
-        await pendingSend;
-      } catch (error) {
-        const message = describeError(error, "Failed to start this conversation.");
-        failComposerSubmission(draftThreadId, submission.clientMessageId, message);
-        setActionError({ kind: "send", message });
-      }
-      return;
-    }
-
-    await sendComposerSubmission(submission);
+    await dispatchComposerSubmission(submission);
   }
 
   async function retryFailedToolCalls(toolItemIds: string[]) {
@@ -1057,7 +1072,7 @@ export default function ThreadDetailScreen() {
             backgroundColor: "transparent",
           }}
         >
-          {actionError ? (
+          {visibleActionError ? (
             <View
               testID="composer-recovery"
               accessibilityLiveRegion="assertive"
@@ -1079,13 +1094,13 @@ export default function ThreadDetailScreen() {
                 selectable
                 style={{ flex: 1, color: theme.danger, fontSize: 13, lineHeight: 18 }}
               >
-                {actionError.message}
+                {visibleActionError.message}
               </Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Retry ${actionError.kind}`}
+                accessibilityLabel={`Retry ${visibleActionError.kind}`}
                 onPress={() => {
-                  retryActionError(actionError);
+                  retryActionError(visibleActionError);
                 }}
                 style={({ pressed }) => ({
                   minHeight: minimumTouchTarget(),

@@ -596,6 +596,110 @@ describe("mobile ThreadDetailScreen", () => {
     }
   });
 
+  test("retries a failed draft promotion with the original thread and message identities", async () => {
+    mockRouteThreadId = "draft-retry-1";
+    mockThread.id = "draft-retry-1";
+    mockThread.composerDraft = "Retry exactly once";
+    mockStartThread.mockImplementationOnce(async () => {
+      throw new Error("Desktop connection interrupted");
+    });
+    mockBeginComposerSubmission.mockImplementationOnce((_threadId, clientMessageId) => {
+      const submission = {
+        clientMessageId,
+        text: mockThread.composerDraft,
+        attachments: [],
+        status: "submitting" as const,
+        error: null,
+      };
+      mockThread.composerSubmission = submission;
+      return submission;
+    });
+    mockFailComposerSubmission.mockImplementationOnce((_threadId, _clientMessageId, error) => {
+      mockThread.composerSubmission = {
+        ...mockThread.composerSubmission,
+        status: "failed",
+        error,
+      };
+    });
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+
+      await act(async () => {
+        await latestComposerProps?.onSubmit();
+      });
+      const originalClientMessageId = mockBeginComposerSubmission.mock.calls[0]?.[1];
+      const retryButton = container.querySelector('[aria-label="Retry send"]');
+      if (!(retryButton instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing failed draft retry button");
+      }
+
+      await act(async () => {
+        retryButton.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockStartThread).toHaveBeenCalledTimes(2);
+      expect(mockStartThread.mock.calls).toEqual([
+        [{ cwd: "/workspace", clientThreadId: "draft-retry-1" }],
+        [{ cwd: "/workspace", clientThreadId: "draft-retry-1" }],
+      ]);
+      expect(mockStartTurn).toHaveBeenCalledWith(
+        "remote-promoted",
+        [{ type: "text", text: "Retry exactly once" }],
+        originalClientMessageId,
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("surfaces a restart-recovered failed submission with an actionable retry", async () => {
+    mockThread.composerDraft = "Recover this message";
+    mockThread.composerSubmission = {
+      clientMessageId: "recovered-message-1",
+      text: "Recover this message",
+      attachments: [],
+      status: "failed",
+      error: "Sending was interrupted. Retry to continue.",
+    };
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+
+      const recovery = container.querySelector('[data-testid="composer-recovery"]');
+      expect(recovery?.textContent).toContain("Sending was interrupted. Retry to continue.");
+      expect(container.querySelector('[aria-label="Retry send"]')).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("ignores a thread read that completes after the screen unmounts", async () => {
     let resolveRead:
       | ((value: { coworkSnapshot: { sessionId: string; feed: Array<{ id: string }> } }) => void)

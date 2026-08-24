@@ -53,8 +53,7 @@ export type ThreadFeedMutation = {
   revision: number;
 };
 
-export type PendingServerRequest = PendingServerRequestIdentity &
-  (
+export type PendingServerRequest = PendingServerRequestIdentity & { turnId?: string | null } & (
     | {
         kind: "ask";
         threadId: string;
@@ -113,6 +112,7 @@ type ThreadStoreState = {
   getPendingRequest(threadId: string): PendingServerRequest | null;
   setPendingRequest(request: PendingServerRequest): void;
   clearPendingRequest(threadId: string, requestFingerprint?: string): void;
+  expirePendingRequestsForTurn(threadId: string, turnId: string): void;
   selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
   setComposerAttachments(threadId: string, attachments: ComposerAttachment[]): void;
@@ -676,6 +676,53 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
                   state.snapshots[threadId]?.hasPendingAsk ||
                   state.snapshots[threadId]?.hasPendingApproval ||
                   false,
+                pendingServerRequest: next,
+              }
+            : thread,
+        ),
+      };
+    });
+  },
+  expirePendingRequestsForTurn(threadId, turnId) {
+    set((state) => {
+      const current = state.pendingRequests[threadId];
+      if (!current) return state;
+
+      const queue = state.pendingRequestQueues[threadId] ?? [current];
+      const remaining = queue.filter(
+        (request) => request.turnId !== turnId && request.turnId != null,
+      );
+      if (remaining.length === queue.length) return state;
+
+      const next = remaining[0] ?? null;
+      const snapshot = state.snapshots[threadId];
+      const hasPendingAsk = remaining.some((request) => request.kind === "ask");
+      const hasPendingApproval = remaining.some((request) => request.kind === "approval");
+
+      return {
+        pendingRequests: {
+          ...state.pendingRequests,
+          [threadId]: next,
+        },
+        pendingRequestQueues: {
+          ...state.pendingRequestQueues,
+          [threadId]: remaining,
+        },
+        snapshots: snapshot
+          ? {
+              ...state.snapshots,
+              [threadId]: {
+                ...snapshot,
+                hasPendingAsk,
+                hasPendingApproval,
+              },
+            }
+          : state.snapshots,
+        threads: state.threads.map((thread) =>
+          thread.id === threadId
+            ? {
+                ...thread,
+                pendingPrompt: next !== null,
                 pendingServerRequest: next,
               }
             : thread,

@@ -310,6 +310,11 @@ export function handleLifecycleThreadEvent(
   }
 
   if (evt.type === "session_busy") {
+    const activeTurnId = get().threadRuntimeById[threadId]?.activeTurnId;
+    if (!evt.busy && activeTurnId && evt.turnId && evt.turnId !== activeTurnId) {
+      return true;
+    }
+
     resetLiveModelStreamRuntime(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];

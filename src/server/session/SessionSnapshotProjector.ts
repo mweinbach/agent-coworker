@@ -342,6 +342,15 @@ export class SessionSnapshotProjector {
       };
     }
 
+    if (evt.type === "interaction_resolved") {
+      this.snapshot = {
+        ...this.snapshot,
+        hasPendingAsk: evt.hasPendingAsk,
+        hasPendingApproval: evt.hasPendingApproval,
+      };
+      return;
+    }
+
     this.conversationProjection.handle(evt);
 
     if (this.snapshot.feed.length > SESSION_FEED_ITEM_LIMIT) {

@@ -105,4 +105,73 @@ describe("JSON-RPC projectors", () => {
     expect(errorCompleted?.params?.turnId).toBeNull();
     expect(errorCompleted?.params?.item?.message).toBe("Uploaded file too large.");
   });
+
+  test("projects autonomous prompt resolution to the existing client notification", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcNotificationProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "interaction_resolved",
+      sessionId,
+      requestId: "approval-expired",
+      kind: "approval",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      response: { kind: "approval", approved: false },
+    } as never);
+    projector.handle({
+      type: "interaction_resolved",
+      sessionId,
+      requestId: "question-cancelled",
+      kind: "ask",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    } as never);
+
+    expect(outbound).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: sessionId,
+          requestId: "approval-expired",
+          response: { kind: "approval", approved: false },
+        },
+      },
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: sessionId,
+          requestId: "question-cancelled",
+        },
+      },
+    ]);
+  });
+
+  test("journals autonomous prompt resolution so reconnect cannot resurrect stale prompts", () => {
+    const emissions: Array<{ eventType: string; requestId: string | null; payload: any }> = [];
+    const projector = createThreadJournalNotificationProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push(event),
+    });
+
+    projector.handle({
+      type: "interaction_resolved",
+      sessionId,
+      requestId: "approval-cancelled",
+      kind: "approval",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    } as never);
+
+    expect(emissions).toEqual([
+      expect.objectContaining({
+        eventType: "serverRequest/resolved",
+        requestId: "approval-cancelled",
+        payload: { threadId: sessionId, requestId: "approval-cancelled" },
+      }),
+    ]);
+  });
 });

@@ -16,6 +16,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<SessionEvent["type"]>([
   "reset_done",
   "ask",
   "approval",
+  "interaction_resolved",
   "provider_auth_challenge",
   "provider_auth_result",
   "mcp_server_validation",

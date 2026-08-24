@@ -144,17 +144,42 @@ export class InteractionManager {
   }
 
   rejectAllPending(reason: string) {
+    let hadPendingPrompts = false;
     for (const [id, pending] of this.pendingAsk) {
-      pending.reject(new Error(reason));
+      hadPendingPrompts = true;
       this.pendingAsk.delete(id);
       this.pendingPromptEvents.delete(id);
+      this.emitAutonomousPromptResolution(id, "ask");
+      pending.reject(new Error(reason));
     }
 
     for (const [id, pending] of this.pendingApproval) {
-      pending.reject(new Error(reason));
+      hadPendingPrompts = true;
       this.pendingApproval.delete(id);
       this.pendingPromptEvents.delete(id);
+      this.emitAutonomousPromptResolution(id, "approval");
+      pending.reject(new Error(reason));
     }
+
+    if (hadPendingPrompts) {
+      this.opts.queuePersistSessionSnapshot("session.interactions_cancelled");
+    }
+  }
+
+  private emitAutonomousPromptResolution(
+    requestId: string,
+    kind: "ask" | "approval",
+    response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean },
+  ): void {
+    this.opts.emit({
+      type: "interaction_resolved",
+      sessionId: this.opts.sessionId,
+      requestId,
+      kind,
+      hasPendingAsk: this.hasPendingAsk,
+      hasPendingApproval: this.hasPendingApproval,
+      ...(response ? { response } : {}),
+    });
   }
 
   async askUser(question: string, options?: string[]) {
@@ -177,6 +202,7 @@ export class InteractionManager {
       // Only act if still pending (delete() returns false if already answered).
       if (!this.pendingAsk.delete(requestId)) return;
       this.pendingPromptEvents.delete(requestId);
+      this.emitAutonomousPromptResolution(requestId, "ask");
       this.opts.log(`[warn] ask ${requestId} timed out without a response`);
       this.opts.queuePersistSessionSnapshot("session.ask_timeout");
       pending.reject(new Error("Ask prompt timed out without a response."));
@@ -243,6 +269,10 @@ export class InteractionManager {
       // Fail safe: an abandoned approval denies (false), never silently runs.
       if (!this.pendingApproval.delete(requestId)) return;
       this.pendingPromptEvents.delete(requestId);
+      this.emitAutonomousPromptResolution(requestId, "approval", {
+        kind: "approval",
+        approved: false,
+      });
       this.opts.log(`[warn] approval ${requestId} timed out without a response; denying`);
       this.opts.queuePersistSessionSnapshot("session.approval_timeout");
       pending.resolve(false);

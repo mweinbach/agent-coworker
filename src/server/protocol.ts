@@ -371,6 +371,15 @@ export type SessionEvent =
       category?: SandboxDenialCategory;
     }
   | {
+      type: "interaction_resolved";
+      sessionId: string;
+      requestId: string;
+      kind: "ask" | "approval";
+      hasPendingAsk: boolean;
+      hasPendingApproval: boolean;
+      response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean };
+    }
+  | {
       type: "config_updated";
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {

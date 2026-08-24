@@ -323,7 +323,20 @@ export function createJsonRpcTransportAdapter({
       },
     });
 
-    addBindingSink(binding, sinkId, (event) => projector.handle(event));
+    addBindingSink(binding, sinkId, (event) => {
+      if (event.type === "interaction_resolved") {
+        ws.data.rpc?.pendingServerRequests.delete(event.requestId);
+        if (event.response) {
+          resolvedServerRequests.remember({
+            threadId,
+            requestId: event.requestId,
+            response: event.response,
+            resolvedAt: new Date().toISOString(),
+          });
+        }
+      }
+      projector.handle(event);
+    });
     subscriptions.set(threadId, { sinkId });
 
     const replayedPromptRequestIds = new Set(opts?.skipPendingPromptRequestIds ?? []);

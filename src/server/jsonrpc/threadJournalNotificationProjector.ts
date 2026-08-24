@@ -128,6 +128,18 @@ export function createThreadJournalNotificationProjector(
   return {
     handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
+      if (event.type === "interaction_resolved") {
+        emit(
+          "serverRequest/resolved",
+          {
+            threadId: opts.threadId,
+            requestId: event.requestId,
+            ...(event.response ? { response: event.response } : {}),
+          },
+          { requestId: event.requestId },
+        );
+        return;
+      }
       if (
         event.type === "user_message" &&
         event.clientMessageId &&

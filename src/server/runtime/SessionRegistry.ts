@@ -96,6 +96,7 @@ function shouldInvalidateThreadList(evt: SessionEvent): boolean {
     case "assistant_message":
     case "ask":
     case "approval":
+    case "interaction_resolved":
     case "error":
       return true;
     default:

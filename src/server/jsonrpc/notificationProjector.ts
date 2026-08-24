@@ -103,6 +103,13 @@ export function createJsonRpcNotificationProjector(
       if (event.sessionId !== opts.threadId) return;
 
       switch (event.type) {
+        case "interaction_resolved":
+          sendNotification("serverRequest/resolved", {
+            threadId: opts.threadId,
+            requestId: event.requestId,
+            ...(event.response ? { response: event.response } : {}),
+          });
+          return;
         case "session_settings":
           sendNotification("cowork/session/settings", event);
           return;

@@ -311,6 +311,60 @@ describe("mobile cowork jsonrpc client", () => {
     });
   });
 
+  test("delivers canonical server interaction receipts including their committed response", async () => {
+    const notifications: unknown[] = [];
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile",
+        version: "0.1.0",
+      },
+      send() {},
+      onNotification(notification) {
+        notifications.push(notification);
+      },
+    });
+
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-fingerprint",
+          response: { kind: "approval", approved: true },
+        },
+      }),
+    );
+    await client.handleIncoming(
+      JSON.stringify({
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "ask-fingerprint",
+          response: { kind: "ask", answer: "continue" },
+        },
+      }),
+    );
+
+    expect(notifications).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-fingerprint",
+          response: { kind: "approval", approved: true },
+        },
+      },
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "ask-fingerprint",
+          response: { kind: "ask", answer: "continue" },
+        },
+      },
+    ]);
+  });
+
   test("readThread initializes before sending thread/read", async () => {
     const sent: string[] = [];
     const client = new CoworkJsonRpcClient({

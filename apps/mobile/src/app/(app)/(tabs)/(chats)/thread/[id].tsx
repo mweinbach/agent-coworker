@@ -181,8 +181,10 @@ export default function ThreadDetailScreen() {
   const appendOptimisticUserMessage = useThreadStore((state) => state.appendOptimisticUserMessage);
   const removeOptimisticUserMessage = useThreadStore((state) => state.removeOptimisticUserMessage);
   const interruptThread = useThreadStore((state) => state.interruptThread);
-  const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
+  const [respondingRequestFingerprint, setRespondingRequestFingerprint] = useState<string | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<ThreadActionError | null>(null);
   const [isStopping, setIsStopping] = useState(false);
   const [scrollState, setScrollState] = useState(initialThreadScrollState);
@@ -201,6 +203,7 @@ export default function ThreadDetailScreen() {
   const scrollThreadIdRef = useRef(threadId);
   const loadRequestIdRef = useRef(0);
   const submissionAttemptRef = useRef(0);
+  const respondingRequestFingerprintRef = useRef<string | null>(null);
   const stoppingRef = useRef(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
@@ -305,6 +308,16 @@ export default function ThreadDetailScreen() {
       loadRequestIdRef.current += 1;
     };
   }, [loadThreadFeed]);
+
+  useEffect(() => {
+    if (
+      respondingRequestFingerprintRef.current !== null &&
+      respondingRequestFingerprintRef.current !== pendingRequest?.requestFingerprint
+    ) {
+      respondingRequestFingerprintRef.current = null;
+      setRespondingRequestFingerprint(null);
+    }
+  }, [pendingRequest?.requestFingerprint]);
 
   const showStop = turnActive || isSubmitting || (isConnected && pendingRequest !== null);
   useEffect(() => {
@@ -625,15 +638,18 @@ export default function ThreadDetailScreen() {
     if (!client) {
       return false;
     }
+    if (respondingRequestFingerprintRef.current === identity.requestFingerprint) {
+      return true;
+    }
+    respondingRequestFingerprintRef.current = identity.requestFingerprint;
+    setRespondingRequestFingerprint(identity.requestFingerprint);
     setActionError((current) => (current?.kind === "respond" ? null : current));
     try {
       await client.respondServerRequest(identity.requestId, result);
-      const currentRequest = useThreadStore.getState().getPendingRequest(activeThread.id);
-      if (currentRequest && hasPendingServerRequestIdentity(currentRequest, identity)) {
-        clearPendingRequest(activeThread.id);
-      }
       return true;
     } catch (error) {
+      respondingRequestFingerprintRef.current = null;
+      setRespondingRequestFingerprint(null);
       setActionError({
         kind: "respond",
         message: describeError(error, "Failed to send your response."),
@@ -938,6 +954,7 @@ export default function ThreadDetailScreen() {
               return (
                 <PendingRequestCard
                   request={request}
+                  responsePending={respondingRequestFingerprint === request.requestFingerprint}
                   askDraft={askDraft}
                   onChangeAskDraft={setAskDraft}
                   onAnswerOption={(answer) => {

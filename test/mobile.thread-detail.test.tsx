@@ -155,6 +155,7 @@ const mockFailComposerSubmission = mock(
 );
 const mockCancelComposerSubmission = mock((_threadId: string, _clientMessageId: string) => true);
 const mockAcceptComposerSubmission = mock((_threadId: string, _clientMessageId: string) => {});
+const mockClearPendingRequest = mock((_threadId: string, _requestFingerprint?: string) => {});
 const mockPromoteDraftThread = mock((_draftThreadId: string, remoteThread: { id: string }) => {
   mockThread.id = remoteThread.id;
 });
@@ -200,7 +201,7 @@ const threadStoreMock = () => ({
         appendOptimisticUserMessage: mockAppendOptimisticUserMessage,
         removeOptimisticUserMessage: mockRemoveOptimisticUserMessage,
         interruptThread: () => {},
-        clearPendingRequest: () => {},
+        clearPendingRequest: mockClearPendingRequest,
       };
       return fn(state);
     },
@@ -381,6 +382,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockAcceptComposerSubmission.mockClear();
     mockMarkTurnStarted.mockClear();
     mockMarkTurnCompleted.mockClear();
+    mockClearPendingRequest.mockClear();
     mockAppendOptimisticUserMessage.mockClear();
     mockRemoveOptimisticUserMessage.mockClear();
     mockInterruptTurn.mockClear();
@@ -746,6 +748,47 @@ describe("mobile ThreadDetailScreen", () => {
       });
 
       expect(mockRespondServerRequest).toHaveBeenCalledTimes(1);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root!.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("keeps an answered interaction visible until its canonical server receipt arrives", async () => {
+    mockPendingRequest = {
+      kind: "ask",
+      method: "item/tool/requestUserInput",
+      threadId: "test-thread-123",
+      itemId: "ask-item-1",
+      requestId: 7,
+      requestFingerprint: "ask-request-1",
+      question: "Continue?",
+      options: ["yes"],
+    };
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root container");
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(createElement(ThreadDetailScreen));
+      });
+
+      await act(async () => {
+        latestPendingRequestProps?.onAnswerOption("yes");
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockRespondServerRequest).toHaveBeenCalledWith(7, { answer: "yes" });
+      expect(mockClearPendingRequest).not.toHaveBeenCalled();
+      expect(latestPendingRequestProps?.responsePending).toBe(true);
     } finally {
       if (root) {
         await act(async () => {

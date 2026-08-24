@@ -144,7 +144,10 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             threadStore.markTurnCompleted(notification.params.threadId);
             break;
           case "serverRequest/resolved":
-            threadStore.clearPendingRequest(notification.params.threadId);
+            threadStore.clearPendingRequest(
+              notification.params.threadId,
+              notification.params.requestId,
+            );
             break;
         }
       },

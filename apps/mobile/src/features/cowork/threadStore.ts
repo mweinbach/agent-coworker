@@ -79,6 +79,7 @@ type ThreadStoreState = {
   threads: MobileThreadSummary[];
   selectedThreadId: string | null;
   pendingRequests: Record<string, PendingServerRequest | null>;
+  pendingRequestQueues: Record<string, PendingServerRequest[]>;
   activeTurnStartedAt: Record<string, string | null>;
   lastFeedMutationByThread: Record<string, ThreadFeedMutation>;
   expandedWorkspaceIds: Record<string, true>;
@@ -111,7 +112,7 @@ type ThreadStoreState = {
   getThread(threadId: string): MobileThreadSummary | null;
   getPendingRequest(threadId: string): PendingServerRequest | null;
   setPendingRequest(request: PendingServerRequest): void;
-  clearPendingRequest(threadId: string): void;
+  clearPendingRequest(threadId: string, requestFingerprint?: string): void;
   selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
   setComposerAttachments(threadId: string, attachments: ComposerAttachment[]): void;
@@ -313,6 +314,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   threads: [],
   selectedThreadId: null,
   pendingRequests: {},
+  pendingRequestQueues: {},
   activeTurnStartedAt: {},
   lastFeedMutationByThread: {},
   expandedWorkspaceIds: {},
@@ -356,6 +358,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
             ? state.selectedThreadId
             : (cachedThreads[0]?.id ?? existingDraftThreads[0]?.id ?? null),
         pendingRequests: {},
+        pendingRequestQueues: {},
         activeTurnStartedAt: {},
         lastFeedMutationByThread: {},
         expandedWorkspaceIds: {
@@ -598,37 +601,75 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     return get().pendingRequests[threadId] ?? null;
   },
   setPendingRequest(request) {
-    set((state) => ({
-      pendingRequests: {
-        ...state.pendingRequests,
-        [request.threadId]: request,
-      },
-      threads: state.threads.map((thread) =>
-        thread.id === request.threadId
-          ? { ...thread, pendingPrompt: true, pendingServerRequest: request }
-          : thread,
-      ),
-    }));
+    set((state) => {
+      const current = state.pendingRequests[request.threadId];
+      const existingQueue = current
+        ? (state.pendingRequestQueues[request.threadId] ?? [current])
+        : [];
+      const existingIndex = existingQueue.findIndex(
+        (entry) => entry.requestFingerprint === request.requestFingerprint,
+      );
+      const queue =
+        existingIndex < 0
+          ? [...existingQueue, request]
+          : existingQueue.map((entry, index) => (index === existingIndex ? request : entry));
+      const visibleRequest = queue[0] ?? request;
+
+      return {
+        pendingRequests: {
+          ...state.pendingRequests,
+          [request.threadId]: visibleRequest,
+        },
+        pendingRequestQueues: {
+          ...state.pendingRequestQueues,
+          [request.threadId]: queue,
+        },
+        threads: state.threads.map((thread) =>
+          thread.id === request.threadId
+            ? { ...thread, pendingPrompt: true, pendingServerRequest: visibleRequest }
+            : thread,
+        ),
+      };
+    });
   },
-  clearPendingRequest(threadId) {
-    set((state) => ({
-      pendingRequests: {
-        ...state.pendingRequests,
-        [threadId]: null,
-      },
-      threads: state.threads.map((thread) =>
-        thread.id === threadId
-          ? {
-              ...thread,
-              pendingPrompt:
-                state.snapshots[threadId]?.hasPendingAsk ||
-                state.snapshots[threadId]?.hasPendingApproval ||
-                false,
-              pendingServerRequest: null,
-            }
-          : thread,
-      ),
-    }));
+  clearPendingRequest(threadId, requestFingerprint) {
+    set((state) => {
+      const current = state.pendingRequests[threadId];
+      if (!current) return state;
+
+      const queue = state.pendingRequestQueues[threadId] ?? [current];
+      const fingerprint = requestFingerprint ?? current.requestFingerprint;
+      if (!queue.some((request) => request.requestFingerprint === fingerprint)) {
+        return state;
+      }
+
+      const remaining = queue.filter((request) => request.requestFingerprint !== fingerprint);
+      const next = remaining[0] ?? null;
+
+      return {
+        pendingRequests: {
+          ...state.pendingRequests,
+          [threadId]: next,
+        },
+        pendingRequestQueues: {
+          ...state.pendingRequestQueues,
+          [threadId]: remaining,
+        },
+        threads: state.threads.map((thread) =>
+          thread.id === threadId
+            ? {
+                ...thread,
+                pendingPrompt:
+                  next !== null ||
+                  state.snapshots[threadId]?.hasPendingAsk ||
+                  state.snapshots[threadId]?.hasPendingApproval ||
+                  false,
+                pendingServerRequest: next,
+              }
+            : thread,
+        ),
+      };
+    });
   },
   selectThread(threadId) {
     set({ selectedThreadId: threadId });
@@ -1031,6 +1072,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       }
       return {
         pendingRequests: {},
+        pendingRequestQueues: {},
         activeTurnStartedAt: {},
         snapshots: nextSnapshots,
         threads: state.threads.map((thread) => ({

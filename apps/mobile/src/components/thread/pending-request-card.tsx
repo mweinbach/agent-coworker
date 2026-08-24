@@ -12,6 +12,7 @@ import { useAppTheme } from "@/theme/use-app-theme";
 
 type PendingRequestCardProps = {
   request: PendingServerRequest;
+  responsePending?: boolean;
   askDraft: string;
   onChangeAskDraft: (text: string) => void;
   onAnswerOption: (answer: string) => void;
@@ -24,6 +25,7 @@ type ApprovalResponseAction = "approve" | "reject";
 
 export function PendingRequestCard({
   request,
+  responsePending = false,
   askDraft,
   onChangeAskDraft,
   onAnswerOption,
@@ -42,7 +44,7 @@ export function PendingRequestCard({
   // Desktop SandboxApprovalCard: quiet tinted wash (border-destructive/40 + bg-destructive/5),
   // no heavy shadow — not a loud solid border.
   const toneAccent = isSandboxEscalation ? theme.danger : theme.warning;
-  const isResponding = respondingAction !== null;
+  const isResponding = respondingAction !== null || responsePending;
   const approvalDetail = isApproval ? (request.detail ?? request.reason) : null;
   const categoryLabel =
     isApproval && request.category
@@ -185,6 +187,7 @@ export function PendingRequestCard({
       {request.kind === "ask" ? (
         <>
           <TextInput
+            editable={!isResponding}
             value={askDraft}
             onChangeText={onChangeAskDraft}
             placeholder="Type a response..."
@@ -207,9 +210,11 @@ export function PendingRequestCard({
             {request.options.map((option) => (
               <Pressable
                 key={option}
+                disabled={isResponding}
                 onPress={() => onAnswerOption(option)}
                 accessibilityRole="button"
                 accessibilityLabel={`Answer with ${option}`}
+                accessibilityState={{ disabled: isResponding }}
                 style={({ pressed }) => ({
                   minHeight: minimumTouchTarget(),
                   justifyContent: "center",
@@ -226,11 +231,11 @@ export function PendingRequestCard({
               </Pressable>
             ))}
             <Pressable
-              disabled={!askDraft.trim()}
+              disabled={isResponding || !askDraft.trim()}
               onPress={onAnswerText}
               accessibilityRole="button"
               accessibilityLabel="Send answer"
-              accessibilityState={{ disabled: !askDraft.trim() }}
+              accessibilityState={{ disabled: isResponding || !askDraft.trim() }}
               style={({ pressed }) => ({
                 minHeight: minimumTouchTarget(),
                 justifyContent: "center",

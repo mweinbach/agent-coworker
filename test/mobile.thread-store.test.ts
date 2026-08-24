@@ -622,4 +622,68 @@ describe("mobile thread store offline draft preservation", () => {
     expect(useThreadStore.getState().getPendingRequest("remote-1")).toBeNull();
     expect(useThreadStore.getState().snapshots["remote-1"].hasPendingAsk).toBe(false);
   });
+
+  test("keeps concurrent interactions ordered and resolves only their exact request fingerprint", () => {
+    const store = useThreadStore.getState();
+    store.hydrate({
+      sessionId: "remote-interactions",
+      title: "Remote Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "remote-session",
+      sessionKind: "primary",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 0,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    const first = {
+      kind: "ask" as const,
+      method: "item/tool/requestUserInput" as const,
+      threadId: "remote-interactions",
+      itemId: "ask-1",
+      requestId: 7,
+      requestFingerprint: "request-first",
+      question: "First?",
+      options: [],
+    };
+    const second = {
+      kind: "approval" as const,
+      method: "item/commandExecution/requestApproval" as const,
+      threadId: "remote-interactions",
+      itemId: "approval-2",
+      requestId: 8,
+      requestFingerprint: "request-second",
+      command: "echo hello",
+      reason: "Run a command",
+      dangerous: false,
+    };
+
+    store.setPendingRequest(first);
+    store.setPendingRequest(second);
+    store.setPendingRequest(second);
+
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-first",
+    );
+
+    store.clearPendingRequest("remote-interactions", "unrelated-resolution");
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-first",
+    );
+
+    store.clearPendingRequest("remote-interactions", "request-first");
+    expect(store.getPendingRequest("remote-interactions")?.requestFingerprint).toBe(
+      "request-second",
+    );
+
+    store.clearPendingRequest("remote-interactions", "request-second");
+    expect(store.getPendingRequest("remote-interactions")).toBeNull();
+    expect(store.getThread("remote-interactions")?.pendingPrompt).toBe(false);
+  });
 });

@@ -163,7 +163,14 @@ export type JsonRpcNotification =
   | { method: "item/agentMessage/delta"; params: CoworkItemDeltaNotification }
   | { method: "item/reasoning/delta"; params: CoworkReasoningDeltaNotification }
   | { method: "turn/completed"; params: CoworkTurnCompletedNotification }
-  | { method: "serverRequest/resolved"; params: { threadId: string; requestId: string } };
+  | {
+      method: "serverRequest/resolved";
+      params: {
+        threadId: string;
+        requestId: string;
+        response?: { kind: "ask"; answer: string } | { kind: "approval"; approved: boolean };
+      };
+    };
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -256,6 +263,12 @@ function normalizeNotification(message: JsonRpcNotificationMessage): JsonRpcNoti
           .object({
             threadId: z.string().trim().min(1),
             requestId: z.string().trim().min(1),
+            response: z
+              .discriminatedUnion("kind", [
+                z.object({ kind: z.literal("ask"), answer: z.string() }).strict(),
+                z.object({ kind: z.literal("approval"), approved: z.boolean() }).strict(),
+              ])
+              .optional(),
           })
           .strict()
           .parse(message.params),

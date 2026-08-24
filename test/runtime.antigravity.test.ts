@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -581,7 +582,9 @@ describe("antigravity runtime", () => {
 
   test("never starts a local harness for a turn cancelled before startup", async () => {
     const runtime = createAntigravityRuntime({ platform: "linux" });
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-cancel-before-start-"));
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-cancel-before-start-"),
+    );
     const controller = new AbortController();
     controller.abort();
     const starts = mock(() => {});
@@ -600,7 +603,9 @@ describe("antigravity runtime", () => {
 
   test("stops and releases a harness when startup fails after partially connecting", async () => {
     const runtime = createAntigravityRuntime({ platform: "linux" });
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-startup-failure-"));
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-startup-failure-"),
+    );
     (Agent as any).__setStartMockImpl(async (agent: { isConnected: boolean }) => {
       agent.isConnected = true;
       throw new Error("local harness startup failed");
@@ -619,7 +624,9 @@ describe("antigravity runtime", () => {
 
   test("Stop settles immediately when local harness startup never answers", async () => {
     const runtime = createAntigravityRuntime({ platform: "linux" });
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-stalled-startup-"));
+    const homeDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "antigravity-stalled-startup-"),
+    );
     const startup = Promise.withResolvers<void>();
     (Agent as any).__setStartMockImpl(async () => await startup.promise);
     process.env.GEMINI_API_KEY = "test-key";

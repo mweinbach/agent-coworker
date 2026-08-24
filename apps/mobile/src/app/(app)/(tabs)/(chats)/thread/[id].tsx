@@ -171,7 +171,6 @@ export default function ThreadDetailScreen() {
     (state) => state.lastFeedMutationByThread?.[threadId] ?? null,
   );
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
-  const submitComposer = useThreadStore((state) => state.submitComposer);
   const promoteDraftThread = useThreadStore((state) => state.promoteDraftThread);
   const beginComposerSubmission = useThreadStore((state) => state.beginComposerSubmission);
   const retryComposerSubmission = useThreadStore((state) => state.retryComposerSubmission);
@@ -222,28 +221,20 @@ export default function ThreadDetailScreen() {
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected =
     connectionState.status === "connected" && connectionState.transportMode === "native";
-  const isOfflineReadOnly = !isConnected && !isDraftThread;
+  const isOffline = !isConnected;
   const [isLoadingThread, setIsLoadingThread] = useState(() =>
     Boolean(threadId && !isDraftThread && !thread),
   );
   const capability = useMemo(
     () =>
       resolveComposerCapabilityAvailability({
-        connected: isConnected || isDraftThread,
+        connected: isConnected,
         providerId: snapshotProvider ?? defaultProvider,
         modelId: snapshotModel ?? defaultModel,
         catalog: providerCatalog,
         attachmentPickerAvailable: false,
       }),
-    [
-      defaultModel,
-      defaultProvider,
-      isConnected,
-      isDraftThread,
-      providerCatalog,
-      snapshotModel,
-      snapshotProvider,
-    ],
+    [defaultModel, defaultProvider, isConnected, providerCatalog, snapshotModel, snapshotProvider],
   );
   useAccessibilityAnnouncement(thread ? `Opened chat ${thread.title}` : null);
   useAccessibilityAnnouncement(
@@ -739,9 +730,6 @@ export default function ThreadDetailScreen() {
 
   async function handleSubmitComposer() {
     if (!isConnected || !runtimeClient) {
-      if (isDraftThread) {
-        submitComposer(activeThread.id);
-      }
       return;
     }
     const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto
@@ -796,12 +784,12 @@ export default function ThreadDetailScreen() {
     hasFailedSubmission: activeThread.composerSubmission?.status === "failed",
   });
   const modelIsUnavailable = capability.model.availability === "unavailable";
-  const sessionHelperText = isOfflineReadOnly
-    ? "Showing cached messages. Connect to your desktop to send."
+  const sessionHelperText = isOffline
+    ? isDraftThread
+      ? "Your draft is saved on this phone. Reconnect to your desktop to send."
+      : "Showing cached messages. Your draft is saved on this phone; reconnect to your desktop to send."
     : isDraftThread
-      ? isConnected
-        ? "Send to start this conversation on your desktop."
-        : "This draft stays local until you pair with a desktop."
+      ? "Send to start this conversation on your desktop."
       : null;
   const composerHelperText = [sessionHelperText, describeComposerCapabilityAvailability(capability)]
     .filter((value): value is string => value !== null)
@@ -841,7 +829,7 @@ export default function ThreadDetailScreen() {
   }
 
   const showSessionBadge =
-    isDraftThread || activePendingRequest !== null || isOfflineReadOnly || turnActive;
+    isDraftThread || activePendingRequest !== null || isOffline || turnActive;
 
   return (
     <>
@@ -928,8 +916,8 @@ export default function ThreadDetailScreen() {
                     {showSessionBadge ? (
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                         {isDraftThread ? <StatusPill label="local draft" tone="primary" /> : null}
-                        {isOfflineReadOnly ? (
-                          <StatusPill label="offline · read only" tone="warning" />
+                        {isOffline ? (
+                          <StatusPill label="offline · draft saved" tone="warning" />
                         ) : null}
                         {turnActive && !activePendingRequest ? (
                           <StatusPill label="working" tone="primary" />
@@ -1131,7 +1119,7 @@ export default function ThreadDetailScreen() {
             isBusy={showStop}
             isStopping={isStopping}
             helperText={composerHelperText}
-            submitLabel={isDraftThread ? "Save draft" : "Send"}
+            submitLabel="Send"
           />
         </View>
       </KeyboardAvoidingView>

@@ -146,6 +146,7 @@ mockLocalModule(
 // Mock threadStore hydrate method and State
 const mockHydrate = mock((snapshot: any) => {});
 const mockSetComposerDraft = mock((_threadId: string, _text: string) => {});
+const mockSubmitComposer = mock((_threadId: string) => {});
 const mockAppendOptimisticUserMessage = mock(
   (_threadId: string, _text: string, _clientMessageId: string) => {},
 );
@@ -191,7 +192,7 @@ const threadStoreMock = () => ({
         markTurnStarted: mockMarkTurnStarted,
         markTurnCompleted: mockMarkTurnCompleted,
         setComposerDraft: mockSetComposerDraft,
-        submitComposer: () => {},
+        submitComposer: mockSubmitComposer,
         promoteDraftThread: mockPromoteDraftThread,
         beginComposerSubmission: mockBeginComposerSubmission,
         retryComposerSubmission: mockRetryComposerSubmission,
@@ -375,6 +376,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockRouterReplace.mockClear();
     mockHydrate.mockClear();
     mockSetComposerDraft.mockClear();
+    mockSubmitComposer.mockClear();
     mockBeginComposerSubmission.mockClear();
     mockRetryComposerSubmission.mockClear();
     mockFailComposerSubmission.mockClear();
@@ -513,6 +515,7 @@ describe("mobile ThreadDetailScreen", () => {
         root!.render(createElement(ThreadDetailScreen));
       });
 
+      expect(latestComposerProps?.submitLabel).toBe("Send");
       await act(async () => {
         await latestComposerProps?.onSubmit();
       });
@@ -746,7 +749,7 @@ describe("mobile ThreadDetailScreen", () => {
     }
   });
 
-  test("uses cached thread data as read-only while disconnected", async () => {
+  test("keeps cached conversations editable without implying offline delivery", async () => {
     mockConnectionState = {
       status: "error",
       transportMode: "native",
@@ -776,11 +779,20 @@ describe("mobile ThreadDetailScreen", () => {
       expect(mockResumeThread).not.toHaveBeenCalled();
       expect(mockReadThread).not.toHaveBeenCalled();
       expect(mockHydrate).not.toHaveBeenCalled();
-      expect(latestComposerProps?.canEdit).toBe(false);
+      expect(latestComposerProps?.canEdit).toBe(true);
       expect(latestComposerProps?.canSubmit).toBe(false);
       expect(latestComposerProps?.helperText).toContain("Showing cached messages");
+      expect(latestComposerProps?.helperText).toContain("saved");
+      expect(latestComposerProps?.helperText).toContain("reconnect");
+      latestComposerProps?.onChangeText("  Preserve this offline draft\n");
+      expect(mockSetComposerDraft).toHaveBeenCalledWith(
+        "test-thread-123",
+        "  Preserve this offline draft\n",
+      );
       await latestComposerProps?.onSubmit();
       expect(mockResumeThread).not.toHaveBeenCalled();
+      expect(mockBeginComposerSubmission).not.toHaveBeenCalled();
+      expect(mockStartTurn).not.toHaveBeenCalled();
     } finally {
       if (root) {
         try {
@@ -792,6 +804,51 @@ describe("mobile ThreadDetailScreen", () => {
       harness.restore();
     }
   });
+
+  test.each(["android", "ios"] as const)(
+    "%s never clears or fake-sends an offline local conversation draft",
+    async (_platform) => {
+      mockRouteThreadId = "draft-offline-1";
+      mockConnectionState = {
+        status: "reconnecting",
+        transportMode: "native",
+      };
+      mockThread.id = "draft-offline-1";
+      mockThread.composerDraft = "  Keep my unsent message\n";
+      const harness = setupJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root container");
+        root = createRoot(container);
+
+        await act(async () => {
+          root!.render(createElement(ThreadDetailScreen));
+        });
+
+        expect(latestComposerProps?.canEdit).toBe(true);
+        expect(latestComposerProps?.canSubmit).toBe(false);
+        expect(latestComposerProps?.value).toBe("  Keep my unsent message\n");
+        expect(latestComposerProps?.helperText).toContain("saved");
+        expect(latestComposerProps?.helperText).toContain("connect");
+        await latestComposerProps?.onSubmit();
+
+        expect(mockSubmitComposer).not.toHaveBeenCalled();
+        expect(mockBeginComposerSubmission).not.toHaveBeenCalled();
+        expect(mockStartThread).not.toHaveBeenCalled();
+        expect(mockStartTurn).not.toHaveBeenCalled();
+        expect(mockThread.composerDraft).toBe("  Keep my unsent message\n");
+      } finally {
+        if (root) {
+          await act(async () => {
+            root!.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
 
   test("never redirects a failed response retry to a newer server request", async () => {
     mockPendingRequest = {

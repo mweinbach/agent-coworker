@@ -133,6 +133,24 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().notifications).toHaveLength(0);
   });
 
+  test("updateWorkspaceDefaults applies workflow concurrency to the running workspace", async () => {
+    jsonRpcRequests.length = 0;
+
+    const result = await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultWorkflowMaxConcurrentAgents: 3,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(
+      useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId)
+        ?.defaultWorkflowMaxConcurrentAgents,
+    ).toBe(3);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      config: { workflowMaxConcurrentAgents: 3 },
+    });
+  });
+
   test("keeps the preferred subagent model and its ref together in one patch", async () => {
     // Reproduces a real workspace: the chat provider moved to codex-cli while a
     // Google subagent model stayed saved. Sending the legacy model id alone made
@@ -670,6 +688,30 @@ describe("workspace settings sync", () => {
           },
         },
       },
+    });
+  });
+
+  test("applyWorkspaceDefaultsToThread updates workflow concurrency for existing chats", async () => {
+    primeWorkspaceConnection();
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? { ...workspace, defaultWorkflowMaxConcurrentAgents: 3 }
+          : workspace,
+      ),
+    }));
+    const { threadId, sessionId } = seedConnectedThread({
+      sessionConfig: { workflowMaxConcurrentAgents: 12 },
+    });
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      threadId: sessionId,
+      cwd: "/tmp/workspace",
+      config: { workflowMaxConcurrentAgents: 3 },
     });
   });
 

@@ -929,6 +929,9 @@ export function createWorkspaceDefaultsActions(
             : harnessToolOutputOverflowChars !== undefined
               ? { toolOutputOverflowChars: harnessToolOutputOverflowChars }
               : {}),
+          workflowMaxConcurrentAgents:
+            ws.defaultWorkflowMaxConcurrentAgents ??
+            workspaceRuntime?.controlSessionConfig?.workflowMaxConcurrentAgents,
           ...(preferredChildModel ? { preferredChildModel } : {}),
           ...(childModelRoutingMode ? { childModelRoutingMode } : {}),
           ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
@@ -1079,6 +1082,7 @@ export function createWorkspaceDefaultsActions(
             workspacePatch.defaultPreferredChildModelRef !== undefined ||
             workspacePatch.defaultAllowedChildModelRefs !== undefined ||
             workspacePatch.defaultToolOutputOverflowChars !== undefined ||
+            workspacePatch.defaultWorkflowMaxConcurrentAgents !== undefined ||
             clearDefaultToolOutputOverflowChars === true ||
             workspacePatch.defaultAdvancedMemory !== undefined ||
             workspacePatch.defaultMemoryGenerationModel !== undefined ||

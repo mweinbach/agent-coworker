@@ -380,10 +380,16 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
     }
     const taskId = asSafeId(item.taskId);
     const taskThreadId = taskId ? asSafeId(item.taskThreadId) : null;
+    const sessionKind =
+      item.sessionKind === "root" || item.sessionKind === "agent" ? item.sessionKind : undefined;
+    const parentSessionId =
+      item.parentSessionId === null ? null : (asSafeId(item.parentSessionId) ?? undefined);
 
     threads.push({
       id,
       workspaceId,
+      ...(sessionKind ? { sessionKind } : {}),
+      ...(parentSessionId !== undefined ? { parentSessionId } : {}),
       title,
       titleSource: asThreadTitleSource(item.titleSource, title),
       createdAt,

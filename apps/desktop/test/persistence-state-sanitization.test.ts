@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { pinHome } from "../../../test/helpers/platform";
+import { isStandardChatThread } from "../src/app/threadFilters";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 let userDataDir = "";
@@ -298,6 +299,98 @@ describe("desktop persistence state validation", () => {
         taskThreadId: expect.any(String),
       }),
     ]);
+  });
+
+  test("saveState preserves subagent thread identity and safely sanitizes parent linkage", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-subagents");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_subagents",
+          name: "Subagent workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "root_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "root",
+          parentSessionId: null,
+          title: "Root chat",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "root_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "agent_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "agent",
+          parentSessionId: "root_session",
+          title: "Subagent run",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "agent_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "malformed_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "worker" as "agent",
+          parentSessionId: "../root_session",
+          title: "Malformed session identity",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "malformed_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+        {
+          id: "malformed_parent_thread",
+          workspaceId: "ws_subagents",
+          sessionKind: "agent",
+          parentSessionId: 42 as unknown as string,
+          title: "Malformed parent linkage",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: "malformed_parent_session",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+    });
+
+    const loaded = await persistence.loadState();
+    const rootThread = loaded.threads.find((thread) => thread.id === "root_thread");
+    const agentThread = loaded.threads.find((thread) => thread.id === "agent_thread");
+    const malformedThread = loaded.threads.find((thread) => thread.id === "malformed_thread");
+    const malformedParentThread = loaded.threads.find(
+      (thread) => thread.id === "malformed_parent_thread",
+    );
+
+    expect(rootThread).toMatchObject({ sessionKind: "root", parentSessionId: null });
+    expect(agentThread).toMatchObject({ sessionKind: "agent", parentSessionId: "root_session" });
+    expect(isStandardChatThread(agentThread!)).toBe(false);
+    expect(malformedThread).not.toHaveProperty("sessionKind");
+    expect(malformedThread).not.toHaveProperty("parentSessionId");
+    expect(malformedParentThread).toMatchObject({ sessionKind: "agent" });
+    expect(malformedParentThread).not.toHaveProperty("parentSessionId");
   });
 
   test("saveState preserves yolo configuration", async () => {

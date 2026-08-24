@@ -818,6 +818,7 @@ export function createFeedProjectionModule(
             executionState: snapshot.executionState,
             lastMessagePreview: snapshot.lastMessagePreview,
             agents: snapshot.agents,
+            workflowRuns: snapshot.workflowRuns ?? [],
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: nextFeed,

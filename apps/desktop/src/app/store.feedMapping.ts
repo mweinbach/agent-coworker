@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
+import { upsertRetainedWorkflowRun } from "../../../../src/shared/workflows";
 import {
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
@@ -1258,15 +1259,15 @@ export function extractAgentStateFromTranscript(events: TranscriptEvent[]): Thre
  * per runId rather than merging.
  */
 export function extractWorkflowRunsFromTranscript(events: TranscriptEvent[]): ThreadWorkflowRun[] {
-  const byRunId = new Map<string, ThreadWorkflowRun>();
+  let runs: ThreadWorkflowRun[] = [];
 
   for (const evt of events) {
     const parsed = safeParseSessionEvent(evt.payload);
     if (parsed?.type !== "workflow_progress") continue;
-    byRunId.set(parsed.progress.runId, parsed.progress);
+    runs = upsertRetainedWorkflowRun(runs, parsed.progress);
   }
 
-  return [...byRunId.values()];
+  return runs;
 }
 
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {

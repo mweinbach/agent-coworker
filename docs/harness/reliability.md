@@ -36,6 +36,13 @@ outages, concurrent actions, and restarts.
 9. **Failures are honest.** Interrupted model streams are failed turns, not
    successful partial answers. Permission denials explain the missing grant.
    Connected means its event stream is genuinely usable.
+10. **Unavailable projects never erase or freeze unrelated work.** A temporarily
+    disconnected drive preserves its project, conversation history, drafts, and
+    trusted authorization. Other application state remains writable, and
+    reconnecting the drive restores access without widening workspace permissions.
+11. **Every loading operation settles.** Event-dependent requests require their
+    authoritative response event. Missing or mismatched responses surface an
+    actionable retry state instead of leaving an indefinite spinner or lock.
 
 ## Architecture ownership
 
@@ -48,6 +55,9 @@ outages, concurrent actions, and restarts.
   permission state.
 - Shared provider runtimes are workspace-scoped resources. They are not owned by
   whichever individual conversation happens to terminate first.
+- Chat workspaces, durable sessions, configuration, and credentials resolve
+  against the same canonical Cowork home. Environment isolation cannot silently
+  split them across different user profiles.
 - Diagnostic trace capture must not be allowed to corrupt authoritative user
   work. Durability of canonical messages, interactions, and execution state takes
   precedence over optional observability.
@@ -71,6 +81,12 @@ outages, concurrent actions, and restarts.
 
 - Successful-write deduplication advances only after a durable write succeeds.
 - Concurrent writes are serialized, and transient failures remain retryable.
+- A canonical mutation committed before a failed rich snapshot is resumed from
+  its original checkpoint; retries never create duplicate canonical events.
+- Trusted persisted projects remain readable by identity while their storage is
+  unavailable. Previously unapproved paths, removed projects, and symlink
+  escapes never become authorized through offline recovery.
+- Concurrent first-use preparation shares one in-flight workspace allocation.
 - Startup recovery reconciles only sessions and tasks owned by that workspace.
 - Idle-session eviction counts actual client subscribers, not permanent internal
   journal sinks; active turns remain protected.
@@ -102,6 +118,11 @@ Reliability fixes require deterministic, user-visible fault-injection coverage:
 - queued approvals and messages while a reconnect itself fails;
 - desktop/mobile approval resolution from a second device;
 - offline draft restoration and late cache hydration;
+- unplugged project, unrelated state save, restart, remount, and retry;
+- concurrent first-use chat preparation and cancellation;
+- missing or mismatched authoritative catalog response events;
+- matching chat, session, and credential roots under an isolated Cowork home;
+- optional model diagnostics failing without aborting the canonical answer;
 - mobile background-to-foreground stream replacement;
 - provider outage before versus after visible assistant output; and
 - graceful shutdown, failed state writes, and idle-runtime cleanup.

@@ -284,6 +284,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       toolEnv: context.deps.toolEnv,
       onWorkflowProgress: (progress) => {
         context.emit({ type: "workflow_progress", sessionId: context.id, progress });
+        if (progress.outcome !== undefined) {
+          context.queuePersistSessionSnapshot("session.workflow_completed");
+        }
       },
       onSessionUsageBudgetUpdated: (snapshot) => {
         context.emit({

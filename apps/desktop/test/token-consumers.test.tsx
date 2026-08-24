@@ -129,7 +129,9 @@ describe("desktop token consumers", () => {
       }),
     );
 
-    expect(html).toContain("bg-foreground/[0.02]");
+    expect(html).toContain("app-border-subtle");
+    expect(html).toContain("app-fill-subtle");
+    expect(html).toContain("hover:app-fill-strong");
     expect(html).toContain("text-success/90");
   });
 

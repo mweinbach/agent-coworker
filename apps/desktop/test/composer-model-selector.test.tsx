@@ -141,12 +141,11 @@ describe("ComposerModelSelector", () => {
     const popover = body.querySelector('[data-slot="popover-content"]');
     const command = body.querySelector('[data-slot="command"]');
 
-    expect(popover?.className).toContain("border-border/45");
+    expect(popover?.className).toContain("app-border-subtle");
     expect(popover?.className).toContain("shadow-foreground/10");
     expect(popover?.className).toContain("outline-none");
-    expect(command?.className).toContain(
-      "[&_[data-slot=command-input-wrapper]]:border-b-border/50",
-    );
+    expect(command?.className).toContain("[&_[data-slot=command-input-wrapper]]:border-b");
+    expect(command?.className).toContain("[&_[data-slot=command-input-wrapper]]:app-border-subtle");
   });
 
   test("selecting a model fires onChange with the provider/model pair", async () => {

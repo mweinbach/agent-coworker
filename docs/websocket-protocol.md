@@ -3995,6 +3995,7 @@ Result event emitted after an `agent_wait` request resolves or times out.
     }
   ],
   "readyAgentIds": ["child-456"],
+  "erroredAgentIds": [],
   "inspections": [
     {
       "agentId": "child-456",
@@ -4024,6 +4025,7 @@ Result event emitted after an `agent_wait` request resolves or times out.
 | `mode` | `"any" \| "all"` | Wait mode used for this request |
 | `agents` | `PersistentAgentSummary[]` | Latest known child summaries for the requested ids, returned in request order even on timeout |
 | `readyAgentIds` | `string[]` | Requested child ids currently in a terminal state (`completed`, `errored`, or `closed`) |
+| `erroredAgentIds` | `string[]` | Ready child ids that failed; their partial assistant text must not be treated as a successful result |
 | `inspections` | `AgentWaitInspection[]` | Optional rich results for ready child agents, present only when `includeFinalMessage` or `includeReport` was requested |
 
 ---

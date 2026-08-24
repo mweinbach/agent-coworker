@@ -719,7 +719,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
                 );
               });
             } else if (typeof drainResult === "object" && "error" in drainResult) {
-              log(`[warn] Model stream ended with error: ${String(drainResult.error)}`);
+              log(`[model:error] Model stream ended with error: ${String(drainResult.error)}`);
+              await params.onModelError?.(drainResult.error);
+              throw drainResult.error;
             }
             // else: drained successfully, nothing to log
           }

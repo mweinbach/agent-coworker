@@ -433,7 +433,7 @@ describe("runTurn – multi-step tool loops", () => {
   // 7. Error during stream consumption
   // -------------------------------------------------------------------------
 
-  test("error during fullStream consumption is logged and turn still completes", async () => {
+  test("error during fullStream consumption fails the turn instead of claiming partial success", async () => {
     const partsBeforeError = [
       { type: "start" },
       { type: "start-step", stepNumber: 0 },
@@ -460,45 +460,24 @@ describe("runTurn – multi-step tool loops", () => {
     });
 
     const log = mock(() => {});
+    const onModelError = mock(async () => {});
     const seen: unknown[] = [];
 
-    const result = await Promise.race([
+    await expect(
       runTurn(
         makeParams({
           log,
+          onModelError,
           onModelStreamPart: async (part) => {
             seen.push(part);
           },
         }),
       ),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
-    ]);
+    ).rejects.toThrow("Stream interrupted");
 
-    expect(result).not.toBe("timeout");
-    if (result === "timeout") return;
-
-    // Parts before the error should have been forwarded
-    expect(seen.length).toBe(3);
     expect(seen).toEqual(partsBeforeError);
-
-    // The turn should still complete with the text
-    expect(result.text).toBe("partial response");
-
-    // The error should be logged as a warning. Depending on microtask timing,
-    // the agent may take either the "settled" path (logs synchronously before
-    // runTurn returns) or the "not settled" path (logs via a fire-and-forget
-    // .catch). Allow a small delay to let the async catch handler run, then
-    // check for either variant of the warning.
-    await new Promise((r) => setTimeout(r, 50));
-    const logCalls = (log as any).mock.calls.map((c: any) => c[0]);
-    const hasStreamError = logCalls.some(
-      (msg: string) => msg.includes("[warn]") && msg.includes("Stream interrupted"),
-    );
-    const hasStreamDidNotDrain = logCalls.some((msg: string) =>
-      msg.includes("Model stream did not drain"),
-    );
-    // At least one of the warning paths should have triggered
-    expect(hasStreamError || hasStreamDidNotDrain).toBe(true);
+    expect(onModelError).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.some(([line]) => line.includes("Stream interrupted"))).toBe(true);
   });
 
   // -------------------------------------------------------------------------

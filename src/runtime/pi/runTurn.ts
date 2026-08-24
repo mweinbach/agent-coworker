@@ -31,6 +31,7 @@ import {
 import { withPatchedNvidiaFetch } from "./nvidiaFetchPatch";
 import {
   isRateLimitError,
+  isTransientProviderError,
   isVisibleAssistantStreamPart,
   rateLimitBackoffDelayMs,
   resolveRateLimitMaxAttempts,
@@ -187,20 +188,23 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                 markModelCallSpanSuccessFromAssistantRecord(span, telemetry, assistantRecord);
                 break;
               } catch (error) {
-                const retryableRateLimit =
+                const retryableProviderFailure =
                   attempt < maxModelCallAttempts &&
                   !emittedAssistantContent &&
                   !isAbortLikeError(error, params.abortSignal) &&
-                  isRateLimitError(error);
-                if (!retryableRateLimit) {
+                  isTransientProviderError(error);
+                if (!retryableProviderFailure) {
                   for (const part of bufferedErrorParts) {
                     await emitPart(part);
                   }
                   throw error;
                 }
                 const delayMs = rateLimitBackoffDelayMs(attempt);
+                const failureDescription = isRateLimitError(error)
+                  ? "rate-limited the model call"
+                  : "encountered a temporary provider failure";
                 params.log?.(
-                  `pi: ${params.config.provider} rate-limited the model call; retrying attempt ${attempt + 1}/${maxModelCallAttempts} in ${(delayMs / 1000).toFixed(1)}s`,
+                  `pi: ${params.config.provider} ${failureDescription}; retrying attempt ${attempt + 1}/${maxModelCallAttempts} in ${(delayMs / 1000).toFixed(1)}s`,
                 );
                 await retrySleep(delayMs, params.abortSignal);
               }

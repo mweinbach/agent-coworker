@@ -27,6 +27,10 @@ outages, concurrent actions, and restarts.
 6. **Approvals are authoritative and shared.** A decision remains pending until
    its matching server receipt exists. Its resolution reaches every subscribed
    client; reconnect replay cannot clear a different outstanding interaction.
+   Unopened clients discover it through authoritative thread summaries, and a
+   process restart clears prompts whose resolver no longer exists. An explicit
+   rejection can never become approval through contradictory response fields,
+   and a missing resolver never fabricates a successful decision receipt.
 7. **Stop actually stops.** Cancellation interrupts startup, model execution,
    connector preparation, and provider backoff. When explicitly requested, the
    harness also stops the active turn's subagents.
@@ -35,7 +39,8 @@ outages, concurrent actions, and restarts.
    restart. Late disk/cache hydration never overwrites newer live state.
 9. **Failures are honest.** Interrupted model streams are failed turns, not
    successful partial answers. Permission denials explain the missing grant.
-   Connected means its event stream is genuinely usable.
+   Connected means its event stream is genuinely usable. Provider sign-in
+   failures preserve the entered credential or authorization code for retry.
 10. **Unavailable projects never erase or freeze unrelated work.** A temporarily
     disconnected drive preserves its project, conversation history, drafts, and
     trusted authorization. Other application state remains writable, and
@@ -88,6 +93,8 @@ outages, concurrent actions, and restarts.
   escapes never become authorized through offline recovery.
 - Concurrent first-use preparation shares one in-flight workspace allocation.
 - Startup recovery reconciles only sessions and tasks owned by that workspace.
+- Interrupted startup recovery clears impossible pending interactions from both
+  canonical session records and their materialized snapshots.
 - Idle-session eviction counts actual client subscribers, not permanent internal
   journal sinks; active turns remain protected.
 - Server shutdown drains journals, sessions, and analytics within its bounded
@@ -105,6 +112,9 @@ outages, concurrent actions, and restarts.
   applied event.
 - Transport-level HTTP acceptance does not replace an authoritative approval or
   question-resolution receipt.
+- An authentication form clears retry input only after its authoritative
+  provider operation succeeds; explicit unauthorized provider state disables
+  sends that the harness would certainly reject.
 
 ## Regression matrix
 
@@ -117,10 +127,13 @@ Reliability fixes require deterministic, user-visible fault-injection coverage:
 - stalled connection, handshake, model startup, connector, or HTTP send;
 - queued approvals and messages while a reconnect itself fails;
 - desktop/mobile approval resolution from a second device;
+- unopened approval discovery and crash recovery across isolated workspaces;
+- contradictory approval responses and prompts whose owning runtime disappeared;
 - offline draft restoration and late cache hydration;
 - unplugged project, unrelated state save, restart, remount, and retry;
 - concurrent first-use chat preparation and cancellation;
 - missing or mismatched authoritative catalog response events;
+- rejected provider credentials or authorization codes with preserved retry;
 - matching chat, session, and credential roots under an isolated Cowork home;
 - optional model diagnostics failing without aborting the canonical answer;
 - mobile background-to-foreground stream replacement;

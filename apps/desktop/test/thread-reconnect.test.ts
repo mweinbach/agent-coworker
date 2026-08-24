@@ -1136,6 +1136,43 @@ describe("thread reconnect over shared JSON-RPC socket", () => {
     ]);
   });
 
+  test("retries automatic thread recovery after one temporary resume failure", async () => {
+    const { threadId } = seedStore();
+
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+
+    const activeThreadId = canonicalThreadId("session-1", threadId);
+    const socket = MockJsonRpcSocket.instances[0];
+    let recoveryAttempts = 0;
+    jsonRpcHandlers.set("thread/resume", async () => {
+      recoveryAttempts += 1;
+      if (recoveryAttempts === 1) {
+        throw new Error("The workspace server is still recovering.");
+      }
+      return { thread: threadMeta("session-1") };
+    });
+
+    socket.close();
+    await flushAsyncWork();
+    socket.reopen();
+    await flushAsyncWork();
+
+    expect(recoveryAttempts).toBe(1);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.connected).toBe(false);
+
+    socket.close();
+    await flushAsyncWork();
+    socket.reopen();
+    await flushAsyncWork();
+
+    expect(recoveryAttempts).toBe(2);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.connected).toBe(true);
+    expect(
+      useAppStore.getState().threads.find((thread) => thread.id === activeThreadId)?.status,
+    ).toBe("active");
+  });
+
   test("stale shared JsonRpcSocket close after a serverUrl swap does not disconnect tracked threads", async () => {
     const { threadId, workspaceId } = seedStore();
 

@@ -199,7 +199,15 @@ export function createSocketModule(
         if (isWorkspaceDisposed(workspaceId)) {
           return;
         }
-        forgetThreadForReconnect(workspaceId, activeThreadId);
+        const recoverableSessionId =
+          get().threadRuntimeById[activeThreadId]?.sessionId ??
+          get().threads.find((thread) => thread.id === activeThreadId)?.sessionId ??
+          null;
+        if (recoverableSessionId) {
+          rememberThreadForReconnect(workspaceId, activeThreadId);
+        } else {
+          forgetThreadForReconnect(workspaceId, activeThreadId);
+        }
         set((s) => {
           const runtime = s.threadRuntimeById[activeThreadId];
           if (!runtime) {

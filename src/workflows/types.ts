@@ -15,7 +15,7 @@ export type WorkflowAgentOptions = {
   phase?: string;
   /** JSON Schema. When present, `agent()` resolves to a validated object, not a string. */
   schema?: WorkflowJsonSchema;
-  /** Model id or `provider:modelId`. Goes through `routeAgentConfig`; may fall back. */
+  /** Model id or `provider:modelId`. Disallowed or unavailable targets fail closed. */
   model?: string;
   effort?: AgentReasoningEffort;
   /** Maps to `contextMode`. `"full"` is deliberately unavailable — see docs/workflows.md. */

@@ -409,7 +409,7 @@ describe("lmstudio provider", () => {
     expect(routed.effectiveModel).toBe("local/qwen-2.5");
   });
 
-  test("routeAgentConfig falls back cleanly when LM Studio is disconnected", () => {
+  test("routeAgentConfig rejects disconnected LM Studio models without silently falling back", () => {
     const parentConfig = makeConfig({
       provider: "lmstudio",
       model: "local/current",
@@ -419,14 +419,12 @@ describe("lmstudio provider", () => {
       knowledgeCutoff: "Unknown",
     });
 
-    const routed = routeAgentConfig(parentConfig, {
-      role: AGENT_ROLE_DEFINITIONS.worker,
-      model: "local/qwen-2.5",
-      connectedProviders: ["openai"],
-    });
-
-    expect(routed.effectiveProvider).toBe("lmstudio");
-    expect(routed.effectiveModel).toBe("local/current");
-    expect(routed.fallbackLine).toContain("LM Studio is not connected");
+    expect(() =>
+      routeAgentConfig(parentConfig, {
+        role: AGENT_ROLE_DEFINITIONS.worker,
+        model: "local/qwen-2.5",
+        connectedProviders: ["openai"],
+      }),
+    ).toThrow(/LM Studio is not connected\. No child was started\./);
   });
 });

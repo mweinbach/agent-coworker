@@ -446,6 +446,19 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
   });
 
+  test("warns that unavailable child model targets fail closed without fallback", () => {
+    const prompt = buildSpawnAgentPromptBody(
+      makeConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+      }),
+    );
+
+    expect(prompt).toContain("the spawn request is rejected and no child is started");
+    expect(prompt).not.toContain("the child falls back to the live parent provider/model");
+  });
+
   test("default prompt includes explicit explorer-worker-reviewer plan-mode mapping", async () => {
     const config = makeConfig({
       provider: "opencode-go",

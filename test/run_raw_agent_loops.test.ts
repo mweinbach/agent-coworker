@@ -95,7 +95,7 @@ describe("raw loop child-agent control", () => {
     );
   });
 
-  test("falls back when requested cross-provider child ref is not connected", async () => {
+  test("rejects disconnected cross-provider child targets without running a delegate", async () => {
     const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const control = createRawLoopAgentControl(
       {
@@ -117,31 +117,15 @@ describe("raw loop child-agent control", () => {
       },
     );
 
-    const spawned = await control.spawn({
-      role: "worker",
-      model: "opencode-zen:glm-5",
-      message: "Fallback to parent provider",
-    });
-    await control.wait({
-      agentIds: [spawned.agentId],
-      timeoutMs: 1000,
-    });
+    await expect(
+      control.spawn({
+        role: "worker",
+        model: "opencode-zen:glm-5",
+        message: "Use the requested child target",
+      }),
+    ).rejects.toThrow(/requested provider is not connected.*No child was started/);
 
-    expect(spawned).toEqual(
-      expect.objectContaining({
-        provider: "codex-cli",
-        effectiveModel: "gpt-5.4",
-      }),
-    );
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          provider: "codex-cli",
-          model: "gpt-5.4",
-        }),
-        connectedProviders: ["codex-cli"],
-      }),
-    );
+    expect(run).not.toHaveBeenCalled();
   });
 
   test("supports spawnAgent handles plus waitForAgent completion", async () => {

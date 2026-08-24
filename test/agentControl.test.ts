@@ -308,11 +308,13 @@ describe("AgentControl.spawn", () => {
     childSession.waitForPersistenceIdle = mock(async () => {
       throw persistenceError;
     });
+    const deleteSession = mock(async () => {});
     const disposeBinding = mock(() => {});
+    const emitParentAgentStatus = mock(() => {});
     const sessionBindings = new Map<string, SessionBinding>();
     const control = new AgentControl({
       sessionBindings,
-      sessionDb: null,
+      sessionDb: { deleteSession } as any,
       getConnectedProviders: async () => ["openai"],
       buildSession: ((binding: SessionBinding) => {
         binding.session = childSession;
@@ -320,7 +322,7 @@ describe("AgentControl.spawn", () => {
       }) as any,
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding,
-      emitParentAgentStatus: () => {},
+      emitParentAgentStatus,
       emitParentLog: () => {},
     });
 
@@ -335,12 +337,120 @@ describe("AgentControl.spawn", () => {
     ).rejects.toBe(persistenceError);
 
     expect(childSession.sendUserMessage).not.toHaveBeenCalled();
+    expect(emitParentAgentStatus).not.toHaveBeenCalled();
+    expect(deleteSession).toHaveBeenCalledWith(childSession.id);
     expect(sessionBindings.has(childSession.id)).toBe(false);
     expect(disposeBinding).toHaveBeenCalledWith(
       expect.anything(),
       "child spawn failed before execution",
       { closeSharedCodexClient: false },
     );
+  });
+
+  test("preserves the initial persistence error when orphaned child cleanup also fails", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    const persistenceError = new Error("session snapshot write failed");
+    const cleanupError = new Error("session cleanup write lock timed out");
+    childSession.waitForPersistenceIdle = mock(async () => {
+      throw persistenceError;
+    });
+    const deleteSession = mock(async () => {
+      throw cleanupError;
+    });
+    const emitParentLog = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: { deleteSession } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog,
+    });
+
+    await expect(
+      control.spawn({
+        parentSessionId: "root-1",
+        parentConfig,
+        role: "worker",
+        message: "Must not start",
+        contextMode: "none",
+      }),
+    ).rejects.toBe(persistenceError);
+
+    expect(deleteSession).toHaveBeenCalledWith(childSession.id);
+    expect(emitParentLog).toHaveBeenCalledWith(
+      "root-1",
+      expect.stringContaining(cleanupError.message),
+    );
+  });
+
+  test("admits all 16 children awaiting initial persistence without double-counting reservations", async () => {
+    const parentConfig = makeConfig();
+    const persistenceGate = Promise.withResolvers<void>();
+    const admissions = Array.from({ length: 16 }, () => Promise.withResolvers<void>());
+    const pendingSpawns: Array<Promise<unknown>> = [];
+    let nextChildIndex = 0;
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        const childIndex = nextChildIndex++;
+        const childSession = makeChildSession(parentConfig);
+        childSession.id = `child-${childIndex}`;
+        childSession.waitForPersistenceIdle = mock(async () => {
+          admissions[childIndex]?.resolve();
+          await persistenceGate.promise;
+        });
+        binding.session = childSession;
+        return { session: childSession, isResume: false, resumedFromStorage: false };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    try {
+      for (let childIndex = 0; childIndex < admissions.length; childIndex += 1) {
+        const spawn = control.spawn({
+          parentSessionId: "root-1",
+          parentConfig,
+          role: "worker",
+          message: `Start child ${childIndex}`,
+          contextMode: "none",
+        });
+        pendingSpawns.push(spawn);
+
+        const admission = await Promise.race([
+          admissions[childIndex]!.promise.then(() => "admitted"),
+          spawn.then(
+            () => "completed",
+            (error: unknown) => error,
+          ),
+        ]);
+        expect(admission).toBe("admitted");
+      }
+
+      await expect(
+        control.spawn({
+          parentSessionId: "root-1",
+          parentConfig,
+          role: "worker",
+          message: "One too many",
+          contextMode: "none",
+        }),
+      ).rejects.toThrow(/active child agents \(limit 16\)/);
+    } finally {
+      persistenceGate.resolve();
+      await Promise.allSettled(pendingSpawns);
+    }
   });
 
   test("rejects spawning beyond the maximum depth", async () => {

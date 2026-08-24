@@ -371,7 +371,15 @@ export class AgentControl {
       );
     }
     this.inFlightSpawnsByParent.set(parentId, reserved + 1);
-    const spawnPromise = this.spawnReserved(opts, depth);
+    let reservationHeld = true;
+    const releaseReservation = () => {
+      if (!reservationHeld) return;
+      reservationHeld = false;
+      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
+      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
+      else this.inFlightSpawnsByParent.set(parentId, remaining);
+    };
+    const spawnPromise = this.spawnReserved(opts, depth, releaseReservation);
     let spawnSettlement!: Promise<void>;
     spawnSettlement = spawnPromise
       .then(
@@ -392,9 +400,7 @@ export class AgentControl {
     try {
       return await spawnPromise;
     } finally {
-      const remaining = (this.inFlightSpawnsByParent.get(parentId) ?? 1) - 1;
-      if (remaining <= 0) this.inFlightSpawnsByParent.delete(parentId);
-      else this.inFlightSpawnsByParent.set(parentId, remaining);
+      releaseReservation();
     }
   }
 
@@ -402,6 +408,7 @@ export class AgentControl {
   private async spawnReserved(
     opts: AgentSpawnOptions,
     depth: number,
+    releaseReservation: () => void,
   ): Promise<PersistentAgentSummary> {
     const profile = opts.profileRef
       ? await resolveAgentProfileSnapshot(opts.parentConfig, opts.profileRef)
@@ -499,20 +506,21 @@ export class AgentControl {
     built.session.beginDisconnectedReplayBuffer();
     const previousBinding = this.deps.sessionBindings.get(built.session.id);
     this.deps.sessionBindings.set(built.session.id, binding);
-    this.publish(opts.parentSessionId, built.session, {
-      mode: roleDefinition.defaultMode,
-      depth,
-      ...(nickname ? { nickname } : {}),
-      ...(taskType ? { taskType } : {}),
-      ...(targetPaths !== undefined ? { targetPaths } : {}),
-      requestedModel: routed.requestedModel,
-      requestedReasoningEffort: routed.requestedReasoningEffort,
-      effectiveReasoningEffort: routed.effectiveReasoningEffort,
-      executionState: "pending_init",
-    });
+    releaseReservation();
     try {
       await built.session.waitForPersistenceIdle({ throwOnError: true });
       this.assertParentWritable(opts.parentSessionId);
+      this.publish(opts.parentSessionId, built.session, {
+        mode: roleDefinition.defaultMode,
+        depth,
+        ...(nickname ? { nickname } : {}),
+        ...(taskType ? { taskType } : {}),
+        ...(targetPaths !== undefined ? { targetPaths } : {}),
+        requestedModel: routed.requestedModel,
+        requestedReasoningEffort: routed.requestedReasoningEffort,
+        effectiveReasoningEffort: routed.effectiveReasoningEffort,
+        executionState: "pending_init",
+      });
       return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
     } catch (error) {
       if (this.deps.sessionBindings.get(built.session.id) === binding) {
@@ -525,6 +533,18 @@ export class AgentControl {
       this.deps.disposeBinding(binding, "child spawn failed before execution", {
         closeSharedCodexClient: false,
       });
+      if (!previousBinding && this.deps.sessionDb) {
+        try {
+          await this.deps.sessionDb.deleteSession(built.session.id);
+        } catch (cleanupError) {
+          const message =
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          this.deps.emitParentLog(
+            opts.parentSessionId,
+            `[agent] Failed to remove child session ${built.session.id} after spawn failure: ${message}`,
+          );
+        }
+      }
       throw error;
     }
   }

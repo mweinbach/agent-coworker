@@ -107,6 +107,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   const journal = await WorkflowJournal.open({
     projectCoworkDir: opts.ctx.config.projectCoworkDir,
     runId,
+    persist: !opts.dryRun,
     ...(opts.resumeFromRunId ? { resumeFromRunId: opts.resumeFromRunId } : {}),
   });
 
@@ -401,7 +402,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
       // Re-record under this run's journal so a later resume of THIS run still
       // has the prefix. Dry runs never persist.
       if (!opts.dryRun) {
-        journal.append({ ...cached, index, digest });
+        await journal.append({ ...cached, index, digest });
       }
       postWorker({
         t: "agentResult",
@@ -469,7 +470,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
 
       // Dry-run stubs must not become a resumable journal prefix.
       if (!opts.dryRun) {
-        journal.append({
+        await journal.append({
           index,
           digest,
           phase,
@@ -512,7 +513,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
 
       if (options.onError === "null") {
         if (!opts.dryRun && row.agentId !== null) {
-          journal.append({
+          await journal.append({
             index,
             digest,
             phase,

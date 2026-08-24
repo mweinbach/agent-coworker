@@ -121,16 +121,22 @@ export class WorkflowJournal {
    * one recorded result rather than both replaying the first.
    */
   private readonly cached = new Map<string, WorkflowJournalEntry[]>();
-  private buffer = "";
+  private pendingWrite: Promise<void> = Promise.resolve();
 
   private constructor(
-    private readonly filePath: string,
+    private readonly filePath: string | null,
     prior: WorkflowJournalEntry[],
   ) {
     for (const entry of prior) {
       const bucket = this.cached.get(entry.digest);
       if (bucket) bucket.push(entry);
       else this.cached.set(entry.digest, [entry]);
+    }
+    // Fan-out checkpoints are written when each child completes, which may be
+    // different from invocation order. Preserve occurrence identity when two
+    // otherwise identical calls happened to finish in the opposite order.
+    for (const bucket of this.cached.values()) {
+      bucket.sort((first, second) => first.index - second.index);
     }
   }
 
@@ -142,7 +148,11 @@ export class WorkflowJournal {
     projectCoworkDir: string;
     runId: string;
     resumeFromRunId?: string;
+    persist?: boolean;
   }): Promise<WorkflowJournal> {
+    if (opts.persist === false) {
+      return new WorkflowJournal(null, []);
+    }
     const dir = workflowRunDir(opts.projectCoworkDir, opts.runId);
     await mkdir(dir, { recursive: true });
     const prior = opts.resumeFromRunId
@@ -164,9 +174,21 @@ export class WorkflowJournal {
     return bucket.shift() ?? null;
   }
 
-  append(entry: WorkflowJournalEntry): void {
+  async append(entry: WorkflowJournalEntry): Promise<void> {
     this.entries.push(entry);
-    this.buffer += `${JSON.stringify(entry)}\n`;
+    const filePath = this.filePath;
+    if (filePath === null) return;
+
+    const line = `${JSON.stringify(entry)}\n`;
+    const write = async () => {
+      await writeFile(filePath, line, { encoding: "utf8", flag: "a" });
+    };
+    // Concurrent children settle independently. Chain their writes so complete
+    // JSONL records cannot interleave, while allowing a later checkpoint to
+    // retry after an earlier filesystem error.
+    const pending = this.pendingWrite.then(write, write);
+    this.pendingWrite = pending;
+    await pending;
   }
 
   get recorded(): readonly WorkflowJournalEntry[] {
@@ -174,18 +196,12 @@ export class WorkflowJournal {
   }
 
   /**
-   * Persist buffered entries.
-   *
-   * Buffered rather than written per call: journal writes go through the same
-   * filesystem the turn's mutation gate guards, and during cancellation teardown
-   * that gate throws. Flushing once at the end keeps a cancelled run from failing
-   * inside its own cleanup path.
+   * Wait for checkpoints already queued by independently settling children.
+   * Each completed call is persisted before its result returns to the script,
+   * so a killed host can resume all previously finished work.
    */
   async flush(): Promise<void> {
-    if (!this.buffer) return;
-    const pending = this.buffer;
-    this.buffer = "";
-    await writeFile(this.filePath, pending, { encoding: "utf8", flag: "a" });
+    await this.pendingWrite;
   }
 }
 

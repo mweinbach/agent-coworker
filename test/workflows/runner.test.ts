@@ -91,6 +91,39 @@ describe("runWorkflow: control flow", () => {
 });
 
 describe("runWorkflow: schema-validated returns", () => {
+  test("overrides role-level final-response instructions only for structured children", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl({
+      reply: (nth) => (nth === 1 ? `<workflow_result>{"n": 7}</workflow_result>` : "plain"),
+    });
+    const originalSpawn = control.spawn.bind(control);
+    const systemPromptSuffixes: Array<string | undefined> = [];
+    control.spawn = async (options) => {
+      systemPromptSuffixes.push(options.systemPromptSuffix);
+      return await originalSpawn(options);
+    };
+
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control,
+      script:
+        `${metaHeader()}` +
+        `export default async function run({ agent }) {\n` +
+        `  const structured = await agent("count", { agentType: "research", schema: ${N_SCHEMA} });\n` +
+        `  const plain = await agent("plain", { agentType: "research" });\n` +
+        `  return { n: structured.n, plain };\n}`,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.summary.result).toEqual({ n: 7, plain: "plain" });
+    expect(systemPromptSuffixes[0]).toContain("Workflow structured-output mode");
+    expect(systemPromptSuffixes[0]).toContain(
+      "replaces role-level final-response and report-footer instructions",
+    );
+    expect(systemPromptSuffixes[1]).toBeUndefined();
+  });
+
   test("a valid envelope is parsed into an object", async () => {
     const dir = await workflowTmpDir();
     const control = makeFakeControl({

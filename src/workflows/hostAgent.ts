@@ -4,6 +4,7 @@ import type { AgentControl, ToolContext } from "../tools/context";
 import {
   buildRepairInstruction,
   buildSchemaInstruction,
+  buildSchemaSystemInstruction,
   extractResultEnvelope,
   validateAgainstJsonSchema,
 } from "./resultSchema";
@@ -71,6 +72,7 @@ export async function runWorkflowAgent(opts: {
   let spawned: Awaited<ReturnType<AgentControl["spawn"]>>;
   const spawnPromise = control.spawn({
     message,
+    ...(schema ? { systemPromptSuffix: buildSchemaSystemInstruction() } : {}),
     ...(role ? { role } : {}),
     ...(profileRef ? { profileRef } : {}),
     ...(options.model ? { model: options.model } : {}),

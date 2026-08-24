@@ -159,6 +159,99 @@ describe("resume", () => {
     expect(second.spawnCount()).toBe(0);
   });
 
+  test("parallel identical calls replay in their original call order", async () => {
+    const dir = await workflowTmpDir();
+    const script =
+      `${metaHeader("parallel-dupes", ["main"])}` +
+      `export default async function run({ agent, parallel }) {\n` +
+      `  return await parallel([() => agent("same"), () => agent("same")]);\n}`;
+    let releaseFirst!: () => void;
+    const firstIsBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = makeFakeControl({
+      reply: async (nth) => {
+        if (nth === 1) await firstIsBlocked;
+        return `run1-${nth}`;
+      },
+    });
+
+    const one = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: first,
+      script,
+      onProgress: ({ agents }) => {
+        if (agents.some((agent) => agent.index === 1 && agent.state === "completed")) {
+          releaseFirst();
+        }
+      },
+    });
+    expect(one.ok).toBe(true);
+    if (!one.ok) return;
+    expect(one.summary.result).toEqual(["run1-1", "run1-2"]);
+
+    const second = makeFakeControl({ reply: () => "should-not-appear" });
+    const two = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: second,
+      script,
+      resumeFromRunId: one.summary.runId,
+    });
+
+    expect(two.ok).toBe(true);
+    if (!two.ok) return;
+    expect(two.summary.result).toEqual(["run1-1", "run1-2"]);
+    expect(second.spawnCount()).toBe(0);
+  });
+
+  test("persists completed agent checkpoints while the workflow is still running", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl();
+    const originalWait = control.wait.bind(control);
+    let resolveSecondWait!: () => void;
+    const secondWaitGate = new Promise<void>((resolve) => {
+      resolveSecondWait = resolve;
+    });
+    let notifySecondWait!: () => void;
+    const secondWaitStarted = new Promise<void>((resolve) => {
+      notifySecondWait = resolve;
+    });
+    control.wait = async (options) => {
+      if (options.agentIds[0] === "agent-2") {
+        notifySecondWait();
+        await secondWaitGate;
+      }
+      return await originalWait(options);
+    };
+    let runId = "";
+    const pending = runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control,
+      script:
+        `${metaHeader("durable-checkpoints", ["main"])}` +
+        `export default async function run({ agent }) {\n` +
+        `  await agent("first");\n` +
+        `  return await agent("second");\n}`,
+      onProgress: (progress) => {
+        runId = progress.runId;
+      },
+    });
+
+    try {
+      await secondWaitStarted;
+      const journalPath = path.join(dir, "workflows", "runs", runId, "journal.jsonl");
+      const entries = (await fs.readFile(journalPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { index: number; result: unknown });
+
+      expect(entries).toEqual([expect.objectContaining({ index: 0, result: "reply 1" })]);
+    } finally {
+      resolveSecondWait();
+      await pending.catch(() => {});
+    }
+  });
+
   test("resuming from an unknown run id runs everything live", async () => {
     const dir = await workflowTmpDir();
     const control = makeFakeControl();
@@ -196,6 +289,9 @@ describe("resume", () => {
     });
     expect(dry.ok).toBe(true);
     if (!dry.ok) return;
+
+    const runDirectory = path.join(dir, "workflows", "runs", dry.summary.runId);
+    await expect(fs.access(runDirectory)).rejects.toThrow();
 
     // Even if a forged journal.jsonl appears under the dry-run id, the dry run
     // itself must not have written stub results. Resume from it must spawn live.

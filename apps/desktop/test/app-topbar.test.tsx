@@ -207,7 +207,7 @@ describe("desktop app top bar", () => {
       expect(strip?.className).not.toContain("overflow-hidden");
       expect(sidebarFill).not.toBeNull();
       expect(sidebarFill?.className).toContain("border-r");
-      expect(sidebarFill?.className).toContain("border-border/70");
+      expect(sidebarFill?.className).toContain("app-border-subtle");
       expect(sidebarToggle).not.toBeNull();
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
       expect(inlineSidebarToggle?.className).toContain("app-topbar__toolbar-layer");

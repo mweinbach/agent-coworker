@@ -1501,6 +1501,118 @@ describe("desktop bootstrap cache", () => {
     expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-live");
   });
 
+  test("initial startup preserves drafts and uploads edited while the disk state is loading", async () => {
+    const threadKey = composerDraftKeyForThread("thread-cached");
+    const staleState = {
+      ...cachedState.persistedState,
+      composerDrafts: {
+        [threadKey]: {
+          ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+          revision: 1,
+          generation: 1,
+          text: "stale composer from disk",
+        },
+      },
+      creationDrafts: {
+        research: {
+          ...createEmptyComposerDraft("2099-07-11T16:00:00.000Z"),
+          revision: 1,
+          generation: 1,
+          text: "stale research from disk",
+        },
+        task: {
+          ...createEmptyTaskCreationDraft(1, "ws-cached"),
+          updatedAt: "2099-07-11T16:00:00.000Z",
+          title: "Stale task from disk",
+        },
+      },
+    };
+    const delayedLoad = createDeferred<unknown>();
+    loadStateImplementation = async () => await delayedLoad.promise;
+    const draftAttachment = await createComposerDraftAttachment(
+      new File(["preview"], "still-editing.png", {
+        type: "image/png",
+        lastModified: 7,
+      }),
+      { createObjectURL: () => "blob:still-editing" },
+    );
+    const liveDraft = {
+      ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+      revision: 7,
+      generation: 2,
+      text: "draft typed while startup loads",
+      attachments: [draftAttachment],
+    };
+    const revokedUrls: string[] = [];
+    const previousRevokeObjectUrl = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => {
+      revokedUrls.push(url);
+    };
+
+    try {
+      const startup = useAppStore.getState().init();
+      await waitForCondition(() => loadStateCallCount === 1);
+
+      useAppStore.setState({
+        composerDraftsByKey: { [threadKey]: liveDraft },
+        composerDraftRevisionFloorByKey: {
+          [threadKey]: { revision: 7, generation: 2 },
+        },
+        composerAttachmentIngestionCountByKey: { [threadKey]: 1 },
+        composerSubmissionsByKey: {
+          [threadKey]: {
+            id: "startup-submission",
+            clientMessageId: "startup-message",
+            owner: { key: threadKey, revision: 7 },
+            request: { kind: "thread", threadId: "thread-cached" },
+            draft: liveDraft,
+            prepared: null,
+            phase: "preparing",
+            delivery: "send",
+            error: null,
+          },
+        },
+        researchCreationDraft: {
+          ...createEmptyComposerDraft("2099-07-11T16:01:00.000Z"),
+          revision: 7,
+          generation: 2,
+          text: "research typed while startup loads",
+        },
+        taskCreationDraft: {
+          ...createEmptyTaskCreationDraft(7, "ws-cached"),
+          updatedAt: "2099-07-11T16:01:00.000Z",
+          title: "Task typed while startup loads",
+        },
+      });
+
+      delayedLoad.resolve(staleState);
+      await startup;
+
+      const restored = useAppStore.getState();
+      expect(restored.composerDraftsByKey[threadKey]).toMatchObject({
+        revision: 7,
+        generation: 2,
+        text: "draft typed while startup loads",
+        attachments: [expect.objectContaining({ previewUrl: "blob:still-editing" })],
+      });
+      expect(restored.composerDraftRevisionFloorByKey[threadKey]).toEqual({
+        revision: 7,
+        generation: 2,
+      });
+      expect(restored.composerAttachmentIngestionCountByKey[threadKey]).toBe(1);
+      expect(restored.composerSubmissionsByKey[threadKey]).toMatchObject({
+        id: "startup-submission",
+        phase: "preparing",
+      });
+      expect(restored.researchCreationDraft.text).toBe("research typed while startup loads");
+      expect(restored.taskCreationDraft.title).toBe("Task typed while startup loads");
+      expect(revokedUrls).not.toContain("blob:still-editing");
+      expect(restored.bootstrapPhase).toBe("ready");
+    } finally {
+      URL.revokeObjectURL = previousRevokeObjectUrl;
+    }
+  });
+
   test("Retry flushes and preserves newer revision-owned drafts while disk reloads", async () => {
     const threadKey = composerDraftKeyForThread("thread-cached");
     const staleResearchDraft = {

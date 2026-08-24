@@ -1123,23 +1123,18 @@ export function createBootstrapActions(
               newChatLandingTarget: ui.newChatLandingTarget,
             },
             {
-              mergeDrafts: retryingStartupFailure ? currentComposerDrafts : undefined,
+              mergeDrafts: currentComposerDrafts,
               replacedDrafts: currentComposerDrafts,
             },
           );
           const persistedCreationDrafts = hydrateCreationDrafts(state.creationDrafts);
           const currentState = get();
-          const inMemoryCreationDrafts = retryingStartupFailure
-            ? {
-                researchCreationDraft: currentState.researchCreationDraft,
-                researchCreationError: currentState.researchCreationError,
-                taskCreationDraft: currentState.taskCreationDraft,
-                taskCreationError: currentState.taskCreationError,
-              }
-            : null;
-          const creationDrafts = inMemoryCreationDrafts
-            ? mergeCreationDraftsByRevision(persistedCreationDrafts, inMemoryCreationDrafts)
-            : persistedCreationDrafts;
+          const creationDrafts = mergeCreationDraftsByRevision(persistedCreationDrafts, {
+            researchCreationDraft: currentState.researchCreationDraft,
+            researchCreationError: currentState.researchCreationError,
+            taskCreationDraft: currentState.taskCreationDraft,
+            taskCreationError: currentState.taskCreationError,
+          });
           const retainedResearchDraft = creationDrafts.researchCreationDraft;
           const discardedResearchDrafts = new Set([
             persistedCreationDrafts.researchCreationDraft,
@@ -1156,9 +1151,10 @@ export function createBootstrapActions(
             selectedWorkspaceId: ui.selectedWorkspaceId,
             selectedThreadId: ui.selectedThreadId,
             selectedTaskId: ui.selectedTaskId,
-            composerDraftRevisionFloorByKey: {},
-            composerAttachmentIngestionCountByKey: {},
-            composerSubmissionsByKey: {},
+            composerDraftRevisionFloorByKey: currentState.composerDraftRevisionFloorByKey,
+            composerAttachmentIngestionCountByKey:
+              currentState.composerAttachmentIngestionCountByKey,
+            composerSubmissionsByKey: currentState.composerSubmissionsByKey,
             composerDraftsByKey: restoredComposerDrafts,
             ...creationDrafts,
             newChatLandingTarget: ui.newChatLandingTarget,

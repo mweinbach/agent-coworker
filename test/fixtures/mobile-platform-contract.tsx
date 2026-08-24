@@ -323,10 +323,11 @@ mockMobileModule("@expo/ui/swift-ui", () => ({
   Button: ({ children, modifiers, onPress }: HostProps) => {
     const disabled = modifierValue(modifiers, "disabled") === true;
     const frame = flattenStyle(modifierValue(modifiers, "frame"));
+    const label = modifierValue(modifiers, "accessibilityLabel");
     return createElement(
       "button",
       {
-        ...accessibilityAttributes("button", undefined, undefined, { disabled }, undefined),
+        ...accessibilityAttributes("button", label, undefined, { disabled }, undefined),
         "data-min-height": numericStyle(frame, "height") ?? minimumTarget,
         disabled,
         onClick: disabled ? undefined : (onPress as (() => void) | undefined),
@@ -344,12 +345,18 @@ mockMobileModule("@expo/ui/swift-ui", () => ({
     const disabled = modifierValue(modifiers, "disabled") === true;
     const frame = flattenStyle(modifierValue(modifiers, "frame"));
     const label = modifierValue(modifiers, "accessibilityLabel");
+    if (typeof onPress !== "function") {
+      return createElement("span", {
+        "aria-hidden": "true",
+        "data-system-name": systemName,
+      });
+    }
     return createElement("button", {
       ...accessibilityAttributes("button", label, undefined, { disabled }, undefined),
       "data-min-height": numericStyle(frame, "height") ?? minimumTarget,
       "data-system-name": systemName,
       disabled,
-      onClick: disabled ? undefined : (onPress as (() => void) | undefined),
+      onClick: disabled ? undefined : onPress,
       type: "button",
     });
   },

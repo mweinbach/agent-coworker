@@ -1,8 +1,8 @@
-import { Image as ExpoImage, Group, Host, HStack, RNHostView } from "@expo/ui/swift-ui";
+import { Button, Image as ExpoImage, Group, Host, HStack, RNHostView } from "@expo/ui/swift-ui";
 import {
-  accessibilityAddTraits,
   accessibilityLabel as accessibilityLabelModifier,
   background,
+  buttonStyle,
   disabled as disabledModifier,
   foregroundStyle,
   frame,
@@ -219,15 +219,12 @@ export function ComposerBar({
             </RNHostView>
           </Group>
           <Group modifiers={[frame({ width: BUTTON_SIZE, height: BUTTON_SIZE })]}>
-            <ExpoImage
-              systemName={asNativeSymbol(isBusy ? "stop.fill" : "arrow.up")}
-              size={16}
-              color={actionIconColor}
+            <Button
               onPress={actionEnabled ? performAction : undefined}
               modifiers={[
                 accessibilityLabelModifier(actionAccessibilityLabel),
-                accessibilityAddTraits(["isButton"]),
                 disabledModifier(!actionEnabled),
+                buttonStyle("plain"),
                 foregroundStyle(actionIconColor),
                 frame({ width: BUTTON_SIZE, height: BUTTON_SIZE }),
                 background(actionFillColor, shapes.circle()),
@@ -240,7 +237,13 @@ export function ComposerBar({
                   shape: "circle",
                 }),
               ]}
-            />
+            >
+              <ExpoImage
+                systemName={asNativeSymbol(isBusy ? "stop.fill" : "arrow.up")}
+                size={16}
+                color={actionIconColor}
+              />
+            </Button>
           </Group>
         </HStack>
       </Host>

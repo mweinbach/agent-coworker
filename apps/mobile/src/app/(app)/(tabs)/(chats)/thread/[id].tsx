@@ -164,6 +164,11 @@ export default function ThreadDetailScreen() {
   const defaultModel = useWorkspaceStore((state) => state.controlSnapshot?.config?.model ?? null);
   const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const providerCatalog = useProviderStore((state) => state.catalog);
+  const providerStatuses = useProviderStore((state) => state.statusByProvider);
+  const selectedProviderId = snapshotProvider ?? defaultProvider;
+  const selectedProviderStatus = selectedProviderId
+    ? (providerStatuses[selectedProviderId] ?? null)
+    : null;
   const normalizedAgents = useMemo(() => normalizeAgents(snapshotAgents), [snapshotAgents]);
   const showDebugMessages = useDisplayPreferencesStore((state) => state.showDebugMessages);
   const activeTurnStartedAt = useThreadStore((state) => state.getActiveTurnStartedAt(threadId));
@@ -232,9 +237,18 @@ export default function ThreadDetailScreen() {
         providerId: snapshotProvider ?? defaultProvider,
         modelId: snapshotModel ?? defaultModel,
         catalog: providerCatalog,
+        providerStatus: selectedProviderStatus,
         attachmentPickerAvailable: false,
       }),
-    [defaultModel, defaultProvider, isConnected, providerCatalog, snapshotModel, snapshotProvider],
+    [
+      defaultModel,
+      defaultProvider,
+      isConnected,
+      providerCatalog,
+      selectedProviderStatus,
+      snapshotModel,
+      snapshotProvider,
+    ],
   );
   useAccessibilityAnnouncement(thread ? `Opened chat ${thread.title}` : null);
   useAccessibilityAnnouncement(
@@ -729,7 +743,7 @@ export default function ThreadDetailScreen() {
   }
 
   async function handleSubmitComposer() {
-    if (!isConnected || !runtimeClient) {
+    if (!isConnected || !runtimeClient || capability.model.availability === "unavailable") {
       return;
     }
     const clientMessageId = (globalThis as { crypto?: { randomUUID: () => string } }).crypto

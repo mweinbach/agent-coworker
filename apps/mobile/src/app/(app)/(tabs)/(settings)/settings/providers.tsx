@@ -120,6 +120,7 @@ export default function ProvidersScreen() {
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
   const [oauthCodeDrafts, setOauthCodeDrafts] = useState<Record<string, string>>({});
+  const [authRequestsInFlight, setAuthRequestsInFlight] = useState<Record<string, boolean>>({});
   useAccessibilityAnnouncement(error ?? lastAuthResult?.message ?? null);
 
   useEffect(() => {
@@ -315,6 +316,7 @@ export default function ProvidersScreen() {
 
                 {apiKeyMethods.map((method) => {
                   const draftKey = `${provider.id}:${method.id}`;
+                  const savingKey = authRequestsInFlight[draftKey] === true;
                   return (
                     <View key={method.id} style={{ gap: 8 }}>
                       <Text
@@ -354,14 +356,27 @@ export default function ProvidersScreen() {
                         accessibilityLabel={`Save ${provider.name} API key`}
                         accessibilityRole="button"
                         accessibilityState={{
-                          disabled: !apiKeyDrafts[draftKey]?.trim(),
+                          busy: savingKey,
+                          disabled: savingKey || !apiKeyDrafts[draftKey]?.trim(),
                         }}
-                        disabled={!apiKeyDrafts[draftKey]?.trim()}
+                        disabled={savingKey || !apiKeyDrafts[draftKey]?.trim()}
                         onPress={() => {
                           const nextValue = apiKeyDrafts[draftKey]?.trim();
-                          if (!nextValue) return;
-                          void setApiKey(provider.id, method.id, nextValue);
-                          setApiKeyDrafts((state) => ({ ...state, [draftKey]: "" }));
+                          if (!nextValue || savingKey) return;
+                          setAuthRequestsInFlight((state) => ({ ...state, [draftKey]: true }));
+                          void setApiKey(provider.id, method.id, nextValue)
+                            .then((saved) => {
+                              if (saved) {
+                                setApiKeyDrafts((state) =>
+                                  state[draftKey]?.trim() === nextValue
+                                    ? { ...state, [draftKey]: "" }
+                                    : state,
+                                );
+                              }
+                            })
+                            .finally(() => {
+                              setAuthRequestsInFlight((state) => ({ ...state, [draftKey]: false }));
+                            });
                         }}
                         style={({ pressed }) => ({
                           minHeight: minimumTouchTarget(),
@@ -374,7 +389,7 @@ export default function ProvidersScreen() {
                         })}
                       >
                         <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
-                          Save key
+                          {savingKey ? "Saving…" : "Save key"}
                         </Text>
                       </Pressable>
                     </View>
@@ -383,6 +398,7 @@ export default function ProvidersScreen() {
 
                 {oauthMethods.map((method) => {
                   const codeKey = `${provider.id}:${method.id}`;
+                  const completingSignIn = authRequestsInFlight[codeKey] === true;
                   const isChallenge =
                     lastAuthChallenge?.provider === provider.id &&
                     lastAuthChallenge.methodId === method.id;
@@ -497,9 +513,31 @@ export default function ProvidersScreen() {
                           <Pressable
                             accessibilityLabel={`Complete ${provider.name} sign-in`}
                             accessibilityRole="button"
+                            accessibilityState={{
+                              busy: completingSignIn,
+                              disabled: completingSignIn,
+                            }}
+                            disabled={completingSignIn}
                             onPress={() => {
-                              void callback(provider.id, method.id, oauthCodeDrafts[codeKey]);
-                              setOauthCodeDrafts((state) => ({ ...state, [codeKey]: "" }));
+                              if (completingSignIn) return;
+                              const submittedCode = oauthCodeDrafts[codeKey];
+                              setAuthRequestsInFlight((state) => ({ ...state, [codeKey]: true }));
+                              void callback(provider.id, method.id, submittedCode)
+                                .then((completed) => {
+                                  if (completed) {
+                                    setOauthCodeDrafts((state) =>
+                                      state[codeKey] === submittedCode
+                                        ? { ...state, [codeKey]: "" }
+                                        : state,
+                                    );
+                                  }
+                                })
+                                .finally(() => {
+                                  setAuthRequestsInFlight((state) => ({
+                                    ...state,
+                                    [codeKey]: false,
+                                  }));
+                                });
                             }}
                             style={({ pressed }) => ({
                               minHeight: minimumTouchTarget(),
@@ -514,7 +552,7 @@ export default function ProvidersScreen() {
                             })}
                           >
                             <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>
-                              Complete sign-in
+                              {completingSignIn ? "Completing…" : "Complete sign-in"}
                             </Text>
                           </Pressable>
                         </View>

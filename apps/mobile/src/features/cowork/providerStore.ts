@@ -29,11 +29,11 @@ type ProviderStoreState = {
   fetchStatus(): Promise<void>;
   refresh(): Promise<void>;
   selectDefaultModel(provider: ProviderCatalogEntry["id"], model: string): Promise<void>;
-  setApiKey(provider: string, methodId: string, apiKey: string): Promise<void>;
+  setApiKey(provider: string, methodId: string, apiKey: string): Promise<boolean>;
   copyApiKey(provider: string, sourceProvider: string): Promise<void>;
   authorize(provider: string, methodId: string): Promise<void>;
   logout(provider: string): Promise<void>;
-  callback(provider: string, methodId: string, code?: string): Promise<void>;
+  callback(provider: string, methodId: string, code?: string): Promise<boolean>;
   clear(): void;
 };
 
@@ -136,8 +136,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   },
 
   async setApiKey(provider: string, methodId: string, apiKey: string) {
-    const { client, cwd } = getClientAndCwd();
+    set({ error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/auth/setApiKey", {
         cwd,
         provider: provider as ProviderCatalogEntry["id"],
@@ -145,17 +146,23 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
         apiKey,
       });
       set({
-        lastAuthChallenge: null,
+        lastAuthChallenge: result.event.ok ? null : get().lastAuthChallenge,
         lastAuthResult: {
           provider: result.event.provider,
           methodId: result.event.methodId,
           ok: result.event.ok,
           message: result.event.message,
         },
+        error: result.event.ok ? null : result.event.message,
       });
+      if (!result.event.ok) {
+        return false;
+      }
       await get().refresh();
+      return true;
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
 
@@ -240,8 +247,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   },
 
   async callback(provider: string, methodId: string, code?: string) {
-    const { client, cwd } = getClientAndCwd();
+    set({ error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/auth/callback", {
         cwd,
         provider: provider as any,
@@ -249,17 +257,23 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
         ...(code ? { code } : {}),
       });
       set({
-        lastAuthChallenge: null,
+        lastAuthChallenge: result.event.ok ? null : get().lastAuthChallenge,
         lastAuthResult: {
           provider: result.event.provider,
           methodId: result.event.methodId,
           ok: result.event.ok,
           message: result.event.message,
         },
+        error: result.event.ok ? null : result.event.message,
       });
+      if (!result.event.ok) {
+        return false;
+      }
       await get().refresh();
+      return true;
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
 

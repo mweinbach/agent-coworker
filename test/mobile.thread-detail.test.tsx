@@ -14,6 +14,7 @@ if (typeof globalThis.cancelAnimationFrame === "undefined") {
 
 const actualWorkspaceStore = require("../apps/mobile/src/features/cowork/workspaceStore");
 const actualThreadStore = require("../apps/mobile/src/features/cowork/threadStore");
+const actualProviderStore = require("../apps/mobile/src/features/cowork/providerStore");
 const actualRuntimeClient = require("../apps/mobile/src/features/cowork/runtimeClient");
 const actualPairingStore = require("../apps/mobile/src/features/pairing/pairingStore");
 
@@ -164,7 +165,7 @@ const mockMarkTurnStarted = mock((_threadId: string, _startedAt: string) => {});
 const mockMarkTurnCompleted = mock((_threadId: string) => {});
 let mockActiveTurnStartedAt: string | null = null;
 let mockPendingRequest: any = null;
-let mockSnapshots: Record<string, { lastEventSeq: number }> = {};
+let mockSnapshots: Record<string, { lastEventSeq: number; provider?: string; model?: string }> = {};
 const mockThread = {
   id: "test-thread-123",
   title: "Test Thread",
@@ -361,6 +362,7 @@ describe("mobile ThreadDetailScreen", () => {
     mockActiveTurnStartedAt = null;
     mockPendingRequest = null;
     mockSnapshots = {};
+    actualProviderStore.useProviderStore.setState({ catalog: [], statusByProvider: {} });
     latestComposerProps = null;
     latestPendingRequestProps = null;
     mockResumeThread.mockClear();
@@ -548,6 +550,82 @@ describe("mobile ThreadDetailScreen", () => {
       harness.restore();
     }
   });
+
+  test.each([
+    { platform: "android", authorized: false, catalogState: "ready", canSubmit: false },
+    { platform: "ios", authorized: false, catalogState: "ready", canSubmit: false },
+    { platform: "android", authorized: true, catalogState: "unreachable", canSubmit: true },
+    { platform: "ios", authorized: true, catalogState: "unreachable", canSubmit: true },
+  ] as const)(
+    "$platform respects explicit provider authorization without trusting stale discovery",
+    async ({ authorized, catalogState, canSubmit }) => {
+      mockThread.composerDraft = "Keep this message ready to send";
+      mockSnapshots = {
+        "test-thread-123": { lastEventSeq: 4, provider: "openai", model: "gpt-5" },
+      };
+      actualProviderStore.useProviderStore.setState({
+        catalog: [
+          {
+            id: "openai",
+            name: "OpenAI",
+            defaultModel: "gpt-5",
+            state: catalogState,
+            models: [
+              {
+                id: "gpt-5",
+                displayName: "GPT 5",
+                knowledgeCutoff: "2025-01",
+                supportsImageInput: false,
+              },
+            ],
+          },
+        ],
+        statusByProvider: {
+          openai: {
+            provider: "openai",
+            authorized,
+            verified: authorized,
+            mode: authorized ? "api_key" : "missing",
+            account: null,
+            message: authorized
+              ? "Provider credentials are valid."
+              : "Add an OpenAI API key in Settings > Providers.",
+            checkedAt: "2026-08-01T00:00:00.000Z",
+          },
+        },
+      });
+      const harness = setupJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root container");
+        root = createRoot(container);
+        await act(async () => {
+          root!.render(createElement(ThreadDetailScreen));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(latestComposerProps?.canEdit).toBe(true);
+        expect(latestComposerProps?.canSubmit).toBe(canSubmit);
+        if (!authorized) {
+          expect(latestComposerProps?.helperText).toContain(
+            "Add an OpenAI API key in Settings > Providers.",
+          );
+          await latestComposerProps?.onSubmit();
+          expect(mockStartTurn).not.toHaveBeenCalled();
+          expect(mockBeginComposerSubmission).not.toHaveBeenCalled();
+        }
+      } finally {
+        if (root) {
+          await act(async () => {
+            root!.unmount();
+          });
+        }
+        harness.restore();
+      }
+    },
+  );
 
   test("rolls back a rejected optimistic send without clearing its exact draft", async () => {
     mockThread.composerDraft = "  Retry this message\n";

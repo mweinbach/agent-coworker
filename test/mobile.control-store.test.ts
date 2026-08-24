@@ -302,6 +302,63 @@ describe("mobile control stores", () => {
     });
   });
 
+  test("reports rejected provider key saves without storing or exposing the retry value", async () => {
+    const fixtureCredential = "fixture-value-for-retry";
+    const { client } = createFakeClient(() => {
+      throw new Error("Desktop connection interrupted before the provider could be configured.");
+    });
+    setActiveCoworkJsonRpcClient(client);
+
+    const saved = await useProviderStore
+      .getState()
+      .setApiKey("google", "api-key", fixtureCredential);
+
+    expect(saved).toBe(false);
+    expect(useProviderStore.getState().error).toBe(
+      "Desktop connection interrupted before the provider could be configured.",
+    );
+    expect(JSON.stringify(useProviderStore.getState())).not.toContain(fixtureCredential);
+  });
+
+  test("keeps an OAuth challenge recoverable when the desktop rejects its authorization code", async () => {
+    const challenge = {
+      provider: "google",
+      methodId: "oauth",
+      instructions: "Paste the authorization code from your browser.",
+    };
+    useProviderStore.setState({ lastAuthChallenge: challenge });
+    const { client } = createFakeClient((method) => {
+      if (method === "cowork/provider/auth/callback") {
+        return {
+          event: {
+            type: "provider_auth_result",
+            sessionId: "control-session",
+            provider: "google",
+            methodId: "oauth",
+            ok: false,
+            mode: "oauth_pending",
+            message: "Authorization code expired. Request a new code and try again.",
+          },
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    setActiveCoworkJsonRpcClient(client);
+
+    const completed = await useProviderStore.getState().callback("google", "oauth", "fixture-code");
+
+    expect(completed).toBe(false);
+    expect(useProviderStore.getState().lastAuthChallenge).toEqual(challenge);
+    expect(useProviderStore.getState().lastAuthResult).toMatchObject({
+      ok: false,
+      message: "Authorization code expired. Request a new code and try again.",
+    });
+    expect(useProviderStore.getState().error).toBe(
+      "Authorization code expired. Request a new code and try again.",
+    );
+    expect(JSON.stringify(useProviderStore.getState())).not.toContain("fixture-code");
+  });
+
   test("provider store applies provider and model defaults through the workspace control session", async () => {
     const { client, calls } = createFakeClient((method) => {
       if (method === "cowork/session/defaults/apply") {

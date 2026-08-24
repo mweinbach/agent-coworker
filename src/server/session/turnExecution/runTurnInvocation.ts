@@ -8,10 +8,13 @@ import { createRawToolRetryEventTracker } from "../../../shared/toolRetryRawEven
 import type { ApproveCommandOptions, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
+import type { PersistedModelStreamChunk } from "../../sessionDb";
 import type { SessionContext } from "../SessionContext";
 import { getSessionTaskLock } from "../taskLocks";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
+
+const MAX_RAW_STREAM_DIAGNOSTIC_BATCH_SIZE = 64;
 
 type TurnStreamTracker = {
   startedStepCount: number;
@@ -77,6 +80,32 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
   const toolRetryTracker = createToolRetryAttemptTracker(toolRetryIntent);
   const rawToolRetryTracker = createRawToolRetryEventTracker(toolRetryTracker);
   const rawBackedToolKeys = new Set<string>();
+  const pendingRawDiagnostics: PersistedModelStreamChunk[] = [];
+
+  const flushRawDiagnostics = async () => {
+    const sessionDb = context.deps.sessionDb;
+    if (!sessionDb || pendingRawDiagnostics.length === 0) return;
+    const batch = pendingRawDiagnostics.splice(0, pendingRawDiagnostics.length);
+
+    try {
+      if (typeof sessionDb.persistModelStreamChunks === "function") {
+        await sessionDb.persistModelStreamChunks(batch);
+      } else {
+        for (const chunk of batch) {
+          await sessionDb.persistModelStreamChunk(chunk);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[diagnostics] Failed to persist raw model stream: ${message}`);
+      context.emitTelemetry("agent.stream.raw_persist", "error", {
+        sessionId: context.id,
+        turnId,
+        chunkCount: batch.length,
+        error: message,
+      });
+    }
+  };
 
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const abortSignal = context.state.abortController?.signal;
@@ -105,7 +134,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     const taskContext = context.deps.getTaskContextImpl?.(context.id) ?? null;
     const applyTaskDirective = context.deps.applyTaskDirectiveImpl;
     const createTask = context.deps.createTaskImpl;
-    return await context.deps.runTurnImpl({
+    const invocation = context.deps.runTurnImpl({
       config: context.state.config,
       system: context.state.system,
       messages: context.state.messages,
@@ -347,7 +376,8 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           ...(rawTracking.metadata.length > 0 ? { toolCallMetadata: rawTracking.metadata } : {}),
         };
         context.emit(eventPayload);
-        await context.deps.sessionDb?.persistModelStreamChunk({
+        if (!context.deps.sessionDb) return;
+        pendingRawDiagnostics.push({
           sessionId: context.id,
           turnId,
           chunkIndex: index,
@@ -358,6 +388,9 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
           normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
           rawEvent: rawEvent.event,
         });
+        if (pendingRawDiagnostics.length >= MAX_RAW_STREAM_DIAGNOSTIC_BATCH_SIZE) {
+          await flushRawDiagnostics();
+        }
       },
       onModelStreamPart: async (rawPart) => {
         if (isTurnAborted()) return;
@@ -444,5 +477,6 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
         }
       },
     });
+    return await invocation.finally(flushRawDiagnostics);
   };
 }

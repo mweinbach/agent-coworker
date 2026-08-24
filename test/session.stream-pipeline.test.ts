@@ -208,6 +208,71 @@ describe("AgentSession stream pipeline", () => {
     });
   });
 
+  test("batches optional raw model diagnostics instead of locking the database for every token", async () => {
+    const persistedBatches: PersistedModelStreamChunk[][] = [];
+    const persistModelStreamChunk = mock(async () => {});
+    const persistModelStreamChunks = mock(async (chunks: PersistedModelStreamChunk[]) => {
+      persistedBatches.push([...chunks]);
+    });
+    const { session, events } = makeSession({
+      sessionDb: {
+        persistSessionMutation: async () => 1,
+        persistSessionSnapshot: async () => {},
+        persistModelStreamChunk,
+        persistModelStreamChunks,
+      } as never,
+    });
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      for (let index = 0; index < 130; index += 1) {
+        await params.onModelRawEvent?.({
+          format: "openai-responses-v1",
+          event: { type: "response.output_text.delta", delta: String(index) },
+        });
+      }
+      return { text: "stream complete", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("stream many tokens");
+
+    expect(persistModelStreamChunk).not.toHaveBeenCalled();
+    expect(persistedBatches.map((batch) => batch.length)).toEqual([64, 64, 2]);
+    expect(persistedBatches.flat().map((chunk) => chunk.chunkIndex)).toEqual(
+      Array.from({ length: 130 }, (_, index) => index),
+    );
+    expect(
+      events.some(
+        (event) => event.type === "assistant_message" && event.text === "stream complete",
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps a successful assistant response when optional raw diagnostics cannot be persisted", async () => {
+    const { session, events } = makeSession({
+      sessionDb: {
+        persistSessionMutation: async () => 1,
+        persistSessionSnapshot: async () => {},
+        persistModelStreamChunk: async () => {
+          throw new Error("raw diagnostics database is locked");
+        },
+      } as never,
+    });
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      await params.onModelRawEvent?.({
+        format: "openai-responses-v1",
+        event: { type: "response.output_text.delta", delta: "useful" },
+      });
+      return { text: "useful answer", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("answer even if diagnostics fail");
+
+    expect(
+      events.some((event) => event.type === "assistant_message" && event.text === "useful answer"),
+    ).toBe(true);
+    expect(session.getSessionInfoEvent().executionState).toBe("completed");
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
   // =========================================================================
   // 1. tool-call
   // =========================================================================

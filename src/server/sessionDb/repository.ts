@@ -596,6 +596,16 @@ export class SessionDbRepository {
       );
   }
 
+  persistModelStreamChunks(chunks: readonly PersistedModelStreamChunk[]): void {
+    if (chunks.length === 0) return;
+    const persistBatch = this.db.transaction((batch: readonly PersistedModelStreamChunk[]) => {
+      for (const chunk of batch) {
+        this.persistModelStreamChunk(chunk);
+      }
+    });
+    persistBatch(chunks);
+  }
+
   reconcileStaleExecutionStates(workingDirectory?: string | null): number {
     const reconcile = this.db.transaction((workspacePath: string | null) => {
       if (!workspacePath) {

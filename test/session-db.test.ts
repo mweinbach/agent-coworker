@@ -624,6 +624,33 @@ describe("sessionDb", () => {
           },
         },
       ]);
+
+      await db.persistModelStreamChunks([
+        {
+          sessionId: "s-raw",
+          turnId: "turn-1",
+          chunkIndex: 1,
+          ts: now,
+          provider: "openai",
+          model: "gpt-5.2",
+          rawFormat: "openai-responses-v1",
+          normalizerVersion: 1,
+          rawEvent: { type: "response.output_text.delta", delta: "hello" },
+        },
+        {
+          sessionId: "s-raw",
+          turnId: "turn-1",
+          chunkIndex: 2,
+          ts: now,
+          provider: "openai",
+          model: "gpt-5.2",
+          rawFormat: "openai-responses-v1",
+          normalizerVersion: 1,
+          rawEvent: { type: "response.output_text.delta", delta: " world" },
+        },
+      ]);
+
+      expect(db.listModelStreamChunks("s-raw").map((chunk) => chunk.chunkIndex)).toEqual([0, 1, 2]);
     } finally {
       db.close();
     }

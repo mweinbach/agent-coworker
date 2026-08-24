@@ -455,6 +455,22 @@ export class SessionDb {
     );
   }
 
+  async persistModelStreamChunks(chunks: readonly PersistedModelStreamChunk[]): Promise<void> {
+    const first = chunks[0];
+    if (!first) return;
+    await this.writeCoordinator.runExclusive(
+      "persist_model_stream_chunks",
+      async () => {
+        this.repository.persistModelStreamChunks(chunks);
+      },
+      {
+        sessionId: first.sessionId,
+        turnId: first.turnId,
+        chunkCount: chunks.length,
+      },
+    );
+  }
+
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
     return this.readRepository.listModelStreamChunks(sessionId, turnId);
   }

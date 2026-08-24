@@ -12,6 +12,7 @@ import {
 import { getSavedProviderApiKey } from "../config";
 import { assertAntigravitySupportedPlatform } from "../providers/antigravitySupport";
 import type { ModelMessage } from "../types";
+import { raceWithAbort } from "../utils/abortSignal";
 import { isZodSchema, toPiJsonSchema } from "./piRuntimeOptions";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeUsage } from "./types";
@@ -419,42 +420,48 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
       }
 
       const agent = new Agent(agentConfig);
-
-      if (params.abortSignal) {
-        params.abortSignal.addEventListener("abort", () => {
-          agent.stop().catch(() => {});
-        });
+      if (params.abortSignal?.aborted) {
+        throw new Error("Model turn aborted.");
       }
-
-      await withProcessEnv(params.toolEnv, async () => {
-        await agent.start();
-      });
-
-      const log = params.log;
-      if (log) {
-        const childProcess = (
-          agent as unknown as {
-            _strategy?: { connection?: { process?: { stderr?: NodeJS.ReadableStream } } };
-          }
-        )._strategy?.connection?.process;
-        const stderr = childProcess?.stderr;
-        if (stderr && typeof stderr.on === "function") {
-          let buf = "";
-          stderr.on("data", (chunk: unknown) => {
-            buf +=
-              typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
-            let nl = buf.indexOf("\n");
-            while (nl >= 0) {
-              const line = buf.slice(0, nl).trim();
-              if (line) log(`[antigravity-harness] ${line}`);
-              buf = buf.slice(nl + 1);
-              nl = buf.indexOf("\n");
-            }
-          });
-        }
-      }
+      const onAbort = () => {
+        void agent.stop().catch(() => {});
+      };
+      params.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       try {
+        await raceWithAbort(
+          withProcessEnv(params.toolEnv, async () => {
+            await agent.start();
+          }),
+          params.abortSignal,
+        );
+
+        const log = params.log;
+        if (log) {
+          const childProcess = (
+            agent as unknown as {
+              _strategy?: { connection?: { process?: { stderr?: NodeJS.ReadableStream } } };
+            }
+          )._strategy?.connection?.process;
+          const stderr = childProcess?.stderr;
+          if (stderr && typeof stderr.on === "function") {
+            let buf = "";
+            stderr.on("data", (chunk: unknown) => {
+              buf +=
+                typeof chunk === "string"
+                  ? chunk
+                  : Buffer.from(chunk as Uint8Array).toString("utf8");
+              let nl = buf.indexOf("\n");
+              while (nl >= 0) {
+                const line = buf.slice(0, nl).trim();
+                if (line) log(`[antigravity-harness] ${line}`);
+                buf = buf.slice(nl + 1);
+                nl = buf.indexOf("\n");
+              }
+            });
+          }
+        }
+
         if (params.abortSignal?.aborted) {
           throw new Error("Model turn aborted.");
         }
@@ -567,6 +574,7 @@ export function createAntigravityRuntime(opts: { platform?: NodeJS.Platform } = 
           usage: finalUsage,
         };
       } finally {
+        params.abortSignal?.removeEventListener("abort", onAbort);
         await agent.stop().catch(() => {});
       }
     },

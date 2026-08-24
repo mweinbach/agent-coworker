@@ -578,4 +578,79 @@ describe("antigravity runtime", () => {
       }
     }
   });
+
+  test("never starts a local harness for a turn cancelled before startup", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-cancel-before-start-"));
+    const controller = new AbortController();
+    controller.abort();
+    const starts = mock(() => {});
+    (Agent as any).__setStartMockImpl(starts);
+    process.env.GEMINI_API_KEY = "test-key";
+
+    try {
+      await expect(
+        runtime.runTurn(makeParams(makeConfig(homeDir), { abortSignal: controller.signal })),
+      ).rejects.toThrow("Model turn aborted.");
+      expect(starts).not.toHaveBeenCalled();
+    } finally {
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
+
+  test("stops and releases a harness when startup fails after partially connecting", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-startup-failure-"));
+    (Agent as any).__setStartMockImpl(async (agent: { isConnected: boolean }) => {
+      agent.isConnected = true;
+      throw new Error("local harness startup failed");
+    });
+    process.env.GEMINI_API_KEY = "test-key";
+
+    try {
+      await expect(runtime.runTurn(makeParams(makeConfig(homeDir)))).rejects.toThrow(
+        "local harness startup failed",
+      );
+      expect((Agent as any).getLastInstance().isConnected).toBe(false);
+    } finally {
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
+
+  test("Stop settles immediately when local harness startup never answers", async () => {
+    const runtime = createAntigravityRuntime({ platform: "linux" });
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-stalled-startup-"));
+    const startup = Promise.withResolvers<void>();
+    (Agent as any).__setStartMockImpl(async () => await startup.promise);
+    process.env.GEMINI_API_KEY = "test-key";
+    const controller = new AbortController();
+
+    try {
+      const turn = runtime.runTurn(
+        makeParams(makeConfig(homeDir), { abortSignal: controller.signal }),
+      );
+      const settled = turn.then(
+        () => ({ kind: "completed" as const }),
+        (error: Error) => ({ kind: "rejected" as const, error }),
+      );
+      await Promise.resolve();
+      controller.abort();
+
+      const result = await Promise.race([
+        settled,
+        new Promise<{ kind: "hung" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "hung" }), 100),
+        ),
+      ]);
+      startup.resolve();
+
+      expect(result.kind).toBe("rejected");
+      if (result.kind === "rejected") {
+        expect(result.error.message).toBe("Model turn aborted.");
+      }
+    } finally {
+      startup.resolve();
+      (Agent as any).__setStartMockImpl(undefined);
+    }
+  });
 });

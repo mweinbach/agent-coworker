@@ -424,6 +424,7 @@ async function stopProcess(child: StreamingSubprocess): Promise<void> {
 }
 
 const pooledClients = new Map<string, Promise<CodexAppServerClient>>();
+const CODEX_APP_SERVER_INITIALIZATION_TIMEOUT_MS = 15_000;
 
 const POOLED_ENV_KEYS = [
   "PATH",
@@ -478,15 +479,18 @@ export async function getPooledCodexAppServerClient(
     opts.log?.(`[codex-app-server] windows sandbox setup sync failed: ${String(error)}`);
   }
   const key = pooledClientKey(opts.cwd, codexHome, opts.env);
-  const existing = pooledClients.get(key);
-  if (existing) {
+  while (true) {
+    const existing = pooledClients.get(key);
+    if (!existing) break;
     try {
       const client = await existing;
       if (!client.isClosed()) return client;
     } catch (error) {
       opts.log?.(`[codex-app-server] Discarding failed pooled client: ${String(error)}`);
     }
-    pooledClients.delete(key);
+    if (pooledClients.get(key) === existing) {
+      pooledClients.delete(key);
+    }
   }
 
   const created = (async () => {
@@ -498,7 +502,11 @@ export async function getPooledCodexAppServerClient(
       invalidJsonLogPrefix: opts.invalidJsonLogPrefix,
     });
     try {
-      await client.request("initialize", codexAppServerInitializeParams());
+      await client.request(
+        "initialize",
+        codexAppServerInitializeParams(),
+        CODEX_APP_SERVER_INITIALIZATION_TIMEOUT_MS,
+      );
       client.notify("initialized");
       client.onClose?.((code, signal) => {
         if (pooledClients.get(key) === created) {
@@ -518,7 +526,9 @@ export async function getPooledCodexAppServerClient(
   try {
     return await created;
   } catch (error) {
-    pooledClients.delete(key);
+    if (pooledClients.get(key) === created) {
+      pooledClients.delete(key);
+    }
     throw error;
   }
 }

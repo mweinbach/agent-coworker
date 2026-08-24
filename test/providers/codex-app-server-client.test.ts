@@ -122,6 +122,75 @@ describe("codex app-server client", () => {
     expect(logLines.some((line) => line.includes("pooled client closed"))).toBe(true);
   });
 
+  test("bounds app-server initialization and replaces a timed-out pooled client", async () => {
+    const home = await makeTmpHome();
+    process.env.HOME = home;
+    const initializationTimeouts: Array<number | undefined> = [];
+    let starts = 0;
+    let failedClientClosed = false;
+
+    __internal.setClientFactoryForTests(async () => {
+      starts += 1;
+      const attempt = starts;
+      return {
+        ...makeStubClient(),
+        request: async (method, _params, timeoutMs) => {
+          if (method === "initialize") {
+            initializationTimeouts.push(timeoutMs);
+          }
+          if (attempt === 1) {
+            throw new Error(`codex app-server initialize timed out after ${timeoutMs}ms`);
+          }
+          return { userAgent: "recovered" };
+        },
+        close: async () => {
+          if (attempt === 1) failedClientClosed = true;
+        },
+      } satisfies CodexAppServerClient;
+    });
+
+    await expect(getPooledCodexAppServerClient()).rejects.toThrow(
+      "initialize timed out after 15000ms",
+    );
+    expect(failedClientClosed).toBe(true);
+
+    const recovered = await getPooledCodexAppServerClient();
+    expect(recovered.isClosed()).toBe(false);
+    expect(starts).toBe(2);
+    expect(initializationTimeouts).toEqual([15_000, 15_000]);
+  });
+
+  test("shares one replacement when concurrent callers discover a closed pooled client", async () => {
+    const home = await makeTmpHome();
+    process.env.HOME = home;
+    let starts = 0;
+    let firstClosed = false;
+    const replacements: CodexAppServerClient[] = [];
+
+    __internal.setClientFactoryForTests(async () => {
+      starts += 1;
+      const attempt = starts;
+      const client = {
+        ...makeStubClient(),
+        isClosed: () => attempt === 1 && firstClosed,
+      } satisfies CodexAppServerClient;
+      if (attempt > 1) replacements.push(client);
+      return client;
+    });
+
+    await getPooledCodexAppServerClient();
+    firstClosed = true;
+    const recovered = await Promise.all([
+      getPooledCodexAppServerClient(),
+      getPooledCodexAppServerClient(),
+      getPooledCodexAppServerClient(),
+    ]);
+
+    expect(starts).toBe(2);
+    expect(replacements).toHaveLength(1);
+    expect(recovered.every((client) => client === replacements[0])).toBe(true);
+  });
+
   test("starts app-server with Cowork-owned CODEX_HOME", async () => {
     const home = await makeTmpHome();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-client-script-"));

@@ -93,8 +93,8 @@ and emit their required evidence under `apps/desktop/quality-gates/proof-artifac
 ## Updating screenshots
 
 Baselines are Linux/sRGB artifacts because Linux is the review and enforcement host. CI pins
-Playwright 1.61.1 on Ubuntu Noble by immutable image digest
-`sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48`, the repository
+Playwright 1.62.0 on Ubuntu Noble by immutable image digest
+`sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`, the repository
 `.bun-version`, and `bun.lock`. From the repository root, this exact invocation mirrors the CI
 mount, working directory, Linux dependencies, image-baked fonts, Bun version, lockfile, Xvfb
 display, and Playwright browser toolchain:
@@ -111,7 +111,7 @@ docker run --rm --ipc=host \
   --mount "type=bind,source=$PWD,target=/work/agent-coworker" \
   --mount "type=volume,target=/work/agent-coworker/node_modules" \
   --workdir /work/agent-coworker \
-  mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48 \
+  mcr.microsoft.com/playwright:v1.62.0-noble@sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07 \
   bash -lc '
     set -euo pipefail
     trap '\''chown -R "$HOST_UID:$HOST_GID" /work/agent-coworker'\'' EXIT
@@ -129,7 +129,7 @@ docker run --rm --ipc=host \
     export PATH="$BUN_INSTALL/bin:$PATH"
     test "$(bun --version)" = "$bun_version"
     bun install --frozen-lockfile
-    test "$(bunx playwright --version)" = "Version 1.61.1"
+    test "$(bunx playwright --version)" = "Version 1.62.0"
     xvfb-run --auto-servernum --server-args="-screen 0 1400x1000x24" \
       bun run desktop:quality:update
   '

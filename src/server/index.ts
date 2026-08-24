@@ -13,6 +13,7 @@ import {
 } from "../telemetry/crashReporting";
 import { initProductAnalytics, shutdownProductAnalytics } from "../telemetry/productAnalytics";
 import { VERSION } from "../version";
+import { createGracefulShutdown } from "./runtime/gracefulShutdown";
 
 // Keep server output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
@@ -291,23 +292,18 @@ async function main() {
       : {}),
   });
 
-  // Graceful shutdown on signals so child processes are cleaned up.
-  let stopping = false;
-  const shutdown = () => {
-    if (stopping) return;
-    stopping = true;
-    try {
-      server.stop();
-      void shutdownProductAnalytics();
-    } catch {
-      // ignore
-    }
-    process.exit(0);
+  const shutdown = createGracefulShutdown({
+    stopServer: () => server.stop(),
+    shutdownAnalytics: shutdownProductAnalytics,
+    exit: (code) => process.exit(code),
+  });
+  const onShutdownSignal = () => {
+    void shutdown();
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", onShutdownSignal);
+  process.on("SIGTERM", onShutdownSignal);
   if (process.platform !== "win32") {
-    process.on("SIGHUP", shutdown);
+    process.on("SIGHUP", onShutdownSignal);
   }
   process.on("exit", () => {
     // Last-resort synchronous cleanup.

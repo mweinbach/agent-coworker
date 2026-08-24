@@ -396,6 +396,28 @@ describe("workspace startup flow", () => {
     delete (globalThis as Record<string, unknown>)[DESKTOP_API_OVERRIDE_KEY];
   });
 
+  test("creation readiness preserves the actionable workspace startup failure", async () => {
+    const workspace = projectWorkspace("offline-project");
+    useAppStore.setState({
+      workspaces: [workspace],
+      selectedWorkspaceId: workspace.id,
+    });
+
+    const preflight = useAppStore.getState().preflightCreation({
+      kind: "chat",
+      workspaceId: workspace.id,
+      cwd: workspace.path,
+    });
+    await waitForCondition(() => startCalls.length === 1);
+    const startupError =
+      "This project's folder is unavailable. Reconnect its drive, then retry the readiness check.";
+    startDeferreds[0]?.reject(new Error(startupError));
+
+    await expect(preflight).rejects.toThrow(startupError);
+    expect(useAppStore.getState().workspaceRuntimeById[workspace.id]?.error).toBe(startupError);
+    expect(useAppStore.getState().workspaces).toEqual([workspace]);
+  });
+
   test("concurrent quick-chat readiness checks share one prepared workspace and server", async () => {
     class ReadyPreflightSocket extends MockJsonRpcSocket {
       override async request(method: string) {

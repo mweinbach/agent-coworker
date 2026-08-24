@@ -158,6 +158,10 @@ export function createCreationReadinessActions(
       }
 
       await ensureServerRunning(get, set, workspaceId, { signal: options.signal });
+      const startupError = get().workspaceRuntimeById[workspaceId]?.error;
+      if (startupError) {
+        throw new Error(startupError);
+      }
       ensureControlSocket(get, set, workspaceId);
       const params: CreationPreflightParams = {
         kind: request.kind,

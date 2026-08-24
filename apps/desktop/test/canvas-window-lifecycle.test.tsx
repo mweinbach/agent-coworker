@@ -172,72 +172,75 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("restores an inline context rail after closing a compact canvas overlay", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    let root: ReturnType<typeof createRoot> | null = null;
-    try {
-      Object.defineProperty(harness.dom.window, "innerWidth", {
-        configurable: true,
-        value: 1_240,
-        writable: true,
-      });
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const createdRoot = createRoot(container);
-      root = createdRoot;
-
-      await act(async () => {
-        createdRoot.render(createElement(App));
-        await flushUi();
-      });
-      expect(
-        harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
-      ).not.toBeNull();
-
-      expect(
-        harness.dom.window.document.querySelector('button[aria-label="Hide context"]'),
-      ).not.toBeNull();
-
-      await act(async () => {
-        harness.dom.window.innerWidth = 800;
-        harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize"));
-        await flushUi();
-      });
-
-      expect(useAppStore.getState().filePreview).not.toBeNull();
-      expect(
-        harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
-      ).not.toBeNull();
-      expect(
-        harness.dom.window.document.querySelector('button[aria-label="Close context"]'),
-      ).not.toBeNull();
-
-      await act(async () => {
-        harness.dom.window.document
-          .querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')
-          ?.click();
-        await flushUi();
-      });
-
-      expect(useAppStore.getState().filePreview).toBeNull();
-      const context = harness.dom.window.document.querySelector(
-        '[role="region"][aria-label="Context"]',
-      );
-      expect(context?.getAttribute("data-presentation")).toBe("inline");
-      expect(context?.getAttribute("data-active")).toBe("true");
-      expect(
-        harness.dom.window.document.querySelector('[data-slot="adaptive-rail-backdrop"]'),
-      ).toBeNull();
-    } finally {
-      if (root) {
-        const mountedRoot = root;
-        await act(async () => {
-          mountedRoot.unmount();
+  test.serial(
+    "restores an inline context rail after closing a compact canvas overlay",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        Object.defineProperty(harness.dom.window, "innerWidth", {
+          configurable: true,
+          value: 1_240,
+          writable: true,
         });
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const createdRoot = createRoot(container);
+        root = createdRoot;
+
+        await act(async () => {
+          createdRoot.render(createElement(App));
+          await flushUi();
+        });
+        expect(
+          harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
+        ).not.toBeNull();
+
+        expect(
+          harness.dom.window.document.querySelector('button[aria-label="Hide context"]'),
+        ).not.toBeNull();
+
+        await act(async () => {
+          harness.dom.window.innerWidth = 800;
+          harness.dom.window.dispatchEvent(new harness.dom.window.Event("resize"));
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().filePreview).not.toBeNull();
+        expect(
+          harness.dom.window.document.querySelector('button[aria-label="Close canvas"]'),
+        ).not.toBeNull();
+        expect(
+          harness.dom.window.document.querySelector('button[aria-label="Close context"]'),
+        ).not.toBeNull();
+
+        await act(async () => {
+          harness.dom.window.document
+            .querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')
+            ?.click();
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().filePreview).toBeNull();
+        const context = harness.dom.window.document.querySelector(
+          '[role="region"][aria-label="Context"]',
+        );
+        expect(context?.getAttribute("data-presentation")).toBe("inline");
+        expect(context?.getAttribute("data-active")).toBe("true");
+        expect(
+          harness.dom.window.document.querySelector('[data-slot="adaptive-rail-backdrop"]'),
+        ).toBeNull();
+      } finally {
+        if (root) {
+          const mountedRoot = root;
+          await act(async () => {
+            mountedRoot.unmount();
+          });
+        }
+        harness.restore();
       }
-      harness.restore();
-    }
-  });
+    },
+  );
 
   test.serial("closes the sidebar overlay when opening a canvas overlay", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
@@ -287,95 +290,105 @@ describe("canvas window lifecycle", () => {
     }
   });
 
-  test.serial("keeps an inline context rail open after closing a narrow canvas overlay", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    let root: ReturnType<typeof createRoot> | null = null;
-    try {
-      Object.defineProperty(harness.dom.window, "innerWidth", {
-        configurable: true,
-        value: 680,
-        writable: true,
-      });
-      useAppStore.setState({ filePreview: null });
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const createdRoot = createRoot(container);
-      root = createdRoot;
-
-      await act(async () => {
-        createdRoot.render(createElement(App));
-        await flushUi();
-      });
-      const context = container.querySelector<HTMLElement>('[role="region"][aria-label="Context"]');
-      expect(context?.hasAttribute("aria-hidden")).toBe(false);
-
-      await act(async () => {
-        useAppStore.setState({
-          filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
+  test.serial(
+    "keeps an inline context rail open after closing a narrow canvas overlay",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        Object.defineProperty(harness.dom.window, "innerWidth", {
+          configurable: true,
+          value: 680,
+          writable: true,
         });
-        await flushUi();
-      });
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')?.click();
-        await flushUi();
-      });
+        useAppStore.setState({ filePreview: null });
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const createdRoot = createRoot(container);
+        root = createdRoot;
 
-      expect(useAppStore.getState().filePreview).toBeNull();
-      expect(context?.getAttribute("data-presentation")).toBe("inline");
-      expect(context?.hasAttribute("aria-hidden")).toBe(false);
-    } finally {
-      if (root) {
-        const mountedRoot = root;
-        await act(async () => mountedRoot.unmount());
-      }
-      harness.restore();
-    }
-  });
-
-  test.serial("restores the inline context rail after switching and closing canvas files", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
-    let root: ReturnType<typeof createRoot> | null = null;
-    try {
-      Object.defineProperty(harness.dom.window, "innerWidth", {
-        configurable: true,
-        value: 680,
-        writable: true,
-      });
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const createdRoot = createRoot(container);
-      root = createdRoot;
-
-      await act(async () => {
-        createdRoot.render(createElement(App));
-        await flushUi();
-      });
-      const context = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context"]');
-      expect(context?.hasAttribute("aria-hidden")).toBe(false);
-
-      await act(async () => {
-        useAppStore.setState({
-          filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
+        await act(async () => {
+          createdRoot.render(createElement(App));
+          await flushUi();
         });
-        await flushUi();
-      });
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')?.click();
-        await flushUi();
-      });
+        const context = container.querySelector<HTMLElement>(
+          '[role="region"][aria-label="Context"]',
+        );
+        expect(context?.hasAttribute("aria-hidden")).toBe(false);
 
-      expect(useAppStore.getState().filePreview).toBeNull();
-      expect(context?.getAttribute("role")).toBe("region");
-      expect(context?.getAttribute("data-presentation")).toBe("inline");
-      expect(context?.hasAttribute("aria-hidden")).toBe(false);
-    } finally {
-      if (root) {
-        const mountedRoot = root;
-        await act(async () => mountedRoot.unmount());
+        await act(async () => {
+          useAppStore.setState({
+            filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/model.xlsx" },
+          });
+          await flushUi();
+        });
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')?.click();
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().filePreview).toBeNull();
+        expect(context?.getAttribute("data-presentation")).toBe("inline");
+        expect(context?.hasAttribute("aria-hidden")).toBe(false);
+      } finally {
+        if (root) {
+          const mountedRoot = root;
+          await act(async () => mountedRoot.unmount());
+        }
+        harness.restore();
       }
-      harness.restore();
-    }
-  });
+    },
+  );
+
+  test.serial(
+    "restores the inline context rail after switching and closing canvas files",
+    async () => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      let root: ReturnType<typeof createRoot> | null = null;
+      try {
+        Object.defineProperty(harness.dom.window, "innerWidth", {
+          configurable: true,
+          value: 680,
+          writable: true,
+        });
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const createdRoot = createRoot(container);
+        root = createdRoot;
+
+        await act(async () => {
+          createdRoot.render(createElement(App));
+          await flushUi();
+        });
+        const context = container.querySelector<HTMLElement>(
+          '[role="dialog"][aria-label="Context"]',
+        );
+        expect(context?.hasAttribute("aria-hidden")).toBe(false);
+
+        await act(async () => {
+          useAppStore.setState({
+            filePreview: { path: "/Users/mweinbach/Projects/agent-coworker/notes.md" },
+          });
+          await flushUi();
+        });
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('button[aria-label="Close canvas"]')?.click();
+          await flushUi();
+        });
+
+        expect(useAppStore.getState().filePreview).toBeNull();
+        expect(context?.getAttribute("role")).toBe("region");
+        expect(context?.getAttribute("data-presentation")).toBe("inline");
+        expect(context?.hasAttribute("aria-hidden")).toBe(false);
+      } finally {
+        if (root) {
+          const mountedRoot = root;
+          await act(async () => mountedRoot.unmount());
+        }
+        harness.restore();
+      }
+    },
+  );
 
   test.serial(
     "relinquishes canvas ownership after a manual overlay dismiss and reopen",

@@ -52,6 +52,13 @@ function viewerStatusIcon(rt: ThreadRuntime | null): ReactNode {
 
 function viewerStatusLabel(rt: ThreadRuntime | null): string {
   if (!rt) return "connecting";
+  if (
+    rt.executionState === "completed" ||
+    rt.executionState === "errored" ||
+    rt.executionState === "closed"
+  ) {
+    return rt.executionState;
+  }
   if (rt.busy) return "running";
   if (!rt.connected) return "connecting";
   return (rt.executionState ?? "idle").replace(/_/g, " ");
@@ -198,8 +205,12 @@ export const AgentRunViewer = memo(function AgentRunViewer() {
 
   const busy = rt?.busy === true;
   const connected = rt?.connected === true;
-  const hydrating = rt?.hydrating === true || (!connected && visibleFeed.length === 0);
-  const disconnected = !hydrating && !connected;
+  const terminal =
+    rt?.executionState === "completed" ||
+    rt?.executionState === "errored" ||
+    rt?.executionState === "closed";
+  const hydrating = rt?.hydrating === true || (!connected && visibleFeed.length === 0 && !terminal);
+  const disconnected = !hydrating && !connected && !terminal;
 
   const title = thread?.title?.trim() || "Subagent run";
   const metaLine = [rt?.role ?? null, rt ? `depth ${rt.depth}` : null, rt?.effectiveModel ?? null]

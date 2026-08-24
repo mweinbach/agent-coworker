@@ -427,6 +427,66 @@ describe("AgentRunViewer", () => {
     }
   });
 
+  test("preserves terminal subagent states after their connection closes", async () => {
+    const harness = setupJsdom({
+      includeAnimationFrame: {
+        requestAnimationFrame: requestAnimationFrameMock,
+        cancelAnimationFrame: cancelAnimationFrameMock,
+      },
+      extraGlobals: { MutationObserver: MockMutationObserver, ResizeObserver: MockResizeObserver },
+    });
+    try {
+      useAppStore.setState({
+        ...defaultStoreState,
+        ready: true,
+        threads: [parentThreadRecord(), agentThreadRecord()],
+        workspaces: [{ id: "ws-1", path: "/tmp/workspace", name: "Workspace" }],
+        selectedThreadId: PARENT_THREAD_ID,
+        agentViewerThreadId: AGENT_ID,
+        threadRuntimeById: {
+          [AGENT_ID]: agentRuntime({ busy: false, connected: false, executionState: "completed" }),
+        },
+      } as any);
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      try {
+        await act(async () => {
+          root.render(createElement(OverlayStackProvider, null, createElement(AgentRunViewer)));
+        });
+
+        const statusText = () =>
+          harness.dom.window.document.querySelector('[data-slot="agent-run-status"]')?.textContent;
+        expect(statusText()).toContain("completed");
+
+        for (const executionState of ["errored", "closed"] as const) {
+          await act(async () => {
+            useAppStore.setState({
+              threadRuntimeById: {
+                [AGENT_ID]: agentRuntime({
+                  busy: false,
+                  connected: false,
+                  executionState,
+                  feed: [],
+                }),
+              },
+            } as any);
+          });
+
+          expect(statusText()).toContain(executionState);
+          expect(harness.dom.window.document.body.textContent).not.toContain("Loading chat");
+        }
+      } finally {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("renders nothing when no agent run is being viewed", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: {

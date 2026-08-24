@@ -386,6 +386,15 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
     return "Agent started";
   }
   if (base === "waitforagent") {
+    const erroredAgentIds = recordStringArray(result, "erroredAgentIds");
+    const timedOut = result.timedOut === true;
+    if (erroredAgentIds.length > 0) {
+      const failureSummary =
+        erroredAgentIds.length === 1 ? "1 agent failed" : `${erroredAgentIds.length} agents failed`;
+      return timedOut ? `${failureSummary} · Timed out` : failureSummary;
+    }
+    if (timedOut) return "Timed out";
+
     const status = getRecordValue(result, ["status", "mode"]);
     const completed = getRecordValue(result, ["completed", "done"]);
     if (completed !== undefined) return `Done: ${toText(completed)}`;
@@ -412,10 +421,21 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
 }
 
 function buildDetailsRows(
+  name: string,
   args: unknown,
   result: unknown,
   state: ToolFeedState,
 ): ToolCardDetailsRow[] {
+  const agentWaitResult =
+    name.toLowerCase() === "waitforagent" && state === "output-available" && isRecord(result)
+      ? result
+      : null;
+  const availableStatus =
+    agentWaitResult && recordStringArray(agentWaitResult, "erroredAgentIds").length > 0
+      ? "Error"
+      : agentWaitResult?.timedOut === true
+        ? "Timed Out"
+        : "Done";
   const rows: ToolCardDetailsRow[] = [
     {
       label: "Status",
@@ -427,7 +447,7 @@ function buildDetailsRows(
             : state === "approval-requested"
               ? "Awaiting Approval"
               : state === "output-available"
-                ? "Done"
+                ? availableStatus
                 : state === "output-denied"
                   ? "Denied"
                   : "Error",
@@ -536,6 +556,6 @@ export function formatToolCard(
   return {
     title,
     subtitle,
-    details: buildDetailsRows(args, result, state),
+    details: buildDetailsRows(name, args, result, state),
   };
 }

@@ -118,6 +118,79 @@ describe("tool card formatting ask summaries", () => {
     expect(out.subtitle).toBe("Waiting for 4 agents");
   });
 
+  test("preserves successful waitForAgent result summaries and status", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "any" },
+      {
+        timedOut: false,
+        mode: "any",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: [],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toBe("Waiting for 1 agent · any");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Done");
+  });
+
+  test("shows timed-out waitForAgent results without reporting success", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "all" },
+      {
+        timedOut: true,
+        mode: "all",
+        agents: [],
+        readyAgentIds: [],
+        erroredAgentIds: [],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("Timed out");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Timed Out");
+  });
+
+  test("shows crashed waitForAgent children without reporting success", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1"], mode: "any" },
+      {
+        timedOut: false,
+        mode: "any",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: ["agent-1"],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("1 agent failed");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Error");
+  });
+
+  test("preserves both child failures and timeout in partial waitForAgent results", () => {
+    const out = formatToolCard(
+      "waitForAgent",
+      { agentIds: ["agent-1", "agent-2"], mode: "all" },
+      {
+        timedOut: true,
+        mode: "all",
+        agents: [],
+        readyAgentIds: ["agent-1"],
+        erroredAgentIds: ["agent-1"],
+      },
+      "output-available",
+    );
+
+    expect(out.subtitle).toContain("1 agent failed");
+    expect(out.subtitle).toContain("Timed out");
+    expect(out.details.find((row) => row.label === "Status")?.value).toBe("Error");
+  });
+
   test("summarizes modern todoWrite args without a generic Completed suffix", () => {
     const out = formatToolCard(
       "todoWrite",

@@ -33,9 +33,6 @@ export class SessionSnapshotBuilder {
   }
 
   private resolvePersistedExecutionState(): AgentExecutionState | null {
-    if ((this.opts.state.sessionInfo.sessionKind ?? "root") !== "agent") {
-      return this.opts.state.sessionInfo.executionState ?? null;
-    }
     if (this.opts.state.persistenceStatus === "closed") return "closed";
     if (this.opts.state.running) return "running";
     if (this.opts.state.currentTurnOutcome === "error") return "errored";

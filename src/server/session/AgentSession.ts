@@ -293,6 +293,7 @@ export class AgentSession {
         provider: opts.config.provider,
         model: opts.config.model,
         sessionKind: opts.sessionInfoPatch?.sessionKind ?? "root",
+        executionState: opts.sessionInfoPatch?.executionState ?? "completed",
         ...(opts.sessionInfoPatch?.parentSessionId
           ? { parentSessionId: opts.sessionInfoPatch.parentSessionId }
           : {}),
@@ -318,9 +319,6 @@ export class AgentSession {
           : {}),
         ...(opts.sessionInfoPatch?.effectiveReasoningEffort
           ? { effectiveReasoningEffort: opts.sessionInfoPatch.effectiveReasoningEffort }
-          : {}),
-        ...(opts.sessionInfoPatch?.executionState
-          ? { executionState: opts.sessionInfoPatch.executionState }
           : {}),
         ...(opts.sessionInfoPatch?.lastMessagePreview
           ? { lastMessagePreview: opts.sessionInfoPatch.lastMessagePreview }

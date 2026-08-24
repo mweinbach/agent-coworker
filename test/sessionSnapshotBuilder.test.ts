@@ -82,6 +82,30 @@ function makeAgentState(overrides: Partial<SessionRuntimeState> = {}): SessionRu
 }
 
 describe("SessionSnapshotBuilder child execution state", () => {
+  test("persists root execution from live runtime state even when legacy metadata omitted it", () => {
+    const base = makeAgentState();
+    const { executionState: _legacyExecutionState, ...legacySessionInfo } = base.sessionInfo;
+    const state = makeAgentState({
+      running: true,
+      sessionInfo: { ...legacySessionInfo, sessionKind: "root", parentSessionId: undefined },
+    });
+    const builder = new SessionSnapshotBuilder({
+      sessionId: "root-1",
+      state,
+      harnessContextStore: new HarnessContextStore(),
+      getEnableMcp: () => true,
+      hasPendingAsk: () => false,
+      hasPendingApproval: () => false,
+    });
+
+    expect(builder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe(
+      "running",
+    );
+    expect(
+      builder.buildPersistedSnapshotAt("2026-03-16T18:01:00.000Z").session.executionState,
+    ).toBe("running");
+  });
+
   test("persists completed child execution state from runtime instead of stale pending_init metadata", () => {
     const state = makeAgentState({
       currentTurnOutcome: "completed",

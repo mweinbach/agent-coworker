@@ -55,7 +55,7 @@ function normalizeHydratedExecutionState(
   status: HydratedSessionState["status"] | undefined,
 ): SessionInfoState["executionState"] {
   if ((sessionKind ?? "root") !== "agent") {
-    return executionState;
+    return executionState ?? (status === "closed" ? "closed" : "completed");
   }
   if (status === "closed") {
     return "closed";

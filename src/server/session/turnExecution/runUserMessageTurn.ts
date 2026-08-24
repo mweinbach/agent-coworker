@@ -121,7 +121,6 @@ export function createUserMessageTurnRunner(
   } = deps;
 
   const updateSessionExecutionState = (executionState: AgentExecutionState) => {
-    if (context.state.sessionInfo.executionState === undefined) return;
     metadataManager.updateSessionInfo({ executionState });
   };
 

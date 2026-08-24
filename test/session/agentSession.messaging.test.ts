@@ -1992,6 +1992,82 @@ describe("AgentSession", () => {
       await turnPromise;
     });
 
+    test("persists root chat executionState from its first active turn through completion", async () => {
+      const persistedStates: Array<string | null> = [];
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => null,
+        persistSessionMutation: async ({
+          snapshot,
+        }: {
+          snapshot: { executionState: string | null };
+        }) => {
+          persistedStates.push(snapshot.executionState);
+          return persistedStates.length;
+        },
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () =>
+              resolve({ text: "finished", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const sendPromise = session.sendUserMessage("first task or chat turn");
+      await waitForTurnStart(session);
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("running");
+      expect(persistedStates.at(-1)).toBe("running");
+      expect(
+        events.some((event) => event.type === "session_info" && event.executionState === "running"),
+      ).toBe(true);
+
+      resolveRunTurn();
+      await sendPromise;
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      expect(persistedStates.at(-1)).toBe("completed");
+    });
+
+    test("persists a failed root chat turn as recoverably errored", async () => {
+      const persistedStates: Array<string | null> = [];
+      const sessionDb = {
+        getActiveTaskForSourceSession: () => null,
+        getTaskForThread: () => null,
+        persistSessionMutation: async ({
+          snapshot,
+        }: {
+          snapshot: { executionState: string | null };
+        }) => {
+          persistedStates.push(snapshot.executionState);
+          return persistedStates.length;
+        },
+        persistSessionSnapshot: async () => {},
+      };
+      const { session, events } = makeSession({ sessionDb: sessionDb as never });
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("root provider failed");
+      });
+
+      await session.sendUserMessage("first root turn fails");
+      await session.waitForPersistenceIdle();
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(persistedStates.at(-1)).toBe("errored");
+      expect(
+        events.some((event) => event.type === "session_info" && event.executionState === "running"),
+      ).toBe(true);
+    });
+
     test("updates child session_info executionState across a successful turn", async () => {
       const { session, events } = makeSession({
         sessionInfoPatch: {

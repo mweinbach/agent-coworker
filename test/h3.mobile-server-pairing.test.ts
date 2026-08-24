@@ -453,6 +453,85 @@ describe("H3 mobile server pairing", () => {
     }
   });
 
+  test("keeps a replacement event stream connected when an older stream closes late", async () => {
+    const storeRoot = await createTempRoot();
+    const openedConnections: H3TestConnection[] = [];
+    let closedConnections = 0;
+    const runtime = {
+      openHttpConnection(connection: H3TestConnection) {
+        openedConnections.push(connection);
+      },
+      handleDecodedMessage(connection: H3TestConnection, message: JsonRpcLiteRequest) {
+        if ("id" in message) {
+          connection.send(JSON.stringify({ id: message.id, result: { ok: true } }));
+        }
+      },
+      closeConnection() {
+        closedConnections += 1;
+      },
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      const pairResponse = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "phone-identity",
+        }),
+      });
+      const { sessionToken } = (await pairResponse.json()) as { sessionToken: string };
+      const headers = {
+        authorization: `Bearer ${sessionToken}`,
+        "x-cowork-mobile-device-id": "phone-1",
+      };
+      const firstStreamAbort = new AbortController();
+      const firstResponse = await fetchH3(`${server.url}/events`, {
+        headers,
+        signal: firstStreamAbort.signal,
+      });
+      const firstReader = firstResponse.body?.getReader();
+      expect(firstReader).toBeDefined();
+      await firstReader?.read();
+
+      const replacementResponse = await fetchH3(`${server.url}/events`, { headers });
+      const replacementReader = replacementResponse.body?.getReader();
+      expect(replacementReader).toBeDefined();
+      await replacementReader?.read();
+      expect(openedConnections).toHaveLength(1);
+
+      firstStreamAbort.abort();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(closedConnections).toBe(0);
+      openedConnections[0]?.send(
+        JSON.stringify({ method: "turn/completed", params: { threadId: "thread-1" } }),
+      );
+      const received = await Promise.race([
+        replacementReader?.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Replacement stream did not receive its event.")),
+            1_000,
+          ),
+        ),
+      ]);
+      expect(received?.done).toBe(false);
+      expect(new TextDecoder().decode(received?.value)).toContain("turn/completed");
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("closes active event streams when workspace settings permission is revoked", async () => {
     const storeRoot = await createTempRoot();
     let closedConnections = 0;

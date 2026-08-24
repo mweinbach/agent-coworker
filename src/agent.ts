@@ -49,10 +49,12 @@ import type {
   ReferencedPluginContext,
   TodoItem,
 } from "./types";
+import { raceWithAbort } from "./utils/abortSignal";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
 /** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
 let STREAM_DRAIN_TIMEOUT_MS = 30_000;
+const TURN_STARTUP_CLEANUP_TIMEOUT_MS = 200;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
   .object({
@@ -458,13 +460,16 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       discoveredSkills,
       abortSignal,
     } = params;
+    if (abortSignal?.aborted) {
+      throw new Error("Model turn aborted.");
+    }
     let latestTurnMessages = messages;
     // Cold-start steps with no data dependencies between them — each reads
     // only `params`/`config`, and none mutates state another one reads
     // (`prepareCoworkRuntimeToolEnv` copies `process.env` rather than writing
     // it) — so they run concurrently to cut first-turn latency.
     const mcpLoadPromise = loadTurnMcpTools(params, deps, log);
-    const [turnToolEnv, mcpLoad, telemetry] = await Promise.all([
+    const startup = Promise.all([
       prepareTurnToolEnv(params),
       mcpLoadPromise,
       buildRuntimeTelemetrySettings(config, {
@@ -473,20 +478,36 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           ...(params.telemetryContext?.metadata ?? {}),
         },
       }),
-    ]).catch(async (error: unknown): Promise<never> => {
-      // A sibling step failed before the turn could start; sequentially the
-      // MCP connections would never have been opened. Wait for the MCP leg to
-      // settle and close whatever it opened before rethrowing.
-      const settledMcpLoad = await mcpLoadPromise.catch(() => undefined);
-      if (settledMcpLoad?.close) {
-        try {
-          await settledMcpLoad.close();
-        } catch (closeError) {
-          log(`[MCP] Error closing MCP connections: ${String(closeError)}`);
+    ]);
+    const [turnToolEnv, mcpLoad, telemetry] = await raceWithAbort(startup, abortSignal).catch(
+      async (error: unknown): Promise<never> => {
+        // A dependency can ignore cancellation or hang forever. Still close
+        // late-created MCP connections, but never let cleanup strand Stop.
+        const cleanup = mcpLoadPromise
+          .then(async (settledMcpLoad) => {
+            await settledMcpLoad.close?.();
+          })
+          .catch((closeError: unknown) => {
+            log(`[MCP] Error closing MCP connections: ${String(closeError)}`);
+          });
+
+        if (!abortSignal?.aborted) {
+          let cleanupTimeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              cleanup,
+              new Promise<void>((resolve) => {
+                cleanupTimeout = setTimeout(resolve, TURN_STARTUP_CLEANUP_TIMEOUT_MS);
+              }),
+            ]);
+          } finally {
+            if (cleanupTimeout !== undefined) clearTimeout(cleanupTimeout);
+          }
         }
-      }
-      throw error;
-    });
+
+        throw error;
+      },
+    );
     const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
     const turnSandboxPolicy = resolveSandboxPolicy({
       config: config.sandbox,

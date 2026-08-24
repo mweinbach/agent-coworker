@@ -3,12 +3,43 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/sandbox";
 import { requireWorkspacePath } from "../src/server/jsonrpc/routes/shared";
 import { listWorkspaceSummaries } from "../src/server/jsonrpc/workspaceCatalog";
 import { WebDesktopService, type WebDesktopServiceLike } from "../src/server/webDesktopService";
-import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
+import {
+  createOneOffChatWorkspace,
+  getOneOffChatsRoot,
+  isPathInsideOneOffChatsRoot,
+} from "../src/utils/oneOffChats";
 
 describe("workspace catalog and path rules", () => {
+  test("one-off chats honor the configured Cowork home by default", async () => {
+    const configuredHome = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-configured-home-"),
+    );
+    const previousOverride = process.env.COWORK_HOME_OVERRIDE;
+    process.env.COWORK_HOME_OVERRIDE = configuredHome;
+
+    try {
+      const expectedChatsRoot = path.join(configuredHome, ".cowork", "chats");
+      expect(getOneOffChatsRoot()).toBe(expectedChatsRoot);
+      expect(isPathInsideOneOffChatsRoot(path.join(expectedChatsRoot, "draft-chat"))).toBe(true);
+
+      const workspace = await createOneOffChatWorkspace({ titleHint: "Isolated startup" });
+      expect(workspace.path.startsWith(`${await fs.realpath(expectedChatsRoot)}${path.sep}`)).toBe(
+        true,
+      );
+    } finally {
+      if (previousOverride === undefined) {
+        delete process.env.COWORK_HOME_OVERRIDE;
+      } else {
+        process.env.COWORK_HOME_OVERRIDE = previousOverride;
+      }
+      await fs.rm(configuredHome, { recursive: true, force: true });
+    }
+  });
+
   test("requireWorkspacePath accepts one-off chat directories under ~/.cowork/chats", async () => {
     const homedir = await fs.mkdtemp(path.join(process.cwd(), "cowork-home-"));
     const projectDir = path.join(homedir, "project");

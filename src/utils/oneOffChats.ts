@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import { home as resolveCoworkHomeDirectory } from "../platform/paths";
 import { canonicalizePathForBoundaryCheckSync, isPathInside } from "./paths";
 
 const PRIVATE_DIR_MODE = 0o700;
@@ -45,11 +45,14 @@ export function normalizeWorkspaceKind(value: unknown): WorkspaceKind {
     : PROJECT_WORKSPACE_KIND;
 }
 
-export function getOneOffChatsRoot(homedir = os.homedir()): string {
+export function getOneOffChatsRoot(homedir = resolveCoworkHomeDirectory()): string {
   return path.join(homedir, ".cowork", "chats");
 }
 
-export function isPathInsideOneOffChatsRoot(targetPath: string, homedir = os.homedir()): boolean {
+export function isPathInsideOneOffChatsRoot(
+  targetPath: string,
+  homedir = resolveCoworkHomeDirectory(),
+): boolean {
   const root = getOneOffChatsRoot(homedir);
   try {
     return isPathInside(

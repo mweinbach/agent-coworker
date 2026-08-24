@@ -19,6 +19,19 @@ const DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES = 2;
 export const DESKTOP_IDENTITY_CHANGED_ERROR =
   "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
 
+function desktopPermissionLabel(permission: string): string {
+  switch (permission) {
+    case "conversations":
+      return "Conversations";
+    case "turns":
+      return "Turns";
+    case "serverRequests":
+      return "Approvals";
+    default:
+      return permission;
+  }
+}
+
 function sessionTokenKey(macDeviceId: string): string {
   return `${SESSION_TOKEN_KEY_PREFIX}${macDeviceId}`;
 }
@@ -309,10 +322,11 @@ export class SecureTransportClient {
       };
       this.activeSessionRestoreBlocked = false;
       await this.persistTrustedState();
+      this.setConnectionStatus("connecting");
       this.openEventStream();
       this.reconnectAttempt = 0;
       this.consecutiveRequestFailures = 0;
-      return this.setConnectionStatus("connected");
+      return this.snapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.activeSession = null;
@@ -346,10 +360,11 @@ export class SecureTransportClient {
     };
     this.activeSessionRestoreBlocked = false;
     await this.persistTrustedState();
+    this.setConnectionStatus("connecting");
     this.openEventStream();
     this.reconnectAttempt = 0;
     this.consecutiveRequestFailures = 0;
-    return this.setConnectionStatus("connected");
+    return this.snapshot();
   }
 
   async disconnect(): Promise<SecureTransportSnapshot> {
@@ -414,6 +429,19 @@ export class SecureTransportClient {
       throw error;
     }
     if (!response.ok) {
+      if (response.status === 403) {
+        const body = parseJsonObject(await response.text());
+        const permission = body ? readString(body, "permission") : "";
+        if (body && permission) {
+          const serverError = readString(body, "error");
+          const guidance = `Enable ${desktopPermissionLabel(permission)} for this phone in Cowork Desktop > Settings > Remote Access.`;
+          const message = serverError ? `${serverError} ${guidance}` : guidance;
+          this.lastError = message;
+          this.emitSecureError(message);
+          this.setConnectionStatus("error");
+          throw new Error(message);
+        }
+      }
       throw new Error(`Desktop request failed with HTTP ${response.status}.`);
     }
     this.consecutiveRequestFailures = 0;
@@ -554,8 +582,8 @@ export class SecureTransportClient {
     }
     this.activeSession = active && trusted ? activeSessionFromTrustedDesktop(trusted) : null;
     if (this.activeSession) {
-      if (this.connectionStatus === "idle" || this.connectionStatus === "error") {
-        this.connectionStatus = "connected";
+      if (this.connectionStatus === "idle") {
+        this.connectionStatus = "connecting";
       }
       return;
     }

@@ -182,6 +182,8 @@ export function createPluginActions(
         workspaceId,
         "cowork/plugins/catalog/read",
         { cwd },
+        undefined,
+        { requiredEventType: "plugins_catalog" },
       );
       if (!ok) {
         set((s) => ({
@@ -237,11 +239,19 @@ export function createPluginActions(
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
-        cwd,
-        pluginId,
-        ...(resolvedScope ? { scope: resolvedScope } : {}),
-      });
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/plugins/read",
+        {
+          cwd,
+          pluginId,
+          ...(resolvedScope ? { scope: resolvedScope } : {}),
+        },
+        undefined,
+        { requiredEventType: "plugin_detail" },
+      );
       if (!ok) {
         set((s) => ({
           workspaceRuntimeById: {
@@ -279,6 +289,7 @@ export function createPluginActions(
           targetScope,
         },
         rpcError,
+        { requiredEventType: "plugin_install_preview" },
       );
       if (!ok) {
         const detail = rpcError.message?.trim() || "Unable to preview plugin install.";

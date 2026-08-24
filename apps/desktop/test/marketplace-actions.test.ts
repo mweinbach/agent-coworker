@@ -104,6 +104,42 @@ describe("marketplace store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
+  test.each([
+    { label: "empty", response: {} },
+    {
+      label: "unrelated",
+      response: {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: { plugins: [], availablePlugins: [], warnings: [] },
+        },
+      },
+    },
+  ])("refreshMarketplaces settles loading after an $label response", async ({ response }) => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    };
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => response,
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createMarketplaceActions(set, get).refreshMarketplaces();
+
+    expect(state.workspaceRuntimeById[workspaceId].marketplacesLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].marketplacesError).toContain(
+      "Reconnect and retry",
+    );
+    expect(state.notifications).toHaveLength(1);
+  });
+
   test("refreshMarketplaces targets an explicitly provided workspace", async () => {
     const state = createState();
     const otherWorkspaceId = "ws-marketplaces-other";
@@ -295,6 +331,31 @@ describe("marketplace store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toBe(
       'Failed to read marketplace: Marketplace "acme/gone" is not configured.',
+    );
+    expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toBeNull();
+  });
+
+  test("readMarketplaceDetail settles loading when the server omits its detail event", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      selectedMarketplaceId: "acme/cowork-extras",
+    };
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({}),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createMarketplaceActions(set, get).readMarketplaceDetail("acme/cowork-extras");
+
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toContain(
+      "Reconnect and retry",
     );
     expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toBeNull();
   });

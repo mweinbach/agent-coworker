@@ -83,6 +83,7 @@ export function createMarketplaceActions(
       "cowork/marketplaces/detail",
       { cwd, id },
       rpcError,
+      { requiredEventType: "marketplace_detail" },
     );
     if (!ok) {
       const detail = rpcError.message?.trim() || "Unable to load marketplace details.";
@@ -142,6 +143,7 @@ export function createMarketplaceActions(
         "cowork/marketplaces/read",
         { cwd },
         rpcError,
+        { requiredEventType: "marketplaces_list" },
       );
       if (!ok) {
         const detail = rpcError.message?.trim() || "Unable to load marketplaces.";

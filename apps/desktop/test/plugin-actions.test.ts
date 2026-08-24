@@ -100,6 +100,42 @@ describe("plugin store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
+  test.each([
+    { label: "empty", response: {} },
+    {
+      label: "unrelated",
+      response: {
+        event: {
+          type: "marketplaces_list",
+          sessionId: "jsonrpc-control",
+          marketplaces: [],
+        },
+      },
+    },
+  ])("refreshPluginsCatalog settles loading after an $label response", async ({ response }) => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    };
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => response,
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createPluginActions(set, get).refreshPluginsCatalog();
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Unable to refresh plugins catalog.",
+    );
+    expect(state.notifications).toHaveLength(1);
+  });
+
   test("selectPlugin enters loading state before the request and preserves loaded detail after success", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId] = {
@@ -213,6 +249,36 @@ describe("plugin store actions", () => {
     );
   });
 
+  test("selectPlugin rejects an unrelated catalog event without stranding its detail spinner", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    };
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: { plugins: [], availablePlugins: [], warnings: [] },
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createPluginActions(set, get).selectPlugin("plugin-1", "workspace");
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Unable to load plugin details.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+  });
+
   test("previewPluginInstall targets the selected workspace", async () => {
     const state = createState();
     const managementWorkspaceId = "ws-plugin-management";
@@ -278,6 +344,30 @@ describe("plugin store actions", () => {
       state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope,
     ).toBe("workspace");
     expect(state.workspaceRuntimeById[managementWorkspaceId].pluginMutationPendingKeys).toEqual({});
+  });
+
+  test("previewPluginInstall releases its pending action when the preview event is missing", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    };
+    const { get, set } = createStoreHarness(state);
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({}),
+      respond: () => true,
+      close: () => {},
+    } as unknown as JsonRpcSocket);
+
+    await createPluginActions(set, get).previewPluginInstall("owner/repo", "workspace");
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].pluginMutationError).toContain(
+      "Reconnect and retry",
+    );
   });
 
   test("installPlugins registers its waiter on the selected workspace", async () => {

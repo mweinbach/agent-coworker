@@ -70,6 +70,7 @@ type ControlSocketHelperOptions = {
 type RequestJsonRpcControlEventOptions = {
   beforeApplyEvent?: (event: SessionEvent) => void;
   decodeAcknowledgement?: ControlEventAcknowledgementDecoder;
+  requiredEventType?: SessionEvent["type"];
   shouldApplyEvent?: (event: SessionEvent) => boolean;
 };
 
@@ -1991,6 +1992,20 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         setErrorDetail("Workspace control session was disposed.");
         return false;
+      }
+      if (
+        options.requiredEventType &&
+        !normalizedEvents.some((nextEvent) => nextEvent.type === options.requiredEventType)
+      ) {
+        const containsExplicitFailure = normalizedEvents.some((nextEvent) => {
+          const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
+          const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
+          return acknowledgement?.ok === false || operationAcknowledgement?.ok === false;
+        });
+        if (!containsExplicitFailure) {
+          setErrorDetail("The server returned an incomplete response. Reconnect and retry.");
+          return false;
+        }
       }
       if (normalizedEvents.length === 0) {
         return true;

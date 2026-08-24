@@ -186,6 +186,152 @@ describe("desktop activity group card", () => {
     expect(html).toContain("4 subagents");
   });
 
+  test("reveals approvals added to a previously collapsed tool cluster", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const completedItems: Parameters<typeof ActivityGroupCard>[0]["items"] = [
+      {
+        id: "read-1",
+        kind: "tool",
+        ts: "2024-01-01T00:00:01.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "first.ts" },
+      },
+      {
+        id: "read-2",
+        kind: "tool",
+        ts: "2024-01-01T00:00:02.000Z",
+        name: "read",
+        state: "output-available",
+        args: { path: "second.ts" },
+      },
+    ];
+    const approvalItem: Parameters<typeof ActivityGroupCard>[0]["items"][number] = {
+      id: "read-approval",
+      kind: "tool",
+      ts: "2024-01-01T00:00:03.000Z",
+      name: "read",
+      state: "approval-requested",
+      args: { path: "restricted.ts" },
+      approval: { approvalId: "approval-1" },
+    };
+    const renderItems = async (items: Parameters<typeof ActivityGroupCard>[0]["items"]) => {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items,
+          }),
+        );
+      });
+    };
+
+    try {
+      await renderItems(completedItems);
+      const clusterToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="tool-cluster-label"]',
+      );
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+
+      await renderItems([...completedItems, approvalItem]);
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(container.textContent).toContain("Approval required");
+
+      await act(async () => {
+        clusterToggle?.click();
+      });
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+
+      await renderItems([
+        ...completedItems,
+        approvalItem,
+        {
+          ...approvalItem,
+          id: "read-approval-2",
+          approval: { approvalId: "approval-2" },
+        },
+      ]);
+      expect(clusterToggle?.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
+  test("keeps completed tool payloads inspectable inside tool clusters", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "read-report-1",
+                kind: "tool",
+                ts: "2024-01-01T00:00:01.000Z",
+                name: "read",
+                state: "output-available",
+                args: { path: "first-report.md" },
+                result: { report: "First completed workflow report" },
+              },
+              {
+                id: "read-report-2",
+                kind: "tool",
+                ts: "2024-01-01T00:00:02.000Z",
+                name: "read",
+                state: "output-available",
+                args: { path: "second-report.md" },
+                result: { report: "Second completed workflow report" },
+              },
+            ],
+          }),
+        );
+      });
+
+      const clusterToggle = container.querySelector<HTMLButtonElement>(
+        '[data-slot="tool-cluster-label"]',
+      );
+      await act(async () => {
+        clusterToggle?.click();
+      });
+
+      const toolRows = container.querySelectorAll('[data-activity-entry-kind="tool"]');
+      expect(toolRows).toHaveLength(2);
+      const firstToolToggle = toolRows[0]?.querySelector<HTMLButtonElement>("button");
+      expect(firstToolToggle).not.toBeNull();
+
+      await act(async () => {
+        firstToolToggle?.click();
+      });
+      const rawToggle = Array.from(toolRows[0]?.querySelectorAll("button") ?? []).find((button) =>
+        button.textContent?.includes("Raw input/output"),
+      );
+      expect(rawToggle).toBeDefined();
+
+      await act(async () => {
+        rawToggle?.click();
+      });
+      expect(toolRows[0]?.textContent).toContain("First completed workflow report");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      harness.restore();
+    }
+  });
+
   test("renders reasoning summaries once without a nested disclosure", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

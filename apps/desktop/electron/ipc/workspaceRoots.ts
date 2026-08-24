@@ -32,6 +32,7 @@ async function getNormalizedWorkspaceRoots(state: PersistedState): Promise<strin
 
 export class WorkspaceRootsController implements WorkspaceRootsAccess {
   private readonly approvedWorkspaceRoots = new Set<string>();
+  private readonly unpersistedWorkspaceRoots = new Set<string>();
   private approvedWorkspaceRootsInitialized = false;
 
   constructor(private readonly persistence: PersistenceService) {}
@@ -39,6 +40,10 @@ export class WorkspaceRootsController implements WorkspaceRootsAccess {
   private resetApprovedWorkspaceRoots(paths: Iterable<string>): void {
     this.approvedWorkspaceRoots.clear();
     for (const workspacePath of paths) {
+      this.approvedWorkspaceRoots.add(workspacePath);
+      this.unpersistedWorkspaceRoots.delete(workspacePath);
+    }
+    for (const workspacePath of this.unpersistedWorkspaceRoots) {
       this.approvedWorkspaceRoots.add(workspacePath);
     }
     this.approvedWorkspaceRootsInitialized = true;
@@ -74,6 +79,9 @@ export class WorkspaceRootsController implements WorkspaceRootsAccess {
 
   async addApprovedWorkspacePath(workspacePath: string): Promise<string> {
     const normalized = await normalizeWorkspacePath(workspacePath);
+    if (!this.approvedWorkspaceRoots.has(normalized)) {
+      this.unpersistedWorkspaceRoots.add(normalized);
+    }
     this.approvedWorkspaceRoots.add(normalized);
     this.approvedWorkspaceRootsInitialized = true;
     return normalized;

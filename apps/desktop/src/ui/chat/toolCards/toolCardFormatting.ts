@@ -59,7 +59,11 @@ function composeToolSubtitle(
   state: ToolFeedState,
   preferArgsWhileRunning: boolean,
 ): string {
-  if (!argsSummary) return resultSummary;
+  if (!argsSummary) {
+    return state === "output-available" && isGenericSuccessSummary(resultSummary)
+      ? ""
+      : resultSummary;
+  }
   if (preferArgsWhileRunning) {
     if (state === "output-available" || state === "output-error" || state === "output-denied") {
       return isGenericSuccessSummary(resultSummary)
@@ -119,6 +123,12 @@ function firstStringArrayValue(record: Record<string, unknown>, key: string): st
 }
 
 function humanizeToolName(name: string): string {
+  const normalized = name.toLowerCase().replace(/[_.-]/g, "");
+  if (normalized === "commandexecution" || normalized === "execcommand" || normalized === "bash") {
+    return "Run command";
+  }
+  if (normalized === "todowrite") return "Update plan";
+  if (normalized === "filechange") return "Edit files";
   const nativeKind = nativeGoogleToolKind(name);
   if (nativeKind === "web-search") {
     return "Web Search";
@@ -206,9 +216,14 @@ function summarizeArgs(name: string, args: unknown): string {
     const url = getRecordValue(args, ["url"]);
     return url ? `Fetching: ${truncate(toText(url), 90)}` : "";
   }
-  if (base === "bash") {
+  if (
+    base === "bash" ||
+    base === "commandexecution" ||
+    base === "exec_command" ||
+    base === "execcommand"
+  ) {
     const command = getRecordValue(args, ["command", "cmd"]);
-    return command ? `Command: ${truncate(toText(command), 90)}` : "";
+    return command ? truncate(toText(command).replace(/\s+/g, " ").trim(), 110) : "";
   }
   if (base === "write" || base === "edit" || base === "read") {
     const filePath = getRecordValue(args, ["filePath", "path"]);
@@ -273,6 +288,7 @@ function summarizeArgs(name: string, args: unknown): string {
   const common = getRecordValue(args, [
     "query",
     "command",
+    "cmd",
     "filePath",
     "path",
     "url",

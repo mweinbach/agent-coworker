@@ -364,14 +364,15 @@ export function formatActivityContentSummary(items: ActivityFeedItem[]): string 
 
   const counts = new Map<string, { title: string; count: number }>();
   for (const tool of toolItems) {
-    const key = tool.name.toLowerCase();
+    const title = formatToolCard(tool.name, undefined, undefined, "output-available").title;
+    const key = title.toLowerCase();
     const existing = counts.get(key);
     if (existing) {
       existing.count += 1;
       continue;
     }
     counts.set(key, {
-      title: formatToolCard(tool.name, undefined, undefined, "output-available").title,
+      title,
       count: 1,
     });
   }

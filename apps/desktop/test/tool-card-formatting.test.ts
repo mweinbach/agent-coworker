@@ -205,7 +205,7 @@ describe("tool card formatting ask summaries", () => {
       "ok",
       "output-available",
     );
-    expect(out.title).toBe("Todo Write");
+    expect(out.title).toBe("Update plan");
     expect(out.subtitle).toBe("1 active · 2 complete · 1 pending");
     expect(out.subtitle).not.toContain("Completed");
   });
@@ -217,5 +217,25 @@ describe("tool card formatting ask summaries", () => {
     expect(out.subtitle).toContain("kimi-k3.md");
     expect(out.subtitle).not.toContain("Completed");
     expect(out.subtitle.length).toBeLessThan(longPath.length);
+  });
+
+  test("uses a consistent readable label and command text across shell execution tools", () => {
+    for (const name of ["commandExecution", "exec_command", "bash"]) {
+      const out = formatToolCard(
+        name,
+        { cmd: "rg -n 'important' AGENTS.md" },
+        "",
+        "output-available",
+      );
+
+      expect(out.title).toBe("Run command");
+      expect(out.subtitle).toBe("rg -n 'important' AGENTS.md");
+      expect(out.subtitle).not.toContain("Completed");
+    }
+  });
+
+  test("omits empty successful status placeholders", () => {
+    expect(formatToolCard("commandExecution", undefined, "", "output-available").subtitle).toBe("");
+    expect(formatToolCard("todoWrite", undefined, undefined, "output-available").subtitle).toBe("");
   });
 });

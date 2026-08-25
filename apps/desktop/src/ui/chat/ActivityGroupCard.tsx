@@ -662,10 +662,10 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
           </div>
 
           <CollapsibleContent className="activity-trace-content max-w-3xl">
-            <div className="border-b app-border-subtle px-1 pb-2.5 pt-3">
+            <div className="border-b app-border-subtle px-1 pb-2.5 pt-2.5">
               {contentSummary ? (
                 <div
-                  className="app-type-label mb-2 px-0.5 font-medium uppercase tracking-wide app-text-muted"
+                  className="mb-2.5 px-0.5 text-xs font-medium tracking-normal app-text-muted"
                   data-slot="activity-content-summary"
                 >
                   {contentSummary}

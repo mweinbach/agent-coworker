@@ -186,6 +186,45 @@ describe("desktop activity group card", () => {
     expect(html).toContain("4 subagents");
   });
 
+  test("groups command aliases without repeated completed placeholders or duplicated previews", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        items: [
+          {
+            id: "command-provider",
+            kind: "tool",
+            ts: "2024-01-01T00:00:01.000Z",
+            name: "commandExecution",
+            state: "output-available",
+            args: { command: "find . -maxdepth 2" },
+          },
+          {
+            id: "command-harness",
+            kind: "tool",
+            ts: "2024-01-01T00:00:02.000Z",
+            name: "exec_command",
+            state: "input-available",
+            args: { cmd: "rg -n purpose AGENTS.md" },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const cluster = doc.querySelector('[data-activity-entry-kind="tool-cluster"]');
+
+    expect(cluster?.getAttribute("data-tool-cluster-size")).toBe("2");
+    expect(doc.querySelector('[data-slot="activity-content-summary"]')?.textContent).toBe(
+      "Run command ×2",
+    );
+    expect(cluster?.textContent).not.toContain("Completed");
+    expect(cluster?.textContent?.match(/find \. -maxdepth 2/g)).toHaveLength(1);
+    expect(cluster?.textContent?.match(/rg -n purpose AGENTS\.md/g)).toHaveLength(1);
+    expect(
+      cluster?.querySelector('[data-activity-entry-kind="tool"] span.font-mono'),
+    ).not.toBeNull();
+  });
+
   test("reveals approvals added to a previously collapsed tool cluster", async () => {
     const harness = setupJsdom();
     const container = harness.dom.window.document.getElementById("root");
@@ -956,12 +995,12 @@ describe("desktop activity group card", () => {
       expect(alert?.textContent).toContain("This activity couldn't be rendered.");
       expect(alert?.className).not.toContain("min-h-screen");
       expect(healthyRow).not.toBeNull();
-      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).toContain("Run command");
       expect(container.textContent).not.toContain("Something went wrong.");
 
       await renderFeed();
       expect(container.querySelector('[data-message-id="activity-healthy"]')).toBe(healthyRow);
-      expect(container.textContent).toContain("Bash");
+      expect(container.textContent).toContain("Run command");
       expect(container.textContent).not.toContain("Something went wrong.");
     } finally {
       console.error = originalConsoleError;
@@ -991,7 +1030,7 @@ describe("desktop activity group card", () => {
 
     expect(html).toContain("Needs review");
     expect(html).toContain("Review");
-    expect(html).toContain("Bash");
+    expect(html).toContain("Run command");
     expect(html).toContain("rm -rf /tmp/x");
   });
 });

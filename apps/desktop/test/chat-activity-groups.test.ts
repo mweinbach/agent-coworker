@@ -324,7 +324,28 @@ describe("desktop chat activity groups", () => {
           state: "output-available",
         },
       ]),
-    ).toBe("Read ×2 · Todo Write");
+    ).toBe("Read ×2 · Update plan");
+  });
+
+  test("combines provider and harness command aliases in activity summaries", () => {
+    expect(
+      formatActivityContentSummary([
+        {
+          id: "command-provider",
+          kind: "tool",
+          ts: "2024-01-01T00:00:01.000Z",
+          name: "commandExecution",
+          state: "output-available",
+        },
+        {
+          id: "command-harness",
+          kind: "tool",
+          ts: "2024-01-01T00:00:02.000Z",
+          name: "exec_command",
+          state: "output-available",
+        },
+      ]),
+    ).toBe("Run command ×2");
   });
 
   test("keeps todos out of the transcript so the context sidebar owns plan progress", () => {

@@ -28,7 +28,7 @@ function TimelineToolIcon({ title, className }: { title: string; className?: str
     return <SearchIcon className={className} />;
   if (t.includes("fetch") || t.includes("web") || t.includes("browser"))
     return <GlobeIcon className={className} />;
-  if (t.includes("bash") || t.includes("shell") || t.includes("run"))
+  if (t.includes("bash") || t.includes("shell") || t.includes("run") || t.includes("command"))
     return <TerminalIcon className={className} />;
   return <WrenchIcon className={className} />;
 }
@@ -94,6 +94,8 @@ function ToolRowSummary({
   recovered,
   state,
   hideTitle,
+  fallbackLabel,
+  command,
   retryOf,
 }: {
   title: string;
@@ -101,14 +103,21 @@ function ToolRowSummary({
   recovered: boolean;
   state: ToolFeedState;
   hideTitle?: boolean;
+  fallbackLabel?: string;
+  command?: boolean;
   retryOf?: string;
 }) {
   return (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-1.5">
         {hideTitle ? (
-          <span className="min-w-0 truncate app-type-body text-foreground">
-            {subtitle || title}
+          <span
+            className={cn(
+              "min-w-0 truncate app-type-body text-foreground",
+              command && subtitle && "font-mono text-xs",
+            )}
+          >
+            {subtitle || fallbackLabel || title}
           </span>
         ) : (
           <span className="app-type-body font-medium text-foreground">{title}</span>
@@ -126,7 +135,14 @@ function ToolRowSummary({
         )}
       </div>
       {!hideTitle && subtitle ? (
-        <div className="mt-0.5 text-xs leading-snug app-text-muted">{subtitle}</div>
+        <div
+          className={cn(
+            "mt-0.5 truncate text-xs leading-snug app-text-muted",
+            command && "font-mono",
+          )}
+        >
+          {subtitle}
+        </div>
       ) : null}
       {retryOf ? (
         <div className="mt-0.5 text-xs font-medium app-text-muted" data-tool-recovery="retry">
@@ -143,6 +159,7 @@ function ToolTimelineNode({
   recovered,
   hideTitle = false,
   embedded = false,
+  fallbackLabel,
 }: {
   item: Extract<ActivityFeedItem, { kind: "tool" }>;
   isLast: boolean;
@@ -151,6 +168,7 @@ function ToolTimelineNode({
   hideTitle?: boolean;
   /** Skip the outer timeline rail when nested under a cluster disclosure. */
   embedded?: boolean;
+  fallbackLabel?: string;
 }) {
   const formatting = useMemo(
     () => formatToolCard(item.name, item.args, item.result, item.state),
@@ -192,6 +210,8 @@ function ToolTimelineNode({
       recovered={recovered}
       state={item.state}
       hideTitle={hideTitle}
+      fallbackLabel={fallbackLabel}
+      command={formatting.title === "Run command"}
       retryOf={item.retryOf}
     />
   );
@@ -304,7 +324,8 @@ export function bucketTimelineEntries(
     const previous = buckets[buckets.length - 1];
     if (
       previous?.kind === "tool-cluster" &&
-      previous.name.toLowerCase() === entry.item.name.toLowerCase()
+      formatToolCard(previous.name, undefined, undefined, "output-available").title ===
+        formatToolCard(entry.item.name, undefined, undefined, "output-available").title
     ) {
       previous.entries.push(entry);
       continue;
@@ -400,8 +421,13 @@ export function ToolClusterNode({
                 <span>{clusterLabel}</span>
                 <span className="tabular-nums app-text-muted">×{entries.length}</span>
               </div>
-              {previews.length > 0 ? (
-                <div className="mt-0.5 flex flex-col gap-0.5 app-type-caption app-text-muted">
+              {previews.length > 0 && !clusterOpen ? (
+                <div
+                  className={cn(
+                    "mt-0.5 flex flex-col gap-0.5 app-type-caption app-text-muted",
+                    clusterLabel === "Run command" && "font-mono",
+                  )}
+                >
                   {previews.map((preview) => (
                     <div key={preview.id} className="truncate">
                       {preview.text}
@@ -423,7 +449,7 @@ export function ToolClusterNode({
           </CollapsibleTrigger>
           <CollapsibleContent className="activity-trace-content pt-1.5">
             <div className="ml-0.5 flex flex-col gap-1 border-l app-border-subtle pl-2.5">
-              {entries.map((entry) => (
+              {entries.map((entry, index) => (
                 <div
                   key={entry.item.id}
                   data-activity-entry-kind="tool"
@@ -435,6 +461,9 @@ export function ToolClusterNode({
                     recovered={recoveredToolIds.has(entry.item.id)}
                     hideTitle
                     embedded
+                    fallbackLabel={
+                      clusterLabel === "Run command" ? `Command ${index + 1}` : `Step ${index + 1}`
+                    }
                   />
                 </div>
               ))}

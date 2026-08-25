@@ -12,6 +12,7 @@ import type {
   SpreadsheetFileVersionResult,
   SpreadsheetWorkbookSnapshotResult,
 } from "../../../../../src/shared/spreadsheetPreview";
+import { runOfficePreviewRequest } from "../../lib/officePreviewRequest";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import { ensureServerRunning } from "../store.helpers";
 import {
@@ -108,8 +109,10 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet workbooks.");
       }
-      await ensureServerRunning(get, set, workspaceId);
-      return previewJsonRpcWorkspaceSpreadsheetWorkbook(get, set, workspaceId, path, opts ?? {});
+      return runOfficePreviewRequest(async () => {
+        await ensureServerRunning(get, set, workspaceId);
+        return previewJsonRpcWorkspaceSpreadsheetWorkbook(get, set, workspaceId, path, opts ?? {});
+      }, "Workbook");
     },
 
     loadSpreadsheetFileVersion: async (path: string): Promise<SpreadsheetFileVersionResult> => {
@@ -146,13 +149,15 @@ export function createPreviewActions(
       if (!workspaceId) {
         throw new Error("No active workspace found.");
       }
-      await ensureServerRunning(get, set, workspaceId);
-      return previewJsonRpcWorkspacePresentation(
-        get,
-        set,
-        workspaceId,
-        path,
-      ) as Promise<PresentationPreviewResult>;
+      return runOfficePreviewRequest(async () => {
+        await ensureServerRunning(get, set, workspaceId);
+        return previewJsonRpcWorkspacePresentation(
+          get,
+          set,
+          workspaceId,
+          path,
+        ) as Promise<PresentationPreviewResult>;
+      }, "Presentation");
     },
   };
 }

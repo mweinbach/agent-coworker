@@ -279,6 +279,8 @@ const ChatShell = memo(function ChatShell({
   const canvasPath = filePreview?.path ?? null;
   const canvasSupported = canvasPath !== null && isCanvasSupportedFile(canvasPath);
   const showCanvasSurface = isConversationView && canvasEnabled && canvasSupported;
+  const showInlineFilePreview =
+    isConversationView && canvasPath !== null && !(canvasEnabled && canvasSupported);
   const rightRailKind = showCanvasSurface
     ? "canvas"
     : effectiveView === "task"
@@ -616,24 +618,42 @@ const ChatShell = memo(function ChatShell({
         >
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div
-              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+              className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
               data-slot="primary-content-pane"
             >
-              <PrimaryContent
-                init={init}
-                ready={ready}
-                bootstrapLoading={bootstrapLoading}
-                bootstrapStage={bootstrapStage}
-                startupError={preserveCachedContentOnStartupError ? null : startupError}
-                workspaceStartupProgress={workspaceStartupProgress}
-                view={
-                  effectiveView === "research"
-                    ? "research"
-                    : effectiveView === "task"
-                      ? "task"
-                      : "chat"
-                }
-              />
+              <div
+                className={cn(
+                  "relative min-h-0 min-w-0 overflow-hidden",
+                  showInlineFilePreview
+                    ? "w-[38%] min-w-[min(18rem,42%)] shrink-0 border-r app-border-subtle"
+                    : "flex-1",
+                )}
+                data-slot="conversation-content-pane"
+              >
+                <PrimaryContent
+                  init={init}
+                  ready={ready}
+                  bootstrapLoading={bootstrapLoading}
+                  bootstrapStage={bootstrapStage}
+                  startupError={preserveCachedContentOnStartupError ? null : startupError}
+                  workspaceStartupProgress={workspaceStartupProgress}
+                  view={
+                    effectiveView === "research"
+                      ? "research"
+                      : effectiveView === "task"
+                        ? "task"
+                        : "chat"
+                  }
+                />
+              </div>
+              {showInlineFilePreview ? (
+                <div
+                  className="min-h-0 min-w-0 flex-1 overflow-hidden"
+                  data-slot="file-preview-pane"
+                >
+                  <FilePreviewModal presentation="inline" />
+                </div>
+              ) : null}
             </div>
             {showContextSidebar && workspaceStartupProgress === null ? (
               <RightSidebarPane
@@ -775,6 +795,11 @@ function AppContent() {
         if (event.defaultPrevented || event.isComposing || hasOpenOverlay()) return;
         if (isEditableEscapeTarget(event.target)) return;
         const state = useAppStore.getState();
+        if (state.filePreview && state.view !== "settings") {
+          event.preventDefault();
+          void state.closeFilePreview();
+          return;
+        }
         if (state.view === "settings") {
           event.preventDefault();
           state.closeSettings();
@@ -955,6 +980,7 @@ function AppContent() {
       )}
       <LmStudioStartDialog />
       {windowMode === "main" &&
+      view === "settings" &&
       !(canvasEnabled && filePreviewPath && isCanvasSupportedFile(filePreviewPath)) ? (
         <FilePreviewModal />
       ) : null}

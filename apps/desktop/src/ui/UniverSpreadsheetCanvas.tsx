@@ -135,6 +135,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   const [workbook, setWorkbook] = useState<SpreadsheetWorkbookSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [selection, setSelection] = useState<UniverSelectionContext | null>(null);
   const [promptText, setPromptText] = useState("");
   const [promptError, setPromptError] = useState<string | null>(null);
@@ -263,7 +264,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
 
     void (async () => {
       try {
-        const response = await loadSpreadsheetWorkbook(path);
+        const response = await loadSpreadsheetWorkbook(path, loadAttempt > 0 ? {} : undefined);
         if (!active) return;
         if (!response.ok) {
           setLoadError(response.error.message);
@@ -285,7 +286,7 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
     return () => {
       active = false;
     };
-  }, [loadSpreadsheetWorkbook, path, updateSaveState]);
+  }, [loadAttempt, loadSpreadsheetWorkbook, path, updateSaveState]);
 
   useEffect(() => {
     if (!workbook || !isWorkbookSnapshotForPath(workbook, path)) return;
@@ -694,12 +695,22 @@ export function UniverSpreadsheetCanvas({ path, compact = false }: UniverSpreads
   if (loadError) {
     return (
       <div className="flex h-full min-h-[360px] items-center justify-center bg-[var(--surface-spreadsheet)] p-6">
-        <div
-          role="alert"
-          className="flex max-w-md items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"
-        >
-          <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
-          <span>{loadError}</span>
+        <div className="flex max-w-md flex-col items-start gap-3">
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-md border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"
+          >
+            <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            Try again
+          </Button>
         </div>
       </div>
     );

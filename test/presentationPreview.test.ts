@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/config";
 import { previewPresentationFile } from "../src/server/presentationPreview";
+import { makePptxFixture } from "./helpers/artifactOfficeFixtures";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-presentation-preview-"));
@@ -24,6 +25,39 @@ function localRuntimeEnv(home: string): Record<string, string> {
 }
 
 describe("presentation preview renderer", () => {
+  test("renders standalone PowerPoint decks without sidecar slides or a rendering script", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "standalone.pptx");
+      await fs.writeFile(
+        filePath,
+        await makePptxFixture([
+          { id: "256", text: "Quarterly revenue & growth" },
+          { id: "257", text: "Forecast <next year>" },
+        ]),
+      );
+
+      const result = await previewPresentationFile({
+        cwd: dir,
+        filePath: "standalone.pptx",
+        builtInDir: dir,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.slides).toHaveLength(2);
+      expect(result.slides.map((slide) => slide.title)).toEqual([
+        "Quarterly revenue & growth",
+        "Forecast <next year>",
+      ]);
+      expect(result.dependencies).toEqual([await fs.realpath(filePath)]);
+      const svg = Buffer.from(
+        result.slides[0]?.pngBase64.replace("data:image/svg+xml;base64,", "") ?? "",
+        "base64",
+      ).toString("utf8");
+      expect(svg).toContain("Quarterly revenue &amp; growth");
+    });
+  });
+
   test("returns error for unsupported format", async () => {
     await withTempDir(async (dir) => {
       const filePath = path.join(dir, "document.txt");

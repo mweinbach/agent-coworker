@@ -11,6 +11,8 @@ import {
   readCappedFilePreview,
   readFileChangeVersion,
 } from "../utils/filePreviewRead";
+import { extractPptxSnapshot } from "./artifacts/pptx";
+import type { PptxSlide } from "./artifacts/types";
 import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
@@ -232,6 +234,87 @@ async function buildPresentationVersion(
   };
 }
 
+function escapeSlideSvg(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function renderPackagedSlide(slide: PptxSlide): PresentationSlide {
+  const slideWidth = 1600;
+  const slideHeight = 900;
+  const emuWidth = 12_192_000;
+  const emuHeight = 6_858_000;
+  const textShapes = slide.shapes.filter((shape) => shape.text.trim().length > 0);
+  const textElements = textShapes
+    .map((shape, index) => {
+      const hasPosition =
+        shape.x !== null &&
+        shape.y !== null &&
+        shape.width !== null &&
+        shape.height !== null &&
+        shape.width > 10_000 &&
+        shape.height > 10_000;
+      const x = hasPosition ? Math.max(40, ((shape.x ?? 0) / emuWidth) * slideWidth) : 112;
+      const y = hasPosition
+        ? Math.max(72, ((shape.y ?? 0) / emuHeight) * slideHeight + 42)
+        : 154 + index * 112;
+      const fontSize = index === 0 ? 48 : 29;
+      const weight = index === 0 ? 700 : 400;
+      const availableWidth = hasPosition
+        ? Math.max(120, ((shape.width ?? 0) / emuWidth) * slideWidth)
+        : slideWidth - 224;
+      const maxCharacters = Math.max(12, Math.floor(availableWidth / (fontSize * 0.54)));
+      const words = shape.text.trim().split(/\s+/);
+      const lines: string[] = [];
+      for (const word of words) {
+        const previous = lines.at(-1);
+        if (!previous || previous.length + word.length + 1 > maxCharacters) {
+          lines.push(word);
+        } else {
+          lines[lines.length - 1] = `${previous} ${word}`;
+        }
+      }
+      const tspans = lines
+        .slice(0, 12)
+        .map(
+          (line, lineIndex) =>
+            `<tspan x="${x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : fontSize * 1.35}">${escapeSlideSvg(line)}</tspan>`,
+        )
+        .join("");
+      return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="#202124" font-family="Aptos, Calibri, Arial, sans-serif" font-size="${fontSize}" font-weight="${weight}">${tspans}</text>`;
+    })
+    .join("");
+  const emptyLabel =
+    textElements.length === 0
+      ? `<text x="800" y="450" text-anchor="middle" fill="#777" font-family="Arial, sans-serif" font-size="30">Slide ${slide.index + 1}</text>`
+      : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${slideWidth} ${slideHeight}"><rect width="${slideWidth}" height="${slideHeight}" fill="#ffffff"/>${textElements}${emptyLabel}</svg>`;
+  const title = textShapes[0]?.text.trim() || `Slide ${slide.index + 1}`;
+
+  return {
+    slideIndex: slide.index,
+    slideId: slide.id,
+    title,
+    pngBase64: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+  };
+}
+
+async function loadPackagedPresentationSlides(
+  resolvedPath: string,
+): Promise<PresentationSlide[] | null> {
+  try {
+    const bytes = await fs.readFile(resolvedPath);
+    const snapshot = await extractPptxSnapshot(bytes);
+    return snapshot.slides.map(renderPackagedSlide);
+  } catch {
+    return null;
+  }
+}
+
 export async function previewPresentationFile(
   request: PresentationPreviewRequest,
 ): Promise<PresentationPreviewResult> {
@@ -277,6 +360,23 @@ export async function previewPresentationFile(
     }
   }
 
+  const slideModuleResult = isPptx
+    ? await findPresentationSlideModules(request.cwd)
+    : { directory: request.cwd, modules: [] };
+
+  if (isPptx && slideModuleResult.modules.length === 0) {
+    const packagedSlides = await loadPackagedPresentationSlides(resolvedPath);
+    if (packagedSlides && packagedSlides.length > 0) {
+      return {
+        ok: true,
+        dependencies: [resolvedPath],
+        path: resolvedPath,
+        slides: packagedSlides,
+        version: sourceVersion,
+      };
+    }
+  }
+
   const { scriptPath, expectedPath } = await resolvePresentationScript(
     request.builtInDir,
     request.config,
@@ -291,9 +391,6 @@ export async function previewPresentationFile(
     };
   }
 
-  const slideModuleResult = isPptx
-    ? await findPresentationSlideModules(request.cwd)
-    : { directory: request.cwd, modules: [] };
   const slideModules = slideModuleResult.modules;
   if (isPptx && slideModules.length === 0) {
     return {

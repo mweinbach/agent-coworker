@@ -219,7 +219,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
     if (!interactions.some((entry) => entry.threadId !== selectedThreadId)) return undefined;
     return new Map(allThreads.map((candidate) => [candidate.id, candidate.title]));
   }, [allThreads, interactions, selectedThreadId]);
-  const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const composerOverlayMinHeight = COMPOSER_OVERLAY_MIN_HEIGHT_PX;
@@ -729,10 +728,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
         const submitState = getComposerSubmitState({
           busy,
           hasBlockingOverlay:
-            hasFilePreview ||
-            attachmentIngestionPending ||
-            sourceTask !== null ||
-            readOnlyNotice !== undefined,
+            attachmentIngestionPending || sourceTask !== null || readOnlyNotice !== undefined,
           composerText,
           hasPendingAttachments: pendingAttachments.length > 0,
           pendingAttachmentSignature,
@@ -766,7 +762,6 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
       composerText,
       composerSubmission,
       attachmentIngestionPending,
-      hasFilePreview,
       pendingAttachmentSignature,
       pendingAttachments.length,
       pendingTurnStart,
@@ -811,7 +806,7 @@ export function ChatView({ readOnlyNotice }: ChatViewProps = {}) {
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled = hasFilePreview || sourceTask !== null || readOnlyNotice !== undefined;
+  const inputDisabled = sourceTask !== null || readOnlyNotice !== undefined;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating =
     rt?.hydrating === true ||

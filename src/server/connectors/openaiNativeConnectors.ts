@@ -10,7 +10,7 @@ import type {
   OpenAiNativeConnector,
   OpenAiNativeConnectorsConfig,
 } from "../../shared/openaiNativeConnectors";
-import type { AgentConfig, MCPServerConfig } from "../../types";
+import type { AgentConfig } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 
 export type OpenAiNativeConnectorsSnapshot = {
@@ -107,11 +107,4 @@ export async function listOpenAiNativeConnectors(opts: {
     message:
       connectors.length === 0 ? "Codex app-server did not report any ChatGPT apps." : undefined,
   };
-}
-
-export async function buildCodexAppsMcpServer(
-  config: AgentConfig,
-): Promise<(MCPServerConfig & { enabledConnectorIds?: string[] }) | null> {
-  void config;
-  return null;
 }

@@ -5,6 +5,7 @@ import {
   getFireworksInferenceAuthConfig,
   resolveFireworksInferenceApiKey,
 } from "./fireworksShared";
+import { resolveGoogleApiKey } from "./googleApiKey";
 import { MINIMAX_ADAPTER_PROVIDER, MINIMAX_BASE_URL, resolveMinimaxApiKey } from "./minimaxShared";
 import {
   getOpenCodeProviderConfig,
@@ -71,7 +72,7 @@ export function createOpenAiModelAdapter(modelId: string, savedKey?: string): Pr
 
 export function createGoogleModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "google.generative-ai", async () => {
-    const key = firstNonEmpty(savedKey, envKey("GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"));
+    const key = resolveGoogleApiKey({ savedKey });
     const headers: HeaderMap = {};
     if (key) {
       headers["x-goog-api-key"] = key;

@@ -1,6 +1,5 @@
 import { Reorder } from "framer-motion";
 import {
-  BookOpenIcon,
   ChevronDownIcon,
   ClipboardPlusIcon,
   FolderPlusIcon,
@@ -27,7 +26,6 @@ import {
   nextInteractionThreadId,
 } from "../app/interactionQueue";
 import { resolveInteractionThreadTarget } from "../app/interactionVisibility";
-import { isResearchAvailable, resolveResearchAwareView } from "../app/researchAvailability";
 import { publishForegroundNotification, useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import {
@@ -69,7 +67,6 @@ export const Sidebar = memo(function Sidebar() {
   const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const newChatLandingTarget = useAppStore((s) => s.newChatLandingTarget);
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
-  const providerConnected = useAppStore((s) => s.providerConnected);
   const sidebarSectionOrder = useAppStore((s) => s.desktopSettings.sidebarSectionOrder);
   const bootstrapLoading = useAppStore((s) => s.bootstrapPhase === "loading");
 
@@ -88,7 +85,6 @@ export const Sidebar = memo(function Sidebar() {
   const archiveThread = useAppStore((s) => s.archiveThread);
   const restoreThread = useAppStore((s) => s.restoreThread);
   const openSkills = useAppStore((s) => s.openSkills);
-  const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
   const setSidebarSectionOrder = useAppStore((s) => s.setSidebarSectionOrder);
 
@@ -135,8 +131,7 @@ export const Sidebar = memo(function Sidebar() {
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const tasksEnabled = desktopFeatures.tasks === true;
-  const researchAvailable = isResearchAvailable(providerConnected);
-  const effectiveView = resolveResearchAwareView(view, providerConnected);
+  const effectiveView = view;
   const isOnNewChatLanding = effectiveView === "chat" && selectedThreadId === null;
   const landingProjectWorkspaceId = useMemo(
     () =>
@@ -149,12 +144,7 @@ export const Sidebar = memo(function Sidebar() {
         : null,
     [isOnNewChatLanding, newChatLandingTarget, projectWorkspaces, selectedWorkspaceId],
   );
-  const activeWorkspaceId =
-    effectiveView === "research"
-      ? null
-      : isOnNewChatLanding
-        ? landingProjectWorkspaceId
-        : selectedWorkspaceId;
+  const activeWorkspaceId = isOnNewChatLanding ? landingProjectWorkspaceId : selectedWorkspaceId;
   const activeProjectWorkspaceId = projectWorkspaces.some(
     (workspace) => workspace.id === activeWorkspaceId,
   )
@@ -869,22 +859,6 @@ export const Sidebar = memo(function Sidebar() {
         </Button>
       ) : null}
       <nav aria-label="Primary" className="grid w-full min-w-0 gap-1.5">
-        {researchAvailable ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-current={effectiveView === "research" ? "page" : undefined}
-            className={cn(
-              "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 app-type-body font-medium tracking-[-0.015em] app-text-secondary",
-              "hover:app-hover-wash hover:text-foreground",
-              effectiveView === "research" && "app-selected-row",
-            )}
-            onClick={() => void openResearch()}
-          >
-            <BookOpenIcon className="h-4 w-4" />
-            Research
-          </Button>
-        ) : null}
         <Button
           variant="ghost"
           size="sm"

@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import type { SandboxConfig } from "./platform/sandbox/policy";
-
 export const PROVIDER_NAMES = [
   "google",
   "openai",
@@ -166,6 +164,14 @@ export type WorkspaceFeatureFlagOverrides = {
 export type WorkspaceFeatureFlags = {
   openAiNativeConnectors?: boolean;
 };
+
+export type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
+
+export interface SandboxConfig {
+  mode: SandboxMode;
+  network?: boolean;
+  requireBackend?: boolean;
+}
 
 export interface AgentConfig {
   provider: ProviderName;

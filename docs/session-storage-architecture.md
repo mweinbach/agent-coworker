@@ -18,7 +18,6 @@ Core tables:
 - `session_events(...)` append-only semantic event log keyed by `(session_id, seq)`
 - `session_snapshots(...)` projected UI replay snapshots keyed by `session_id`
 - `external_conversation_imports(...)` idempotency and provenance rows for imported Codex, Claude Code, and Cowork conversations
-- `research(...)` global research metadata rows (`status`, `interaction_id`, `last_event_id`, `inputs_json`, `settings_json`, `outputs_markdown`, `thought_summaries_json`, `sources_json`, `error`)
 - `tasks(...)` project-scoped task brief and lifecycle rows with optimistic `revision`
 - `task_threads(...)` maps coordinator task threads to canonical session ids
 - `task_requirements(...)`, `task_work_items(...)`, and `task_work_item_dependencies(...)` hold the live brief and work graph
@@ -35,8 +34,6 @@ Indexes:
 - `sessions(updated_at DESC)`
 - `session_events(session_id, seq DESC)`
 - `sessions(status, updated_at DESC)`
-- `research(status, updated_at DESC)`
-- `research(parent_research_id, updated_at DESC)`
 - `tasks(workspace_path, updated_at DESC)`
 - `task_activity(task_id, seq DESC)`
 - `task_questions(task_id, status, created_at)`
@@ -84,7 +81,7 @@ When connecting with `resumeSessionId`:
 ## Surface Behavior
 
 - Core server: writes semantic events + state updates transactionally to SQLite.
-- Research service: writes debounced markdown/thought/source state into `research` rows and mirrors exported artifacts under `~/.cowork/research/<id>/`.
+- Research work: runs through ordinary chat, task, helper-agent, or bundled `workflows/deep-research.ts` execution paths. Active research state is persisted as the same session, task, artifact, and transcript state used by other harness work; the retired dedicated research product no longer owns a service, UI tab, protocol surface, or active `research` row writer.
 - Task coordinator: owns task lifecycle, validates work-graph and completion invariants, persists durable user questions and provisional defaults, resumes the primary thread after the final blocking answer, versions artifact bytes, checkpoints meaningful phases, and attaches each task thread to an ordinary persisted session without exposing it in chat listings.
 - CLI/TUI/desktop: list/resume/history operations go through server APIs (`list_sessions`, `get_messages`, etc.).
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority. The web
@@ -102,3 +99,9 @@ When connecting with `resumeSessionId`:
   continues to append through its existing IPC persistence path.
 - Imported external conversations are normal persisted sessions. Their `session_snapshots.feed` stores the reconstructed visible replay, while `session_state.messages_json` stores only sanitized model-facing handoff context and `provider_state_json` stays null.
 - Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.
+
+## Retired Compatibility State
+
+- Legacy databases may still contain a `research` table and its indexes from the retired dedicated Google Deep Research product. They are migration-compatibility state only, not an active architecture surface.
+- Fresh databases do not create the retired `research` table or mark its historical migrations 13–15 as applied. Startup preserves existing legacy rows and clears historical migration markers whose table or columns are missing, allowing an older build to apply the corresponding schema upgrades after a downgrade.
+- New research-oriented work should be represented as ordinary session/task/workflow execution and artifacts, not new writes to `research(...)` rows or `~/.cowork/research/<id>/` exports.

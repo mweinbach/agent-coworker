@@ -1,779 +1,330 @@
-import type { EditableMCPServerConfigSource, MCPServerSource } from "../../mcp/configRegistry";
-import type { MemoryScope } from "../../memoryStore";
-import type { AgentProfileCopyInput, AgentProfileUpsertInput } from "../../shared/agentProfiles";
-import type {
-  AgentContextMode,
-  AgentInspectResult,
-  AgentReasoningEffort,
-  AgentRole,
-  AgentSpawnContextOptions,
-} from "../../shared/agents";
-import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type {
-  AgentConfig,
-  HarnessContextPayload,
-  MCPServerConfig,
-  TurnReference,
-} from "../../types";
-import type { AgentWaitMode } from "../agents/types";
-import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
-import type { SessionConfigPatch } from "../protocol";
 import type { AgentSession } from "./AgentSession";
-import type { PendingPromptReplayEvent } from "./InteractionManager";
-import type { McpServerLookup } from "./mcp/McpServerLookup";
-import type { SeededSessionContext } from "./SessionContext";
-import type {
-  SendUserMessageOptions,
-  SteerIdempotencyClaim,
-  SteerIdempotencyInput,
-  UserMessageIdempotencyClaim,
-  UserMessageIdempotencyInput,
-} from "./TurnExecutionManager";
-import type { TaskLockError } from "./taskLocks";
 
-export class SessionSnapshotService {
-  constructor(private readonly session: AgentSession) {}
+type SessionMethodName = {
+  [Name in keyof AgentSession]: AgentSession[Name] extends (...args: never[]) => unknown
+    ? Name
+    : never;
+}[keyof AgentSession];
 
-  build(): SessionSnapshot {
-    return this.session.buildSessionSnapshot();
-  }
+type SessionMethod<Name extends SessionMethodName> = Extract<
+  AgentSession[Name],
+  (...args: never[]) => unknown
+>;
 
-  peek(): SessionSnapshot {
-    return this.session.peekSessionSnapshot();
-  }
+function forward<Name extends SessionMethodName>(
+  session: AgentSession,
+  methodName: Name,
+): SessionMethod<Name> {
+  return ((...args: Parameters<SessionMethod<Name>>) =>
+    Reflect.apply(
+      session[methodName] as SessionMethod<Name>,
+      session,
+      args,
+    )) as SessionMethod<Name>;
 }
 
-export class SessionReadModelService {
-  constructor(private readonly session: AgentSession) {}
-
-  get info() {
-    return this.session.getSessionInfoEvent();
-  }
-
-  get configEvent() {
-    return this.session.getSessionConfigEvent();
-  }
-
-  get publicConfig() {
-    return this.session.getPublicConfig();
-  }
-
-  get id(): string {
-    return this.session.id;
-  }
-
-  get isBusy(): boolean {
-    return this.session.isBusy;
-  }
-
-  get messageCount(): number {
-    return this.session.messageCount;
-  }
-
-  get activeTurnId(): string | null {
-    return this.session.activeTurnId;
-  }
-
-  get sessionKind() {
-    return this.session.sessionKind;
-  }
-
-  get parentSessionId(): string | null {
-    return this.session.parentSessionId;
-  }
-
-  get role() {
-    return this.session.role;
-  }
-
-  get workingDirectory(): string {
-    return this.session.getWorkingDirectory();
-  }
-
-  get enableMcp(): boolean {
-    return this.session.getEnableMcp();
-  }
-
-  get enableMemory(): boolean {
-    return this.session.getEnableMemory();
-  }
-
-  get memoryRequireApproval(): boolean {
-    return this.session.getMemoryRequireApproval();
-  }
-
-  getLatestAssistantText(): string | undefined {
-    return this.session.getLatestAssistantText();
-  }
-
-  isAgentOf(parentSessionId: string): boolean {
-    return this.session.isAgentOf(parentSessionId);
-  }
-
-  getSessionDepth(): number {
-    return this.session.getSessionDepth();
-  }
+function createSessionSnapshotService(session: AgentSession) {
+  return {
+    build: forward(session, "buildSessionSnapshot"),
+    peek: forward(session, "peekSessionSnapshot"),
+  };
 }
 
-export class SessionReplayService {
-  constructor(private readonly session: AgentSession) {}
-
-  beginDisconnectedReplayBuffer(): void {
-    this.session.beginDisconnectedReplayBuffer();
-  }
-
-  ensureDisconnectedReplayBuffer(): void {
-    this.session.ensureDisconnectedReplayBuffer();
-  }
-
-  drainDisconnectedReplayEvents() {
-    return this.session.drainDisconnectedReplayEvents();
-  }
-
-  getPendingPromptEventsForReplay(): ReadonlyArray<PendingPromptReplayEvent> {
-    return this.session.getPendingPromptEventsForReplay();
-  }
-}
-
-export class SessionTurnService {
-  constructor(private readonly session: AgentSession) {}
-
-  get activeTurnId(): string | null {
-    return this.session.activeTurnId;
-  }
-
-  async sendUserMessage(
-    text: string,
-    clientMessageId?: string,
-    displayText?: string,
-    attachments?: FileAttachment[],
-    inputParts?: OrderedInputPart[],
-    references?: TurnReference[],
-    opts?: SendUserMessageOptions,
-  ): Promise<void> {
-    await this.session.sendUserMessage(
-      text,
-      clientMessageId,
-      displayText,
-      attachments,
-      inputParts,
-      references,
-      opts,
-    );
-  }
-
-  claimUserMessage(input: UserMessageIdempotencyInput): UserMessageIdempotencyClaim | null {
-    return this.session.claimUserMessage(input);
-  }
-
-  rejectUserMessageClaim(claim: UserMessageIdempotencyClaim | null, message: string): void {
-    this.session.rejectUserMessageClaim(claim, message);
-  }
-
-  claimSteer(input: SteerIdempotencyInput): SteerIdempotencyClaim | null {
-    return this.session.claimSteer(input);
-  }
-
-  rejectSteerClaim(claim: SteerIdempotencyClaim | null, message: string): void {
-    this.session.rejectSteerClaim(claim, message);
-  }
-
-  async sendSteerMessage(
-    text: string,
-    expectedTurnId: string,
-    clientMessageId?: string,
-    attachments?: FileAttachment[],
-    inputParts?: OrderedInputPart[],
-    references?: TurnReference[],
-    steerRequestId?: string,
-  ): Promise<void> {
-    await this.session.sendSteerMessage(
-      text,
-      expectedTurnId,
-      clientMessageId,
-      attachments,
-      inputParts,
-      references,
-      steerRequestId,
-    );
-  }
-
-  cancel(opts?: { includeSubagents?: boolean }): void {
-    this.session.cancel(opts);
-  }
-
-  async cancelAndWaitForSettlement(opts?: {
-    includeSubagents?: boolean;
-    timeoutMs?: number;
-    taskLock?: TaskLockError;
-  }): Promise<void> {
-    await this.session.cancelAndWaitForSettlement(opts);
-  }
-}
-
-export class SessionSettingsService {
-  constructor(private readonly session: AgentSession) {}
-
-  get publicConfig() {
-    return this.session.getPublicConfig();
-  }
-
-  get configEvent() {
-    return this.session.getSessionConfigEvent();
-  }
-
-  get enableMcp(): boolean {
-    return this.session.getEnableMcp();
-  }
-
-  get enableMemory(): boolean {
-    return this.session.getEnableMemory();
-  }
-
-  get memoryRequireApproval(): boolean {
-    return this.session.getMemoryRequireApproval();
-  }
-
-  get backupsEnabled(): boolean {
-    return this.session.getBackupsEnabled();
-  }
-
-  setTitle(title: string): void {
-    this.session.setSessionTitle(title);
-  }
-
-  async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]): Promise<void> {
-    await this.session.setModel(modelIdRaw, providerRaw);
-  }
-
-  async setConfig(patch: SessionConfigPatch): Promise<void> {
-    await this.session.setConfig(patch);
-  }
-
-  async applyDefaults(opts: {
-    provider?: AgentConfig["provider"];
-    model?: string;
-    enableMcp?: boolean;
-    config?: SessionConfigPatch;
-  }): Promise<void> {
-    await this.session.applySessionDefaults(opts);
-  }
-
-  getHarnessContext(): void {
-    this.session.getHarnessContext();
-  }
-
-  setHarnessContext(context: HarnessContextPayload): void {
-    this.session.setHarnessContext(context);
-  }
-
-  getSessionUsage(): void {
-    this.session.getSessionUsage();
-  }
-
-  setSessionUsageBudget(warnAtUsd?: number | null, stopAtUsd?: number | null): void {
-    this.session.setSessionUsageBudget(warnAtUsd, stopAtUsd);
-  }
-}
-
-export class SessionProviderService {
-  constructor(private readonly session: AgentSession) {}
-
-  async emitCatalog(opts: { refresh?: boolean } = {}): Promise<void> {
-    await this.session.emitProviderCatalog(opts);
-  }
-
-  emitAuthMethods(): void {
-    this.session.emitProviderAuthMethods();
-  }
-
-  async refreshStatus(opts: { refreshBedrockDiscovery?: boolean } = {}): Promise<void> {
-    await this.session.refreshProviderStatus(opts);
-  }
-
-  async authorizeAuth(provider: AgentConfig["provider"], methodId: string): Promise<void> {
-    await this.session.authorizeProviderAuth(provider, methodId);
-  }
-
-  async logoutAuth(provider: AgentConfig["provider"]): Promise<void> {
-    await this.session.logoutProviderAuth(provider);
-  }
-
-  async callbackAuth(
-    provider: AgentConfig["provider"],
-    methodId: string,
-    code?: string,
-  ): Promise<void> {
-    await this.session.callbackProviderAuth(provider, methodId, code);
-  }
-
-  async setApiKey(
-    provider: AgentConfig["provider"],
-    methodId: string,
-    apiKey: string,
-  ): Promise<void> {
-    await this.session.setProviderApiKey(provider, methodId, apiKey);
-  }
-
-  async setConfig(
-    provider: AgentConfig["provider"],
-    methodId: string,
-    values: Record<string, string>,
-  ): Promise<void> {
-    await this.session.setProviderConfig(provider, methodId, values);
-  }
-
-  async copyApiKey(
-    provider: AgentConfig["provider"],
-    sourceProvider: AgentConfig["provider"],
-  ): Promise<void> {
-    await this.session.copyProviderApiKey(provider, sourceProvider);
-  }
-
-  async addCustomModel(provider: AgentConfig["provider"], modelId: string): Promise<void> {
-    await this.session.addCustomProviderModel(provider, modelId);
-  }
-
-  async deleteCustomModel(provider: AgentConfig["provider"], modelId: string): Promise<void> {
-    await this.session.deleteCustomProviderModel(provider, modelId);
-  }
-
-  async setModelsEnabled(
-    provider: AgentConfig["provider"],
-    models: ReadonlyArray<{ id: string; enabled: boolean }>,
-  ): Promise<void> {
-    await this.session.setProviderModelsEnabled(provider, models);
-  }
-
-  async resetModelPreferences(provider: AgentConfig["provider"]): Promise<void> {
-    await this.session.resetProviderModelPreferences(provider);
-  }
-}
-
-export class SessionMcpService {
-  constructor(private readonly session: AgentSession) {}
-
-  async emitServers(): Promise<void> {
-    await this.session.emitMcpServers();
-  }
-
-  async upsert(
-    server: MCPServerConfig,
-    previousName?: string,
-    source?: EditableMCPServerConfigSource,
-  ): Promise<void> {
-    await this.session.upsertMcpServer(server, previousName, source);
-  }
-
-  async delete(name: string, source?: EditableMCPServerConfigSource): Promise<void> {
-    await this.session.deleteMcpServer(name, source);
-  }
-
-  async setEnabled(opts: Parameters<AgentSession["setMcpServerEnabled"]>[0]): Promise<void> {
-    await this.session.setMcpServerEnabled(opts);
-  }
-
-  async validate(name: string, lookup?: McpServerLookup | MCPServerSource): Promise<void> {
-    await this.session.validateMcpServer(name, lookup);
-  }
-
-  async authorizeAuth(name: string, lookup?: McpServerLookup | MCPServerSource): Promise<void> {
-    await this.session.authorizeMcpServerAuth(name, lookup);
-  }
-
-  async callbackAuth(
-    name: string,
-    code?: string,
-    lookup?: McpServerLookup | MCPServerSource,
-  ): Promise<void> {
-    await this.session.callbackMcpServerAuth(name, code, lookup);
-  }
-
-  async setApiKey(
-    name: string,
-    apiKey: string,
-    lookup?: McpServerLookup | MCPServerSource,
-  ): Promise<void> {
-    await this.session.setMcpServerApiKey(name, apiKey, lookup);
-  }
-}
-
-export class SessionMemoryService {
-  constructor(private readonly session: AgentSession) {}
-
-  async list(scope?: MemoryScope): Promise<void> {
-    await this.session.emitMemories(scope);
-  }
-
-  async upsert(scope: MemoryScope, id: string | undefined, content: string): Promise<void> {
-    await this.session.upsertMemory(scope, id, content);
-  }
-
-  async delete(scope: MemoryScope, id: string): Promise<void> {
-    await this.session.deleteMemory(scope, id);
-  }
-
-  async listAdvanced(folder?: string): Promise<void> {
-    await this.session.emitAdvancedMemories(folder);
-  }
-
-  async upsertAdvanced(
-    folder: string | undefined,
-    input: { slug?: string; name: string; description: string; type?: string; body: string },
-  ): Promise<void> {
-    await this.session.upsertAdvancedMemory(folder, input);
-  }
-
-  async deleteAdvanced(folder: string | undefined, slug: string): Promise<void> {
-    await this.session.deleteAdvancedMemory(folder, slug);
-  }
-
-  async generateAdvancedFromHistory(folder?: string): Promise<void> {
-    await this.session.generateAdvancedMemoryForHistory(folder);
-  }
-}
-
-export class SessionSkillService {
-  constructor(private readonly session: AgentSession) {}
-
-  listTools(): void {
-    this.session.listTools();
-  }
-
-  async listCommands(): Promise<void> {
-    await this.session.listCommands();
-  }
-
-  async executeCommand(name: string, argumentsText = "", clientMessageId?: string): Promise<void> {
-    await this.session.executeCommand(name, argumentsText, clientMessageId);
-  }
-
-  async getCatalog(): Promise<void> {
-    await this.session.getSkillsCatalog();
-  }
-
-  async list(): Promise<void> {
-    await this.session.listSkills();
-  }
-
-  async read(skillName: string): Promise<void> {
-    await this.session.readSkill(skillName);
-  }
-
-  async disable(skillName: string): Promise<void> {
-    await this.session.disableSkill(skillName);
-  }
-
-  async enable(skillName: string): Promise<void> {
-    await this.session.enableSkill(skillName);
-  }
-
-  async delete(skillName: string): Promise<void> {
-    await this.session.deleteSkill(skillName);
-  }
-
-  async getInstallation(installationId: string): Promise<void> {
-    await this.session.getSkillInstallation(installationId);
-  }
-
-  async listMarketplaces(): Promise<void> {
-    await this.session.listMarketplaces();
-  }
-
-  async readMarketplaceDetail(marketplaceId: string): Promise<void> {
-    await this.session.readMarketplaceDetail(marketplaceId);
-  }
-
-  async addMarketplace(sourceInput: string): Promise<void> {
-    await this.session.addMarketplace(sourceInput);
-  }
-
-  async removeMarketplace(marketplaceId: string): Promise<void> {
-    await this.session.removeMarketplace(marketplaceId);
-  }
-
-  async previewInstall(sourceInput: string, targetScope: "project" | "global"): Promise<void> {
-    await this.session.previewSkillInstall(sourceInput, targetScope);
-  }
-
-  async install(sourceInput: string, targetScope: "project" | "global"): Promise<void> {
-    await this.session.installSkills(sourceInput, targetScope);
-  }
-
-  async enableInstallation(installationId: string): Promise<void> {
-    await this.session.enableSkillInstallation(installationId);
-  }
-
-  async disableInstallation(installationId: string): Promise<void> {
-    await this.session.disableSkillInstallation(installationId);
-  }
-
-  async deleteInstallation(installationId: string): Promise<void> {
-    await this.session.deleteSkillInstallation(installationId);
-  }
-
-  async copyInstallation(installationId: string, targetScope: "project" | "global"): Promise<void> {
-    await this.session.copySkillInstallation(installationId, targetScope);
-  }
-
-  async checkInstallationUpdate(installationId: string): Promise<void> {
-    await this.session.checkSkillInstallationUpdate(installationId);
-  }
-
-  async updateInstallation(installationId: string): Promise<void> {
-    await this.session.updateSkillInstallation(installationId);
-  }
-
-  async refreshFromExternalMutation(reason?: string): Promise<void> {
-    await this.session.refreshSkillStateFromExternalMutation(reason);
-  }
-
-  async refreshSystemPrompt(reason?: string): Promise<void> {
-    await this.session.refreshSystemPromptWithSkills(reason);
-  }
-}
-
-export class SessionAgentProfileService {
-  constructor(private readonly session: AgentSession) {}
-
-  async getCatalog(): Promise<void> {
-    await this.session.getAgentProfilesCatalog();
-  }
-
-  async upsert(input: AgentProfileUpsertInput): Promise<void> {
-    await this.session.upsertAgentProfile(input);
-  }
-
-  async delete(scope: "global" | "workspace", id: string): Promise<void> {
-    await this.session.deleteAgentProfile(scope, id);
-  }
-
-  async copy(input: AgentProfileCopyInput): Promise<void> {
-    await this.session.copyAgentProfile(input);
-  }
-
-  async setWorkspaceAvailability(id: string, disabled: boolean): Promise<void> {
-    await this.session.setAgentProfileWorkspaceAvailability(id, disabled);
-  }
-}
-
-export class SessionPluginService {
-  constructor(private readonly session: AgentSession) {}
-
-  async getCatalog(): Promise<void> {
-    await this.session.getPluginsCatalog();
-  }
-
-  async get(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.getPlugin(pluginId, scope);
-  }
-
-  async previewInstall(sourceInput: string, targetScope: "workspace" | "user"): Promise<void> {
-    await this.session.previewPluginInstall(sourceInput, targetScope);
-  }
-
-  async install(sourceInput: string, targetScope: "workspace" | "user"): Promise<void> {
-    await this.session.installPlugins(sourceInput, targetScope);
-  }
-
-  async checkUpdate(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.checkPluginUpdate(pluginId, scope);
-  }
-
-  async update(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.updatePlugin(pluginId, scope);
-  }
-
-  async enable(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.enablePlugin(pluginId, scope);
-  }
-
-  async disable(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.disablePlugin(pluginId, scope);
-  }
-
-  async delete(pluginId: string, scope?: "workspace" | "user"): Promise<void> {
-    await this.session.deletePlugin(pluginId, scope);
-  }
-}
-
-export class SessionImportService {
-  constructor(private readonly session: AgentSession) {}
-
-  async list(
-    source: import("../../import").ImportSource,
-    kind: import("../../import").ImportableKind,
-  ): Promise<void> {
-    await this.session.listImport(source, kind);
-  }
-
-  async plugin(
-    sourcePath: string,
-    conversionRequired: boolean,
-    targetScope: "workspace" | "user",
-  ): Promise<void> {
-    await this.session.importPlugin(sourcePath, conversionRequired, targetScope);
-  }
-
-  async skill(sourcePath: string, targetScope: "workspace" | "user"): Promise<void> {
-    await this.session.importSkill(sourcePath, targetScope);
-  }
-}
-
-export class SessionAgentService {
-  constructor(private readonly session: AgentSession) {}
-
-  async create(
-    opts: AgentSpawnContextOptions & {
-      message: string;
-      role?: AgentRole;
-      profileRef?: string;
-      model?: string;
-      reasoningEffort?: AgentReasoningEffort;
+export type SessionSnapshotService = ReturnType<typeof createSessionSnapshotService>;
+
+function createSessionReadModelService(session: AgentSession) {
+  return {
+    get info() {
+      return session.getSessionInfoEvent();
     },
-  ): Promise<void> {
-    await this.session.createAgentSession(opts);
-  }
-
-  async list(): Promise<void> {
-    await this.session.listAgentSessions();
-  }
-
-  async sendInput(agentId: string, message: string, interrupt?: boolean): Promise<void> {
-    await this.session.sendAgentInput(agentId, message, interrupt);
-  }
-
-  async wait(
-    agentIds: string[],
-    timeoutMs?: number,
-    mode?: AgentWaitMode,
-    includeFinalMessage?: boolean,
-    includeReport?: boolean,
-  ): Promise<void> {
-    await this.session.waitForAgents(agentIds, timeoutMs, mode, includeFinalMessage, includeReport);
-  }
-
-  async inspect(agentId: string): Promise<AgentInspectResult> {
-    return await this.session.inspectAgent(agentId);
-  }
-
-  async resume(agentId: string): Promise<void> {
-    await this.session.resumeAgent(agentId);
-  }
-
-  async close(agentId: string): Promise<void> {
-    await this.session.closeAgent(agentId);
-  }
+    get configEvent() {
+      return session.getSessionConfigEvent();
+    },
+    get publicConfig() {
+      return session.getPublicConfig();
+    },
+    get id() {
+      return session.id;
+    },
+    get isBusy() {
+      return session.isBusy;
+    },
+    get messageCount() {
+      return session.messageCount;
+    },
+    get activeTurnId() {
+      return session.activeTurnId;
+    },
+    get sessionKind() {
+      return session.sessionKind;
+    },
+    get parentSessionId() {
+      return session.parentSessionId;
+    },
+    get role() {
+      return session.role;
+    },
+    get workingDirectory() {
+      return session.getWorkingDirectory();
+    },
+    get enableMcp() {
+      return session.getEnableMcp();
+    },
+    get enableMemory() {
+      return session.getEnableMemory();
+    },
+    get memoryRequireApproval() {
+      return session.getMemoryRequireApproval();
+    },
+    getLatestAssistantText: forward(session, "getLatestAssistantText"),
+    isAgentOf: forward(session, "isAgentOf"),
+    getSessionDepth: forward(session, "getSessionDepth"),
+  };
 }
 
-export class SessionBackupService {
-  constructor(private readonly session: AgentSession) {}
+export type SessionReadModelService = ReturnType<typeof createSessionReadModelService>;
 
-  async listWorkspaceBackups(): Promise<void> {
-    await this.session.listWorkspaceBackups();
-  }
-
-  async createWorkspaceCheckpoint(targetSessionId: string): Promise<void> {
-    await this.session.createWorkspaceBackupCheckpoint(targetSessionId);
-  }
-
-  async restoreWorkspaceBackup(targetSessionId: string, checkpointId?: string): Promise<void> {
-    await this.session.restoreWorkspaceBackup(targetSessionId, checkpointId);
-  }
-
-  async deleteWorkspaceCheckpoint(targetSessionId: string, checkpointId: string): Promise<void> {
-    await this.session.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
-  }
-
-  async deleteWorkspaceEntry(targetSessionId: string): Promise<void> {
-    await this.session.deleteWorkspaceBackupEntry(targetSessionId);
-  }
-
-  async getWorkspaceDelta(targetSessionId: string, checkpointId: string): Promise<void> {
-    await this.session.getWorkspaceBackupDelta(targetSessionId, checkpointId);
-  }
-
-  async getState(): Promise<void> {
-    await this.session.getSessionBackupState();
-  }
-
-  async createManualCheckpoint(): Promise<void> {
-    await this.session.createManualSessionCheckpoint();
-  }
-
-  async restoreSession(checkpointId?: string): Promise<void> {
-    await this.session.restoreSessionBackup(checkpointId);
-  }
-
-  async deleteSessionCheckpoint(checkpointId: string): Promise<void> {
-    await this.session.deleteSessionCheckpoint(checkpointId);
-  }
-
-  async reloadStateFromDisk(): Promise<void> {
-    await this.session.reloadSessionBackupStateFromDisk();
-  }
+function createSessionReplayService(session: AgentSession) {
+  return {
+    beginDisconnectedReplayBuffer: forward(session, "beginDisconnectedReplayBuffer"),
+    ensureDisconnectedReplayBuffer: forward(session, "ensureDisconnectedReplayBuffer"),
+    drainDisconnectedReplayEvents: forward(session, "drainDisconnectedReplayEvents"),
+    getPendingPromptEventsForReplay: forward(session, "getPendingPromptEventsForReplay"),
+  };
 }
 
-export class SessionFileService {
-  constructor(private readonly session: AgentSession) {}
+export type SessionReplayService = ReturnType<typeof createSessionReplayService>;
 
-  async upload(filename: string, contentBase64: string): Promise<void> {
-    await this.session.uploadFile(filename, contentBase64);
-  }
+function createSessionTurnService(session: AgentSession) {
+  return {
+    get activeTurnId() {
+      return session.activeTurnId;
+    },
+    sendUserMessage: forward(session, "sendUserMessage"),
+    claimUserMessage: forward(session, "claimUserMessage"),
+    rejectUserMessageClaim: forward(session, "rejectUserMessageClaim"),
+    claimSteer: forward(session, "claimSteer"),
+    rejectSteerClaim: forward(session, "rejectSteerClaim"),
+    sendSteerMessage: forward(session, "sendSteerMessage"),
+    cancel: forward(session, "cancel"),
+    cancelAndWaitForSettlement: forward(session, "cancelAndWaitForSettlement"),
+  };
 }
 
-export class SessionLifecycleService {
-  constructor(private readonly session: AgentSession) {}
+export type SessionTurnService = ReturnType<typeof createSessionTurnService>;
 
-  reset(): void {
-    this.session.reset();
-  }
-
-  async delete(targetSessionId: string): Promise<void> {
-    await this.session.deleteSession(targetSessionId);
-  }
-
-  handleAskResponse(requestId: string, answer: string): boolean {
-    return this.session.handleAskResponse(requestId, answer);
-  }
-
-  handleApprovalResponse(requestId: string, approved: boolean): boolean {
-    return this.session.handleApprovalResponse(requestId, approved);
-  }
-
-  async closeForHistory(opts: { closeSharedCodexClient?: boolean } = {}): Promise<void> {
-    await this.session.closeForHistory(opts);
-  }
-
-  async waitForPersistenceIdle(): Promise<void> {
-    await this.session.waitForPersistenceIdle();
-  }
-
-  reopenForHistory(): void {
-    this.session.reopenForHistory();
-  }
-
-  dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}): void {
-    this.session.dispose(reason, opts);
-  }
-
-  getMessages(offset = 0, limit = 100): void {
-    this.session.getMessages(offset, limit);
-  }
-
-  buildForkContextSeed(): SeededSessionContext {
-    return this.session.buildForkContextSeed();
-  }
-
-  buildContextSeed(opts: {
-    contextMode: Exclude<AgentContextMode, "full">;
-    briefing?: string;
-    includeParentTodos?: boolean;
-    includeHarnessContext?: boolean;
-  }): SeededSessionContext {
-    return this.session.buildContextSeed(opts);
-  }
+function createSessionSettingsService(session: AgentSession) {
+  return {
+    get publicConfig() {
+      return session.getPublicConfig();
+    },
+    get configEvent() {
+      return session.getSessionConfigEvent();
+    },
+    get enableMcp() {
+      return session.getEnableMcp();
+    },
+    get enableMemory() {
+      return session.getEnableMemory();
+    },
+    get memoryRequireApproval() {
+      return session.getMemoryRequireApproval();
+    },
+    get backupsEnabled() {
+      return session.getBackupsEnabled();
+    },
+    setTitle: forward(session, "setSessionTitle"),
+    setModel: forward(session, "setModel"),
+    setConfig: forward(session, "setConfig"),
+    applyDefaults: forward(session, "applySessionDefaults"),
+    getHarnessContext: forward(session, "getHarnessContext"),
+    setHarnessContext: forward(session, "setHarnessContext"),
+    getSessionUsage: forward(session, "getSessionUsage"),
+    setSessionUsageBudget: forward(session, "setSessionUsageBudget"),
+  };
 }
+
+export type SessionSettingsService = ReturnType<typeof createSessionSettingsService>;
+
+function createSessionProviderService(session: AgentSession) {
+  return {
+    emitCatalog: (opts: { refresh?: boolean } = {}) => session.emitProviderCatalog(opts),
+    emitAuthMethods: forward(session, "emitProviderAuthMethods"),
+    refreshStatus: (opts: { refreshBedrockDiscovery?: boolean } = {}) =>
+      session.refreshProviderStatus(opts),
+    authorizeAuth: forward(session, "authorizeProviderAuth"),
+    logoutAuth: forward(session, "logoutProviderAuth"),
+    callbackAuth: forward(session, "callbackProviderAuth"),
+    setApiKey: forward(session, "setProviderApiKey"),
+    setConfig: forward(session, "setProviderConfig"),
+    copyApiKey: forward(session, "copyProviderApiKey"),
+    addCustomModel: forward(session, "addCustomProviderModel"),
+    deleteCustomModel: forward(session, "deleteCustomProviderModel"),
+    setModelsEnabled: forward(session, "setProviderModelsEnabled"),
+    resetModelPreferences: forward(session, "resetProviderModelPreferences"),
+  };
+}
+
+export type SessionProviderService = ReturnType<typeof createSessionProviderService>;
+
+function createSessionMcpService(session: AgentSession) {
+  return {
+    emitServers: forward(session, "emitMcpServers"),
+    upsert: forward(session, "upsertMcpServer"),
+    delete: forward(session, "deleteMcpServer"),
+    setEnabled: forward(session, "setMcpServerEnabled"),
+    validate: forward(session, "validateMcpServer"),
+    authorizeAuth: forward(session, "authorizeMcpServerAuth"),
+    callbackAuth: forward(session, "callbackMcpServerAuth"),
+    setApiKey: forward(session, "setMcpServerApiKey"),
+  };
+}
+
+export type SessionMcpService = ReturnType<typeof createSessionMcpService>;
+
+function createSessionMemoryService(session: AgentSession) {
+  return {
+    list: forward(session, "emitMemories"),
+    upsert: forward(session, "upsertMemory"),
+    delete: forward(session, "deleteMemory"),
+    listAdvanced: forward(session, "emitAdvancedMemories"),
+    upsertAdvanced: forward(session, "upsertAdvancedMemory"),
+    deleteAdvanced: forward(session, "deleteAdvancedMemory"),
+    generateAdvancedFromHistory: forward(session, "generateAdvancedMemoryForHistory"),
+  };
+}
+
+export type SessionMemoryService = ReturnType<typeof createSessionMemoryService>;
+
+function createSessionSkillService(session: AgentSession) {
+  return {
+    listTools: forward(session, "listTools"),
+    listCommands: forward(session, "listCommands"),
+    executeCommand: (name: string, argumentsText = "", clientMessageId?: string) =>
+      session.executeCommand(name, argumentsText, clientMessageId),
+    getCatalog: forward(session, "getSkillsCatalog"),
+    list: forward(session, "listSkills"),
+    read: forward(session, "readSkill"),
+    disable: forward(session, "disableSkill"),
+    enable: forward(session, "enableSkill"),
+    delete: forward(session, "deleteSkill"),
+    getInstallation: forward(session, "getSkillInstallation"),
+    listMarketplaces: forward(session, "listMarketplaces"),
+    readMarketplaceDetail: forward(session, "readMarketplaceDetail"),
+    addMarketplace: forward(session, "addMarketplace"),
+    removeMarketplace: forward(session, "removeMarketplace"),
+    previewInstall: forward(session, "previewSkillInstall"),
+    install: forward(session, "installSkills"),
+    enableInstallation: forward(session, "enableSkillInstallation"),
+    disableInstallation: forward(session, "disableSkillInstallation"),
+    deleteInstallation: forward(session, "deleteSkillInstallation"),
+    copyInstallation: forward(session, "copySkillInstallation"),
+    checkInstallationUpdate: forward(session, "checkSkillInstallationUpdate"),
+    updateInstallation: forward(session, "updateSkillInstallation"),
+    refreshFromExternalMutation: forward(session, "refreshSkillStateFromExternalMutation"),
+    refreshSystemPrompt: forward(session, "refreshSystemPromptWithSkills"),
+  };
+}
+
+export type SessionSkillService = ReturnType<typeof createSessionSkillService>;
+
+function createSessionAgentProfileService(session: AgentSession) {
+  return {
+    getCatalog: forward(session, "getAgentProfilesCatalog"),
+    upsert: forward(session, "upsertAgentProfile"),
+    delete: forward(session, "deleteAgentProfile"),
+    copy: forward(session, "copyAgentProfile"),
+    setWorkspaceAvailability: forward(session, "setAgentProfileWorkspaceAvailability"),
+  };
+}
+
+export type SessionAgentProfileService = ReturnType<typeof createSessionAgentProfileService>;
+
+function createSessionPluginService(session: AgentSession) {
+  return {
+    getCatalog: forward(session, "getPluginsCatalog"),
+    get: forward(session, "getPlugin"),
+    previewInstall: forward(session, "previewPluginInstall"),
+    install: forward(session, "installPlugins"),
+    checkUpdate: forward(session, "checkPluginUpdate"),
+    update: forward(session, "updatePlugin"),
+    enable: forward(session, "enablePlugin"),
+    disable: forward(session, "disablePlugin"),
+    delete: forward(session, "deletePlugin"),
+  };
+}
+
+export type SessionPluginService = ReturnType<typeof createSessionPluginService>;
+
+function createSessionImportService(session: AgentSession) {
+  return {
+    list: forward(session, "listImport"),
+    plugin: forward(session, "importPlugin"),
+    skill: forward(session, "importSkill"),
+  };
+}
+
+export type SessionImportService = ReturnType<typeof createSessionImportService>;
+
+function createSessionAgentService(session: AgentSession) {
+  return {
+    create: forward(session, "createAgentSession"),
+    list: forward(session, "listAgentSessions"),
+    sendInput: forward(session, "sendAgentInput"),
+    wait: forward(session, "waitForAgents"),
+    inspect: forward(session, "inspectAgent"),
+    resume: forward(session, "resumeAgent"),
+    close: forward(session, "closeAgent"),
+  };
+}
+
+export type SessionAgentService = ReturnType<typeof createSessionAgentService>;
+
+function createSessionBackupService(session: AgentSession) {
+  return {
+    listWorkspaceBackups: forward(session, "listWorkspaceBackups"),
+    createWorkspaceCheckpoint: forward(session, "createWorkspaceBackupCheckpoint"),
+    restoreWorkspaceBackup: forward(session, "restoreWorkspaceBackup"),
+    deleteWorkspaceCheckpoint: forward(session, "deleteWorkspaceBackupCheckpoint"),
+    deleteWorkspaceEntry: forward(session, "deleteWorkspaceBackupEntry"),
+    getWorkspaceDelta: forward(session, "getWorkspaceBackupDelta"),
+    getState: forward(session, "getSessionBackupState"),
+    createManualCheckpoint: forward(session, "createManualSessionCheckpoint"),
+    restoreSession: forward(session, "restoreSessionBackup"),
+    deleteSessionCheckpoint: forward(session, "deleteSessionCheckpoint"),
+    reloadStateFromDisk: forward(session, "reloadSessionBackupStateFromDisk"),
+  };
+}
+
+export type SessionBackupService = ReturnType<typeof createSessionBackupService>;
+
+function createSessionFileService(session: AgentSession) {
+  return {
+    upload: forward(session, "uploadFile"),
+  };
+}
+
+export type SessionFileService = ReturnType<typeof createSessionFileService>;
+
+function createSessionLifecycleService(session: AgentSession) {
+  return {
+    reset: forward(session, "reset"),
+    delete: forward(session, "deleteSession"),
+    handleAskResponse: forward(session, "handleAskResponse"),
+    handleApprovalResponse: forward(session, "handleApprovalResponse"),
+    closeForHistory: (opts: { closeSharedCodexClient?: boolean } = {}) =>
+      session.closeForHistory(opts),
+    waitForPersistenceIdle: () => session.waitForPersistenceIdle(),
+    reopenForHistory: forward(session, "reopenForHistory"),
+    dispose: (reason: string, opts: { closeSharedCodexClient?: boolean } = {}) =>
+      session.dispose(reason, opts),
+    getMessages: (offset = 0, limit = 100) => session.getMessages(offset, limit),
+    buildForkContextSeed: forward(session, "buildForkContextSeed"),
+    buildContextSeed: forward(session, "buildContextSeed"),
+  };
+}
+
+export type SessionLifecycleService = ReturnType<typeof createSessionLifecycleService>;
 
 export class SessionRuntime {
   readonly snapshot: SessionSnapshotService;
@@ -794,22 +345,22 @@ export class SessionRuntime {
   readonly lifecycle: SessionLifecycleService;
 
   constructor(readonly session: AgentSession) {
-    this.snapshot = new SessionSnapshotService(session);
-    this.read = new SessionReadModelService(session);
-    this.replay = new SessionReplayService(session);
-    this.turns = new SessionTurnService(session);
-    this.settings = new SessionSettingsService(session);
-    this.provider = new SessionProviderService(session);
-    this.mcp = new SessionMcpService(session);
-    this.memory = new SessionMemoryService(session);
-    this.skills = new SessionSkillService(session);
-    this.agentProfiles = new SessionAgentProfileService(session);
-    this.plugins = new SessionPluginService(session);
-    this.import = new SessionImportService(session);
-    this.agents = new SessionAgentService(session);
-    this.backups = new SessionBackupService(session);
-    this.files = new SessionFileService(session);
-    this.lifecycle = new SessionLifecycleService(session);
+    this.snapshot = createSessionSnapshotService(session);
+    this.read = createSessionReadModelService(session);
+    this.replay = createSessionReplayService(session);
+    this.turns = createSessionTurnService(session);
+    this.settings = createSessionSettingsService(session);
+    this.provider = createSessionProviderService(session);
+    this.mcp = createSessionMcpService(session);
+    this.memory = createSessionMemoryService(session);
+    this.skills = createSessionSkillService(session);
+    this.agentProfiles = createSessionAgentProfileService(session);
+    this.plugins = createSessionPluginService(session);
+    this.import = createSessionImportService(session);
+    this.agents = createSessionAgentService(session);
+    this.backups = createSessionBackupService(session);
+    this.files = createSessionFileService(session);
+    this.lifecycle = createSessionLifecycleService(session);
   }
 
   get id(): string {

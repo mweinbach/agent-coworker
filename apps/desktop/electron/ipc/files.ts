@@ -2,7 +2,6 @@ import { execFile as execFileCallback } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -32,7 +31,6 @@ import {
   type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
-  type SaveExportedFileInput,
   type TrashPathInput,
   type WatchWorkspaceDirectoryInput,
   type WriteFileInput,
@@ -53,7 +51,6 @@ import {
   readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
-  saveExportedFileInputSchema,
   trashPathInputSchema,
   watchWorkspaceDirectoryInputSchema,
   writeFileInputSchema,
@@ -69,14 +66,13 @@ import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
-  resolveAllowedSaveExportSourcePath,
 } from "../services/ipcSecurity";
 import { WorkspaceDirectoryWatcher } from "../services/workspaceDirectoryWatcher";
 import type { DesktopIpcModuleContext } from "./types";
 
 const execFile = promisify(execFileCallback);
 const require = createRequire(import.meta.url);
-const { app, BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
+const { BrowserWindow, clipboard, dialog, shell } = require("electron") as typeof Electron;
 
 export const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_WORKSPACE_UPLOADS_DIR_NAME = "User Uploads";
@@ -549,46 +545,6 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       throw new Error(errString);
     }
   });
-
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.saveExportedFile,
-    async (event, args: SaveExportedFileInput) => {
-      const input = parseWithSchema(saveExportedFileInputSchema, args, "saveExportedFile options");
-      await workspaceRoots.ensureApprovedWorkspaceRoots();
-      const safeSourcePath = resolveAllowedSaveExportSourcePath(
-        workspaceRoots.getApprovedWorkspaceRoots(),
-        input.sourcePath,
-      );
-      const downloadsPath = (() => {
-        try {
-          return app.getPath("downloads");
-        } catch {
-          return os.homedir();
-        }
-      })();
-      const defaultPath = path.join(downloadsPath || os.homedir(), input.defaultFileName);
-      const ownerWindow =
-        BrowserWindow.fromWebContents(event.sender) ??
-        BrowserWindow.getFocusedWindow() ??
-        undefined;
-      const result = ownerWindow
-        ? await dialog.showSaveDialog(ownerWindow, {
-            title: "Save research export",
-            defaultPath,
-          })
-        : await dialog.showSaveDialog({
-            title: "Save research export",
-            defaultPath,
-          });
-
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-
-      await fs.copyFile(safeSourcePath, result.filePath);
-      return result.filePath;
-    },
-  );
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.pickCanvasSavePath,

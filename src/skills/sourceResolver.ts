@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import { parseGitHubUrl } from "../extensions/github";
 import {
   buildDescriptorFromGitHubSource,
@@ -19,6 +18,7 @@ import type {
   SkillSourceDescriptor,
   SkillSourceInputKind,
 } from "../types";
+import { parseSkillDocument } from "./metadata";
 
 type GitHubSkillSourceDescriptor = Omit<SkillSourceDescriptor, "kind"> & {
   kind: Exclude<SkillSourceInputKind, "skills.sh">;
@@ -42,19 +42,6 @@ export type MaterializedSkillSource = {
   cleanup: () => Promise<void>;
 };
 
-const unknownRecordSchema = z.record(z.string(), z.unknown());
-const skillFrontMatterSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-    description: z.string().trim().min(1).max(1024),
-  })
-  .passthrough();
-
 const precedenceByScope = new Map([
   ["project", 0],
   ["global", 1],
@@ -70,46 +57,14 @@ function buildDiagnostic(
   return { code, severity, message };
 }
 
-function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: string } {
-  const re = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
-  const match = raw.match(re);
-  if (!match) {
-    return { frontMatterRaw: null, body: raw };
-  }
-  return {
-    frontMatterRaw: match[1] ?? "",
-    body: raw.slice(match[0].length),
-  };
-}
-
 function parseSkillMetadata(
   raw: string,
   expectedDirName: string,
 ): { name: string; description: string } | null {
-  const { frontMatterRaw } = splitFrontMatter(raw);
-  if (!frontMatterRaw) {
-    return null;
-  }
-
-  try {
-    const parsed = Bun.YAML.parse(frontMatterRaw);
-    const validatedObject = unknownRecordSchema.safeParse(parsed);
-    if (!validatedObject.success) {
-      return null;
-    }
-
-    const validated = skillFrontMatterSchema.safeParse(validatedObject.data);
-    if (!validated.success || validated.data.name !== expectedDirName) {
-      return null;
-    }
-
-    return {
-      name: validated.data.name,
-      description: validated.data.description,
-    };
-  } catch {
-    return null;
-  }
+  const parsed = parseSkillDocument(raw, { expectedName: expectedDirName });
+  return parsed
+    ? { name: parsed.frontMatter.name, description: parsed.frontMatter.description }
+    : null;
 }
 
 async function discoverSkillRoots(rootDir: string): Promise<string[]> {

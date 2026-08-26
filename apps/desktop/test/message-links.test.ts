@@ -582,15 +582,8 @@ describe("desktop message local file links", () => {
         throw new Error("missing grouped citation chip button");
       }
       expect(chipButton.getAttribute("data-slot")).toBe("popover-trigger");
-      // The chip leads with the site mark, which identifies the source faster
-      // than its name does at this size. It stays on the primary source while
-      // the popover pages through the rest, so the chip cannot shift under the
-      // pointer that opened it.
-      const chipFavicon = chipButton.querySelector("img");
-      expect(chipFavicon?.getAttribute("src")).toContain(
-        "google.com/s2/favicons?domain=example.com",
-      );
-      expect(chipFavicon?.getAttribute("alt")).toBe("");
+      expect(chipButton.textContent?.trim()).toStartWith("eSafety Memo +1");
+      expect(chipButton.querySelector("img")).toBeNull();
 
       await act(async () => {
         chipButton.dispatchEvent(
@@ -719,7 +712,7 @@ describe("desktop message local file links", () => {
     }
   });
 
-  test("citation chips prewarm favicon URLs before the popup opens", async () => {
+  test("citation chips do not originate renderer favicon requests", async () => {
     const harness = setupJsdom();
 
     try {
@@ -727,13 +720,13 @@ describe("desktop message local file links", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      const assignedImageUrls: string[] = [];
+      const requestedImageUrls: string[] = [];
       const OriginalWindowImage = harness.dom.window.Image;
       const OriginalGlobalImage = globalThis.Image;
 
       class TrackingImage {
         set src(value: string) {
-          assignedImageUrls.push(value);
+          requestedImageUrls.push(value);
         }
       }
 
@@ -748,27 +741,39 @@ describe("desktop message local file links", () => {
               {
                 normalizeDisplayCitations: true,
                 citationSources: [
-                  { title: "preload-check.example", url: "https://example.com/preload-check" },
+                  { title: "request-check.example", url: "https://example.com/request-check" },
                 ],
                 citationAnnotations: [
                   {
                     type: "url_citation",
                     start_index: 0,
                     end_index: 11,
-                    url: "https://example.com/preload-check",
-                    title: "preload-check.example",
+                    url: "https://example.com/request-check",
+                    title: "request-check.example",
                   },
                 ],
-                citationUrlsByIndex: new Map([[1, "https://example.com/preload-check"]]),
+                citationUrlsByIndex: new Map([[1, "https://example.com/request-check"]]),
               },
               "Source block.",
             ),
           );
         });
 
-        expect(assignedImageUrls).toContain(
-          "https://www.google.com/s2/favicons?domain=preload-check.example&sz=32",
+        const chipButton = Array.from(container.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("request-check.example"),
         );
+        if (!chipButton) {
+          throw new Error("missing citation chip button");
+        }
+
+        await act(async () => {
+          chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(requestedImageUrls).toEqual([]);
+        expect(container.querySelector("img")).toBeNull();
+        expect(harness.dom.window.document.body.querySelector("img")).toBeNull();
+        expect(harness.dom.window.document.body.innerHTML).not.toContain("google.com/s2/favicons");
 
         await act(async () => {
           root.unmount();

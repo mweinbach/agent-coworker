@@ -1,6 +1,4 @@
 import type { CoworkRuntimeBootstrapProgress } from "../../../../src/coworkRuntime/types";
-import type { ResearchRecord, ResearchSettings } from "../../../../src/server/research/types";
-import { DEFAULT_RESEARCH_AGENT_ID } from "../../../../src/server/research/types";
 import type { DesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
@@ -316,7 +314,7 @@ export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null
 }
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
-export type ViewId = "chat" | "task" | "research" | "settings";
+export type ViewId = "chat" | "task" | "settings";
 
 export type {
   TaskArtifact,
@@ -377,17 +375,6 @@ export type DesktopStateCache = {
   sessionSnapshots?: Record<string, CachedSessionSnapshot>;
 };
 
-export type ResearchSettingsState = ResearchSettings;
-export type ResearchCard = ResearchRecord;
-export type ResearchDetail = ResearchRecord;
-
-export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
-  planApproval: false,
-  agentId: DEFAULT_RESEARCH_AGENT_ID,
-  thinkingSummaries: "auto",
-  visualization: "auto",
-};
-
 export type PersistedState = {
   version: number;
   workspaces: WorkspaceRecord[];
@@ -423,12 +410,6 @@ export type ToolFeedState =
   | "output-available"
   | "output-error"
   | "output-denied";
-
-export type ToolApprovalMetadata = {
-  approvalId: string;
-  reason?: unknown;
-  toolCall?: unknown;
-};
 
 export type FeedItem = SessionFeedItem;
 

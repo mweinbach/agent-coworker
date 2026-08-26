@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import type * as Electron from "electron";
 import type * as Ws from "ws";
 import { hostPlatform } from "../../../src/platform/host";
-import type { ResearchRecord } from "../../../src/server/research/types";
 import type {
   CanvasDocumentRevision,
   CanvasDocumentSnapshot,
@@ -160,7 +159,6 @@ let rendererServerUrl = "";
 let rendererLogs: unknown[] = [];
 let explorerRevision = 0;
 let nestedExplorerFixture = false;
-const researchRecords = new Map<string, ResearchRecord>();
 const canvasDocumentSessions = new Map<string, CanvasDocumentSnapshot>();
 const connectedSockets = new Set<Ws.WebSocket>();
 const pendingDeltaBursts = new Map<
@@ -1107,60 +1105,6 @@ function emitLongTranscript(count: number, runId: number): string {
   return `quality-long-${runId}-${boundedCount - 1}`;
 }
 
-function qualityResearchRecord(
-  id: string,
-  opts: {
-    parentResearchId?: string | null;
-    prompt?: string;
-    status?: ResearchRecord["status"];
-    title?: string;
-  } = {},
-): ResearchRecord {
-  const status = opts.status ?? "completed";
-  const completed = status === "completed";
-  return {
-    id,
-    workspacePath: "/quality/project",
-    parentResearchId: opts.parentResearchId ?? null,
-    title: opts.title ?? "Desktop quality research",
-    prompt: opts.prompt ?? "Compare deterministic Electron testing strategies.",
-    status,
-    interactionId: "quality-interaction",
-    lastEventId: "quality-event",
-    inputs: { files: [] },
-    settings: {
-      planApproval: false,
-      agentId: "deep-research-max-preview-04-2026",
-      thinkingSummaries: "auto",
-      visualization: "auto",
-    },
-    outputsMarkdown: completed
-      ? "## Recommendation\n\nUse a real Electron renderer with controlled fixtures and reviewed baselines."
-      : "",
-    thoughtSummaries: [
-      {
-        id: "thought-1",
-        text: "Comparing IPC boundaries and rendering determinism.",
-        ts: FIXED_NOW,
-      },
-    ],
-    sources: completed
-      ? [
-          {
-            url: "https://playwright.dev/docs/api/class-electron",
-            title: "Playwright Electron",
-            sourceType: "url",
-            host: "playwright.dev",
-          },
-        ]
-      : [],
-    planPending: false,
-    createdAt: FIXED_NOW,
-    updatedAt: FIXED_NOW,
-    error: null,
-  };
-}
-
 function canvasDocumentSessionKey(documentId: string, generation: number): string {
   return `${documentId}:${generation}`;
 }
@@ -1241,48 +1185,6 @@ function jsonRpcResult(method: string, rawParams: unknown): unknown {
           },
         },
       };
-    case "research/list":
-      return { research: [...researchRecords.values()] };
-    case "research/get": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      return { research: researchRecords.get(researchId) ?? null };
-    }
-    case "research/start": {
-      const record = qualityResearchRecord("quality-created-research", {
-        prompt: typeof params.input === "string" ? params.input : undefined,
-        status: "running",
-        title: typeof params.title === "string" ? params.title : "Deterministic research run",
-      });
-      researchRecords.set(record.id, record);
-      return { research: record };
-    }
-    case "research/subscribe": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      return { research: researchRecords.get(researchId) ?? null };
-    }
-    case "research/unsubscribe":
-      return { status: "unsubscribed" };
-    case "research/cancel": {
-      const researchId = typeof params.researchId === "string" ? params.researchId : "";
-      const existing = researchRecords.get(researchId);
-      if (!existing) {
-        return { research: null };
-      }
-      const record = { ...existing, status: "cancelled" as const, error: "cancelled" };
-      researchRecords.set(researchId, record);
-      return { research: record };
-    }
-    case "research/followup": {
-      const parentResearchId =
-        typeof params.parentResearchId === "string" ? params.parentResearchId : "";
-      const record = qualityResearchRecord("quality-research-follow-up", {
-        parentResearchId,
-        prompt: typeof params.input === "string" ? params.input : undefined,
-        title: typeof params.title === "string" ? params.title : "Quality audit follow-up",
-      });
-      researchRecords.set(record.id, record);
-      return { research: record };
-    }
     case "cowork/workspace/document/open": {
       const filePath =
         typeof params.path === "string" ? params.path : "/quality/project/quality-gate-report.md";
@@ -1884,7 +1786,6 @@ async function handleIpc(
     case DESKTOP_IPC_CHANNELS.getPreferredFileApp:
     case DESKTOP_IPC_CHANNELS.pickDirectory:
     case DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory:
-    case DESKTOP_IPC_CHANNELS.saveExportedFile:
     case DESKTOP_IPC_CHANNELS.pickCanvasSavePath:
       return null;
     case DESKTOP_IPC_CHANNELS.showContextMenu:

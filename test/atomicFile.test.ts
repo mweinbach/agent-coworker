@@ -36,7 +36,7 @@ describe("writeTextFileAtomic", () => {
     const dir = await makeTmpDir();
     const target = path.join(dir, "config.json");
     let renameCalls = 0;
-    let sleepCalls = 0;
+    const sleepCalls: number[] = [];
 
     await writeTextFileAtomic(
       target,
@@ -44,8 +44,8 @@ describe("writeTextFileAtomic", () => {
       {},
       {
         platform: "win32",
-        sleepImpl: async () => {
-          sleepCalls += 1;
+        sleepImpl: async (ms) => {
+          sleepCalls.push(ms);
         },
         fsImpl: {
           mkdir: fs.mkdir.bind(fs),
@@ -66,7 +66,44 @@ describe("writeTextFileAtomic", () => {
 
     expect(await fs.readFile(target, "utf-8")).toBe('{"model":"gpt-5.2"}\n');
     expect(renameCalls).toBe(3);
-    expect(sleepCalls).toBe(2);
+    expect(sleepCalls).toEqual([20, 40]);
+  });
+
+  test("maps legacy retry options onto the canonical atomic writer", async () => {
+    const dir = await makeTmpDir();
+    const target = path.join(dir, "config.json");
+    let renameCalls = 0;
+    const sleepCalls: number[] = [];
+
+    await writeTextFileAtomic(
+      target,
+      '{"model":"gpt-5.2"}\n',
+      { initialRetryDelayMs: 3, maxRenameAttempts: 4, maxRetryDelayMs: 5 },
+      {
+        platform: "win32",
+        sleepImpl: async (ms) => {
+          sleepCalls.push(ms);
+        },
+        fsImpl: {
+          mkdir: fs.mkdir.bind(fs),
+          writeFile: fs.writeFile.bind(fs),
+          unlink: fs.unlink.bind(fs),
+          rename: async (from: string, to: string) => {
+            renameCalls += 1;
+            if (renameCalls < 4) {
+              const err = new Error("busy") as NodeJS.ErrnoException;
+              err.code = "EBUSY";
+              throw err;
+            }
+            await fs.rename(from, to);
+          },
+        },
+      },
+    );
+
+    expect(await fs.readFile(target, "utf-8")).toBe('{"model":"gpt-5.2"}\n');
+    expect(renameCalls).toBe(4);
+    expect(sleepCalls).toEqual([3, 5, 5]);
   });
 
   test("honors mode option when writing temp file", async () => {

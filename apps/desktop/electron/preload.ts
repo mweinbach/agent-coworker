@@ -47,7 +47,6 @@ import {
   type RenamePathInput,
   type RendererLogInput,
   type RevealPathInput,
-  type SaveExportedFileInput,
   type SetWindowAppearanceInput,
   type ShowCanvasWindowInput,
   type ShowContextMenuInput,
@@ -102,7 +101,6 @@ import {
   renamePathInputSchema,
   rendererLogInputSchema,
   revealPathInputSchema,
-  saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
   showCanvasWindowInputSchema,
   showContextMenuInputSchema,
@@ -225,10 +223,6 @@ function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
 
 function assertOpenPathInput(opts: OpenPathInput): void {
   parseWithSchema(openPathInputSchema, opts, "openPath options");
-}
-
-function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
-  parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
 }
 
 function assertPickCanvasSavePathInput(opts: PickCanvasSavePathInput): void {
@@ -673,11 +667,6 @@ const desktopApi = Object.freeze<DesktopApi>({
   openPath: (opts: OpenPathInput) => {
     assertOpenPathInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
-  },
-
-  saveExportedFile: (opts: SaveExportedFileInput) => {
-    assertSaveExportedFileInput(opts);
-    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
   },
 
   pickCanvasSavePath: (opts: PickCanvasSavePathInput) => {

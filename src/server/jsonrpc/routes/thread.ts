@@ -7,6 +7,7 @@ import { JSONRPC_ERROR_CODES, type JsonRpcLiteRequest } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
 import { listWorkspaceSummaries } from "../workspaceCatalog";
+import { listWorkspaceChatThreads } from "./shared";
 
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
@@ -215,44 +216,13 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         });
         return;
       }
-      const threads = new Map<
-        string,
-        ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>
-      >();
-      for (const record of context.threads.listPersisted({ cwd })) {
-        if (
-          record.sessionKind !== "root" ||
-          record.parentSessionId !== null ||
-          record.role !== null
-        ) {
-          continue;
-        }
-        if (
-          !context.utils.shouldIncludeThreadSummary({
-            titleSource: record.titleSource,
-            messageCount: record.messageCount,
-            hasPendingAsk: record.hasPendingAsk,
-            hasPendingApproval: record.hasPendingApproval,
-            executionState: record.executionState ?? null,
-          })
-        ) {
-          continue;
-        }
-        threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
-      }
-      for (const runtime of context.threads.listLiveRoot({ cwd })) {
-        threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
-      }
-      const sorted = [...threads.values()].sort((left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt),
-      );
-      const total = sorted.length;
-      const offset = parsed.data.offset ?? 0;
-      const limit = parsed.data.limit;
-      const paginated =
-        limit !== undefined ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
+      const { threads, total } = listWorkspaceChatThreads(context, {
+        cwd,
+        offset: parsed.data.offset,
+        limit: parsed.data.limit,
+      });
       context.jsonrpc.sendResult(ws, message.id, {
-        threads: paginated,
+        threads,
         total,
       });
     },

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { __internalResearchActionBindings } from "../src/app/store.actions/research";
 import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
 import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -135,7 +134,6 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("settings nav (store)", () => {
   beforeEach(() => {
-    __internalResearchActionBindings.reset();
     disposeAllJsonRpcSocketState();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
@@ -180,14 +178,6 @@ describe("settings nav (store)", () => {
       workspaces: [],
       workspaceRuntimeById: {},
       selectedWorkspaceId: null,
-      researchTransportWorkspaceId: null,
-      researchById: {},
-      researchOrder: [],
-      selectedResearchId: null,
-      researchListLoading: false,
-      researchListError: null,
-      researchSubscribedIds: [],
-      researchExportPendingIds: [],
       desktopSettings: {
         quickChat: {
           iconEnabled: true,
@@ -212,10 +202,10 @@ describe("settings nav (store)", () => {
   });
 
   test("openSettings records lastNonSettingsView and enters settings", () => {
-    useAppStore.setState({ view: "research" });
+    useAppStore.setState({ view: "task" });
     useAppStore.getState().openSettings();
     expect(useAppStore.getState().view).toBe("settings");
-    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
+    expect(useAppStore.getState().lastNonSettingsView).toBe("task");
   });
 
   test("openSettings optionally selects a settings page", () => {
@@ -225,10 +215,10 @@ describe("settings nav (store)", () => {
   });
 
   test("closeSettings restores the prior view", () => {
-    useAppStore.setState({ view: "research" });
+    useAppStore.setState({ view: "task" });
     useAppStore.getState().openSettings();
     useAppStore.getState().closeSettings();
-    expect(useAppStore.getState().view).toBe("research");
+    expect(useAppStore.getState().view).toBe("task");
   });
 
   test("setSettingsPage updates settingsPage", () => {
@@ -872,72 +862,6 @@ describe("settings nav (store)", () => {
       kind: "info",
       title: "Workspace management is disabled",
     });
-  });
-
-  test("openResearch is a silent no-op without a Google API key", async () => {
-    await useAppStore.getState().openResearch();
-
-    const state = useAppStore.getState();
-    expect(state.view).toBe("chat");
-    expect(state.notifications).toEqual([]);
-  });
-
-  test("openResearch switches to the research view before transport refresh completes", async () => {
-    useAppStore.setState({
-      providerConnected: ["google"],
-      providerStatusByName: {
-        google: {
-          provider: "google",
-          authorized: true,
-          verified: false,
-          mode: "api_key",
-          account: null,
-          message: "API key saved.",
-          checkedAt: "2026-05-15T00:00:00.000Z",
-          savedApiKeyMasks: { api_key: "goog...1234" },
-        },
-      },
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/ws-1",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          lastOpenedAt: "2024-01-01T00:00:00.000Z",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      workspaceRuntimeById: {
-        "ws-1": {
-          ...defaultWorkspaceRuntime(),
-          serverUrl: "ws://mock",
-        },
-      },
-    });
-
-    RUNTIME.jsonRpcSockets.set("ws-1", {
-      readyPromise: Promise.resolve(),
-      request: (method: string) => {
-        if (method === "research/list") {
-          return Promise.resolve({ research: [] });
-        }
-        return Promise.resolve({});
-      },
-      respond: () => true,
-      close: () => {},
-    } as any);
-
-    const openPromise = useAppStore.getState().openResearch();
-
-    expect(useAppStore.getState().view).toBe("research");
-    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
-    expect(useAppStore.getState().researchListLoading).toBe(true);
-
-    await openPromise;
-    expect(useAppStore.getState().researchListError).toBeNull();
   });
 
   test("newThread creates a one-off chat when none is selected", async () => {

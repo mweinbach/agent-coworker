@@ -3,6 +3,7 @@ import { z } from "zod";
 import { serializeTurnDelta } from "../advancedMemory/MemoryGenerator";
 import {
   listPersistedSessionSnapshots,
+  type PersistedSessionSummary,
   readPersistedSessionSnapshot,
 } from "../server/sessionStore";
 import { getAiCoworkerPaths } from "../store/connections";
@@ -21,7 +22,80 @@ type ReadPastConversationDeps = {
   getPaths?: () => Parameters<typeof listPersistedSessionSnapshots>[0];
   listSnapshots?: typeof listPersistedSessionSnapshots;
   readSnapshot?: typeof readPersistedSessionSnapshot;
+  historyReader?: ReadPastConversationHistoryReader;
 };
+
+type ReadPastConversationRecord = {
+  sessionId: string;
+  title: string;
+  workingDirectory: string;
+  messages: ModelMessage[];
+};
+
+export type ReadPastConversationHistoryReader = {
+  list: (opts: {
+    workingDirectory: string;
+  }) => Promise<PersistedSessionSummary[]> | PersistedSessionSummary[];
+  read: (opts: {
+    sessionId: string;
+  }) => Promise<ReadPastConversationRecord | null> | ReadPastConversationRecord | null;
+};
+
+const historyReaders = new Map<string, ReadPastConversationHistoryReader>();
+
+function formatSessionSummaries(summaries: PersistedSessionSummary[]): string {
+  return summaries
+    .map(
+      (s) =>
+        `- ${s.sessionId} — ${s.title || "(untitled)"} (${s.messageCount} msgs, updated ${s.updatedAt})`,
+    )
+    .join("\n");
+}
+
+function mergeSessionSummaries(
+  canonical: PersistedSessionSummary[],
+  legacy: PersistedSessionSummary[],
+): PersistedSessionSummary[] {
+  const bySessionId = new Map<string, PersistedSessionSummary>();
+  for (const summary of canonical) {
+    bySessionId.set(summary.sessionId, summary);
+  }
+  for (const summary of legacy) {
+    if (!bySessionId.has(summary.sessionId)) {
+      bySessionId.set(summary.sessionId, summary);
+    }
+  }
+  return [...bySessionId.values()].sort((a, b) =>
+    b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0,
+  );
+}
+
+async function removeLegacySummariesOwnedByCanonicalReader(
+  legacy: PersistedSessionSummary[],
+  canonical: PersistedSessionSummary[],
+  historyReader: ReadPastConversationHistoryReader,
+): Promise<PersistedSessionSummary[]> {
+  const canonicalSessionIds = new Set(canonical.map((summary) => summary.sessionId));
+  const unownedLegacy: PersistedSessionSummary[] = [];
+  for (const summary of legacy) {
+    if (canonicalSessionIds.has(summary.sessionId)) continue;
+    if (await historyReader.read({ sessionId: summary.sessionId })) continue;
+    unownedLegacy.push(summary);
+  }
+  return unownedLegacy;
+}
+
+export function registerReadPastConversationHistoryReader(
+  sessionId: string,
+  reader: ReadPastConversationHistoryReader,
+): () => void {
+  historyReaders.set(sessionId, reader);
+  return () => {
+    if (historyReaders.get(sessionId) === reader) {
+      historyReaders.delete(sessionId);
+    }
+  };
+}
 
 export function createReadPastConversationTool(
   ctx: ToolContext,
@@ -30,6 +104,8 @@ export function createReadPastConversationTool(
   const paths = (deps.getPaths ?? getAiCoworkerPaths)();
   const listSnapshots = deps.listSnapshots ?? listPersistedSessionSnapshots;
   const readSnapshot = deps.readSnapshot ?? readPersistedSessionSnapshot;
+  const historyReader =
+    deps.historyReader ?? (ctx.sessionId ? historyReaders.get(ctx.sessionId) : undefined);
   const activeWorkingDirectory = ctx.config.workingDirectory;
 
   return defineTool({
@@ -54,15 +130,41 @@ export function createReadPastConversationTool(
       ctx.log(`tool> readPastConversation ${JSON.stringify({ sessionId, list, limit })}`);
 
       if (list || !sessionId) {
-        const summaries = await listSnapshots(paths, { workingDirectory: activeWorkingDirectory });
-        const top = summaries.slice(0, limit ?? 20);
+        const legacySummaries = await listSnapshots(paths, {
+          workingDirectory: activeWorkingDirectory,
+        });
+        if (historyReader) {
+          const canonicalSummaries = await historyReader.list({
+            workingDirectory: activeWorkingDirectory,
+          });
+          const summaries = mergeSessionSummaries(
+            canonicalSummaries,
+            await removeLegacySummariesOwnedByCanonicalReader(
+              legacySummaries,
+              canonicalSummaries,
+              historyReader,
+            ),
+          );
+          const top = summaries.slice(0, limit ?? 20);
+          if (top.length === 0) return "No past conversations found.";
+          return formatSessionSummaries(top);
+        }
+
+        const top = legacySummaries.slice(0, limit ?? 20);
         if (top.length === 0) return "No past conversations found.";
-        return top
-          .map(
-            (s) =>
-              `- ${s.sessionId} — ${s.title || "(untitled)"} (${s.messageCount} msgs, updated ${s.updatedAt})`,
-          )
-          .join("\n");
+        return formatSessionSummaries(top);
+      }
+
+      if (historyReader) {
+        const record = await historyReader.read({ sessionId });
+        if (record) {
+          if (!sameWorkspacePath(record.workingDirectory, activeWorkingDirectory)) {
+            return `No conversation found for sessionId "${sessionId}".`;
+          }
+          const transcript = serializeTurnDelta(record.messages);
+          const header = `# ${record.title || "(untitled)"}\nsessionId: ${record.sessionId}\n\n`;
+          return truncateText(`${header}${transcript}`, 30000);
+        }
       }
 
       const snapshot = await readSnapshot({ paths, sessionId });

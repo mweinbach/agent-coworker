@@ -511,12 +511,6 @@ function renderSpawnAgentSpecificPrompt(
   return prompt;
 }
 
-function normalizeLegacySpawnAgentGuidance(prompt: string): string {
-  return prompt
-    .replaceAll("spawnAgent (explore type)", 'spawnAgent with `role: "explorer"`')
-    .replaceAll("spawnAgent (general type)", 'spawnAgent with `role: "worker"`');
-}
-
 function buildSkillSearchOrder(config: AgentConfig): string {
   const labels = ["project", "global (~/.cowork/skills)", "built-in"];
   return config.skillsDirs
@@ -756,7 +750,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config, agentProfilePromptLines, providerCatalog);
-  prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
   // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.
   // Hierarchical AGENTS.md / AGENTS.override.md are appended separately from memory (.cowork/AGENT.md).
@@ -821,19 +814,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
   const { prompt } = await loadSystemPromptWithSkills(config);
   return prompt;
-}
-
-export async function loadSubAgentPrompt(
-  config: AgentConfig,
-  role: "explore" | "explorer" | "research" | "general",
-): Promise<string> {
-  const mappedRole: AgentRole =
-    role === "general"
-      ? "worker"
-      : role === "explorer" || role === "explore"
-        ? "explorer"
-        : "research";
-  return await loadAgentPrompt(config, mappedRole);
 }
 
 export async function loadAgentPrompt(

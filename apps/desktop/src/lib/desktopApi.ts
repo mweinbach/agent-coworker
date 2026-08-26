@@ -261,11 +261,6 @@ export type OpenPathInput = {
   path: string;
 };
 
-export type SaveExportedFileInput = {
-  sourcePath: string;
-  defaultFileName: string;
-};
-
 export type PickCanvasSavePathInput = {
   sourcePath: string;
 };
@@ -364,7 +359,6 @@ export type DesktopMenuCommand =
   | "toggleSidebar"
   | "openSettings"
   | "openWorkspacesSettings"
-  | "openResearch"
   | "openSkills"
   | "openUpdates"
   | "openCommandPalette";
@@ -634,7 +628,6 @@ export interface DesktopApi {
   getPreferredFileApp(opts: PreferredFileAppInput): Promise<string | null>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
-  saveExportedFile(opts: SaveExportedFileInput): Promise<string | null>;
   pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
@@ -721,7 +714,6 @@ export const DESKTOP_IPC_CHANNELS = {
   getPreferredFileApp: "desktop:getPreferredFileApp",
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
-  saveExportedFile: "desktop:saveExportedFile",
   pickCanvasSavePath: "desktop:pickCanvasSavePath",
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",

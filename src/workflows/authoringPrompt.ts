@@ -16,7 +16,8 @@ For a single delegated task, use spawnAgent instead — a workflow is overhead y
 
 - List reusable workflows: \`{ action: "list" }\`.
 - Run a bundled, project, or global workflow: \`{ name: "deep-research", args: { query: "...", model: "provider:model-id" } }\`.
-- \`deep-research\` supports a default \`args.model\` plus \`plannerModel\`, \`researchModel\`, \`verificationModel\`, and \`synthesisModel\` overrides.
+- \`deep-research\` is the bundled provider-agnostic research workflow. It requires a non-empty string \`query\`, defaults to 5 planned questions and 4 verification claims per question, and rejects out-of-range depth instead of silently truncating coverage.
+- \`deep-research\` supports a default \`args.model\` inherited by every phase plus \`plannerModel\`, \`researchModel\`, \`verificationModel\`, and \`synthesisModel\` overrides. Omit model args to inherit the session/default routing.
 - Copy workflow model values exactly from the effective model catalog in the system prompt. Do not invent provider names or model IDs; disconnected, disabled, and disallowed targets are intentionally omitted.
 - Run an inline workflow: \`{ script: "...", args: ... }\`. Omitting \`action\` defaults to \`run\` for compatibility.
 - Save a reusable workflow: \`{ action: "save", name: "my-workflow", scope: "project" | "global", script: "..." }\`.

@@ -923,6 +923,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
             item.id === clientMessageId ||
             (item.kind === "message" &&
               item.role === "user" &&
+              "clientMessageId" in item &&
               item.clientMessageId === clientMessageId),
         )
       ) {

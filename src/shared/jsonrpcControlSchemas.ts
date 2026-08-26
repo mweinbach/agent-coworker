@@ -1967,6 +1967,7 @@ const sessionDefaultsApplyRequestSchema = z
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),
@@ -2181,6 +2182,37 @@ export const jsonRpcControlResultSchemas = {
   ),
   "cowork/session/defaults/apply": sessionEventEnvelope(sessionConfigEventSchema),
 } as const;
+
+type JsonRpcControlMethod = keyof typeof jsonRpcControlRequestSchemas &
+  keyof typeof jsonRpcControlResultSchemas;
+
+type PickedControlRequestSchemas<Methods extends readonly JsonRpcControlMethod[]> = {
+  readonly [Method in Methods[number]]: (typeof jsonRpcControlRequestSchemas)[Method];
+};
+
+type PickedControlResultSchemas<Methods extends readonly JsonRpcControlMethod[]> = {
+  readonly [Method in Methods[number]]: (typeof jsonRpcControlResultSchemas)[Method];
+};
+
+export const pickJsonRpcControlSchemas = <const Methods extends readonly JsonRpcControlMethod[]>(
+  methods: Methods,
+): {
+  readonly requests: PickedControlRequestSchemas<Methods>;
+  readonly results: PickedControlResultSchemas<Methods>;
+} => {
+  const requests: Partial<Record<JsonRpcControlMethod, z.ZodTypeAny>> = {};
+  const results: Partial<Record<JsonRpcControlMethod, z.ZodTypeAny>> = {};
+
+  for (const method of methods) {
+    requests[method] = jsonRpcControlRequestSchemas[method];
+    results[method] = jsonRpcControlResultSchemas[method];
+  }
+
+  return {
+    requests: requests as PickedControlRequestSchemas<Methods>,
+    results: results as PickedControlResultSchemas<Methods>,
+  };
+};
 
 export type CodexAppServerInstallStatus = z.infer<typeof codexAppServerInstallStatusSchema>;
 export type LibreOfficeRuntimeDiagnostic = z.infer<typeof libreOfficeRuntimeDiagnosticSchema>;

@@ -28,11 +28,6 @@ import { jsonRpcMiscNotificationSchemas } from "./schema.misc";
 import { jsonRpcMcpRequestSchemas, jsonRpcMcpResultSchemas } from "./schema.mcp";
 import { jsonRpcPluginsRequestSchemas, jsonRpcPluginsResultSchemas } from "./schema.plugins";
 import { jsonRpcProviderRequestSchemas, jsonRpcProviderResultSchemas } from "./schema.provider";
-import {
-  jsonRpcResearchNotificationSchemas,
-  jsonRpcResearchRequestSchemas,
-  jsonRpcResearchResultSchemas,
-} from "./schema.research";
 import { jsonRpcRuntimeRequestSchemas, jsonRpcRuntimeResultSchemas } from "./schema.runtime";
 import {
   jsonRpcSessionNotificationSchemas,
@@ -76,7 +71,6 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcCreationRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
   ...jsonRpcRuntimeRequestSchemas,
-  ...jsonRpcResearchRequestSchemas,
   ...jsonRpcMcpRequestSchemas,
   ...jsonRpcPluginsRequestSchemas,
   ...jsonRpcSkillsRequestSchemas,
@@ -95,7 +89,6 @@ export const jsonRpcNotificationSchemas = {
   ...jsonRpcSessionNotificationSchemas,
   ...jsonRpcAgentNotificationSchemas,
   ...jsonRpcAgentProfilesNotificationSchemas,
-  ...jsonRpcResearchNotificationSchemas,
   ...jsonRpcMiscNotificationSchemas,
   ...jsonRpcTaskNotificationSchemas,
   ...jsonRpcWorkspaceNotificationSchemas,
@@ -116,7 +109,6 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcCreationResultSchemas,
   ...jsonRpcProviderResultSchemas,
   ...jsonRpcRuntimeResultSchemas,
-  ...jsonRpcResearchResultSchemas,
   ...jsonRpcMcpResultSchemas,
   ...jsonRpcPluginsResultSchemas,
   ...jsonRpcSkillsResultSchemas,

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import os from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -29,7 +29,8 @@ function toPosix(p: string): string {
  * empty for in-repo test files, but a shell file redirect is reliable.
  */
 function packedFilePaths(): string[] {
-  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "cowork-pack-"));
+  const tmpDir = mkdtempSync(path.join(scratchRoots()[0] ?? "/tmp", "cowork-pack-"));
+  const npmCacheDir = path.join(tmpDir, "npm-cache");
   const outFile = path.join(tmpDir, "pack.json");
   const errFile = path.join(tmpDir, "pack.err");
   const readQuietly = (file: string): string => {
@@ -40,10 +41,16 @@ function packedFilePaths(): string[] {
     }
   };
   try {
+    mkdirSync(npmCacheDir, { recursive: true });
     const result = spawnSync(
       "sh",
       ["-c", `npm pack --dry-run --json > '${outFile}' 2> '${errFile}'`],
-      { cwd: repoRoot, encoding: "utf8", timeout: 120_000 },
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { ...process.env, npm_config_cache: npmCacheDir },
+        timeout: 120_000,
+      },
     );
     const stderr = readQuietly(errFile).trim();
     if (result.error) {

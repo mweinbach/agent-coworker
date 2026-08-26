@@ -1,5 +1,4 @@
 import {
-  BookOpenIcon,
   ClipboardPlusIcon,
   FolderIcon,
   HistoryIcon,
@@ -10,7 +9,6 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
-import { isResearchAvailable } from "../app/researchAvailability";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
 import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
@@ -64,7 +62,6 @@ export const CommandPalette = memo(function CommandPalette({
   const developerMode = useAppStore((s) => s.developerMode);
   const remoteAccessAvailable = useAppStore((s) => s.desktopFeatureFlags.remoteAccess === true);
   const tasksEnabled = useAppStore((s) => s.desktopFeatureFlags.tasks === true);
-  const providerConnected = useAppStore((s) => s.providerConnected);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
 
   const selectThread = useAppStore((s) => s.selectThread);
@@ -72,7 +69,6 @@ export const CommandPalette = memo(function CommandPalette({
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
   const openNewTask = useAppStore((s) => s.openNewTask);
-  const openResearch = useAppStore((s) => s.openResearch);
   const cancelThread = useAppStore((s) => s.cancelThread);
 
   // Recent ordinary chat threads, newest first.
@@ -121,7 +117,6 @@ export const CommandPalette = memo(function CommandPalette({
       ),
     [remoteAccessAvailable, developerMode],
   );
-  const researchAvailable = isResearchAvailable(providerConnected);
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -167,11 +162,6 @@ export const CommandPalette = memo(function CommandPalette({
     close();
   }, [openNewTask, close]);
 
-  const handleResearchClick = useCallback(() => {
-    void openResearch();
-    close();
-  }, [openResearch, close]);
-
   const handleStopTurnClick = useCallback(() => {
     if (selectedThreadId && selectedThreadBusy) {
       cancelThread(selectedThreadId);
@@ -200,13 +190,6 @@ export const CommandPalette = memo(function CommandPalette({
             <CommandItem onSelect={handleNewTaskClick} value="new task">
               <ClipboardPlusIcon />
               <span>New task</span>
-            </CommandItem>
-          ) : null}
-          {researchAvailable ? (
-            <CommandItem onSelect={handleResearchClick} value="research open">
-              <BookOpenIcon />
-              <span>Research</span>
-              <CommandKbd keys={[MOD, SHIFT, "R"]} />
             </CommandItem>
           ) : null}
           {selectedThreadBusy ? (

@@ -9,6 +9,7 @@ import {
   deleteTranscript,
   getDesktopFeatureFlags,
   getUpdateState,
+  getWorkspaceServerStatus,
   isDesktopDemoMode,
   isPackagedDesktopApp,
   loadState,
@@ -29,7 +30,12 @@ import {
   revokeComposerDraftAttachmentPreviews,
   sanitizePersistedComposerDrafts,
 } from "../composerDrafts";
-import { hydrateCreationDrafts, mergeCreationDraftsByRevision } from "../creationDrafts";
+import {
+  hydrateCreationDrafts,
+  mergeCreationDraftsByRevision,
+  migrateLegacyResearchCreationDraft,
+} from "../creationDrafts";
+import { loadDesktopStateCacheRaw } from "../localStateCache";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   deriveConnectedProviders,
@@ -44,12 +50,15 @@ import {
   type AppStoreActions,
   type AppStoreDataState,
   defaultThreadRuntime,
+  defaultWorkspaceRuntime,
+  ensureControlSocket,
   isProviderName,
   normalizeThreadTitleSource,
   nowIso,
   persist,
   persistNow,
   RUNTIME,
+  requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
   syncDesktopStateCache,
@@ -136,11 +145,9 @@ const normalizedViewSchema = z.preprocess(
   (value) => {
     // The standalone skills/plugins view moved into Settings > Tool Access.
     if (value === "skills") return "settings";
-    return value === "chat" || value === "task" || value === "research" || value === "settings"
-      ? value
-      : "chat";
+    return value === "chat" || value === "task" || value === "settings" ? value : "chat";
   },
-  z.enum(["chat", "task", "research", "settings"]),
+  z.enum(["chat", "task", "settings"]),
 );
 
 function normalizeSettingsPageId(
@@ -797,6 +804,16 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       desktopFeatureFlags,
       cached.ui as CachedDesktopUiState | undefined,
     );
+    const trustedSelectedWorkspaceId =
+      persistedUiSchema.parse(cached.ui ?? {}).selectedWorkspaceId ?? null;
+    const migratedComposerDrafts = migrateLegacyResearchCreationDraft(
+      state.composerDrafts,
+      state.creationDrafts,
+      {
+        selectedWorkspaceId: trustedSelectedWorkspaceId,
+        workspaces: state.workspaces,
+      },
+    );
     const connectedProviders = deriveConnectedProviders(
       state.providerState as PersistedProviderState | undefined,
     );
@@ -815,7 +832,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       composerAttachmentIngestionCountByKey: {},
       composerSubmissionsByKey: {},
       composerDraftsByKey: buildRestoredComposerDrafts(
-        state.composerDrafts,
+        migratedComposerDrafts,
         state.workspaces,
         state.threads,
         {
@@ -895,7 +912,105 @@ export function createBootstrapActions(
   | "setMessageBarHeight"
 > {
   const bootstrapCoordinator = createBootstrapCoordinator();
+  const deletedArchivedSessionIds = new Set<string>();
   const deletedArchivedTranscriptIds = new Set<string>();
+
+  async function ensureArchivedSessionDeletionSocket(
+    workspaceId: string,
+    isCurrent: BootstrapRunContext["isCurrent"],
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (!isCurrent() || signal.aborted) return false;
+    const runtime = get().workspaceRuntimeById[workspaceId];
+    const existingSocket = RUNTIME.jsonRpcSockets.get(workspaceId) as
+      | { __coworkOpened?: boolean }
+      | undefined;
+    if (runtime?.serverUrl && existingSocket?.__coworkOpened === true) {
+      return true;
+    }
+
+    const status = await getWorkspaceServerStatus({ workspaceId }).catch(() => null);
+    if (!isCurrent() || signal.aborted || !status?.running || !status.url) {
+      return false;
+    }
+
+    set((state) => ({
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          ...state.workspaceRuntimeById[workspaceId],
+          serverUrl: status.url,
+          starting: false,
+          startupProgress: null,
+          error: null,
+        },
+      },
+    }));
+    return Boolean(ensureControlSocket(get, set, workspaceId));
+  }
+
+  async function deleteExpiredArchivedThreadHistory(
+    thread: ThreadRecord,
+    isCurrent: BootstrapRunContext["isCurrent"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const targetSessionId =
+      typeof thread.sessionId === "string" && thread.sessionId.trim().length > 0
+        ? thread.sessionId
+        : null;
+    if (targetSessionId && !deletedArchivedSessionIds.has(targetSessionId)) {
+      const controlSocketAvailable = await ensureArchivedSessionDeletionSocket(
+        thread.workspaceId,
+        isCurrent,
+        signal,
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      if (controlSocketAvailable) {
+        const workspacePath = get().workspaces.find(
+          (workspace) => workspace.id === thread.workspaceId,
+        )?.path;
+        const deleted = await requestJsonRpcControlEvent(
+          get,
+          set,
+          thread.workspaceId,
+          "cowork/session/delete",
+          {
+            cwd: workspacePath,
+            targetSessionId,
+          },
+        );
+        if (deleted) {
+          deletedArchivedSessionIds.add(targetSessionId);
+        }
+      }
+      if (!isCurrent()) {
+        return;
+      }
+    }
+
+    const transcriptIds = [
+      thread.legacyTranscriptId ?? null,
+      thread.sessionId ?? null,
+      thread.id,
+    ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+    for (const transcriptId of new Set(transcriptIds)) {
+      if (deletedArchivedTranscriptIds.has(transcriptId)) {
+        continue;
+      }
+      try {
+        await deleteTranscript({ threadId: transcriptId });
+        deletedArchivedTranscriptIds.add(transcriptId);
+      } catch {
+        // ignore
+      }
+      if (!isCurrent()) {
+        return;
+      }
+    }
+  }
 
   async function completeStartupSelection(
     ui: ReturnType<typeof buildResolvedDesktopUiState>,
@@ -1072,6 +1187,7 @@ export function createBootstrapActions(
           const resolvedDesktopSettings = normalizeDesktopSettings(state.desktopSettings);
           const autoDeleteDays = resolvedDesktopSettings.archivedChatsAutoDeleteDays;
           let finalThreads = state.threads;
+          const expiredArchivedThreads: typeof state.threads = [];
 
           if (autoDeleteDays && autoDeleteDays > 0) {
             const nowMs = Date.now();
@@ -1081,25 +1197,7 @@ export function createBootstrapActions(
               if (thread.archived && thread.archivedAt) {
                 const archivedTime = Date.parse(thread.archivedAt);
                 if (Number.isFinite(archivedTime) && nowMs - archivedTime > thresholdMs) {
-                  const transcriptIds = [
-                    thread.legacyTranscriptId ?? null,
-                    thread.sessionId ?? null,
-                    thread.id,
-                  ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-                  for (const transcriptId of new Set(transcriptIds)) {
-                    if (deletedArchivedTranscriptIds.has(transcriptId)) {
-                      continue;
-                    }
-                    try {
-                      await deleteTranscript({ threadId: transcriptId });
-                      deletedArchivedTranscriptIds.add(transcriptId);
-                    } catch {
-                      // ignore
-                    }
-                    if (!isCurrent()) {
-                      return;
-                    }
-                  }
+                  expiredArchivedThreads.push(thread);
                   continue;
                 }
               }
@@ -1113,8 +1211,21 @@ export function createBootstrapActions(
           }
           set({ bootstrapStage: "reconnecting-sessions" });
           const currentComposerDrafts = get().composerDraftsByKey;
-          const restoredComposerDrafts = buildRestoredComposerDrafts(
+          const cachedUi = extractCachedDesktopState(loadDesktopStateCacheRaw())?.ui;
+          const cachedWorkspaceId = persistedUiSchema.parse(cachedUi ?? {}).selectedWorkspaceId;
+          const trustedSelectedWorkspaceId =
+            cachedWorkspaceId === get().selectedWorkspaceId ? (cachedWorkspaceId ?? null) : null;
+          const migratedComposerDrafts = migrateLegacyResearchCreationDraft(
             state.composerDrafts,
+            state.creationDrafts,
+            {
+              selectedWorkspaceId: trustedSelectedWorkspaceId,
+              workspaces: state.workspaces,
+              existingComposerDrafts: currentComposerDrafts,
+            },
+          );
+          const restoredComposerDrafts = buildRestoredComposerDrafts(
+            migratedComposerDrafts,
             state.workspaces,
             finalThreads,
             {
@@ -1130,21 +1241,9 @@ export function createBootstrapActions(
           const persistedCreationDrafts = hydrateCreationDrafts(state.creationDrafts);
           const currentState = get();
           const creationDrafts = mergeCreationDraftsByRevision(persistedCreationDrafts, {
-            researchCreationDraft: currentState.researchCreationDraft,
-            researchCreationError: currentState.researchCreationError,
             taskCreationDraft: currentState.taskCreationDraft,
             taskCreationError: currentState.taskCreationError,
           });
-          const retainedResearchDraft = creationDrafts.researchCreationDraft;
-          const discardedResearchDrafts = new Set([
-            persistedCreationDrafts.researchCreationDraft,
-            currentState.researchCreationDraft,
-          ]);
-          revokeComposerDraftAttachmentPreviews(
-            [...discardedResearchDrafts]
-              .filter((draft) => draft !== retainedResearchDraft)
-              .flatMap((draft) => draft.attachments),
-          );
           set({
             workspaces: state.workspaces,
             threads: finalThreads,
@@ -1187,6 +1286,13 @@ export function createBootstrapActions(
             canvasSidebarWidth: ui.canvasSidebarWidth,
             messageBarHeight: ui.messageBarHeight,
           });
+
+          for (const thread of expiredArchivedThreads) {
+            await deleteExpiredArchivedThreadHistory(thread, isCurrent, signal);
+            if (!isCurrent()) {
+              return;
+            }
+          }
 
           // Persist backfilled onboarding status if we changed it.
           if (startupOnboarding.shouldPersist) {

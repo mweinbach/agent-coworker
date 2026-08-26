@@ -7,6 +7,7 @@ import {
   pluginManifestPathsForPluginRoot,
   readPluginManifest,
 } from "../plugins/manifest";
+import { parseSkillDocument } from "../skills/metadata";
 import { getSkillCatalog } from "../skills/operations";
 import type { AgentConfig } from "../types";
 import type { ExternalHome, ImportSource } from "./externalHomes";
@@ -238,18 +239,6 @@ export async function listImportablePlugins(opts: {
   return dedupeImportable(items);
 }
 
-const skillFrontMatterSchema = z
-  .object({
-    name: z.string().trim().min(1).max(64),
-    description: z.string().trim().min(1).max(1024),
-  })
-  .passthrough();
-
-function splitFrontMatter(raw: string): string | null {
-  const match = raw.match(/^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  return match?.[1] ?? null;
-}
-
 async function buildSkillItem(
   skillRoot: string,
   source: ImportSource,
@@ -273,20 +262,9 @@ async function buildSkillItem(
     alreadyInstalledWorkspace: false,
   };
 
-  const frontMatterRaw = splitFrontMatter(raw);
-  let parsedName: string | null = null;
-  let parsedDescription = "";
-  if (frontMatterRaw) {
-    try {
-      const parsed = skillFrontMatterSchema.safeParse(Bun.YAML.parse(frontMatterRaw));
-      if (parsed.success) {
-        parsedName = parsed.data.name;
-        parsedDescription = parsed.data.description;
-      }
-    } catch {
-      // fall through to diagnostic
-    }
-  }
+  const parsed = parseSkillDocument(raw, { requireKebabName: false });
+  const parsedName = parsed?.frontMatter.name ?? null;
+  const parsedDescription = parsed?.frontMatter.description ?? "";
 
   if (!parsedName) {
     return {

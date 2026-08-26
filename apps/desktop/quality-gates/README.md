@@ -50,8 +50,7 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
 - Disconnect/reconnect, drafts, tool-failure history, and attachment-only transcript semantics.
 - File Explorer, Markdown preview, Canvas popout, and all three desktop resizers.
 - Settings persistence through the production preload/state bridge.
-- Active Task blocking questions, artifact review, cancellation controls, and Research
-  empty/completed/follow-up states.
+- Active Task blocking questions, artifact review, and cancellation controls.
 - Mention geometry at 100% and 125% zoom.
 - Approved screenshots and Axe/focus/clipping checks for the complete 16-case Cartesian matrix:
   640, 800, 1024, and 1240 pixels, each in light, dark, reduced-motion, and forced-colors modes.

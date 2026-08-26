@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  buildJsonRpcJsonSchemaArtifact,
-  buildJsonRpcTypeScriptArtifact,
-} from "../../../src/server/jsonrpc/codegen";
+import { buildJsonRpcJsonSchemaArtifact } from "../../../src/server/jsonrpc/codegen";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 
@@ -15,11 +12,6 @@ async function main() {
   await fs.writeFile(
     path.join(outputDir, "websocket-jsonrpc.schema.json"),
     buildJsonRpcJsonSchemaArtifact(),
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(outputDir, "websocket-jsonrpc.d.ts"),
-    buildJsonRpcTypeScriptArtifact(),
     "utf-8",
   );
 }

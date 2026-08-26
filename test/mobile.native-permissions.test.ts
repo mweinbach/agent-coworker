@@ -5,9 +5,62 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const require = createRequire(import.meta.url);
+const androidManifestPath = new URL(
+  "../apps/mobile/android/app/src/main/AndroidManifest.xml",
+  import.meta.url,
+);
+const iosInfoPlistPath = new URL("../apps/mobile/ios/CoworkMobile/Info.plist", import.meta.url);
+const iosProjectPath = new URL(
+  "../apps/mobile/ios/CoworkMobile.xcodeproj/project.pbxproj",
+  import.meta.url,
+);
 const mobileAppJsonPath = new URL("../apps/mobile/app.json", import.meta.url);
 const minimalPermissionsPlugin = require("../apps/mobile/plugins/with-minimal-native-permissions.js");
 const { __internal } = minimalPermissionsPlugin;
+
+function readAndroidPermissionNames(manifestSource: string): string[] {
+  return Array.from(
+    manifestSource.matchAll(/<uses-permission\b[^>]*\bandroid:name="([^"]+)"/g),
+    (match) => match[1],
+  );
+}
+
+function readAndroidApplicationAttributes(manifestSource: string): Record<string, string> {
+  const applicationMatch = manifestSource.match(/<application\b([^>]*)>/);
+  expect(applicationMatch).not.toBeNull();
+
+  return Object.fromEntries(
+    Array.from(applicationMatch?.[1].matchAll(/\b([\w:]+)="([^"]*)"/g) ?? [], (match) => [
+      match[1],
+      match[2],
+    ]),
+  );
+}
+
+function hasPlistKey(plistSource: string, key: string): boolean {
+  return new RegExp(`<key>${key}</key>`).test(plistSource);
+}
+
+function readPlistString(plistSource: string, key: string): string | undefined {
+  const match = plistSource.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`));
+  return match?.[1];
+}
+
+function readPlistStringArray(plistSource: string, key: string): string[] | undefined {
+  const matches = Array.from(
+    plistSource.matchAll(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`, "g")),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  return matches.flatMap((match) =>
+    Array.from(match[1].matchAll(/<string>([^<]*)<\/string>/g), (itemMatch) => itemMatch[1]),
+  );
+}
+
+function hasPlistTrue(plistSource: string, key: string): boolean {
+  return new RegExp(`<key>${key}</key>\\s*<true\\s*/>`).test(plistSource);
+}
 
 describe("mobile native permissions", () => {
   test("can load internal helpers without mobile Expo dependencies installed", () => {
@@ -76,7 +129,7 @@ describe("mobile native permissions", () => {
     expect(manifest.application[0].$["android:fullBackupContent"]).toBeUndefined();
   });
 
-  test("removes generated iOS microphone, Face ID, and Expo Bonjour permission strings", () => {
+  test("removes generated iOS microphone and Face ID while preserving dev-client Bonjour", () => {
     const infoPlist = {
       NSCameraUsageDescription: "camera",
       NSMicrophoneUsageDescription: "microphone",
@@ -91,6 +144,54 @@ describe("mobile native permissions", () => {
     expect(infoPlist).toEqual({
       NSCameraUsageDescription: "camera",
       NSLocalNetworkUsageDescription: __internal.LOCAL_NETWORK_USAGE_DESCRIPTION,
+      NSBonjourServices: [__internal.EXPO_DEV_CLIENT_BONJOUR_SERVICE],
     });
+  });
+
+  test("keeps committed Android native permissions aligned with the minimal plugin", () => {
+    const manifestSource = readFileSync(androidManifestPath, "utf8");
+
+    expect(readAndroidPermissionNames(manifestSource)).toEqual(
+      Array.from(__internal.ANDROID_ALLOWED_PERMISSIONS),
+    );
+    const applicationAttributes = readAndroidApplicationAttributes(manifestSource);
+
+    expect(applicationAttributes).toMatchObject({
+      "android:allowBackup": "false",
+    });
+    expect(applicationAttributes["android:dataExtractionRules"]).toBeUndefined();
+    expect(applicationAttributes["android:fullBackupContent"]).toBeUndefined();
+  });
+
+  test("keeps committed iOS native permissions aligned with the minimal plugin", () => {
+    const appConfig = JSON.parse(readFileSync(mobileAppJsonPath, "utf8"));
+    const infoPlistSource = readFileSync(iosInfoPlistPath, "utf8");
+    const bonjourServices = readPlistStringArray(infoPlistSource, "NSBonjourServices") ?? [];
+    const urlSchemes = readPlistStringArray(infoPlistSource, "CFBundleURLSchemes") ?? [];
+
+    expect(readPlistString(infoPlistSource, "NSCameraUsageDescription")).toBe(
+      appConfig.expo.ios.infoPlist.NSCameraUsageDescription,
+    );
+    expect(readPlistString(infoPlistSource, "NSLocalNetworkUsageDescription")).toBe(
+      __internal.LOCAL_NETWORK_USAGE_DESCRIPTION,
+    );
+    expect(hasPlistTrue(infoPlistSource, "NSAllowsLocalNetworking")).toBe(true);
+    expect(urlSchemes).toEqual(
+      expect.arrayContaining(["cowork-mobile", "co.weinbach.cowork.mobile", "exp+cowork-mobile"]),
+    );
+    expect(bonjourServices).toEqual([__internal.EXPO_DEV_CLIENT_BONJOUR_SERVICE]);
+    expect(hasPlistKey(infoPlistSource, "NSFaceIDUsageDescription")).toBe(false);
+    expect(hasPlistKey(infoPlistSource, "NSMicrophoneUsageDescription")).toBe(false);
+  });
+
+  test("strips Expo Bonjour from non-Debug iOS builds", () => {
+    const projectSource = readFileSync(iosProjectPath, "utf8");
+
+    expect(projectSource).toContain("[Expo Dev Launcher] Strip Expo Bonjour for Release");
+    expect(projectSource).toContain("*Debug*) exit 0");
+    expect(projectSource).toContain("PlistBuddy");
+    expect(projectSource).toContain("NSBonjourServices");
+    expect(projectSource).toContain(__internal.EXPO_DEV_CLIENT_BONJOUR_SERVICE);
+    expect(projectSource).toContain("INFOPLIST_FILE = CoworkMobile/Info.plist");
   });
 });

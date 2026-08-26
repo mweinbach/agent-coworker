@@ -4,10 +4,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from "expo-router/react-naviga
 import { useColorScheme, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import "../global.css";
-
 import { MobileAppProvider } from "@/providers/MobileAppProvider";
-import { SyncCssColorScheme } from "@/theme/sync-css-color-scheme";
 import { resolveColorScheme, useAppTheme } from "@/theme/use-app-theme";
 
 export default function RootLayout() {
@@ -29,7 +26,6 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <SyncCssColorScheme />
       <ThemeProvider
         value={{
           ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme),

@@ -9,12 +9,16 @@ function envelope(value: unknown): string {
   return `<workflow_result>${JSON.stringify(value)}</workflow_result>`;
 }
 
+async function loadDeepResearchScript(): Promise<string> {
+  return await fs.readFile(
+    path.resolve(import.meta.dir, "../../workflows/deep-research.ts"),
+    "utf8",
+  );
+}
+
 describe("bundled deep-research workflow", () => {
   test("plans, researches, independently verifies, and synthesizes", async () => {
-    const script = await fs.readFile(
-      path.resolve(import.meta.dir, "../../workflows/deep-research.ts"),
-      "utf8",
-    );
+    const script = await loadDeepResearchScript();
     const workspaceDir = await workflowTmpDir();
     let synthesisPrompt = "";
     let firstVerificationPrompt = "";
@@ -158,6 +162,16 @@ describe("bundled deep-research workflow", () => {
       expect.objectContaining({
         status: "complete",
         title: "Research Report",
+        settings: {
+          maxQuestions: 2,
+          maxClaimsPerQuestion: 2,
+          models: {
+            planner: "provider:planner-model",
+            research: "provider:research-model",
+            verification: "provider:verification-model",
+            synthesis: "provider:synthesis-model",
+          },
+        },
         coverage: {
           plannedQuestions: 2,
           completedResearchShards: 2,
@@ -199,5 +213,292 @@ describe("bundled deep-research workflow", () => {
     expect(result.reportMarkdown).toContain("https://example.test/a4");
     expect(result.researchReports[0]?.reportMarkdown).toBe(detailedReportA);
     expect(result.claimAssessments[0]?.originalEvidence).toBe(detailedClaimEvidenceA);
+  });
+
+  test.each([2, 4])(
+    "repairs a planner response with %i questions when exactly three were requested",
+    async (initialQuestionCount) => {
+      const script = await loadDeepResearchScript();
+      const workspaceDir = await workflowTmpDir();
+      let plannerRepairCount = 0;
+      const control = makeFakeControl({
+        reply: async (nth, message) => {
+          if (nth === 1) {
+            const repairing = message.includes("did not validate");
+            if (repairing) plannerRepairCount += 1;
+            const questionCount = repairing ? 3 : initialQuestionCount;
+            return envelope({
+              questions: Array.from({ length: questionCount }, (_, index) => ({
+                title: `Question ${index + 1}`,
+                focus: `Investigate ${index + 1}`,
+              })),
+              planningLimitations: [],
+            });
+          }
+          if (message.includes("Assigned question:")) {
+            return envelope({
+              claims: [],
+              reportMarkdown: `## Research report ${nth - 1}`,
+              sources: [{ title: `Source ${nth - 1}`, locator: `https://example.test/${nth - 1}` }],
+              limitations: [],
+            });
+          }
+          return envelope({
+            title: "Question Budget Report",
+            executiveSummary: "All requested research questions were completed.",
+            reportMarkdown: "# Question Budget Report",
+          });
+        },
+      });
+
+      const outcome = await runWorkflow({
+        ctx: makeWorkflowCtx(workspaceDir),
+        control,
+        script,
+        args: { query: "Test exact question budget", maxQuestions: 3 },
+      });
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      expect(plannerRepairCount).toBe(1);
+      expect(control.spawnCount()).toBe(5);
+      expect(
+        control.messages().filter((message) => message.includes("Assigned question:")),
+      ).toHaveLength(3);
+      expect(outcome.summary.result).toEqual(
+        expect.objectContaining({
+          coverage: expect.objectContaining({
+            plannedQuestions: 3,
+            completedResearchShards: 3,
+            candidateClaims: 0,
+          }),
+        }),
+      );
+    },
+  );
+
+  test("repairs research responses that exceed the requested per-question claim budget", async () => {
+    const script = await loadDeepResearchScript();
+    const workspaceDir = await workflowTmpDir();
+    const repairedResearchAgents = new Set<number>();
+    const control = makeFakeControl({
+      reply: async (nth, message) => {
+        if (nth === 1) {
+          return envelope({
+            questions: [
+              { title: "Question A", focus: "Investigate A" },
+              { title: "Question B", focus: "Investigate B" },
+            ],
+            planningLimitations: [],
+          });
+        }
+        if (nth === 2 || nth === 3) {
+          const suffix = nth === 2 ? "A" : "B";
+          const repairing = message.includes("did not validate");
+          if (repairing) repairedResearchAgents.add(nth);
+          const claimCount = repairing ? 1 : 2;
+          return envelope({
+            claims: Array.from({ length: claimCount }, (_, index) => ({
+              statement: `Claim ${suffix}${index + 1}`,
+              evidence: `Evidence ${suffix}${index + 1}`,
+              sources: [
+                {
+                  title: `Source ${suffix}${index + 1}`,
+                  locator: `https://example.test/${suffix}${index + 1}`,
+                },
+              ],
+              uncertainty: "",
+            })),
+            reportMarkdown: `## Complete ${suffix} report with additional unindexed findings`,
+            sources: [{ title: `Source ${suffix}`, locator: `https://example.test/${suffix}` }],
+            limitations: [],
+          });
+        }
+        if (message.startsWith("Independently and adversarially verify")) {
+          const candidateIndex = message.includes("Claim A1") ? 0 : 1;
+          const suffix = candidateIndex === 0 ? "A" : "B";
+          return envelope({
+            claims: [
+              {
+                candidateIndex,
+                verified: true,
+                reason: `Verified ${suffix}1`,
+                evidence: `Independent evidence ${suffix}1`,
+                sources: [
+                  {
+                    title: `Independent ${suffix}1`,
+                    locator: `https://example.test/verify-${suffix}1`,
+                  },
+                ],
+                correctedStatement: `Claim ${suffix}1`,
+              },
+            ],
+            limitations: [],
+          });
+        }
+        return envelope({
+          title: "Claim Budget Report",
+          executiveSummary: "Only budgeted claims were independently verified.",
+          reportMarkdown: "# Claim Budget Report",
+        });
+      },
+    });
+
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(workspaceDir),
+      control,
+      script,
+      args: {
+        query: "Test per-question claim budget",
+        maxQuestions: 2,
+        maxClaimsPerQuestion: 1,
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(repairedResearchAgents).toEqual(new Set([2, 3]));
+    expect(control.spawnCount()).toBe(6);
+    expect(outcome.summary.result).toEqual(
+      expect.objectContaining({
+        coverage: expect.objectContaining({
+          plannedQuestions: 2,
+          completedResearchShards: 2,
+          candidateClaims: 2,
+          verifiedClaims: 2,
+          droppedClaims: 0,
+        }),
+        claimAssessments: [
+          expect.objectContaining({ originalStatement: "Claim A1" }),
+          expect.objectContaining({ originalStatement: "Claim B1" }),
+        ],
+        researchReports: [
+          expect.objectContaining({
+            reportMarkdown: "## Complete A report with additional unindexed findings",
+          }),
+          expect.objectContaining({
+            reportMarkdown: "## Complete B report with additional unindexed findings",
+          }),
+        ],
+      }),
+    );
+  });
+
+  test("inherits args.model across phases unless a phase override is supplied", async () => {
+    const script = await loadDeepResearchScript();
+    const workspaceDir = await workflowTmpDir();
+    const control = makeFakeControl({
+      reply: async (_nth, message) => {
+        if (message.startsWith("Plan a deep research program")) {
+          return envelope({
+            questions: [
+              { title: "Question A", focus: "Investigate A" },
+              { title: "Question B", focus: "Investigate B" },
+            ],
+            planningLimitations: [],
+          });
+        }
+        if (message.includes("Assigned question:")) {
+          const suffix = message.includes("Question A") ? "A" : "B";
+          return envelope({
+            claims: [
+              {
+                statement: `Claim ${suffix}`,
+                evidence: `Evidence ${suffix}`,
+                sources: [{ title: `Source ${suffix}`, locator: `https://example.test/${suffix}` }],
+                uncertainty: "",
+              },
+            ],
+            reportMarkdown: `## Report ${suffix}`,
+            sources: [{ title: `Source ${suffix}`, locator: `https://example.test/${suffix}` }],
+            limitations: [],
+          });
+        }
+        if (message.startsWith("Independently and adversarially verify")) {
+          const candidateIndex = message.includes("Claim A") ? 0 : 1;
+          const suffix = candidateIndex === 0 ? "A" : "B";
+          return envelope({
+            claims: [
+              {
+                candidateIndex,
+                verified: true,
+                reason: `Verified ${suffix}`,
+                evidence: `Independent evidence ${suffix}`,
+                sources: [
+                  {
+                    title: `Independent ${suffix}`,
+                    locator: `https://example.test/verify-${suffix}`,
+                  },
+                ],
+                correctedStatement: `Claim ${suffix}`,
+              },
+            ],
+            limitations: [],
+          });
+        }
+        return envelope({
+          title: "Inherited Model Report",
+          executiveSummary: "All phases used inherited model settings.",
+          reportMarkdown: "# Inherited Model Report",
+        });
+      },
+    });
+
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(workspaceDir),
+      control,
+      script,
+      args: {
+        query: "Test inherited model",
+        maxQuestions: 2,
+        maxClaimsPerQuestion: 1,
+        model: "provider:shared-model",
+        verificationModel: "provider:verifier-model",
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(control.models()).toEqual([
+      "provider:shared-model",
+      "provider:shared-model",
+      "provider:shared-model",
+      "provider:verifier-model",
+      "provider:verifier-model",
+      "provider:shared-model",
+    ]);
+    expect(outcome.summary.logs[0]).toContain(
+      "models planner=provider:shared-model, research=provider:shared-model, verification=provider:verifier-model, synthesis=provider:shared-model",
+    );
+    expect(outcome.summary.result).toEqual(
+      expect.objectContaining({
+        settings: {
+          maxQuestions: 2,
+          maxClaimsPerQuestion: 1,
+          models: {
+            planner: "provider:shared-model",
+            research: "provider:shared-model",
+            verification: "provider:verifier-model",
+            synthesis: "provider:shared-model",
+          },
+        },
+      }),
+    );
+  });
+
+  test("rejects out-of-range depth arguments before spawning agents", async () => {
+    const script = await loadDeepResearchScript();
+    const workspaceDir = await workflowTmpDir();
+    const control = makeFakeControl();
+
+    await expect(
+      runWorkflow({
+        ctx: makeWorkflowCtx(workspaceDir),
+        control,
+        script,
+        args: { query: "Too broad", maxQuestions: 100 },
+      }),
+    ).rejects.toThrow("deep-research invalid args: maxQuestions must be between 2 and 6");
+    expect(control.spawnCount()).toBe(0);
   });
 });

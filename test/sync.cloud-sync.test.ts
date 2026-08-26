@@ -315,7 +315,7 @@ describe("cloud sync service and custom provider", () => {
     const pushed: CloudSyncPatch[] = [];
     const provider: CloudSyncProvider = {
       readRemoteState: async () => null,
-      pushPatch: async (_scope, pushedPatch) => {
+      pushPatch: async (pushedPatch) => {
         pushed.push(pushedPatch);
         return {};
       },
@@ -359,7 +359,7 @@ describe("cloud sync service and custom provider", () => {
     });
     const provider: CloudSyncProvider = {
       readRemoteState: async () => null,
-      pushPatch: async (_scope, pushedPatch) => {
+      pushPatch: async (pushedPatch) => {
         pushed.push(pushedPatch);
         markPushStarted();
         await pushRelease;
@@ -405,10 +405,61 @@ describe("cloud sync service and custom provider", () => {
     expect(await queue.read()).toEqual([]);
   });
 
+  test("drops unsupported queued future-scope patches instead of pushing them", async () => {
+    const pushed: CloudSyncPatch[] = [];
+    const provider: CloudSyncProvider = {
+      readRemoteState: async () => null,
+      pushPatch: async (pushedPatch) => {
+        pushed.push(pushedPatch);
+        return {};
+      },
+      pullSince: async () => ({ changes: [] }),
+      healthCheck: async () => ({ ok: true, status: "connected" }),
+      shutdown: async () => {},
+    };
+    const queue = new CloudSyncQueue({ outboxPath: await tempOutboxPath() });
+    await queue.write([
+      {
+        queueVersion: CLOUD_SYNC_PAYLOAD_VERSION,
+        patch: {
+          version: CLOUD_SYNC_PAYLOAD_VERSION,
+          id: "future-patch",
+          scope: "threads",
+          createdAt: BASE_TS,
+          payload: {
+            version: CLOUD_SYNC_PAYLOAD_VERSION,
+            kind: "threads",
+            threads: [],
+            todo: "future-e2ee-thread-sync",
+          },
+        } as unknown as CloudSyncPatch,
+        attempts: 0,
+        nextAttemptAt: BASE_TS,
+      },
+    ]);
+    const service = new CloudSyncService({
+      queue,
+      env: {
+        COWORK_CLOUD_SYNC_ENABLED: "1",
+        COWORK_CLOUD_SYNC_ENDPOINT: "https://sync.example.test",
+      },
+      providerFactory: () => provider,
+      setTimer: () => null,
+      clearTimer: () => {},
+    });
+
+    await expect(service.flushNow()).resolves.toMatchObject({
+      status: "connected",
+      queued: 0,
+    });
+    expect(pushed).toEqual([]);
+    expect(await queue.read()).toEqual([]);
+  });
+
   test("custom HTTP provider validates inbound remote payloads before returning them", async () => {
     const provider = new CustomHttpCloudSyncProvider({
       endpoint: "https://sync.example.test/",
-      fetchImpl: async (input) => {
+      fetchImpl: (async (input) => {
         const url = String(input);
         if (url.includes("/v1/changes")) {
           return new Response(
@@ -445,7 +496,7 @@ describe("cloud sync service and custom provider", () => {
           }),
           { status: 200 },
         );
-      },
+      }) as typeof fetch,
     });
 
     await expect(provider.readRemoteState("settings")).resolves.toBeNull();

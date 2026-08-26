@@ -42,6 +42,7 @@ import type {
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import { getAiCoworkerPaths } from "../../store/connections";
+import { registerReadPastConversationHistoryReader } from "../../tools/readPastConversation";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -175,6 +176,7 @@ export class AgentSession {
   private disconnectedReplayEvents: SessionEvent[] = [];
   private persistedLastEventSeq: number;
   private costTrackerUnsubscribe?: () => void;
+  private unregisterReadPastConversationHistoryReader?: () => void;
 
   constructor(opts: {
     config: AgentConfig;
@@ -406,6 +408,27 @@ export class AgentSession {
       refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
       recordSkillImprovementUsageImpl: opts.recordSkillImprovementUsageImpl,
     };
+
+    const sessionDb = this.deps.sessionDb;
+    if (sessionDb) {
+      const sessionId = this.id;
+      this.unregisterReadPastConversationHistoryReader = registerReadPastConversationHistoryReader(
+        sessionId,
+        {
+          list: ({ workingDirectory }) => sessionDb.listSessions({ workingDirectory }),
+          read: ({ sessionId }) => {
+            const record = sessionDb.getSessionRecord(sessionId);
+            if (!record) return null;
+            return {
+              sessionId: record.sessionId,
+              title: record.title,
+              workingDirectory: record.workingDirectory,
+              messages: record.messages,
+            };
+          },
+        },
+      );
+    }
 
     if (seededHarnessContext) {
       this.deps.harnessContextStore.set(this.id, seededHarnessContext);
@@ -1716,6 +1739,8 @@ export class AgentSession {
 
   dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}) {
     this.state.abortController?.abort();
+    this.unregisterReadPastConversationHistoryReader?.();
+    this.unregisterReadPastConversationHistoryReader = undefined;
     this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
     unsubscribeAgentSessionCostTracker(this.createCostTrackingHost());
     this.managers.disposeManagers();

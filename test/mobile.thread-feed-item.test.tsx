@@ -24,15 +24,6 @@ mock.module("../apps/mobile/src/components/thread/markdown-text", () => ({
     createElement("markdown-text", { "data-text": text }),
 }));
 
-mock.module("../apps/mobile/src/components/thread/tool-call-card", () => ({
-  ToolCallCard: ({ name }: { name: string }) => createElement("tool-card", { "data-name": name }),
-}));
-
-mock.module("../apps/mobile/src/components/thread/reasoning-card", () => ({
-  ReasoningCard: ({ text }: { text: string }) =>
-    createElement("reasoning-card", { "data-text": text }),
-}));
-
 mock.module("../apps/mobile/src/components/thread/todo-card", () => ({
   TodoCard: () => createElement("todo-card"),
 }));

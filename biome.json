@@ -199,7 +199,6 @@
     },
     {
       "includes": [
-        "apps/desktop/src/app/store.actions/research.ts",
         "apps/desktop/src/app/store.helpers/controlSocket.ts",
         "apps/desktop/src/app/store.helpers/jsonRpcSocket.ts",
         "apps/desktop/src/app/store.helpers.ts"
@@ -233,7 +232,6 @@
         "src/runtime/piMessageBridge.ts",
         "src/runtime/piStreamParts.ts",
         "src/runtime/types.ts",
-        "src/server/research/researchRuntime.ts",
         "src/tools/defineTool.ts",
         "src/server/jsonrpc/routes/session.ts",
         "src/tools/index.ts"

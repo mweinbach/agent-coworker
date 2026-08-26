@@ -64,13 +64,13 @@ The OAuth migration must also fix a pre-existing gap vs. our OAuth engineering r
 
 `bun:sqlite` in `src/server/sessionDb.ts` (+ `sessionDb/` modules) and `src/memoryStore.ts`. No `better-sqlite3`/`node:sqlite` anywhere. No action.
 
-### 3. Child processes — the main migration (13 files, all `Bun.spawn`-able)
+### 3. Child processes — the main migration (12 current files, all `Bun.spawn`-able)
 
 No `exec`/`execSync`/`fork` anywhere; usage is `execFile` (buffered), `spawn` (streaming), `spawnSync` (sandbox probes). Precedent already exists: `scripts/releaseBuildUtils.ts` uses `Bun.spawn`.
 
 | File | API | Difficulty | Notes |
 | --- | --- | --- | --- |
-| `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts` | `spawn` inherit | easy | direct swap |
+| `scripts/open_xcode_workspace.ts` | `spawn` inherit | easy | direct swap |
 | `src/utils/ripgrep.ts` | `execFile` | easy | tar/PowerShell extraction, bounded |
 | `src/tools/bash.ts` | `execFile` | **hard, highest value** | agent shell tool: 10 MB `maxBuffer`, timeout→SIGTERM→exit 124, AbortSignal→exit 130, `windowsHide`, env replacement, shell-candidate ENOENT fallback, sandbox transform |
 | `src/tools/grep.ts` | `execFile` | medium | same contract as bash (timeout/abort/maxBuffer), injectable `execFileImpl` |
@@ -161,7 +161,7 @@ Add a boundary check (test or lint script) that fails if any file in the Electro
 ### Phase 1 — Mechanical, zero-risk slices
 
 1. `randomUUID`/`randomBytes` → global Web Crypto (all 7 files, incl. Electron-shared ones — globals are runtime-portable).
-2. `Bun.spawn` in Bun-only scripts: `scripts/postinstall.ts`, `scripts/open_xcode_workspace.ts`.
+2. `Bun.spawn` in Bun-only scripts: `scripts/open_xcode_workspace.ts`.
 3. `Bun.Glob` in `test/package-manifest.test.ts`.
 4. `Bun.file`/`Bun.write` in `scripts/` and `packages/harness/` file I/O.
 
@@ -195,7 +195,7 @@ Define a `HarnessSubprocess` interface (spawn, write stdin, async line iteration
 ## Implementation status
 
 - **Phase 0** ✅ `test/desktopSharedBunBoundary.test.ts` computes the Electron-main and renderer value-import closures and fails on any `bun:`/`Bun.*` usage inside them.
-- **Phase 1** ✅ global `crypto.randomUUID()`/`getRandomValues` replace `node:crypto` imports in 7 files; `Bun.spawn` in `scripts/postinstall.ts` and `scripts/open_xcode_workspace.ts`; `Bun.Glob` replaces `fast-glob` in `test/package-manifest.test.ts` (verified identical file sets).
+- **Phase 1** ✅ global `crypto.randomUUID()`/`getRandomValues` replace `node:crypto` imports in 7 files; `Bun.spawn` in `scripts/open_xcode_workspace.ts`; `Bun.Glob` replaces `fast-glob` in `test/package-manifest.test.ts` (verified identical file sets).
 - **Phase 2** ✅ MCP OAuth callback on `Bun.serve`, bound to `127.0.0.1` + best-effort `::1` on one port, redirect URI pinned to `127.0.0.1`, with an IPv6 coverage test.
 - **Phase 3** ✅ `src/utils/execFileCompat.ts` (Bun.spawn, Node execFile contract: maxBuffer, timeout→SIGTERM/exit 124, abort/exit 130, ENOENT codes, pipe teardown on kill) + parity tests; consumers migrated: `tools/bash.ts`, `tools/grep.ts`, `utils/ripgrep.ts`, `coworkRuntime/runtime.ts`. Streaming consumers on `src/utils/subprocess.ts` (`spawnStreamingSubprocess` + `subscribeLines`): `sessionBackup/command.ts`, `coworkRuntime/libreOffice.ts` (now with a 4 MiB output cap), `webDesktopService.ts`.
 - **Phase 4** ✅ `Bun.file` reads on hot paths: edit/read tools, prompt templates, skill catalog/bodies, config layers, session snapshots, memory/MCP-auth/CLI-state stores; `Bun.write` in the edit tool.

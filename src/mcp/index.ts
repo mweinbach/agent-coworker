@@ -9,8 +9,6 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { childEnv } from "../platform/env";
-import { buildCodexAppsMcpServer } from "../server/connectors/openaiNativeConnectors";
-import { CODEX_APPS_MCP_SERVER_NAME } from "../shared/openaiNativeConnectors";
 import type { AgentConfig, MCPServerConfig } from "../types";
 import { VERSION } from "../version";
 import {
@@ -116,9 +114,6 @@ type RuntimeMcpClientFactory = (opts: {
   name: string;
   transport: RuntimeMcpTransport;
 }) => Promise<RuntimeMcpClient>;
-type RuntimeMcpServerConfig = MCPServerConfig & {
-  enabledConnectorIds?: string[];
-};
 
 function normalizeToolArguments(input: unknown): Record<string, unknown> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
@@ -623,12 +618,6 @@ export async function loadMCPServers(
   const hydrated = await Promise.all(
     allowed.map(async (server) => await hydrateServerForRuntime(config, server)),
   );
-  if (!hydrated.some((server) => server.name === CODEX_APPS_MCP_SERVER_NAME)) {
-    const codexApps = await buildCodexAppsMcpServer(config);
-    if (codexApps) {
-      hydrated.push(codexApps);
-    }
-  }
   return hydrated;
 }
 
@@ -666,7 +655,7 @@ export async function writeProjectMCPServersDocument(
 }
 
 export async function loadMCPTools(
-  servers: RuntimeMcpServerConfig[],
+  servers: MCPServerConfig[],
   opts: {
     log?: (line: string) => void;
     createClient?: RuntimeMcpClientFactory;
@@ -701,18 +690,18 @@ export async function loadMCPTools(
   type ServerLoadResult =
     | {
         ok: true;
-        server: RuntimeMcpServerConfig;
+        server: MCPServerConfig;
         client: RuntimeMcpClient;
         discovered: Record<string, unknown>;
       }
-    | { ok: false; server: RuntimeMcpServerConfig; message: string };
+    | { ok: false; server: MCPServerConfig; message: string };
 
   // Servers are independent, and each one pays its own spawn + connect +
   // listTools latency (slowest on Windows), so they load concurrently. Shared
   // state — tool-name reservation, the clients list, error collection — is
   // only touched afterwards, in the original server order, so the returned
   // shape, collision remapping, and error ordering match a sequential load.
-  const loadServer = async (server: RuntimeMcpServerConfig): Promise<ServerLoadResult> => {
+  const loadServer = async (server: MCPServerConfig): Promise<ServerLoadResult> => {
     const retries = retriesFor(server.retries);
     let lastError: unknown = null;
 
@@ -736,36 +725,8 @@ export async function loadMCPTools(
         }
         const discovered = discoveredParsed.data;
 
-        const enabledConnectorIds =
-          server.name === CODEX_APPS_MCP_SERVER_NAME
-            ? new Set(server.enabledConnectorIds ?? [])
-            : null;
-        const filtered: Record<string, unknown> = {};
-        for (const [name, toolDef] of Object.entries(discovered)) {
-          if (enabledConnectorIds && enabledConnectorIds.size > 0) {
-            const record =
-              typeof toolDef === "object" && toolDef !== null
-                ? (toolDef as Record<string, unknown>)
-                : {};
-            const meta =
-              typeof record._meta === "object" && record._meta !== null
-                ? (record._meta as Record<string, unknown>)
-                : {};
-            const connectorId =
-              typeof record.connectorId === "string"
-                ? record.connectorId
-                : typeof meta.connector_id === "string"
-                  ? meta.connector_id
-                  : undefined;
-            if (!connectorId || !enabledConnectorIds.has(connectorId)) {
-              continue;
-            }
-          }
-          filtered[name] = toolDef;
-        }
-
         opts.log?.(`[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`);
-        return { ok: true, server, client, discovered: filtered };
+        return { ok: true, server, client, discovered };
       } catch (error) {
         try {
           await client?.close?.();

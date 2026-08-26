@@ -17,6 +17,9 @@ function createRuntime(session: any) {
   return {
     id: session.id,
     read: {
+      sessionKind: session.sessionKind ?? "root",
+      parentSessionId: session.parentSessionId ?? null,
+      role: session.role ?? null,
       getLatestAssistantText: () => session.getLatestAssistantText?.() ?? "",
     },
     replay: {
@@ -90,6 +93,9 @@ function createRouterHarness(
   const context: JsonRpcRouteContext = {
     getConfig: () => ({ workingDirectory, tasksEnabled: opts.tasksEnabled === true }) as any,
     homedir: opts.homedir,
+    tasks: {
+      isTaskThread: () => false,
+    } as any,
     threads: {
       create: ({ cwd, provider, model }) => {
         created.push({ cwd, provider, model });

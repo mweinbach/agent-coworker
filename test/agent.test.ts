@@ -476,7 +476,7 @@ describe("runTurn", () => {
     expect(system).not.toContain(`- Git root: ${workspaceRoot}`);
   });
 
-  test("buildTurnSystemPrompt rewrites project .cowork guidance for off-root working directories", () => {
+  test("buildTurnSystemPrompt preserves prompt text and appends workspace context off-root", () => {
     const workspaceRoot = "/tmp/workspace-root";
     const config = makeConfig({
       projectCoworkDir: path.join(workspaceRoot, ".cowork"),
@@ -496,11 +496,15 @@ describe("runTurn", () => {
       [],
     );
 
-    expect(system).not.toContain("current working directory");
-    expect(system).toContain(`\`${path.join(workspaceRoot, ".cowork", "config.json")}\``);
-    expect(system).toContain(`\`${path.join(workspaceRoot, ".cowork", "mcp-servers.json")}\``);
+    expect(system).toContain("current working directory");
+    expect(system).toContain("`.cowork/config.json`");
+    expect(system).toContain("`.cowork/mcp-servers.json`");
+    expect(system).toContain("`.cowork/skills/{name}/SKILL.md`");
+    expect(system).toContain("## Active Workspace Context");
+    expect(system).toContain(`- Workspace root: ${workspaceRoot}`);
+    expect(system).toContain(`- Execution working directory: /tmp/outside-workdir`);
     expect(system).toContain(
-      `\`${path.join(workspaceRoot, ".cowork", "skills", "{name}", "SKILL.md")}\``,
+      `- Project config, memory, and MCP overrides: ${path.join(workspaceRoot, ".cowork")}`,
     );
   });
 

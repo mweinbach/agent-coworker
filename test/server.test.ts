@@ -38,7 +38,7 @@ function extractProtocolHeadings(doc: string, startMarker: string, endMarker: st
 /** Create an isolated temp directory that mimics a valid project for the agent. */
 async function makeTmpProject(): Promise<string> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-test-"));
-  // Ensure the .agent dir exists so loadConfig can resolve it
+  // Ensure the .cowork dir exists so loadConfig can resolve it.
   await fs.mkdir(path.join(tmp, ".cowork"), { recursive: true });
   return tmp;
 }
@@ -238,7 +238,7 @@ describe("Server Startup", () => {
 
   test("creates projectCoworkDir on startup", async () => {
     const tmpDir = await makeTmpProject();
-    // Remove the .agent dir so startServer has to create it
+    // Remove the .cowork dir so startServer has to create it.
     await fs.rm(path.join(tmpDir, ".cowork"), { recursive: true, force: true });
     const { server, config } = await startAgentServer(serverOpts(tmpDir));
     try {
@@ -688,5 +688,5 @@ describe("HTTP Handler", () => {
 });
 
 // NOTE: Historical raw event WebSocket tests were removed when JSON-RPC became
-// the only wire protocol. See test/server.jsonrpc.test.ts and
-// test/server.jsonrpc.flow.test.ts for protocol coverage.
+// the only wire protocol. See test/jsonrpc/flow.*.test.ts and
+// test/jsonrpc/control.*.test.ts for protocol coverage.

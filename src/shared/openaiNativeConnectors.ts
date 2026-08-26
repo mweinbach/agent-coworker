@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 export const OPENAI_NATIVE_CONNECTORS_EVENT_TYPE = "openai_native_connectors" as const;
-export const CODEX_APPS_MCP_SERVER_NAME = "codex_apps" as const;
 
 export type OpenAiNativeConnector = {
   id: string;

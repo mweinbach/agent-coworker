@@ -33,6 +33,15 @@ type EffectiveCloudSyncConfig = CloudSyncSettings & {
   token?: string;
 };
 
+function unsupportedQueuedPatchReason(patch: CloudSyncPatch): Record<string, unknown> | null {
+  const value = patch as { scope?: unknown; payload?: { kind?: unknown } };
+  if (value.scope === "settings" && value.payload?.kind === "settings") return null;
+  return {
+    scope: typeof value.scope === "string" ? value.scope : "unknown",
+    kind: typeof value.payload?.kind === "string" ? value.payload.kind : "unknown",
+  };
+}
+
 export function resolveEffectiveCloudSyncConfig(
   persisted: unknown,
   env: NodeJS.ProcessEnv = process.env,
@@ -191,7 +200,13 @@ export class CloudSyncService {
       const due = await this.queue.due();
       for (const entry of due) {
         try {
-          await provider.pushPatch(entry.patch.scope, entry.patch);
+          const unsupportedPatch = unsupportedQueuedPatchReason(entry.patch);
+          if (unsupportedPatch) {
+            await this.queue.remove(entry.patch.id);
+            this.log?.("warn", "cloud sync dropped unsupported queued patch", unsupportedPatch);
+            continue;
+          }
+          await provider.pushPatch(entry.patch);
           await this.queue.remove(entry.patch.id);
         } catch (error) {
           await this.queue.markFailed(entry.patch.id, error);

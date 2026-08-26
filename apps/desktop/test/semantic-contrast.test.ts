@@ -209,7 +209,6 @@ describe("desktop semantic contrast", () => {
     for (const consumerPath of [
       "../src/ui/sidebar/SidebarThreadItem.tsx",
       "../src/ui/sidebar/SidebarWorkspaceItem.tsx",
-      "../src/ui/research/ResearchCardGrid.tsx",
     ]) {
       const consumer = readFileSync(resolve(import.meta.dir, consumerPath), "utf8");
       expect(consumer).toContain("app-selected-row");

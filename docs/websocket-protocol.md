@@ -582,11 +582,11 @@ A marketplace `marketplace.json` may also declare a `skills` array (same entry s
 
 Marketplace entries (plugins and skills) may carry optional icon metadata in `interface`: `icon` or `logo` (an image URL or `data:` URI) and `brandColor`. Parsed plugin entries expose them as `availablePlugins[].interface.logo` / `interface.brandColor`; parsed skill entries expose them as `availableSkills[].interface.iconSmall` / `interface.iconLarge`. Installed plugin skills additionally embed `iconSmall` / `iconLarge` `data:` URIs when the skill's `agents/*.yaml` declares `icon_small` / `icon_large` file paths, matching standalone skill catalog behavior.
 
-Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized `owner/repo` slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
+Marketplace registry controls let a client configure additional marketplaces beyond the built-in one. A marketplace is a public GitHub repository whose manifest lives at `.agents/plugins/marketplace.json` (the built-in layout). User-added marketplaces persist in `~/.cowork/config/marketplaces.json`; the built-in marketplace is implicit — always present, always listed first, never persisted, never removable. Marketplace identity is the lowercase-normalized owner/repo slug. Catalog snapshots (`availablePlugins` / `availableSkills`) and update-check annotation aggregate every configured marketplace in list order, deduping same-name offers with earlier marketplaces (built-in first) winning; a single failing marketplace marks the snapshot partial (`availablePluginsPartial` / `availableSkillsPartial`) while the others still contribute rows.
 
 - `cowork/marketplaces/read` — params `{ cwd? }`. Returns `{ event }` where `event.type` is `marketplaces_list` (see [marketplaces_list](#marketplaces_list)). Each entry's `displayName`, `pluginCount`, and `skillCount` come from fetching that marketplace's manifest; when a fetch fails the entry carries `fetchError` instead and omits the counts.
 - `cowork/marketplaces/detail` — params `{ cwd?, id: string }`. Returns `{ event }` where `event.type` is `marketplace_detail` (see [marketplace_detail](#marketplace_detail)): everything the marketplace includes — its plugins, standalone skills, and connectors (MCP servers) from installed plugins — annotated with local installed/enabled state. An unknown id or a manifest fetch failure returns a standard error with the underlying message.
-- `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts `owner/repo` shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
+- `cowork/marketplaces/add` — params `{ cwd?, sourceInput: string }`. `sourceInput` accepts owner/repo shorthand, `https://github.com/owner/repo`, or `https://github.com/owner/repo/tree/<ref>` (ref defaults to `main`). The server validates the source by fetching and parsing its manifest before persisting; on failure the request returns a standard error with the underlying fetch/parse message (duplicates — including the built-in marketplace — are rejected). On success the result returns the updated `marketplaces_list` event and the server refreshes the remote-inclusive plugin and skill catalogs so marketplace rows update immediately.
 - `cowork/marketplaces/remove` — params `{ cwd?, id: string }`. Removes a configured marketplace by id. Removing the built-in marketplace or an unknown id returns an error. On success the result returns the updated `marketplaces_list` event and the same catalog refreshes as `cowork/marketplaces/add`.
 
 The import controls let a client browse and copy plugins/skills that already exist on disk from other agent tools:
@@ -685,7 +685,7 @@ OpenAI native connectors are workspace-scoped ChatGPT apps owned by `codex app-s
 - `cowork/connectors/openai-native/list`
   - Params: `{ "cwd"?: string }`
   - Result event: `{ "type": "openai_native_connectors", "connectors": OpenAiNativeConnector[], "enabledConnectorIds": string[], "authenticated": boolean, "message"?: string }`
-  - Connector entries are derived from the Codex app-server `mcpServerStatus/list` `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
+  - Connector entries are derived from the Codex app-server mcpServerStatus/list `codex_apps` tool metadata (`connector_id`, `connector_name`, and `connector_description`) plus `config/read` app enablement flags.
 - `cowork/connectors/openai-native/refresh`
   - Params: `{ "cwd"?: string }`
   - Result: same event shape as `list`, after re-reading Codex app-server MCP status and app config.
@@ -798,23 +798,21 @@ subscription remains scoped to the latest requested workspace.
 
 ### Creation readiness
 
-Clients should call `cowork/creation/preflight` before creating a chat thread, a task, or a research
-run. The method validates the selected workspace and the dependencies required to start work without
-mutating thread, task, or research state.
+Clients should call `cowork/creation/preflight` before creating a chat thread or a task. The method
+validates the selected workspace and the dependencies required to start work without mutating thread
+or task state.
 
-- params: `{ kind: "chat" | "research" | "task", cwd?, provider?, model? }`
+- params: `{ kind: "chat" | "task", cwd?, provider?, model? }`
 - result: `{ ready, checks }`
 - each check is `{ id, status: "ok" | "pending" | "blocked", message, repairAction? }`
-- check ids are `project_access`, `provider_connected`, `model_available`, `credentials`,
-  `runtime_ready`, and `research_credentials`
+- check ids are `project_access`, `provider_connected`, `model_available`, `credentials`, and
+  `runtime_ready`
 - repair actions are typed as `connectProvider`, `openProviderSettings`, `startLmStudio`, or
   `installCodexRuntime`
 
 For chat preflight, omitted `provider` and `model` use the server configuration defaults. The
 provider catalog, enabled model preferences, credentials, global startup state, and provider-specific
-runtime state are evaluated together. For research preflight, Google Deep Research credentials are
-accepted from the saved Google API-key connection or the server's
-`GOOGLE_GENERATIVE_AI_API_KEY`/`GOOGLE_API_KEY` environment.
+runtime state are evaluated together.
 
 Task preflight runs the same checks as chat — a task turn executes through the same provider, model,
 and runtime — and adds no task-only check id. It differs in one place: `project_access` applies the
@@ -833,127 +831,6 @@ current step, for example `Downloading the Cowork runtime — 62%.`. `turn/start
 `command/execute`, and `task/create` already await startup readiness before touching a session, so a
 client may start a chat or a task during this window and the server queues the work. Clients should
 present pending checks as progress rather than as a failure, and re-poll until the check clears.
-
-### Research JSON-RPC methods
-
-Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
-
-Requests:
-
-- `research/start`
-  - params: `{ input, title?, settings?, attachedFileIds?, clientResearchId? }`
-  - result: `{ research }`
-  - starts a new Deep Research interaction and begins background streaming
-  - validates Google credentials before creating or persisting a research row
-  - `clientResearchId`, when present, is a UUID used as the research id and idempotency key; retries
-    return the existing run instead of creating a duplicate
-- `research/list`
-  - params: `{}`
-  - result: `{ research: ResearchRecord[] }`
-  - lists persisted research rows for the active workspace ordered by `updatedAt DESC`
-- `research/get`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-- `research/cancel`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-  - best-effort cancels the upstream Google interaction, then marks the local row `cancelled`
-- `research/rename`
-  - params: `{ researchId, title }`
-  - result: `{ research: ResearchRecord | null }`
-  - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
-- `research/delete`
-  - permanently removes a research row, local artifacts under `~/.cowork/research/<id>/`, and best-effort remote file-search stores
-  - tombstones active runs, aborts local setup/stream work immediately, requests remote cancellation when an interaction id is available, and bounds stream settlement waiting to five seconds before deleting; late persistence and notifications remain suppressed after that bound
-  - direct follow-ups remain available and are reparented to the research root; live child runtime state is updated before it can persist again
-  - result: `{ researchId, deleted }`
-  - broadcasts `research/deleted` to sockets subscribed to that research id
-- `research/followup`
-  - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
-  - result: `{ research }`
-  - starts a child research row using `previous_interaction_id`
-- `research/uploadFile`
-  - params: `{ filename, mimeType, contentBase64 }`
-  - result: `{ file }`
-  - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
-  - the returned `file.fileId` is a generated UUID; `attachedFileIds`/`fileId` accepted by `research/start`, `research/followup`, and `research/attachFile` must be these exact UUIDs (callers cannot supply arbitrary paths)
-- `research/discardUploads`
-  - params: `{ fileIds }`
-  - result: `{ status: "discarded" }`
-  - best-effort deletes staged uploads that were never consumed by `research/start` or `research/followup`
-- `research/attachFile`
-  - params: `{ researchId, fileId }`
-  - result: `{ research: ResearchRecord | null }`
-  - attaches a previously staged upload to an existing row
-- `research/subscribe`
-  - params: `{ researchId, afterEventId? }`
-  - result: `{ research: ResearchRecord | null }`
-  - registers the socket for live `research/*` notifications and optionally replays buffered notifications after `afterEventId`
-- `research/unsubscribe`
-  - params: `{ researchId }`
-  - result: `{ status: "unsubscribed" }`
-- `research/export`
-  - params: `{ researchId, format: "markdown" | "pdf" | "docx" }`
-  - result: `{ path, sizeBytes }`
-  - writes `report.md`, `report.pdf`, or `report.docx` under `~/.cowork/research/<id>/`
-- `research/approvePlan`
-  - params: `{ researchId }`
-  - result: `{ research: ResearchRecord | null }`
-  - approves a pending research plan so the interaction proceeds (used with plan-approval settings)
-- `research/refinePlan`
-  - params: `{ researchId, input }`
-  - result: `{ research: ResearchRecord | null }`
-  - sends refinement input for a pending research plan instead of approving it as-is
-
-`ResearchRecord` currently persists:
-
-- `id`
-- `workspacePath`
-- `parentResearchId`
-- `title`
-- `prompt`
-- `status` (`pending | running | completed | cancelled | failed`)
-- `interactionId`
-- `lastEventId`
-- `inputs` (`fileSearchStoreName?`, attached files)
-- `settings` including plan-approval preference, Deep Research `agentId`, `thinkingSummaries`, and `visualization`
-- `outputsMarkdown`
-- `thoughtSummaries`
-- `sources`
-- `createdAt`
-- `updatedAt`
-- `error`
-
-Current Google Deep Research wiring notes:
-
-- `background: true` is always used
-- `settings.agentId` selects the Deep Research agent (`deep-research-max-preview-04-2026` by default; `deep-research-preview-04-2026` and `deep-research-pro-preview-12-2025` are also accepted)
-- `settings.thinkingSummaries` controls Deep Research thought summaries (`auto` or `none`)
-- `settings.visualization` controls Deep Research visualizations (`auto` or `off`)
-- `google_search` and `url_context` remain effectively always on
-- attached files are forwarded through `file_search`
-
-### Research notifications
-
-Sockets subscribed with `research/subscribe` can receive:
-
-- `research/updated`
-  - params: `{ research }`
-  - emitted for lifecycle/status/input changes
-- `research/textDelta`
-  - params: `{ researchId, delta, eventId? }`
-  - append-only markdown stream
-- `research/thoughtDelta`
-  - params: `{ researchId, thought, eventId? }`
-  - thought summaries extracted from Deep Research events
-- `research/sourceFound`
-  - params: `{ researchId, source, eventId? }`
-  - deduped citations discovered in text/file/place annotations
-- `research/completed`
-  - params: `{ researchId, research }`
-- `research/failed`
-- `research/deleted`
-  - params: `{ researchId }`
 
 ### Core JSON-RPC notifications currently available
 
@@ -1072,12 +949,6 @@ string, "installed": boolean, "canAutoStart": boolean }`. Because the message ne
 session, the send is retry-safe: clients should keep the optimistic user message, offer to start LM
 Studio via `cowork/provider/lmstudio/local/start`, and re-issue `turn/start` with the **same**
 `clientMessageId` once the server is running.
-
-`research/start` rejects missing Google Deep Research credentials with `-32600` before creating a
-research row. The rejection carries structured `error.data`
-`{ "reason": "research_credentials_missing", "provider": "google" }`. The draft and staged upload
-ids remain retry-safe; clients should preserve them, open the Google provider connection flow, and
-retry after credentials are configured.
 
 ### JSON-RPC overload behavior
 
@@ -1416,7 +1287,7 @@ JSON-RPC clients connect to `ws://<host>:<port>/ws`, optionally with the `cowork
 1. Client sends `initialize`.
 2. Server replies with `initialize.result`, including `protocolVersion`, `serverInfo`, capabilities, and `{ type: "websocket", protocolMode: "jsonrpc" }`.
 3. Client sends the `initialized` notification.
-4. Client calls `thread/start`, `thread/resume`, `thread/list`, `thread/read`, `turn/start`, `turn/steer`, `turn/interrupt`, `research/*`, or `cowork/*` methods.
+4. Client calls `thread/start`, `thread/resume`, `thread/list`, `thread/read`, `turn/start`, `turn/steer`, `turn/interrupt`, or `cowork/*` methods.
 5. Server streams canonical JSON-RPC notifications such as `thread/started`, `turn/started`, `item/started`, `item/agentMessage/delta`, `item/completed`, and `turn/completed`.
 6. Ask/approval prompts are server-initiated JSON-RPC requests (`item/tool/requestUserInput`, `item/commandExecution/requestApproval`); clients answer with JSON-RPC responses using the same request id.
 
@@ -1445,7 +1316,7 @@ All JSON-RPC messages are validated before dispatch:
 
 Validation failures produce JSON-RPC error responses.
 
-JSON-RPC notifications and method results can also be validated client-side with the generated schema artifacts in `docs/generated/`. If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
+JSON-RPC notifications and method results can also be validated client-side with the generated JSON Schema artifact at `docs/generated/websocket-jsonrpc.schema.json`. If a received notification fails validation, clients should ignore/drop that notification rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics without changing runtime behavior.
 
 ## Shared Types
 
@@ -1495,7 +1366,7 @@ Returned in `server_hello` and `config_updated`:
 }
 ```
 
-For `codex-cli`, a connected Codex app-server account uses live `model/list` results for
+For `codex-cli`, a connected Codex app-server account uses live model/list results for
 `models` and `defaultModel`. Models known to Cowork's bundled registry are enriched with static
 metadata; newly available app-server model ids may appear with conservative fallback metadata.
 The bundled fallback catalog includes `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`,
@@ -1505,7 +1376,7 @@ the live app-server default and then the first reported model, preserving plan-d
 behavior without collapsing the three GPT-5.6 tiers.
 When `reasoning` is present, `defaultEffort` is the model's default composer effort and
 `availableEfforts` is the ordered list the UI should present. Codex app-server models use live
-reasoning tiers from `model/list` when reported, with static metadata as the fallback. Gemini
+reasoning tiers from model/list when reported, with static metadata as the fallback. Gemini
 models expose Cowork's hardcoded model-aware tiers, where `dynamic` means no explicit
 `thinking_level` override.
 
@@ -3135,8 +3006,8 @@ Configured marketplace registry snapshot (built-in marketplace first, then user-
 | `type` | `"marketplaces_list"` | — |
 | `sessionId` | `string` | Session identifier |
 | `marketplaces` | `MarketplaceListEntry[]` | Configured marketplaces, built-in first |
-| `marketplaces[].id` | `string` | Lowercase-normalized `owner/repo` identity |
-| `marketplaces[].repo` | `string` | GitHub `owner/repo` slug |
+| `marketplaces[].id` | `string` | Lowercase-normalized owner/repo identity |
+| `marketplaces[].repo` | `string` | GitHub owner/repo slug |
 | `marketplaces[].ref` | `string` | Git ref the manifest is read from (default `main`) |
 | `marketplaces[].url` | `string` | `https://github.com/{repo}/tree/{ref}` |
 | `marketplaces[].marketplacePath` | `string` | Manifest path inside the repo |
@@ -4207,7 +4078,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.google.responseFormat` | `unknown` | Optional Gemini Interactions `response_format` payload for structured responses |
-| `config.providerOptions.google.responseMimeType` | `string` | Optional Gemini Interactions `response_mime_type` such as `application/json` |
+| `config.providerOptions.google.responseMimeType` | `string` | Optional Gemini Interactions `response_mime_type` such as application/json |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
 | `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |
 | `config.providerOptions.lmstudio.autoLoad` | `boolean` | Current LM Studio eager-load toggle |

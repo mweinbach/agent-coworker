@@ -6,13 +6,37 @@ export const meta = {
 };
 
 export default async function run({ agent, parallel, phase, log, args }) {
+  const fail = (message) => {
+    throw new Error(`deep-research invalid args: ${message}`);
+  };
+  const input = args && typeof args === "object" && !Array.isArray(args) ? args : {};
   const text = (value, maxLength) =>
     typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+  const argumentText = (name, value, maxLength, { required = false } = {}) => {
+    if (value === undefined || value === null) {
+      if (required) fail(`${name} is required`);
+      return "";
+    }
+    if (typeof value !== "string") fail(`${name} must be a string`);
+    const normalized = value.trim();
+    if (!normalized) {
+      if (required) fail(`${name} must not be empty`);
+      return "";
+    }
+    if (normalized.length > maxLength) {
+      fail(`${name} must be ${maxLength} characters or fewer`);
+    }
+    return normalized;
+  };
   const fullText = (value) => (typeof value === "string" ? value.trim() : "");
-  const integer = (value, fallback, min, max) => {
+  const integerArgument = (name, value, fallback, min, max) => {
+    if (value === undefined || value === null || value === "") return fallback;
     const numeric = typeof value === "number" ? value : Number(value);
-    if (!Number.isFinite(numeric)) return fallback;
-    return Math.max(min, Math.min(max, Math.floor(numeric)));
+    if (!Number.isInteger(numeric)) fail(`${name} must be an integer`);
+    if (numeric < min || numeric > max) {
+      fail(`${name} must be between ${min} and ${max}`);
+    }
+    return numeric;
   };
   const sourceList = (value) =>
     Array.isArray(value)
@@ -34,27 +58,45 @@ export default async function run({ agent, parallel, phase, log, args }) {
           .filter((source) => source.locator)
       : [];
 
-  const query = text(args?.query, 4_000);
-  if (!query) {
-    throw new Error('deep-research requires args.query, for example { "query": "..." }');
-  }
-
-  const maxQuestions = integer(args?.maxQuestions, 5, 2, 6);
-  const maxClaimsPerQuestion = integer(args?.maxClaimsPerQuestion, 4, 1, 4);
-  const defaultModel = text(args?.model, 300);
-  const plannerModel = text(args?.plannerModel, 300) || defaultModel;
-  const researchModel = text(args?.researchModel, 300) || defaultModel;
-  const verificationModel = text(args?.verificationModel, 300) || defaultModel;
-  const synthesisModel = text(args?.synthesisModel, 300) || defaultModel;
+  const query = argumentText("query", input.query, 4_000, { required: true });
+  const maxQuestions = integerArgument("maxQuestions", input.maxQuestions, 5, 2, 6);
+  const maxClaimsPerQuestion = integerArgument(
+    "maxClaimsPerQuestion",
+    input.maxClaimsPerQuestion,
+    4,
+    1,
+    4,
+  );
+  const defaultModel = argumentText("model", input.model, 300);
+  const plannerModel = argumentText("plannerModel", input.plannerModel, 300) || defaultModel;
+  const researchModel = argumentText("researchModel", input.researchModel, 300) || defaultModel;
+  const verificationModel =
+    argumentText("verificationModel", input.verificationModel, 300) || defaultModel;
+  const synthesisModel = argumentText("synthesisModel", input.synthesisModel, 300) || defaultModel;
+  const modelLabel = (value) => value || "session default";
+  const settings = {
+    maxQuestions,
+    maxClaimsPerQuestion,
+    models: {
+      planner: modelLabel(plannerModel),
+      research: modelLabel(researchModel),
+      verification: modelLabel(verificationModel),
+      synthesis: modelLabel(synthesisModel),
+    },
+  };
   const limitations = [];
+
+  log(
+    `deep-research: planning ${maxQuestions} questions with up to ${maxClaimsPerQuestion} verification claims per question; models planner=${settings.models.planner}, research=${settings.models.research}, verification=${settings.models.verification}, synthesis=${settings.models.synthesis}`,
+  );
 
   const planSchema = {
     type: "object",
     properties: {
       questions: {
         type: "array",
-        minItems: 2,
-        maxItems: 6,
+        minItems: maxQuestions,
+        maxItems: maxQuestions,
         items: {
           type: "object",
           properties: {
@@ -106,7 +148,7 @@ export default async function run({ agent, parallel, phase, log, args }) {
     properties: {
       claims: {
         type: "array",
-        maxItems: 4,
+        maxItems: maxClaimsPerQuestion,
         items: {
           type: "object",
           properties: {
@@ -235,7 +277,7 @@ export default async function run({ agent, parallel, phase, log, args }) {
     properties: {
       claims: {
         type: "array",
-        maxItems: 4,
+        maxItems: maxClaimsPerQuestion,
         items: {
           type: "object",
           properties: {
@@ -455,6 +497,7 @@ export default async function run({ agent, parallel, phase, log, args }) {
   return {
     status,
     query,
+    settings,
     title: synthesis.title,
     executiveSummary: synthesis.executiveSummary,
     reportMarkdown,

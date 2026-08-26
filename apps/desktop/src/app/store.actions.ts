@@ -15,7 +15,6 @@ import { createPreviewActions } from "./store.actions/preview";
 import { createPrivacyTelemetryActions } from "./store.actions/privacyTelemetry";
 import { createProviderActions } from "./store.actions/provider";
 import { createRemoteAccessActions } from "./store.actions/remoteAccess";
-import { createResearchActions } from "./store.actions/research";
 import { createRuntimeDiagnosticsActions } from "./store.actions/runtimeDiagnostics";
 import { createSkillActions } from "./store.actions/skills";
 import { createTaskActions } from "./store.actions/tasks";
@@ -37,7 +36,6 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createPluginActions(set, get),
     ...createMarketplaceActions(set, get),
     ...createImportActions(set, get),
-    ...createResearchActions(set, get),
     ...createWorkspaceDefaultsActions(set, get),
     ...createWorkspaceMcpActions(set, get),
     ...createOpenAiNativeConnectorActions(set, get),

@@ -22,7 +22,6 @@
   },
   "dependencies": {
     "@sentry/electron": "7.16.0",
-    "@shadcn/react": "^0.2.1",
     "@univerjs/preset-sheets-conditional-formatting": "0.25.1",
     "@univerjs/preset-sheets-core": "0.25.1",
     "@univerjs/preset-sheets-data-validation": "0.25.1",

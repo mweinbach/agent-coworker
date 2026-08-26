@@ -52,7 +52,7 @@ export class CustomHttpCloudSyncProvider implements CloudSyncProvider {
     return parseCloudSyncRemoteState(await readJson(response));
   }
 
-  async pushPatch(_scope: CloudSyncScope, patch: CloudSyncPatch): Promise<{ cursor?: string }> {
+  async pushPatch(patch: CloudSyncPatch): Promise<{ cursor?: string }> {
     const response = await this.fetchImpl(joinEndpoint(this.endpoint, "/v1/patch"), {
       method: "POST",
       headers: {

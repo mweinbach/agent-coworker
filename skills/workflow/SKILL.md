@@ -54,8 +54,13 @@ The bundled `deep-research` workflow plans bounded questions, gathers structured
 source-backed claims, independently verifies every claim, and synthesizes only
 claims that survive. It reports failed shards, dropped claims, and uncertainties
 as coverage limitations and marks the result partial when coverage is incomplete.
-Use `args.model` for the default child model, with optional `plannerModel`,
-`researchModel`, `verificationModel`, and `synthesisModel` phase overrides.
+Use it for provider-agnostic deep research through the ordinary workflow harness:
+`args.query` is required, `maxQuestions` defaults to 5 and accepts 2–6, and
+`maxClaimsPerQuestion` defaults to 4 and accepts 1–4. Invalid depth arguments are
+rejected before any child agents spawn so bounded coverage is explicit rather
+than silently capped. Use `args.model` for the default child model, with optional
+`plannerModel`, `researchModel`, `verificationModel`, and `synthesisModel` phase
+overrides. Omit model args to inherit normal session/default routing.
 
 ## The contract
 

@@ -42,7 +42,6 @@ import { jsonRpcTaskRequestSchemas } from "../jsonrpc/schema.tasks";
 import { getTaskRpcRequiredPermissions } from "../jsonrpc/taskPermissions";
 import { projectToolRetryCompatibility } from "../jsonrpc/toolRetryCompatibility";
 import { createJsonRpcTransportAdapter } from "../jsonrpc/transportAdapter";
-import { ResearchService } from "../research/ResearchService";
 import { ServerFileLog, shouldEnableServerFileLog } from "../serverFileLog";
 import { getSessionTaskLock } from "../session/taskLocks";
 import { type PersistedSessionRecord, SessionDb } from "../sessionDb";
@@ -365,13 +364,6 @@ export async function createAgentServerRuntime(
       revision: workspaceListRevision,
     });
   };
-  const research = new ResearchService({
-    rootDir: aiCoworkerPaths.rootDir,
-    workspacePath: config.workingDirectory,
-    sessionDb,
-    getConfig: () => config,
-    sendJsonRpc,
-  });
   let registry!: SessionRegistry;
   const tasks = new TaskCoordinator({
     sessionDb,
@@ -745,7 +737,6 @@ export async function createAgentServerRuntime(
     getConfig: () => config,
     homedir: opts.homedir,
     ...(pluginInstallEventsTimeoutMs !== undefined ? { pluginInstallEventsTimeoutMs } : {}),
-    research,
     skillImprovement,
     tasks,
     conversationImports,
@@ -972,7 +963,6 @@ export async function createAgentServerRuntime(
       workspaceControl.removeSubscriber(ws);
       taskSubscribers.remove(ws);
       forgetAllThreadSubscribers(ws);
-      research.unsubscribeAll(ws);
       jsonRpcTransport.closeConnection(ws);
       sendQueue.deleteConnection(ws.data.connectionId);
     },

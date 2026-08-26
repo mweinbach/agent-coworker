@@ -6,6 +6,7 @@ import type { AgentConfig } from "../../src/types";
 import {
   listWorkflowDefinitions,
   resolveWorkflowDefinition,
+  resolveWorkflowDefinitionForExecution,
   saveWorkflowDefinition,
   WORKFLOW_DEFINITION_MAX_BYTES,
 } from "../../src/workflows/registry";
@@ -142,6 +143,26 @@ describe("saved workflow registry", () => {
       expect.objectContaining({ name: "shadowed", scope: "project" }),
     ]);
     await expect(resolveWorkflowDefinition(config, "shadowed")).rejects.toThrow("default export");
+  });
+
+  test("execution resolution reads a safe file without metadata inspection", async () => {
+    const config = await makeConfig();
+    const projectDir = path.join(config.projectCoworkDir, "workflows");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, "run-later.ts"),
+      `${metaHeader("different-name")}export default 42;`,
+    );
+
+    const resolved = await resolveWorkflowDefinitionForExecution(config, "run-later");
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        name: "run-later",
+        scope: "project",
+        source: expect.stringContaining("export default 42"),
+      }),
+    );
+    await expect(resolveWorkflowDefinition(config, "run-later")).rejects.toThrow("default export");
   });
 
   test("rejects non-regular workflow paths", async () => {

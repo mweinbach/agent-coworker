@@ -57,7 +57,6 @@ import type {
   RenamePathInput,
   RendererLogInput,
   RevealPathInput,
-  SaveExportedFileInput,
   SetWindowAppearanceInput,
   ShowCanvasWindowInput,
   ShowContextMenuInput,
@@ -503,10 +502,6 @@ export const workspaceFileChangeEventSchema: z.ZodType<WorkspaceFileChangeEvent>
   .strict();
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
-export const saveExportedFileInputSchema: z.ZodType<SaveExportedFileInput> = z.object({
-  sourcePath: nonEmptyStringSchema,
-  defaultFileName: validatedSegmentSchema,
-});
 export const pickCanvasSavePathInputSchema: z.ZodType<PickCanvasSavePathInput> = z
   .object({
     sourcePath: nonEmptyStringSchema,
@@ -882,7 +877,6 @@ export const desktopMenuCommandSchema: z.ZodType<DesktopMenuCommand> = z.enum([
   "toggleSidebar",
   "openSettings",
   "openWorkspacesSettings",
-  "openResearch",
   "openSkills",
   "openUpdates",
   "openCommandPalette",

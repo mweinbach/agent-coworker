@@ -16,7 +16,7 @@ import {
 } from "../src/components/ui/select";
 import { Switch } from "../src/components/ui/switch";
 import { Textarea } from "../src/components/ui/textarea";
-import { ToolCard } from "../src/ui/chat/toolCards/ToolCard";
+import { ActivityGroupCard } from "../src/ui/chat/ActivityGroupCard";
 import { setupJsdom } from "./jsdomHarness";
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -120,19 +120,29 @@ describe("desktop token consumers", () => {
     }
   });
 
-  test("app-owned tool cards use token-backed flat surfaces and status colors", () => {
+  test("activity tool rows use token-backed flat surfaces and status colors", () => {
     const html = renderToStaticMarkup(
-      createElement(ToolCard, {
-        name: "read",
-        state: "output-available",
-        result: "done",
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveNowMs: Date.parse("2026-08-25T12:00:02.000Z"),
+        items: [
+          {
+            id: "tool-web-search-1",
+            kind: "tool",
+            name: "webSearch",
+            ts: "2026-08-25T12:00:00.000Z",
+            state: "output-error",
+            args: { query: "desktop activity token surfaces" },
+            result: "Permission denied",
+          },
+        ],
       }),
     );
 
     expect(html).toContain("app-border-subtle");
     expect(html).toContain("app-fill-subtle");
-    expect(html).toContain("hover:app-fill-strong");
-    expect(html).toContain("text-success/90");
+    expect(html).toContain("activity-trace-content");
+    expect(html).toContain("text-destructive");
   });
 
   test("layout and skills surfaces resolve through shared token vars", () => {

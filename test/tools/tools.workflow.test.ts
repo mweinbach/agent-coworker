@@ -81,6 +81,85 @@ describe("workflow tool saved definitions", () => {
     expect(assertCanMutate).toHaveBeenCalledTimes(2);
   });
 
+  test("allows inline and named dry runs when mutations are blocked", async () => {
+    const { ctx, assertCanMutate } = await makeToolContext();
+    const control = makeFakeControl();
+    const onWorkflowProgress = mock(() => {});
+    ctx.agentControl = control;
+    ctx.onWorkflowProgress = onWorkflowProgress;
+    assertCanMutate.mockImplementation(async () => {
+      throw new Error("workflow mutations are blocked");
+    });
+    const tool = createWorkflowTool(ctx);
+    if (!tool) throw new Error("workflow tool was not created");
+    const workflowDir = path.join(ctx.config.projectCoworkDir, "workflows");
+    await fs.mkdir(workflowDir, { recursive: true });
+    const script =
+      `${metaHeader("read-only-preview")}` +
+      'export default async function run({ agent, args }) { await agent("preview"); return { value: args.value }; }';
+    await fs.writeFile(path.join(workflowDir, "read-only-preview.ts"), script);
+
+    const inline = await tool.execute({ script, args: { value: 3 }, dryRun: true });
+    const named = await tool.execute({
+      action: "run",
+      name: "read-only-preview",
+      args: { value: 7 },
+      dryRun: true,
+    });
+
+    expect(inline).toEqual(
+      expect.objectContaining({ ok: true, result: { value: 3 }, agentCount: 1, spentUsd: 0 }),
+    );
+    expect(named).toEqual(
+      expect.objectContaining({
+        ok: true,
+        result: { value: 7 },
+        agentCount: 1,
+        spentUsd: 0,
+        definition: expect.objectContaining({ name: "read-only-preview", scope: "project" }),
+      }),
+    );
+    expect(assertCanMutate).not.toHaveBeenCalled();
+    expect(control.spawnCount()).toBe(0);
+    expect(onWorkflowProgress).not.toHaveBeenCalled();
+
+    await expect(tool.execute({ script, args: { value: 9 } })).rejects.toThrow(
+      "workflow mutations are blocked",
+    );
+    expect(assertCanMutate).toHaveBeenCalledTimes(1);
+  });
+
+  test("named dry runs still validate metadata when mutations are blocked", async () => {
+    const { ctx, assertCanMutate } = await makeToolContext();
+    assertCanMutate.mockImplementation(async () => {
+      throw new Error("workflow mutations are blocked");
+    });
+    const tool = createWorkflowTool(ctx);
+    if (!tool) throw new Error("workflow tool was not created");
+    const workflowDir = path.join(ctx.config.projectCoworkDir, "workflows");
+    await fs.mkdir(workflowDir, { recursive: true });
+    await fs.writeFile(path.join(workflowDir, "mismatch.ts"), workflowSource("different-name"));
+
+    await expect(tool.execute({ action: "run", name: "mismatch", dryRun: true })).rejects.toThrow(
+      'workflow filename/name mismatch: expected meta.name "mismatch", found "different-name"',
+    );
+    expect(assertCanMutate).not.toHaveBeenCalled();
+  });
+
+  test("named runs validate metadata in the execution worker", async () => {
+    const { ctx, assertCanMutate } = await makeToolContext();
+    const tool = createWorkflowTool(ctx);
+    if (!tool) throw new Error("workflow tool was not created");
+    const workflowDir = path.join(ctx.config.projectCoworkDir, "workflows");
+    await fs.mkdir(workflowDir, { recursive: true });
+    await fs.writeFile(path.join(workflowDir, "mismatch.ts"), workflowSource("different-name"));
+
+    await expect(tool.execute({ action: "run", name: "mismatch" })).rejects.toThrow(
+      'workflow filename/name mismatch: expected meta.name "mismatch", found "different-name"',
+    );
+    expect(assertCanMutate).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps legacy inline runs and rejects ambiguous run sources", async () => {
     const { ctx } = await makeToolContext();
     const tool = createWorkflowTool(ctx);

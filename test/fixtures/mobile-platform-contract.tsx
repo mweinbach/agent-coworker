@@ -546,11 +546,9 @@ const { GroupedSwitchRow } = await import("../../apps/mobile/src/components/pair
 const { PendingRequestCard } = await import(
   "../../apps/mobile/src/components/thread/pending-request-card"
 );
-const { ReasoningCard } = await import("../../apps/mobile/src/components/thread/reasoning-card");
 const { SourcesCarousel } = await import(
   "../../apps/mobile/src/components/thread/sources-carousel"
 );
-const { ToolCallCard } = await import("../../apps/mobile/src/components/thread/tool-call-card");
 const { runAccessibleLayoutAnimation } = await import(
   "../../apps/mobile/src/features/accessibility/mobile-accessibility"
 );
@@ -781,16 +779,6 @@ function WorkflowTree() {
       label: "Show debug messages",
       onValueChange: setSwitchValue,
       value: switchValue,
-    }),
-    createElement(ReasoningCard, {
-      mode: "reasoning",
-      text: "First line\nSecond line\nThird line\nFourth line\nFifth line",
-    }),
-    createElement(ToolCallCard, {
-      args: { command: "bun test", cwd: "/workspace", timeout: 60, verbose: true },
-      name: "bash",
-      result: { ok: true },
-      state: "output-available",
     }),
     createElement(SourcesCarousel, {
       items: [{ href: "https://example.com/docs", label: "Example documentation" }],

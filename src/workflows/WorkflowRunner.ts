@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseChildModelRef } from "../models/childModelRouting";
 import {
   MAX_WORKFLOW_ERROR_TEXT_CHARS,
   // Aliased: `WorkflowRunOutcome` is this module's own result union.
@@ -6,6 +7,8 @@ import {
   type WorkflowProgressAgent,
 } from "../shared/workflows";
 import type { AgentControl, ToolContext } from "../tools/context";
+import { isProviderName } from "../types";
+import { resolveAuthHomeDir } from "../utils/authHome";
 import { compileWorkflowSource } from "./compile";
 import { runWorkflowAgent, WorkflowAgentError } from "./hostAgent";
 import { spillWorkflowPromptToFile, WORKFLOW_INLINE_PROMPT_CHARS } from "./inputSpill";
@@ -37,6 +40,8 @@ export type WorkflowRunOptions = {
   dryRun?: boolean;
   /** Internal/test override for the whole-run ceiling. */
   runTimeoutMs?: number;
+  /** Optional registry filename/name contract validated in the worker handshake. */
+  expectedName?: string;
   /** Emitted on phase changes and on every agent state transition. */
   onProgress?: (progress: {
     runId: string;
@@ -403,8 +408,50 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
     progress.push(row);
     emitProgress();
 
-    const digest = digestAgentCall({ argsHash, prompt, opts: options });
-    const cached = journal.lookup(digest);
+    const routingMode = opts.ctx.config.childModelRoutingMode ?? "same-provider";
+    const allowedChildModelRefs =
+      routingMode === "cross-provider-allowlist"
+        ? [...new Set(opts.ctx.config.allowedChildModelRefs ?? [])].sort()
+        : [];
+    const hasInheritedExecutionIdentity = Boolean(
+      opts.ctx.config.provider ||
+        opts.ctx.config.model ||
+        opts.ctx.config.childModelRoutingMode ||
+        allowedChildModelRefs.length,
+    );
+    const hasExplicitModelProvider =
+      options.model?.includes(":") &&
+      isProviderName(options.model.slice(0, options.model.indexOf(":")).trim());
+    const cacheOptions = options.model
+      ? hasExplicitModelProvider || !opts.ctx.config.provider
+        ? options
+        : { ...options, provider: opts.ctx.config.provider }
+      : !hasInheritedExecutionIdentity
+        ? options
+        : {
+            ...options,
+            ...(opts.ctx.config.provider ? { provider: opts.ctx.config.provider } : {}),
+            ...(opts.ctx.config.model ? { model: opts.ctx.config.model } : {}),
+            childModelRoutingMode: routingMode,
+            ...(allowedChildModelRefs.length ? { allowedChildModelRefs } : {}),
+          };
+    const digest = digestAgentCall({ argsHash, prompt, opts: cacheOptions });
+    let cached = journal.lookup(digest);
+    if (cached && hasExplicitModelProvider && options.model) {
+      try {
+        const parentProvider = opts.ctx.config.provider;
+        if (
+          !parentProvider ||
+          parseChildModelRef(options.model, parentProvider, "child model", {
+            home: resolveAuthHomeDir(opts.ctx.config),
+          }).provider !== parentProvider
+        ) {
+          cached = null;
+        }
+      } catch {
+        cached = null;
+      }
+    }
     if (cached) {
       row.state = "cached";
       row.usdCost = 0;
@@ -585,6 +632,18 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
               message: `meta is invalid: ${parsed.error.issues
                 .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
                 .join("; ")}`,
+            },
+          });
+          return;
+        }
+        if (opts.expectedName && parsed.data.name !== opts.expectedName) {
+          postWorker({
+            t: "metaAck",
+            callId,
+            ok: true,
+            payload: {
+              ok: false,
+              message: `workflow filename/name mismatch: expected meta.name "${opts.expectedName}", found "${parsed.data.name}"`,
             },
           });
           return;

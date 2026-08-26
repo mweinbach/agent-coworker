@@ -95,6 +95,187 @@ describe("sessionDb", () => {
     );
   });
 
+  test("leaves retired research migrations unapplied when their schema does not exist", async () => {
+    const paths = await makeTmpCoworkHome();
+    const dbPath = path.join(paths.rootDir, "sessions.db");
+    const db = await SessionDb.create({ paths });
+    try {
+      const inspectDb = new Database(dbPath, { create: false, strict: false });
+      try {
+        expect(
+          inspectDb
+            .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'research'")
+            .get(),
+        ).toBeNull();
+        expect(
+          inspectDb
+            .query("SELECT version FROM schema_migrations WHERE version IN (13, 14, 15)")
+            .all(),
+        ).toEqual([]);
+      } finally {
+        inspectDb.close();
+      }
+    } finally {
+      db.close();
+    }
+
+    const incorrectlyMarkedDb = new Database(dbPath, { create: false, strict: false });
+    try {
+      const markMigration = incorrectlyMarkedDb.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+      );
+      for (const version of [13, 14, 15]) {
+        markMigration.run(version, "2026-04-07T17:16:57.053Z");
+      }
+    } finally {
+      incorrectlyMarkedDb.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      const inspectDb = new Database(dbPath, { create: false, strict: false });
+      try {
+        expect(
+          inspectDb
+            .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'research'")
+            .get(),
+        ).toBeNull();
+        expect(
+          inspectDb
+            .query("SELECT version FROM schema_migrations WHERE version IN (13, 14, 15)")
+            .all(),
+        ).toEqual([]);
+      } finally {
+        inspectDb.close();
+      }
+    } finally {
+      reopened.close();
+    }
+  });
+
+  test("preserves legacy research rows and leaves unapplied upgrades available to older builds", async () => {
+    const paths = await makeTmpCoworkHome();
+    const dbPath = path.join(paths.rootDir, "sessions.db");
+    const seededAt = "2026-04-07T17:16:57.053Z";
+    const initialDb = await SessionDb.create({ paths });
+    initialDb.close();
+
+    const legacyDb = new Database(dbPath, { create: false, strict: false });
+    try {
+      legacyDb.exec(
+        `CREATE TABLE research (
+           id TEXT PRIMARY KEY,
+           parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
+           title TEXT NOT NULL,
+           prompt TEXT NOT NULL,
+           status TEXT NOT NULL,
+           interaction_id TEXT NULL,
+           last_event_id TEXT NULL,
+           inputs_json TEXT NOT NULL,
+           settings_json TEXT NOT NULL,
+           outputs_markdown TEXT NOT NULL,
+           thought_summaries_json TEXT NOT NULL,
+           sources_json TEXT NOT NULL,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           error TEXT NULL
+         );
+         CREATE INDEX idx_research_status_updated ON research(status, updated_at DESC);
+         CREATE INDEX idx_research_parent_updated ON research(parent_research_id, updated_at DESC);`,
+      );
+      legacyDb
+        .query(
+          `INSERT INTO research (
+             id, title, prompt, status, inputs_json, settings_json, outputs_markdown,
+             thought_summaries_json, sources_json, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "legacy-research",
+          "Saved research",
+          "Preserve this research",
+          "completed",
+          "{}",
+          "{}",
+          "Saved findings",
+          "[]",
+          "[]",
+          seededAt,
+          seededAt,
+        );
+      const markMigration = legacyDb.query(
+        "INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+      );
+      for (const version of [13, 14, 15]) {
+        markMigration.run(version, seededAt);
+      }
+    } finally {
+      legacyDb.close();
+    }
+
+    const upgraded = await SessionDb.create({ paths });
+    try {
+      const inspectDb = new Database(dbPath, { create: false, strict: false });
+      try {
+        expect(
+          inspectDb
+            .query("SELECT version FROM schema_migrations WHERE version IN (13, 14, 15)")
+            .all(),
+        ).toEqual([{ version: 13 }]);
+        expect(inspectDb.query("SELECT id, title FROM research").get()).toEqual({
+          id: "legacy-research",
+          title: "Saved research",
+        });
+        const researchColumns = (
+          inspectDb.query("PRAGMA table_info(research)").all() as Array<Record<string, unknown>>
+        ).map((row) => String(row.name));
+        expect(researchColumns).not.toContain("plan_pending");
+        expect(researchColumns).not.toContain("workspace_path");
+      } finally {
+        inspectDb.close();
+      }
+    } finally {
+      upgraded.close();
+    }
+
+    const downgradedDb = new Database(dbPath, { create: false, strict: false });
+    try {
+      downgradedDb.exec(
+        `ALTER TABLE research ADD COLUMN plan_pending INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE research ADD COLUMN workspace_path TEXT NULL;
+         CREATE INDEX idx_research_workspace_updated ON research(workspace_path, updated_at DESC);`,
+      );
+      const markMigration = downgradedDb.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+      );
+      for (const version of [14, 15]) {
+        markMigration.run(version, seededAt);
+      }
+    } finally {
+      downgradedDb.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      const inspectDb = new Database(dbPath, { create: false, strict: false });
+      try {
+        expect(
+          inspectDb
+            .query("SELECT version FROM schema_migrations WHERE version IN (13, 14, 15)")
+            .all(),
+        ).toEqual([{ version: 13 }, { version: 14 }, { version: 15 }]);
+        expect(inspectDb.query("SELECT id, title FROM research").get()).toEqual({
+          id: "legacy-research",
+          title: "Saved research",
+        });
+      } finally {
+        inspectDb.close();
+      }
+    } finally {
+      reopened.close();
+    }
+  });
+
   test("persists/lists/deletes sessions with canonical state", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });

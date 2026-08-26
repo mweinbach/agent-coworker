@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveResearchAwareView } from "./app/researchAvailability";
 import { useAppStore } from "./app/store";
 import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
@@ -192,7 +191,6 @@ const ChatShell = memo(function ChatShell({
   bootstrapStage: BootstrapStage | null;
 }) {
   const view = useAppStore((s) => s.view);
-  const providerConnected = useAppStore((s) => s.providerConnected);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -271,7 +269,7 @@ const ChatShell = memo(function ChatShell({
     return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
   }, [activeThread, selectedWorkspaceId, workspaces]);
   const busy = selectedThreadBusy;
-  const effectiveView = resolveResearchAwareView(view, providerConnected);
+  const effectiveView = view;
   const isConversationView = effectiveView === "chat" || effectiveView === "task";
   const showContextSidebar =
     (effectiveView === "chat" && activeThread !== null) ||
@@ -343,17 +341,12 @@ const ChatShell = memo(function ChatShell({
     return null;
   }, [activeWorkspaceId, workspaceRuntimeById]);
   const topBarTitle =
-    effectiveView === "research"
-      ? "Research"
-      : effectiveView === "task"
-        ? (selectedTask?.title ?? "New task")
-        : activeThread?.title?.trim() || "New chat";
-  const topBarSubtitle: string | null =
-    effectiveView === "research"
-      ? null
-      : isOneOffChatWorkspace(activeWorkspace)
-        ? null
-        : (activeWorkspace?.name ?? "Cowork");
+    effectiveView === "task"
+      ? (selectedTask?.title ?? "New task")
+      : activeThread?.title?.trim() || "New chat";
+  const topBarSubtitle: string | null = isOneOffChatWorkspace(activeWorkspace)
+    ? null
+    : (activeWorkspace?.name ?? "Cowork");
   const canClearHardCap =
     selectedSessionUsageStop &&
     !selectedTranscriptOnly &&
@@ -530,7 +523,6 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={adaptiveLayout.tier === "full" ? topBarSubtitle : null}
         compactToolbar={adaptiveLayout.tier !== "full"}
-        suppressThreadDetails={effectiveView === "research"}
         hideThreadShell={isConversationView && activeThread === null}
         sessionUsage={isConversationView ? selectedSessionUsage : null}
         lastTurnUsage={isConversationView ? selectedLastTurnUsage : null}
@@ -606,13 +598,7 @@ const ChatShell = memo(function ChatShell({
           id="main-content"
           tabIndex={-1}
           aria-label={
-            effectiveView === "settings"
-              ? "Settings"
-              : effectiveView === "research"
-                ? "Research"
-                : effectiveView === "task"
-                  ? "Task"
-                  : "Chat"
+            effectiveView === "settings" ? "Settings" : effectiveView === "task" ? "Task" : "Chat"
           }
           className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
@@ -637,13 +623,7 @@ const ChatShell = memo(function ChatShell({
                   bootstrapStage={bootstrapStage}
                   startupError={preserveCachedContentOnStartupError ? null : startupError}
                   workspaceStartupProgress={workspaceStartupProgress}
-                  view={
-                    effectiveView === "research"
-                      ? "research"
-                      : effectiveView === "task"
-                        ? "task"
-                        : "chat"
-                  }
+                  view={effectiveView === "task" ? "task" : "chat"}
                 />
               </div>
               {showInlineFilePreview ? (
@@ -864,10 +844,6 @@ function AppContent() {
       if (command === "openUpdates") {
         state.openSettings("updates");
         void state.checkForUpdates();
-        return;
-      }
-      if (command === "openResearch") {
-        void state.openResearch();
         return;
       }
       if (command === "openSkills") {

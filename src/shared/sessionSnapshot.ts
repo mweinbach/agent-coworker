@@ -34,6 +34,8 @@ import {
 import { type ToolInputDigest, toolInputDigestSchema } from "./toolInputDigest";
 import { type WorkflowProgressPayload, workflowProgressPayloadSchema } from "./workflows";
 
+export type { ServerErrorData } from "../types";
+
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const todoItemSchema = z

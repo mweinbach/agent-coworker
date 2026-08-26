@@ -64,7 +64,6 @@ import type {
 } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import type {
-  ComposerDraft,
   ComposerDraftAttachment,
   ComposerDraftRevision,
   ComposerDraftRevisionFloor,
@@ -131,9 +130,6 @@ import type {
   PersistedPrivacyTelemetrySettings,
   PersistedProviderUiState,
   PrivacyTelemetrySettings,
-  ResearchCard,
-  ResearchDetail,
-  ResearchSettingsState,
   SettingsPageId,
   SidebarSectionKey,
   TaskArtifactDetail,
@@ -300,8 +296,6 @@ export type AppStoreState = {
   /** Hidden agent thread currently shown in the read-only run viewer, if any. */
   agentViewerThreadId: string | null;
   quickChatPreparedWorkspaceId: string | null;
-  researchCreationDraft: ComposerDraft;
-  researchCreationError: CreationDraftError | null;
   taskCreationDraft: TaskCreationDraft;
   taskCreationError: CreationDraftError | null;
   injectContext: boolean;
@@ -318,16 +312,6 @@ export type AppStoreState = {
   onboardingVisible: boolean;
   onboardingStep: OnboardingStep;
   onboardingState: PersistedOnboardingState;
-
-  researchTransportWorkspaceId: string | null;
-  researchById: Record<string, ResearchDetail>;
-  researchOrder: string[];
-  selectedResearchId: string | null;
-  researchListLoading: boolean;
-  researchListError: string | null;
-  researchDraftSettings: ResearchSettingsState;
-  researchSubscribedIds: string[];
-  researchExportPendingIds: string[];
 
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -473,7 +457,6 @@ export type AppStoreState = {
   quitAndInstallUpdate: () => Promise<void>;
 
   openSkills: () => Promise<void>;
-  openResearch: () => Promise<void>;
   listConversationImportSources: (params?: {
     sources?: ConversationSourceRequest[];
     includeCodex?: boolean;
@@ -659,41 +642,6 @@ export type AppStoreState = {
   addMarketplace: (sourceInput: string) => Promise<OperationResult>;
   removeMarketplace: (id: string) => Promise<OperationResult>;
   dismissMarketplaceMutationError: (workspaceId?: string) => void;
-
-  refreshResearchList: () => Promise<void>;
-  selectResearch: (researchId: string | null) => Promise<void>;
-  startResearch: (
-    opts: {
-      input: string;
-      title?: string;
-      files?: File[];
-      settings?: Partial<ResearchSettingsState>;
-      draftRevision?: number;
-      clientResearchId?: string;
-    } & CreationOperationControl,
-  ) => Promise<OperationResult<ResearchCard>>;
-  setResearchCreationInput: (input: string) => void;
-  addResearchCreationAttachments: (files: File[]) => Promise<void>;
-  removeResearchCreationAttachment: (index: number) => void;
-  setResearchCreationError: (revision: number, message: string | null) => boolean;
-  clearResearchCreationDraft: (revision: number) => boolean;
-  cancelResearch: (researchId: string) => Promise<OperationResult>;
-  renameResearch: (researchId: string, title: string) => Promise<OperationResult>;
-  deleteResearch: (researchId: string) => Promise<OperationResult>;
-  sendResearchFollowUp: (opts: {
-    parentResearchId: string;
-    input: string;
-    title?: string;
-    files?: File[];
-    settings?: Partial<ResearchSettingsState>;
-  }) => Promise<OperationResult<ResearchCard>>;
-  setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
-  exportResearch: (
-    researchId: string,
-    format: import("../../../../src/server/research/types").ResearchExportFormat,
-  ) => Promise<OperationResult<string | null>>;
-  approveResearchPlan: (researchId: string) => Promise<OperationResult<ResearchCard>>;
-  refineResearchPlan: (researchId: string, input: string) => Promise<OperationResult<ResearchCard>>;
 
   applyWorkspaceDefaultsToThread: (
     threadId: string,

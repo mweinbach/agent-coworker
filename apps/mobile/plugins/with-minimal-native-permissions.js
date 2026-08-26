@@ -2,6 +2,7 @@ const ANDROID_ALLOWED_PERMISSIONS = new Set([
   "android.permission.CAMERA",
   "android.permission.INTERNET",
 ]);
+const EXPO_DEV_CLIENT_BONJOUR_SERVICE = "_expo._tcp";
 
 const LOCAL_NETWORK_USAGE_DESCRIPTION =
   "Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code.";
@@ -43,14 +44,13 @@ function pruneIosPermissionStrings(infoPlist) {
   delete infoPlist.NSMicrophoneUsageDescription;
   delete infoPlist.NSFaceIDUsageDescription;
   infoPlist.NSLocalNetworkUsageDescription = LOCAL_NETWORK_USAGE_DESCRIPTION;
-  if (Array.isArray(infoPlist.NSBonjourServices)) {
-    infoPlist.NSBonjourServices = infoPlist.NSBonjourServices.filter(
-      (service) => service !== "_expo._tcp",
-    );
-    if (infoPlist.NSBonjourServices.length === 0) {
-      delete infoPlist.NSBonjourServices;
-    }
+  const bonjourServices = Array.isArray(infoPlist.NSBonjourServices)
+    ? infoPlist.NSBonjourServices
+    : [];
+  if (!bonjourServices.includes(EXPO_DEV_CLIENT_BONJOUR_SERVICE)) {
+    bonjourServices.push(EXPO_DEV_CLIENT_BONJOUR_SERVICE);
   }
+  infoPlist.NSBonjourServices = bonjourServices;
   return infoPlist;
 }
 
@@ -73,6 +73,7 @@ function withMinimalNativePermissions(config) {
 module.exports = withMinimalNativePermissions;
 module.exports.__internal = {
   ANDROID_ALLOWED_PERMISSIONS,
+  EXPO_DEV_CLIENT_BONJOUR_SERVICE,
   LOCAL_NETWORK_USAGE_DESCRIPTION,
   filterAndroidPermissions,
   getAndroidPermissionName,

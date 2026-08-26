@@ -1053,46 +1053,6 @@ describe("desktop sidebar", () => {
     }
   });
 
-  test.serial("shows Research navigation only when Google is connected", async () => {
-    const harness = setupSidebarJsdom();
-    let root: ReturnType<typeof createRoot> | null = null;
-
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      root = createRoot(container);
-
-      await act(async () => {
-        resetAppStore({
-          workspaces: [makeWorkspace()],
-          threads: makeThreads(1),
-          selectedWorkspaceId: "ws-1",
-        });
-        root.render(createElement(Sidebar));
-      });
-
-      expect(container.textContent).not.toContain("Research");
-
-      await act(async () => {
-        resetAppStore({
-          workspaces: [makeWorkspace()],
-          threads: makeThreads(1),
-          selectedWorkspaceId: "ws-1",
-          providerConnected: ["google"],
-        });
-      });
-
-      expect(container.textContent).toContain("Research");
-    } finally {
-      if (root) {
-        await act(async () => {
-          root?.unmount();
-        });
-      }
-      harness.restore();
-    }
-  });
-
   test.serial(
     "hides add-workspace affordances when workspace lifecycle actions are disabled",
     async () => {

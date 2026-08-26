@@ -159,8 +159,12 @@ describe("control socket helpers over JSON-RPC", () => {
       get as never,
       set as never,
       workspaceId,
-      "research/start",
-      {},
+      "turn/start",
+      {
+        threadId: "thread-abort-request",
+        clientMessageId: "message-abort-request",
+        input: [],
+      },
       { signal: controller.signal },
     );
     controller.abort();
@@ -198,8 +202,12 @@ describe("control socket helpers over JSON-RPC", () => {
         get as never,
         set as never,
         workspaceId,
-        "research/start",
-        {},
+        "turn/start",
+        {
+          threadId: "thread-pre-aborted-request",
+          clientMessageId: "message-pre-aborted-request",
+          input: [],
+        },
         {
           signal: controller.signal,
         },
@@ -339,8 +347,8 @@ describe("control socket helpers over JSON-RPC", () => {
       "cowork/session/state/read",
       { cwd: "/tmp/workspace" },
     );
-    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "research/get", {
-      researchId: "research-1",
+    await helpers.requestJsonRpcControl(get as any, set as any, workspaceId, "task/list", {
+      workspacePath: "/tmp/workspace",
     });
     await helpers.requestJsonRpcControl(
       get as any,

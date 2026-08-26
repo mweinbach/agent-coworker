@@ -35,6 +35,36 @@ function sql(lines: readonly string[]): string {
   return lines.join(String.fromCharCode(10));
 }
 
+function reconcileRetiredResearchMigrations(db: Database, appliedMigrations: Set<number>): void {
+  if (
+    !appliedMigrations.has(RESEARCH_TABLE_MIGRATION) &&
+    !appliedMigrations.has(RESEARCH_PLAN_COLUMNS_MIGRATION) &&
+    !appliedMigrations.has(RESEARCH_WORKSPACE_COLUMN_MIGRATION)
+  ) {
+    return;
+  }
+
+  const researchColumns = new Set(
+    (db.query("PRAGMA table_info(research)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  const completedMigrations = new Map([
+    [RESEARCH_TABLE_MIGRATION, researchColumns.size > 0],
+    [RESEARCH_PLAN_COLUMNS_MIGRATION, researchColumns.has("plan_pending")],
+    [RESEARCH_WORKSPACE_COLUMN_MIGRATION, researchColumns.has("workspace_path")],
+  ]);
+  const removeMigration = db.query("DELETE FROM schema_migrations WHERE version = ?");
+
+  db.transaction(() => {
+    for (const [version, isComplete] of completedMigrations) {
+      if (isComplete || !appliedMigrations.has(version)) continue;
+      removeMigration.run(version);
+      appliedMigrations.delete(version);
+    }
+  })();
+}
+
 type BootstrapSessionDbOptions = {
   db: Database;
   busyTimeoutMs: number;
@@ -53,9 +83,6 @@ type BootstrapSessionDbOptions = {
     | "addSessionSnapshotsTable"
     | "addThreadJournalEventsTable"
     | "addAgentTaskMetadataColumns"
-    | "addResearchTable"
-    | "addResearchPlanColumns"
-    | "addResearchWorkspaceColumn"
     | "addAgentProfileMetadataColumn"
     | "addLastMemoryGeneratedIndexColumn"
     | "addTaskModeTables"
@@ -88,6 +115,7 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   );
 
   const appliedMigrations = opts.repository.getAppliedMigrationVersions();
+  reconcileRetiredResearchMigrations(opts.db, appliedMigrations);
 
   if (!appliedMigrations.has(BASE_SCHEMA_MIGRATION)) {
     opts.repository.createBaseSchema();
@@ -142,21 +170,6 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(AGENT_TASK_METADATA_MIGRATION)) {
     opts.repository.addAgentTaskMetadataColumns();
     opts.repository.markMigration(AGENT_TASK_METADATA_MIGRATION);
-  }
-
-  if (!appliedMigrations.has(RESEARCH_TABLE_MIGRATION)) {
-    opts.repository.addResearchTable();
-    opts.repository.markMigration(RESEARCH_TABLE_MIGRATION);
-  }
-
-  if (!appliedMigrations.has(RESEARCH_PLAN_COLUMNS_MIGRATION)) {
-    opts.repository.addResearchPlanColumns();
-    opts.repository.markMigration(RESEARCH_PLAN_COLUMNS_MIGRATION);
-  }
-
-  if (!appliedMigrations.has(RESEARCH_WORKSPACE_COLUMN_MIGRATION)) {
-    opts.repository.addResearchWorkspaceColumn();
-    opts.repository.markMigration(RESEARCH_WORKSPACE_COLUMN_MIGRATION);
   }
 
   if (!appliedMigrations.has(AGENT_PROFILE_METADATA_MIGRATION)) {

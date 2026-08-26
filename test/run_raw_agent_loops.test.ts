@@ -448,6 +448,17 @@ describe("raw loop scripted spawnAgent prompts", () => {
       expect(prompt).not.toContain("Use bash to run command: pwd");
     }
   });
+
+  test("standardize scripted private final outputs on JSON", () => {
+    const runs = [...buildGoogleCustomtoolsToolCoverageRuns(), ...buildMixedRuns()];
+
+    for (const run of runs) {
+      const prompt = run.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
+      expect(run.finalContract?.format).toBe("json");
+      expect(prompt).toContain('"end": "<<END_RUN>>"');
+      expect(prompt).not.toContain("Final response must be exactly");
+    }
+  });
 });
 
 describe("raw loop harness context", () => {

@@ -43,7 +43,8 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "onDemandFilesystem": false
     }
   }
 }

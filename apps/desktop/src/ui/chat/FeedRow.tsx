@@ -47,7 +47,6 @@ import {
   type VisibleUserAttachment,
 } from "./feedMessageParsing";
 import { MentionText } from "./MentionText";
-import { ToolCard } from "./toolCards/ToolCard";
 
 type CopyStatus = "idle" | "copied" | "failed";
 
@@ -499,18 +498,6 @@ export const FeedRow = memo(function FeedRow(props: {
 
   if (item.kind === "todos") {
     return null;
-  }
-
-  if (item.kind === "tool") {
-    return (
-      <ToolCard
-        name={item.name}
-        args={item.args}
-        approval={item.approval}
-        result={item.result}
-        state={item.state}
-      />
-    );
   }
 
   if (item.kind === "log") {

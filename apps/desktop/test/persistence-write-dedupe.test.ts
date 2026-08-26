@@ -14,12 +14,10 @@ const saveState = mock(async (state: unknown) => {
 const { __internal: persistenceInternal, persistNow } = await import(
   "../src/app/store.helpers/persistence"
 );
-const { createEmptyComposerDraft } = await import("../src/app/composerDrafts");
 const { createEmptyTaskCreationDraft } = await import("../src/app/creationDrafts");
 
-// The real store always holds these; building them per call would mint a fresh
+// The real store always holds this; building it per call would mint a fresh
 // idempotency key and make the persisted projection non-deterministic.
-const researchCreationDraft = createEmptyComposerDraft();
 const taskCreationDraft = createEmptyTaskCreationDraft();
 
 type MutableState = { developerMode: boolean; showHiddenFiles: boolean };
@@ -52,7 +50,6 @@ describe("persisted state writes", () => {
       providerStatusByName: {},
       providerStatusLastUpdatedAt: null,
       composerDraftsByKey: {},
-      researchCreationDraft,
       taskCreationDraft,
     }) as never;
 

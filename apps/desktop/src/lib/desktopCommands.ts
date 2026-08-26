@@ -357,13 +357,6 @@ export async function openPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().openPath(opts);
 }
 
-export async function saveExportedFile(opts: {
-  sourcePath: string;
-  defaultFileName: string;
-}): Promise<string | null> {
-  return await requireDesktopApi().saveExportedFile(opts);
-}
-
 export async function pickCanvasSavePath(opts: PickCanvasSavePathInput): Promise<string | null> {
   return await requireDesktopApi().pickCanvasSavePath(opts);
 }

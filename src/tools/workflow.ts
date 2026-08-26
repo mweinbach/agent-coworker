@@ -6,7 +6,7 @@ import { assertSafeWorkflowRunId } from "../workflows/journal";
 import {
   assertWorkflowDefinitionName,
   listWorkflowDefinitions,
-  resolveWorkflowDefinition,
+  resolveWorkflowDefinitionForExecution,
   saveWorkflowDefinition,
 } from "../workflows/registry";
 import { runWorkflow } from "../workflows/WorkflowRunner";
@@ -180,7 +180,7 @@ export function createWorkflowTool(ctx: ToolContext) {
       }
 
       const definition = input.name
-        ? await resolveWorkflowDefinition(ctx.config, input.name)
+        ? await resolveWorkflowDefinitionForExecution(ctx.config, input.name)
         : null;
       const script = definition?.source ?? input.script;
       if (!script) throw new Error("workflow run input validation failed");
@@ -195,12 +195,15 @@ export function createWorkflowTool(ctx: ToolContext) {
           dryRun: input.dryRun === true,
         })}`,
       );
-      await ctx.assertCanMutate?.("workflow");
+      if (input.dryRun !== true) {
+        await ctx.assertCanMutate?.("workflow");
+      }
 
       const outcome = await runWorkflow({
         ctx,
         control: agentControl,
         script,
+        ...(definition ? { expectedName: definition.name } : {}),
         ...(ctx.onWorkflowProgress ? { onProgress: ctx.onWorkflowProgress } : {}),
         ...(input.args !== undefined ? { args: input.args } : {}),
         ...(input.resumeFromRunId ? { resumeFromRunId: input.resumeFromRunId } : {}),

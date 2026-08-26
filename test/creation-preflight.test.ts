@@ -2,10 +2,10 @@ import { describe, expect, mock, test } from "bun:test";
 
 import type { ProviderCatalogPayload } from "../src/providers/connectionCatalog";
 import { runCreationPreflight } from "../src/server/readiness/creationPreflight";
-import { hasGoogleResearchApiKey } from "../src/server/research/googleApiKey";
 import {
   COWORK_RUNTIME_STARTING_MESSAGE,
   type CreationPreflightParams,
+  creationPreflightParamsSchema,
 } from "../src/shared/creationReadiness";
 import type { AgentConfig } from "../src/types";
 
@@ -46,7 +46,6 @@ function preflight(
     resolveWorkspace: () => "/tmp/project",
     getProviderCatalog: async () => readyCatalog,
     getRuntimeStartup: () => ({ ready: true }),
-    hasResearchCredentials: () => true,
     ...overrides,
   });
 }
@@ -241,16 +240,6 @@ describe("creation readiness preflight", () => {
     expect(isProjectWorkspace).not.toHaveBeenCalled();
   });
 
-  test("keeps Research discoverable but blocked without Google credentials", async () => {
-    const result = await preflight({ kind: "research" }, { hasResearchCredentials: () => false });
-
-    expect(result.ready).toBe(false);
-    expect(result.checks.find((entry) => entry.id === "research_credentials")).toMatchObject({
-      status: "blocked",
-      repairAction: { type: "connectProvider", provider: "google" },
-    });
-  });
-
   test("treats an in-flight startup bootstrap as pending, not as a blocker", async () => {
     const result = await preflight(
       { kind: "chat", provider: "google", model: "gemini-2.5-flash" },
@@ -367,15 +356,7 @@ describe("creation readiness preflight", () => {
     });
   });
 
-  test("accepts the Google API key environment supported by the research runtime", () => {
-    expect(
-      hasGoogleResearchApiKey(
-        {
-          ...config,
-          userCoworkDir: "/tmp/nonexistent-cowork-home/.cowork",
-        },
-        { GOOGLE_API_KEY: "test-key" },
-      ),
-    ).toBe(true);
+  test("rejects the retired research creation kind", () => {
+    expect(creationPreflightParamsSchema.safeParse({ kind: "research" }).success).toBe(false);
   });
 });

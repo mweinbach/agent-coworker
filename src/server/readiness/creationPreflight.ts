@@ -9,7 +9,6 @@ import {
   type CreationReadinessCheck,
 } from "../../shared/creationReadiness";
 import type { AgentConfig } from "../../types";
-import { hasGoogleResearchApiKey } from "../research/googleApiKey";
 
 export type CreationPreflightDependencies = {
   config: AgentConfig;
@@ -22,7 +21,6 @@ export type CreationPreflightDependencies = {
   };
   getLmStudioStatus?: () => Promise<LmStudioLocalStatus>;
   getCodexAppServerStatus?: () => Promise<CodexAppServerInstallStatus>;
-  hasResearchCredentials?: () => boolean;
   /**
    * Only consulted for `kind: "task"`. `task/create` accepts an authorized
    * *project* workspace and rejects everything else (quick chats included), so
@@ -155,22 +153,6 @@ export async function runCreationPreflight(
       ),
     );
     return { ready: false, checks };
-  }
-
-  if (params.kind === "research") {
-    const hasCredentials = deps.hasResearchCredentials?.() ?? hasGoogleResearchApiKey(deps.config);
-    checks.push(
-      hasCredentials
-        ? check("research_credentials", "ok", "Google Deep Research credentials are available.")
-        : check(
-            "research_credentials",
-            "blocked",
-            "Connect Google with an API key to use Deep Research.",
-            { type: "connectProvider", provider: "google" },
-          ),
-    );
-    await appendRuntimeChecks(checks, undefined, deps);
-    return { ready: isReady(checks), checks };
   }
 
   const provider = params.provider ?? deps.config.provider;

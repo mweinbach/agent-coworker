@@ -43,6 +43,7 @@ function normalizeCloudSyncEndpoint(value: unknown): string | undefined {
 }
 
 export type CloudSyncScope = "settings" | "workspaceMetadata" | "threads";
+type CloudSyncWritableScope = "settings";
 
 export type CloudSyncSettingsSnapshot = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
@@ -99,10 +100,10 @@ export type CloudSyncPayload =
 export type CloudSyncPatch = {
   version: typeof CLOUD_SYNC_PAYLOAD_VERSION;
   id: string;
-  scope: CloudSyncScope;
+  scope: CloudSyncWritableScope;
   dedupeKey?: string;
   createdAt: string;
-  payload: CloudSyncPayload;
+  payload: CloudSyncSettingsSnapshot;
 };
 
 export type CloudSyncRemoteState = {

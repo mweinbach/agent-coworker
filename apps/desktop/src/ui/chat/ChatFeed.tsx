@@ -383,14 +383,6 @@ function TranscriptScroller(props: {
     }
     restoredRef.current = true;
     persistSnapshot();
-
-    // The shadcn primitive applies its default position in a parent layout
-    // effect. Reapply in the same browser task so the owned position wins
-    // before paint without a hydration-completion jump.
-    queueMicrotask(() => {
-      const current = memory.get(threadId)?.position;
-      if (current) restorePosition(current);
-    });
   }, [
     hydrating,
     lastUserTurnId,
@@ -560,7 +552,6 @@ function TranscriptScroller(props: {
         aria-label="Conversation messages"
         className="[overflow-anchor:none]"
         data-scroll-mode={mode}
-        preserveScrollOnPrepend={false}
         onKeyDown={handleKeyDown}
         onScroll={handleScroll}
         onTouchMove={handleTouchMove}
@@ -703,7 +694,7 @@ export const ChatFeed = memo(function ChatFeed(props: {
   );
 
   return (
-    <MessageScrollerProvider key={threadId} autoScroll={false} defaultScrollPosition="start">
+    <MessageScrollerProvider key={threadId}>
       <ResponseCompletionAnnouncement
         busy={busy}
         streamingAssistantMessageId={streamingAssistantMessageId}

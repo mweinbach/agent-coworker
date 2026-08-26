@@ -32,9 +32,7 @@ for (const width of widths) {
       },
     });
 
-    test("keeps Canvas, Task, Research, Presentation, and Settings usable", async ({
-      quality,
-    }, testInfo) => {
+    test("keeps Canvas, Task, Presentation, and Settings usable", async ({ quality }, testInfo) => {
       const { page } = quality;
       await assertUsablePrimaryContentWidth(page);
 
@@ -76,19 +74,6 @@ for (const width of widths) {
       );
       await assertUsablePrimaryContentWidth(page);
       await captureSurface(page, testInfo, `task-${width}`);
-
-      await page.evaluate(() => window.__coworkQualityGate?.showResearch("completed"));
-      await expect(
-        page.getByRole("heading", { name: "Recommendation", exact: true }),
-      ).toBeVisible();
-      const research = page.locator("[data-research-layout]");
-      const researchWidth = (await research.boundingBox())?.width ?? 0;
-      await expect(research).toHaveAttribute(
-        "data-research-layout",
-        researchWidth > 0 && researchWidth < 808 ? "compact" : "split",
-      );
-      await assertUsablePrimaryContentWidth(page);
-      await captureSurface(page, testInfo, `research-${width}`);
 
       await page.evaluate(() => window.__coworkQualityGate?.openSettings("models"));
       await expect(page.getByRole("heading", { name: "Models", exact: true })).toBeVisible();

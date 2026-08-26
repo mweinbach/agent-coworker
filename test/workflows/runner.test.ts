@@ -321,6 +321,27 @@ describe("runWorkflow: compile failures are values, not throws", () => {
     expect(message).toContain("meta is invalid");
     expect(control.spawnCount()).toBe(0);
   });
+
+  test("expected workflow name is validated during the worker metadata handshake", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl();
+    const message = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control,
+      expectedName: "expected-name",
+      script:
+        `${metaHeader("different-name")}` +
+        `export default async function run({ agent }) { return await agent("go"); }`,
+    }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(message).toContain(
+      'workflow filename/name mismatch: expected meta.name "expected-name", found "different-name"',
+    );
+    expect(control.spawnCount()).toBe(0);
+  });
 });
 
 describe("runWorkflow: live progress", () => {

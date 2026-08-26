@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
+import { GOOGLE_API_KEY_ENV_VARS } from "../../src/providers/googleApiKey";
 import {
   createAnthropicModelAdapter,
   createBasetenModelAdapter,
@@ -11,6 +11,31 @@ import {
   createTogetherModelAdapter,
 } from "../../src/providers/modelAdapter";
 import { makeConfig, withEnv } from "./helpers";
+
+async function withGoogleEnv(
+  env: Partial<Record<(typeof GOOGLE_API_KEY_ENV_VARS)[number], string | undefined>>,
+  run: () => Promise<void> | void,
+) {
+  const previous = Object.fromEntries(
+    GOOGLE_API_KEY_ENV_VARS.map((key) => [key, process.env[key]]),
+  ) as Partial<Record<(typeof GOOGLE_API_KEY_ENV_VARS)[number], string | undefined>>;
+
+  for (const key of GOOGLE_API_KEY_ENV_VARS) {
+    const value = env[key];
+    if (typeof value === "string") process.env[key] = value;
+    else delete process.env[key];
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const key of GOOGLE_API_KEY_ENV_VARS) {
+      const value = previous[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
 
 describe("provider model adapters", () => {
   test("OpenAI adapter prefers saved key over env", async () => {
@@ -30,20 +55,29 @@ describe("provider model adapters", () => {
   });
 
   test("Google adapter wires x-goog-api-key header", async () => {
-    await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", "gkey", async () => {
+    await withGoogleEnv({ GOOGLE_GENERATIVE_AI_API_KEY: "gkey" }, async () => {
       const adapter = createGoogleModelAdapter("gemini-3.1");
       const headers = await adapter.config.headers();
       expect(headers["x-goog-api-key"]).toBe("gkey");
     });
   });
 
-  test("Google adapter falls back to GOOGLE_API_KEY", async () => {
-    await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
-      await withEnv("GOOGLE_API_KEY", "alias-key", async () => {
+  test("Google adapter prefers GEMINI_API_KEY before GOOGLE_API_KEY", async () => {
+    await withGoogleEnv(
+      { GEMINI_API_KEY: "gemini-key", GOOGLE_API_KEY: "google-key" },
+      async () => {
         const adapter = createGoogleModelAdapter("gemini-3.1");
         const headers = await adapter.config.headers();
-        expect(headers["x-goog-api-key"]).toBe("alias-key");
-      });
+        expect(headers["x-goog-api-key"]).toBe("gemini-key");
+      },
+    );
+  });
+
+  test("Google adapter falls back to GOOGLE_API_KEY", async () => {
+    await withGoogleEnv({ GOOGLE_API_KEY: "alias-key" }, async () => {
+      const adapter = createGoogleModelAdapter("gemini-3.1");
+      const headers = await adapter.config.headers();
+      expect(headers["x-goog-api-key"]).toBe("alias-key");
     });
   });
 
@@ -91,37 +125,34 @@ describe("provider model adapters", () => {
 
   test("adapters omit auth headers when no key source is available", async () => {
     await withEnv("OPENAI_API_KEY", undefined, async () => {
-      await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
-        await withEnv("GOOGLE_API_KEY", undefined, async () => {
-          await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
-            await withEnv("BASETEN_API_KEY", undefined, async () => {
-              await withEnv("TOGETHER_API_KEY", undefined, async () => {
-                await withEnv("NVIDIA_API_KEY", undefined, async () => {
-                  await withEnv("MINIMAX_API_KEY", undefined, async () => {
-                    const openAiHeaders =
-                      await createOpenAiModelAdapter("gpt-5.2").config.headers();
-                    const googleHeaders =
-                      await createGoogleModelAdapter("gemini-3.1").config.headers();
-                    const anthropicHeaders =
-                      await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
-                    const basetenHeaders =
-                      await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                    const togetherHeaders =
-                      await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                    const nvidiaHeaders = await createNvidiaModelAdapter(
-                      "nvidia/nemotron-3-super-120b-a12b",
-                    ).config.headers();
-                    const minimaxHeaders =
-                      await createMinimaxModelAdapter("MiniMax-M3").config.headers();
+      await withGoogleEnv({}, async () => {
+        await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
+          await withEnv("BASETEN_API_KEY", undefined, async () => {
+            await withEnv("TOGETHER_API_KEY", undefined, async () => {
+              await withEnv("NVIDIA_API_KEY", undefined, async () => {
+                await withEnv("MINIMAX_API_KEY", undefined, async () => {
+                  const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
+                  const googleHeaders =
+                    await createGoogleModelAdapter("gemini-3.1").config.headers();
+                  const anthropicHeaders =
+                    await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+                  const basetenHeaders =
+                    await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const togetherHeaders =
+                    await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const nvidiaHeaders = await createNvidiaModelAdapter(
+                    "nvidia/nemotron-3-super-120b-a12b",
+                  ).config.headers();
+                  const minimaxHeaders =
+                    await createMinimaxModelAdapter("MiniMax-M3").config.headers();
 
-                    expect(openAiHeaders).toEqual({});
-                    expect(googleHeaders).toEqual({});
-                    expect(anthropicHeaders).toEqual({});
-                    expect(basetenHeaders).toEqual({});
-                    expect(togetherHeaders).toEqual({});
-                    expect(nvidiaHeaders).toEqual({});
-                    expect(minimaxHeaders).toEqual({});
-                  });
+                  expect(openAiHeaders).toEqual({});
+                  expect(googleHeaders).toEqual({});
+                  expect(anthropicHeaders).toEqual({});
+                  expect(basetenHeaders).toEqual({});
+                  expect(togetherHeaders).toEqual({});
+                  expect(nvidiaHeaders).toEqual({});
+                  expect(minimaxHeaders).toEqual({});
                 });
               });
             });

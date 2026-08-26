@@ -52,19 +52,31 @@ the same sealed Worker/`node:vm` boundary used for execution. The default functi
 is not invoked, so validation spends no agent budget. A full run remains the proof
 that live prompts, schemas, and external tools behave as intended.
 
-Cowork bundles `deep-research`, a four-phase workflow that plans bounded research
-questions, gathers compact source-backed claims, independently verifies each
-claim, and synthesizes only claims that survive. Failed shards, dropped claims,
-uncertainty, and bounded-output truncation are reported as coverage limitations;
-the result is marked `partial` whenever those limitations remain.
+Cowork bundles `deep-research`, a provider-agnostic four-phase workflow that runs
+through the ordinary workflow harness: it plans bounded research questions,
+gathers source-backed claims and full shard reports, independently verifies each
+claim, and synthesizes a final report with the complete research record appended.
+Failed shards, dropped claims, uncertainty, and bounded-output truncation are
+reported as coverage limitations; the result is marked `partial` whenever those
+limitations remain.
 
-`deep-research` accepts `model` as the default model for every phase. The optional
-`plannerModel`, `researchModel`, `verificationModel`, and `synthesisModel` arguments
-override it for their respective phases. Values use the normal model id or
-`provider:modelId` syntax and still pass through standard model routing/fallback.
-The root system prompt includes the effective enabled models for the current
-provider and only connected, allowlisted cross-provider targets. Workflow authors
-must copy those exact values rather than guessing provider names or model IDs.
+`deep-research` requires a non-empty string `query`. It defaults to 5 planned
+questions and 4 verification claims per question; callers may set `maxQuestions`
+from 2–6 and `maxClaimsPerQuestion` from 1–4. Values outside those ranges are
+rejected before child agents spawn so the run does not silently pretend to cover
+more than it can. The result includes the effective settings, coverage counts,
+limitations, per-shard reports, verification assessments, verified claims, and
+the Markdown report.
+
+`deep-research` accepts `model` as the inherited default model for every phase.
+The optional `plannerModel`, `researchModel`, `verificationModel`, and
+`synthesisModel` arguments override it for their respective phases. If model args
+are omitted, child agents inherit normal session/default routing. Values use the
+normal model id or `provider:modelId` syntax and still pass through standard
+model routing/fallback. The root system prompt includes the effective enabled
+models for the current provider and only connected, allowlisted cross-provider
+targets. Workflow authors must copy those exact values rather than guessing
+provider names or model IDs.
 
 ## Script shape
 

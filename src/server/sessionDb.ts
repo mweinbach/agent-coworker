@@ -35,7 +35,6 @@ import type {
 } from "../shared/tasks";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { ModelStreamRawFormat } from "./modelStream";
-import type { ResearchRecord } from "./research/types";
 import {
   ensurePrivateDirectory,
   hardenPrivateFile,
@@ -243,7 +242,6 @@ export type PersistedThreadMetadataPatch = {
   updatedAt?: string;
 };
 
-export type PersistedResearchRecord = ResearchRecord;
 export type { PersistedExternalConversationImport } from "../import/conversations/types";
 
 type SessionDbOptions = {
@@ -609,42 +607,6 @@ export class SessionDb {
     } catch {
       return false;
     }
-  }
-
-  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.readRepository.listResearch(opts);
-  }
-
-  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
-    return this.readRepository.listRunningResearch(opts);
-  }
-
-  getResearch(
-    researchId: string,
-    opts?: { workspacePath?: string | null },
-  ): PersistedResearchRecord | null {
-    return this.readRepository.getResearch(researchId, opts);
-  }
-
-  async upsertResearch(record: PersistedResearchRecord): Promise<void> {
-    await this.writeCoordinator.runExclusive(
-      "upsert_research",
-      async () => {
-        this.repository.upsertResearch(record);
-      },
-      { researchId: record.id, status: record.status },
-    );
-  }
-
-  async deleteResearch(
-    researchId: string,
-    opts?: { workspacePath?: string | null },
-  ): Promise<boolean> {
-    return await this.writeCoordinator.runExclusive(
-      "delete_research",
-      async () => this.repository.deleteResearch(researchId, opts),
-      { researchId },
-    );
   }
 
   listTasks(workspacePath?: string | null): TaskSummary[] {

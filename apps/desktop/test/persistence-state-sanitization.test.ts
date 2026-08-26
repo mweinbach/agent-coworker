@@ -237,7 +237,7 @@ describe("desktop persistence state validation", () => {
     });
   });
 
-  test("saveState round-trips research and task creation drafts with their retry state", async () => {
+  test("saveState round-trips task creation drafts with their retry state", async () => {
     const persistence = new PersistenceService();
     const taskDraft = {
       ...createEmptyTaskCreationDraft(6, "ws_drafts"),
@@ -262,27 +262,6 @@ describe("desktop persistence state validation", () => {
       workspaces: [],
       threads: [],
       creationDrafts: {
-        research: {
-          revision: 4,
-          generation: 2,
-          updatedAt: TS,
-          text: "Compare failure-recovery strategies",
-          attachments: [
-            {
-              filename: "notes.txt",
-              mimeType: "text/plain",
-              size: 5,
-              lastModified: 7,
-              signature: "research-notes",
-              contentBase64: "bm90ZXM=",
-            },
-          ],
-          references: [{ kind: "skill", name: "documents" }],
-          provider: "openai",
-          model: "gpt-5.4",
-          reasoningEffort: "high",
-        },
-        researchError: { revision: 4, message: "Research submission can be retried." },
         task: taskDraft,
         taskError: { revision: 6, message: "Task submission can be retried." },
       },
@@ -291,30 +270,322 @@ describe("desktop persistence state validation", () => {
     const loaded = await persistence.loadState();
 
     expect(loaded.creationDrafts).toEqual({
-      research: {
-        revision: 4,
-        generation: 2,
-        updatedAt: TS,
-        text: "Compare failure-recovery strategies",
-        attachments: [
-          {
-            filename: "notes.txt",
-            mimeType: "text/plain",
-            size: 5,
-            lastModified: 7,
-            signature: "research-notes",
-            contentBase64: "bm90ZXM=",
-          },
-        ],
-        references: [{ kind: "skill", name: "documents" }],
-        provider: "openai",
-        model: "gpt-5.4",
-        reasoningEffort: "high",
-      },
-      researchError: { revision: 4, message: "Research submission can be retried." },
       task: taskDraft,
       taskError: { revision: 6, message: "Task submission can be retried." },
     });
+  });
+
+  test("loadState retains sanitized legacy research until its workspace ownership is known", async () => {
+    const persistence = new PersistenceService();
+    const trustedWorkspacePath = path.join(userDataDir, "trusted-workspace");
+    await fs.mkdir(trustedWorkspacePath, { recursive: true });
+    const trustedWorkspace = {
+      id: "trusted-workspace",
+      name: "Trusted project",
+      path: trustedWorkspacePath,
+      workspaceKind: "project" as const,
+      createdAt: TS,
+      lastOpenedAt: TS,
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      yolo: false,
+    };
+    const taskDraft = {
+      ...createEmptyTaskCreationDraft(6, "ws_drafts"),
+      updatedAt: TS,
+      title: "Preserve this task brief",
+    };
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [trustedWorkspace],
+        threads: [],
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "Compare failure-recovery strategies",
+            attachments: [
+              {
+                filename: "notes.txt",
+                mimeType: "text/plain",
+                size: 5,
+                lastModified: 7,
+                signature: "research-notes",
+                contentBase64: "bm90ZXM=",
+              },
+              {
+                filename: "broken.txt",
+                mimeType: "text/plain",
+                size: 50,
+                lastModified: 8,
+                signature: "broken",
+                contentBase64: "dG9vIHNob3J0",
+              },
+            ],
+            references: [{ kind: "skill", name: "documents" }],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+          researchError: { revision: 4, message: "Retired research retry state" },
+          task: taskDraft,
+          taskError: { revision: 6, message: "Keep this task retry state" },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    const pendingResearch = {
+      revision: 4,
+      generation: 2,
+      updatedAt: TS,
+      text: "Compare failure-recovery strategies",
+      attachments: [
+        {
+          filename: "notes.txt",
+          mimeType: "text/plain",
+          size: 5,
+          lastModified: 7,
+          signature: "research-notes",
+          contentBase64: "bm90ZXM=",
+        },
+      ],
+      references: [{ kind: "skill", name: "documents" }],
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    };
+    expect(loaded.composerDrafts).toEqual({});
+    expect(loaded.creationDrafts).toEqual({
+      research: pendingResearch,
+      task: taskDraft,
+      taskError: { revision: 6, message: "Keep this task retry state" },
+    });
+
+    await persistence.saveState(loaded);
+    const retainedState = JSON.parse(
+      await fs.readFile(path.join(userDataDir, "state.json"), "utf8"),
+    );
+    expect(retainedState.composerDrafts).toEqual({});
+    expect(retainedState.creationDrafts.research).toEqual(pendingResearch);
+    expect(retainedState.creationDrafts).not.toHaveProperty("researchError");
+
+    await persistence.saveState({
+      ...loaded,
+      composerDrafts: { "new:project:trusted-workspace": pendingResearch },
+      creationDrafts: { task: taskDraft },
+    });
+    const migratedState = await persistence.loadState();
+    expect(migratedState.composerDrafts?.["new:project:trusted-workspace"]).toEqual(
+      pendingResearch,
+    );
+    expect(migratedState.creationDrafts).not.toHaveProperty("research");
+  });
+
+  test.each([
+    ["nonexistent project", "new:project:missing-project", "project", true],
+    ["deleted project", "new:project:ws-project", "none", true],
+    ["project key targeting a one-off workspace", "new:project:ws-one-off", "oneOff", true],
+    ["one-off key without any workspace", "new:oneOff", "none", true],
+    ["one-off key targeting a project workspace", "new:oneOff", "project", true],
+    ["malformed project key", "new:project:ws-project:extra", "project", true],
+    ["empty project key", "new:project:", "project", true],
+    ["malformed one-off key", "new:oneOff:ws-one-off", "oneOff", true],
+    ["validated project workspace", "new:project:ws-project", "project", false],
+    ["validated one-off workspace", "new:oneOff", "oneOff", false],
+  ] as const)(
+    "legacy research cleanup validates the migrated destination: %s",
+    async (_label, destinationKey, workspaceKind, retainPendingResearch) => {
+      const persistence = new PersistenceService();
+      const projectPath = path.join(userDataDir, "migration-project");
+      const oneOffPath = path.join(appDataDir, ".cowork", "chats", "migration-one-off");
+      await fs.mkdir(projectPath, { recursive: true });
+      const projectWorkspace = {
+        id: "ws-project",
+        name: "Project workspace",
+        path: projectPath,
+        workspaceKind: "project" as const,
+        createdAt: TS,
+        lastOpenedAt: TS,
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: false,
+        yolo: false,
+      };
+      const oneOffWorkspace = {
+        ...projectWorkspace,
+        id: "ws-one-off",
+        name: "One-off workspace",
+        path: oneOffPath,
+        workspaceKind: "oneOffChat" as const,
+      };
+      const workspaces =
+        workspaceKind === "project"
+          ? [projectWorkspace]
+          : workspaceKind === "oneOff"
+            ? [oneOffWorkspace]
+            : [];
+      const pendingResearch = {
+        revision: 4,
+        generation: 2,
+        updatedAt: TS,
+        text: "Sensitive research must remain in its verified workspace",
+        attachments: [
+          {
+            filename: "private.txt",
+            mimeType: "text/plain",
+            size: 6,
+            lastModified: 9,
+            signature: "private-research",
+            contentBase64: "c2VjcmV0",
+          },
+        ],
+        references: [],
+        provider: null,
+        model: null,
+        reasoningEffort: null,
+      };
+
+      await persistence.saveState({
+        version: 2,
+        workspaces,
+        threads: [],
+        creationDrafts: { research: pendingResearch },
+      });
+      await persistence.saveState({
+        version: 2,
+        workspaces,
+        threads: [],
+        composerDrafts: { [destinationKey]: pendingResearch },
+        creationDrafts: {},
+      });
+
+      const reloaded = await persistence.loadState();
+      expect(reloaded.composerDrafts?.[destinationKey]).toEqual(pendingResearch);
+      if (retainPendingResearch) {
+        expect(reloaded.creationDrafts?.research).toEqual(pendingResearch);
+      } else {
+        expect(reloaded.creationDrafts).not.toHaveProperty("research");
+      }
+    },
+  );
+
+  test("legacy research collisions preserve both drafts and attachments across later saves", async () => {
+    const persistence = new PersistenceService();
+    const existingDraft = {
+      revision: 8,
+      generation: 3,
+      updatedAt: "2024-01-02T00:00:00.000Z",
+      text: "Keep my ordinary chat draft",
+      attachments: [
+        {
+          filename: "existing.txt",
+          mimeType: "text/plain",
+          size: 5,
+          lastModified: 8,
+          signature: "ordinary-notes",
+          contentBase64: "bm90ZXM=",
+        },
+      ],
+      references: [],
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      reasoningEffort: null,
+    };
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [],
+        threads: [],
+        composerDrafts: { "new:oneOff": existingDraft },
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "Retired research must not replace an ordinary draft",
+            attachments: [
+              {
+                filename: "research.txt",
+                mimeType: "text/plain",
+                size: 6,
+                lastModified: 9,
+                signature: "research-notes",
+                contentBase64: "c2VjcmV0",
+              },
+            ],
+            references: [],
+            provider: "openai",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.composerDrafts?.["new:oneOff"]).toEqual(existingDraft);
+    expect(loaded.creationDrafts?.research).toMatchObject({
+      text: "Retired research must not replace an ordinary draft",
+      attachments: [
+        expect.objectContaining({
+          filename: "research.txt",
+          contentBase64: "c2VjcmV0",
+        }),
+      ],
+    });
+
+    await persistence.saveState({
+      ...loaded,
+      creationDrafts: { task: loaded.creationDrafts?.task },
+    });
+    const reloaded = await persistence.loadState();
+    expect(reloaded.composerDrafts?.["new:oneOff"]).toEqual(existingDraft);
+    expect(reloaded.creationDrafts?.research).toEqual(loaded.creationDrafts?.research);
+  });
+
+  test("legacy research migration ignores empty and malformed creation drafts", async () => {
+    const persistence = new PersistenceService();
+    await fs.writeFile(
+      path.join(userDataDir, "state.json"),
+      JSON.stringify({
+        version: 2,
+        workspaces: [],
+        threads: [],
+        creationDrafts: {
+          research: {
+            revision: 4,
+            generation: 2,
+            updatedAt: TS,
+            text: "",
+            attachments: [
+              {
+                filename: "broken.txt",
+                mimeType: "text/plain",
+                size: 50,
+                lastModified: 8,
+                signature: "broken",
+                contentBase64: "dG9vIHNob3J0",
+              },
+            ],
+            references: [],
+            provider: "invalid-provider",
+            model: " ",
+            reasoningEffort: "invalid-effort",
+          },
+        },
+      }),
+    );
+
+    const loaded = await persistence.loadState();
+
+    expect(loaded.composerDrafts).toEqual({});
+    expect(loaded.creationDrafts).not.toHaveProperty("research");
   });
 
   test("saveState preserves task-owned thread metadata and drops malformed ownership", async () => {

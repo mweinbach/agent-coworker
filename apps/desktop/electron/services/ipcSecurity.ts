@@ -80,17 +80,6 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
   return assertPathWithinRoots(getFilePanelRoots(workspaceRoots), requestedPath, "path");
 }
 
-function getSaveExportSourceRoots(workspaceRoots: string[]): string[] {
-  return [...workspaceRoots, path.join(coworkPaths().root, "research")];
-}
-
-export function resolveAllowedSaveExportSourcePath(
-  workspaceRoots: string[],
-  requestedPath: string,
-): string {
-  return assertPathWithinRoots(getSaveExportSourceRoots(workspaceRoots), requestedPath, "path");
-}
-
 /**
  * Workspace roots plus Cowork agent homes where skills and config commonly live.
  * Used for `revealPath` targets outside the active workspace

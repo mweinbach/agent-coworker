@@ -1,4 +1,17 @@
 import { z } from "zod";
+import {
+  type ProjectedItem as CanonicalProjectedItem,
+  projectedItemSchema,
+} from "../../../../../src/shared/projectedItems";
+import {
+  type ServerErrorData as CanonicalServerErrorData,
+  type SessionFeedItem as CanonicalSessionFeedItem,
+  sessionFeedItemSchema as canonicalSessionFeedItemSchema,
+  sessionSnapshotSchema as canonicalSessionSnapshotSchema,
+  type SessionSnapshot,
+  serverErrorDataSchema,
+} from "../../../../../src/shared/sessionSnapshot";
+import { SERVER_ERROR_CODES, SERVER_ERROR_SOURCES } from "../../../../../src/types";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -11,135 +24,7 @@ const projectedToolStateSchema = z.enum([
   "output-denied",
 ]);
 
-const taskStatusSchema = z.enum([
-  "draft",
-  "planning",
-  "working",
-  "blocked",
-  "awaiting_review",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-const terminalTaskStatusSchema = z.enum(["completed", "cancelled", "failed"]);
-
-const serverErrorDataSchema = z.discriminatedUnion("lockKind", [
-  z
-    .object({
-      category: z.literal("task_locked"),
-      source: z.literal("session"),
-      lockKind: z.literal("terminal_task_thread"),
-      taskId: nonEmptyStringSchema,
-      taskStatus: terminalTaskStatusSchema,
-    })
-    .strict(),
-  z
-    .object({
-      category: z.literal("task_locked"),
-      source: z.literal("session"),
-      lockKind: z.literal("active_source_chat"),
-      taskId: nonEmptyStringSchema,
-      taskStatus: taskStatusSchema,
-      taskTitle: z.string(),
-    })
-    .strict(),
-]);
-
-const projectedItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("userMessage"),
-      content: z.array(
-        z
-          .object({
-            type: z.literal("text"),
-            text: z.string(),
-          })
-          .strict(),
-      ),
-      clientMessageId: nonEmptyStringSchema.optional(),
-      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("agentMessage"),
-      text: z.string(),
-      annotations: z.array(z.record(z.string(), z.unknown())).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("reasoning"),
-      mode: z.enum(["reasoning", "summary"]),
-      text: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("toolCall"),
-      toolName: z.string(),
-      state: projectedToolStateSchema,
-      args: z.unknown().optional(),
-      result: z.unknown().optional(),
-      retryOf: nonEmptyStringSchema.optional(),
-      approval: z
-        .object({
-          approvalId: nonEmptyStringSchema,
-          reason: z.unknown().optional(),
-          toolCall: z.unknown().optional(),
-        })
-        .strict()
-        .optional(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("system"),
-      line: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("log"),
-      line: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("todos"),
-      todos: z.array(
-        z
-          .object({
-            content: z.string(),
-            status: z.enum(["pending", "in_progress", "completed"]),
-            activeForm: z.string(),
-          })
-          .strict(),
-      ),
-    })
-    .passthrough(),
-  z
-    .object({
-      id: nonEmptyStringSchema,
-      type: z.literal("error"),
-      message: z.string(),
-      code: z.string(),
-      source: z.string(),
-      data: serverErrorDataSchema.optional(),
-    })
-    .passthrough(),
-]);
-
-const sessionFeedItemSchema = z.discriminatedUnion("kind", [
+const mobileSessionFeedItemCompatibilitySchema = z.discriminatedUnion("kind", [
   z
     .object({
       id: nonEmptyStringSchema,
@@ -210,30 +95,8 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
       kind: z.literal("error"),
       ts: z.string(),
       message: z.string(),
-      code: z.enum([
-        "invalid_json",
-        "invalid_payload",
-        "missing_type",
-        "unknown_type",
-        "unknown_session",
-        "busy",
-        "task_locked",
-        "validation_failed",
-        "permission_denied",
-        "provider_error",
-        "backup_error",
-        "observability_error",
-        "internal_error",
-      ]),
-      source: z.enum([
-        "tool",
-        "provider",
-        "session",
-        "jsonrpc",
-        "backup",
-        "observability",
-        "permissions",
-      ]),
+      code: z.enum(SERVER_ERROR_CODES),
+      source: z.enum(SERVER_ERROR_SOURCES),
       data: serverErrorDataSchema.optional(),
     })
     .passthrough(),
@@ -247,7 +110,11 @@ const sessionFeedItemSchema = z.discriminatedUnion("kind", [
     .passthrough(),
 ]);
 
-const sessionSnapshotSchema = z
+const sessionFeedItemSchema = canonicalSessionFeedItemSchema.or(
+  mobileSessionFeedItemCompatibilitySchema,
+);
+
+const mobileSessionSnapshotCompatibilitySchema = z
   .object({
     sessionId: nonEmptyStringSchema,
     title: z.string(),
@@ -291,6 +158,10 @@ const sessionSnapshotSchema = z
     hasPendingApproval: z.boolean(),
   })
   .passthrough();
+
+const sessionSnapshotSchema = canonicalSessionSnapshotSchema.or(
+  mobileSessionSnapshotCompatibilitySchema,
+);
 
 export const coworkThreadSchema = z
   .object({
@@ -567,10 +438,14 @@ export type CoworkReasoningDeltaNotification = z.infer<
   typeof coworkReasoningDeltaNotificationSchema
 >;
 export type CoworkTurnCompletedNotification = z.infer<typeof coworkTurnCompletedNotificationSchema>;
-export type ProjectedItem = z.infer<typeof projectedItemSchema>;
-export type SessionFeedItem = z.infer<typeof sessionFeedItemSchema>;
-export type SessionSnapshotLike = z.infer<typeof sessionSnapshotSchema>;
-export type ServerErrorData = z.infer<typeof serverErrorDataSchema>;
+export type ProjectedItem = CanonicalProjectedItem;
+export type SessionFeedItem =
+  | CanonicalSessionFeedItem
+  | z.infer<typeof mobileSessionFeedItemCompatibilitySchema>;
+export type SessionSnapshotLike =
+  | SessionSnapshot
+  | z.infer<typeof mobileSessionSnapshotCompatibilitySchema>;
+export type ServerErrorData = CanonicalServerErrorData;
 
 // ---------------------------------------------------------------------------
 // Exported types — workspace control

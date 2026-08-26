@@ -15,7 +15,7 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 import { setMCPServerEnabled } from "../src/mcp/configRegistry";
-import { CODEX_APPS_MCP_SERVER_NAME } from "../src/shared/openaiNativeConnectors";
+import { scratchRoots } from "../src/platform/sandbox";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
 function makeConfig(
@@ -297,7 +297,7 @@ describe("mcp layered snapshot", () => {
 });
 
 describe("codex apps MCP bridge", () => {
-  test("loadMCPServers does not inject a direct codex_apps server", async () => {
+  test("loadMCPServers does not inject a direct codex_apps server from connector settings", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-codex-apps-builtin-"));
@@ -309,7 +309,7 @@ describe("codex apps MCP bridge", () => {
       config.experimentalFeatures = { openAiNativeConnectors: true };
 
       const servers = await loadMCPServers(config);
-      const codexApps = servers.find((server) => server.name === CODEX_APPS_MCP_SERVER_NAME);
+      const codexApps = servers.find((server) => server.name === "codex_apps");
 
       expect(codexApps).toBeUndefined();
     } finally {
@@ -319,14 +319,52 @@ describe("codex apps MCP bridge", () => {
     }
   });
 
-  test("loadMCPTools filters codex_apps tools to enabled connector ids", async () => {
+  test("loadMCPServers retains explicitly configured codex_apps MCP servers", async () => {
+    const tmpWorkspace = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-"),
+    );
+    const tmpHome = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-home-"),
+    );
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "mcp-codex-apps-explicit-builtin-"),
+    );
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir, {
+        trustWorkspaceMcp: true,
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "codex_apps",
+            transport: { type: "http", url: "https://apps.example.invalid/mcp" },
+          },
+        ],
+      });
+
+      const servers = await loadMCPServers(config);
+
+      expect(servers).toEqual([
+        expect.objectContaining({
+          name: "codex_apps",
+          transport: { type: "http", url: "https://apps.example.invalid/mcp" },
+        }),
+      ]);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadMCPTools keeps codex_apps connector metadata without connector filtering", async () => {
     const { tools } = await loadMCPTools(
       [
         {
-          name: CODEX_APPS_MCP_SERVER_NAME,
+          name: "codex_apps",
           transport: { type: "http", url: "https://apps.example.invalid/mcp" },
-          enabledConnectorIds: ["connector_gmail"],
-        } as MCPServerConfig & { enabledConnectorIds: string[] },
+          ...({ enabledConnectorIds: ["connector_gmail"] } as Record<string, unknown>),
+        } as MCPServerConfig,
       ],
       {
         createClient: async () => ({
@@ -347,10 +385,16 @@ describe("codex apps MCP bridge", () => {
       },
     );
 
-    expect(Object.keys(tools)).toEqual([`mcp__${CODEX_APPS_MCP_SERVER_NAME}__search_email`]);
-    expect((tools[`mcp__${CODEX_APPS_MCP_SERVER_NAME}__search_email`] as any)._meta).toEqual({
+    expect(Object.keys(tools)).toEqual([
+      "mcp__codex_apps__search_email",
+      "mcp__codex_apps__search_files",
+    ]);
+    expect((tools.mcp__codex_apps__search_email as any)._meta).toEqual({
       connector_id: "connector_gmail",
       _codex_apps: { resource_uri: "app://g" },
+    });
+    expect((tools.mcp__codex_apps__search_files as any)._meta).toEqual({
+      connector_id: "connector_dropbox",
     });
   });
 });

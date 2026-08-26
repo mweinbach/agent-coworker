@@ -154,7 +154,7 @@ describe("raw-loop validation repair policy", () => {
       trace: {},
       strictMode: true,
       contract: {
-        format: "line_pairs",
+        format: "json",
         schema: z
           .object({
             report: z.string(),
@@ -164,7 +164,7 @@ describe("raw-loop validation repair policy", () => {
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
-        return { finalText: "report: /tmp/report.md\n<<END_RUN>>" };
+        return { finalText: JSON.stringify({ report: "/tmp/report.md", end: "<<END_RUN>>" }) };
       },
     });
 
@@ -181,7 +181,7 @@ describe("raw-loop validation repair policy", () => {
       trace: {},
       strictMode: false,
       contract: {
-        format: "line_pairs",
+        format: "json",
         schema: z
           .object({
             report: z.string(),
@@ -191,7 +191,7 @@ describe("raw-loop validation repair policy", () => {
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
-        return { finalText: "report: /tmp/report.md\n<<END_RUN>>" };
+        return { finalText: JSON.stringify({ report: "/tmp/report.md", end: "<<END_RUN>>" }) };
       },
     });
 
@@ -209,7 +209,7 @@ describe("raw-loop validation repair policy", () => {
       trace: {},
       strictMode: false,
       contract: {
-        format: "line_pairs",
+        format: "json",
         schema: z
           .object({
             report: z.string(),

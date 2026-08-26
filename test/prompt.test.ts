@@ -9,7 +9,6 @@ import { promptGuidance as shellPromptGuidance } from "../src/platform/shell";
 import {
   buildSpawnAgentPromptBody,
   loadAgentPrompt,
-  loadSubAgentPrompt,
   loadSystemPrompt,
   loadSystemPromptWithSkills,
 } from "../src/prompt";
@@ -1466,12 +1465,12 @@ describe("loadSystemPrompt", () => {
 });
 
 // ---------------------------------------------------------------------------
-// loadSubAgentPrompt
+// loadAgentPrompt
 // ---------------------------------------------------------------------------
-describe("loadSubAgentPrompt", () => {
-  test("loads explore prompt and returns non-empty string", async () => {
+describe("loadAgentPrompt", () => {
+  test("loads explorer prompt and returns non-empty string", async () => {
     const config = makeConfig();
-    const prompt = await loadSubAgentPrompt(config, "explore");
+    const prompt = await loadAgentPrompt(config, "explorer");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("Role: explorer");
@@ -1479,22 +1478,22 @@ describe("loadSubAgentPrompt", () => {
 
   test("loads research prompt and returns non-empty string", async () => {
     const config = makeConfig();
-    const prompt = await loadSubAgentPrompt(config, "research");
+    const prompt = await loadAgentPrompt(config, "research");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("research");
   });
 
-  test("explore prompt is different from research prompt", async () => {
+  test("explorer prompt is different from research prompt", async () => {
     const config = makeConfig();
-    const explore = await loadSubAgentPrompt(config, "explore");
-    const research = await loadSubAgentPrompt(config, "research");
+    const explore = await loadAgentPrompt(config, "explorer");
+    const research = await loadAgentPrompt(config, "research");
     expect(explore).not.toBe(research);
   });
 
-  test("loads general prompt and returns non-empty string", async () => {
+  test("loads worker prompt and returns non-empty string", async () => {
     const config = makeConfig();
-    const prompt = await loadSubAgentPrompt(config, "general");
+    const prompt = await loadAgentPrompt(config, "worker");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("Role: worker");
@@ -1571,7 +1570,7 @@ describe("loadSubAgentPrompt", () => {
       workingDirectory: cwd,
       projectCoworkDir: path.join(cwd, ".cowork"),
     });
-    const prompt = await loadSubAgentPrompt(config, "explore");
+    const prompt = await loadAgentPrompt(config, "explorer");
     const combined = `${basePrompt}\n\n${promptContent}`;
     const expected = `${combined}\n\n${buildWorkspaceMapSection(config)}`;
     expect(prompt).toBe(expected);

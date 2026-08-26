@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
+import { scratchRoots } from "../src/platform/sandbox";
+import { pinHome } from "./helpers/platform";
 import { createFailureDiagnostics } from "./shared/failureDiagnostics";
 
 type FailureDiagnostics = ReturnType<typeof createFailureDiagnostics>;
@@ -272,6 +276,10 @@ describe("CLI REPL websocket send failures", () => {
         FakeWebSocket.instances = [];
         const realLog = console.log;
         const realErr = console.error;
+        const homeDir = await fs.mkdtemp(
+          path.join(scratchRoots()[0] ?? "/tmp", "repl-disconnect-send-home-"),
+        );
+        const restoreHome = pinHome(homeDir);
 
         try {
           const logs: string[] = [];
@@ -338,6 +346,8 @@ describe("CLI REPL websocket send failures", () => {
         } finally {
           console.log = realLog;
           console.error = realErr;
+          restoreHome();
+          await fs.rm(homeDir, { recursive: true, force: true });
         }
       },
     );

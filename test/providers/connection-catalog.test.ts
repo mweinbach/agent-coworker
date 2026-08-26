@@ -1221,6 +1221,21 @@ describe("providers/connectionCatalog", () => {
     expect(payload.connected).not.toContain("anthropic");
   });
 
+  test("connected providers include Google from GEMINI_API_KEY", async () => {
+    const home = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "connection-catalog-google-gemini-key-"),
+    );
+    const payload = await getProviderCatalog({
+      paths: getAiCoworkerPaths({ homedir: home }),
+      readCodexAppServerAccountImpl: noCodexAccount,
+      lmstudioFetchImpl: unavailableLmStudioFetch,
+      env: { GEMINI_API_KEY: "gemini-env-key" } as NodeJS.ProcessEnv,
+      readStore: async () => emptyConnectionStore(),
+    });
+
+    expect(payload.connected).toContain("google");
+  });
+
   test("connected providers include codex-cli when app-server account exists even if connections.json is empty", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "connection-catalog-cowork-"));
     const paths = getAiCoworkerPaths({ homedir: home });

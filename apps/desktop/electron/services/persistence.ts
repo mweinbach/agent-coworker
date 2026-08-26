@@ -616,7 +616,38 @@ export class PersistenceService {
     await this.stateLock.run(async () => {
       await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
-      const sanitizedState = await sanitizePersistedState(state);
+      let sanitizedState = await sanitizePersistedState(state);
+      if (!sanitizedState.creationDrafts?.research) {
+        let previousState: unknown;
+        try {
+          previousState = JSON.parse(await fs.readFile(this.stateFilePath, "utf8"));
+        } catch (error) {
+          if (!(error instanceof SyntaxError) && !isNotFound(error)) throw error;
+        }
+        const pendingResearch = sanitizePersistedCreationDrafts(
+          isRecord(previousState) ? previousState.creationDrafts : undefined,
+        ).research;
+        if (
+          pendingResearch &&
+          !Object.entries(sanitizedState.composerDrafts ?? {}).some(
+            ([key, draft]) =>
+              JSON.stringify(draft) === JSON.stringify(pendingResearch) &&
+              sanitizedState.workspaces.some((workspace) =>
+                workspace.workspaceKind === "oneOffChat"
+                  ? key === "new:oneOff"
+                  : workspace.workspaceKind === "project" && key === `new:project:${workspace.id}`,
+              ),
+          )
+        ) {
+          sanitizedState = {
+            ...sanitizedState,
+            creationDrafts: {
+              ...sanitizedState.creationDrafts,
+              research: pendingResearch,
+            },
+          };
+        }
+      }
       const tempPath = `${this.stateFilePath}.tmp`;
       const payload = JSON.stringify(
         { ...sanitizedState, version: sanitizedState.version || 2 },

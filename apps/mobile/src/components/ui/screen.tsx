@@ -14,7 +14,6 @@ import { useAppTheme } from "@/theme/use-app-theme";
 type ScreenProps = PropsWithChildren<{
   scroll?: boolean;
   avoidKeyboard?: boolean;
-  className?: string;
   contentStyle?: StyleProp<ViewStyle>;
 }>;
 

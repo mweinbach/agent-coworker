@@ -759,10 +759,6 @@ export function createWebAdapter(): DesktopApi {
     async openPath(opts): Promise<void> {
       openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.path }));
     },
-    async saveExportedFile(opts): Promise<string | null> {
-      openWindow(buildWebRouteUrl("/cowork/fs/open", { path: opts.sourcePath }));
-      return opts.sourcePath;
-    },
     async pickCanvasSavePath(opts): Promise<string | null> {
       const extension = /(\.[^./\\]+)$/.exec(opts.sourcePath)?.[1] ?? "";
       const basePath = extension ? opts.sourcePath.slice(0, -extension.length) : opts.sourcePath;
@@ -900,7 +896,6 @@ export function createWebAdapter(): DesktopApi {
         n: "newThread",
         b: "toggleSidebar",
         ",": "openSettings",
-        r: "openResearch",
       };
 
       const handler = (e: KeyboardEvent) => {

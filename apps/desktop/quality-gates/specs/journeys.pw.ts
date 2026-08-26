@@ -570,9 +570,7 @@ test("keeps New Chat free of serious accessibility violations", async ({ quality
   await assertNoSeriousAxeViolations(page, testInfo);
 });
 
-test("covers active task cancellation and supported research fixture states", async ({
-  quality,
-}, testInfo) => {
+test("covers active task cancellation", async ({ quality }, testInfo) => {
   const { page } = quality;
   await page.evaluate(() => window.__coworkQualityGate?.showTaskReview());
   await expect(page.getByText("Ship Electron quality gates")).toBeVisible();
@@ -584,19 +582,6 @@ test("covers active task cancellation and supported research fixture states", as
   await page.getByRole("button", { name: "Cancel task" }).click();
   await expect.poll(async () => (await quality.getMainMetrics()).taskCancellationRequests).toBe(1);
   await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("empty"));
-  await expect(page.getByText("Select a run or follow-up")).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("completed"));
-  await expect(page.getByText("Use a real Electron renderer")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Ask a follow-up" })).toBeVisible();
-  await assertNoSeriousAxeViolations(page, testInfo);
-
-  await page.evaluate(async () => await window.__coworkQualityGate?.showResearch("follow-up"));
-  await expect(page.getByText("Quality audit follow-up")).toBeVisible();
   await assertNoSeriousAxeViolations(page, testInfo);
 });
 

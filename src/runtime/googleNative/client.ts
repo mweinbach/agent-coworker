@@ -1,18 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
 
+import {
+  googleApiKeyEnvVarList,
+  resolveGoogleApiKey as resolveOptionalGoogleApiKey,
+} from "../../providers/googleApiKey";
+
 export function resolveGoogleApiKey(explicitKey?: string): string {
-  const direct = explicitKey?.trim();
-  if (direct) return direct;
+  const apiKey = resolveOptionalGoogleApiKey({ savedKey: explicitKey });
+  if (apiKey) return apiKey;
 
-  const envKey =
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
-    process.env.GOOGLE_API_KEY?.trim() ||
-    process.env.GEMINI_API_KEY?.trim();
-  if (envKey) return envKey;
-
-  throw new Error(
-    "No API key for Google provider. Set GOOGLE_GENERATIVE_AI_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY.",
-  );
+  throw new Error(`No API key for Google provider. Set ${googleApiKeyEnvVarList()}.`);
 }
 
 export const googleInteractionsClientCache = new Map<string, GoogleGenAI["interactions"]>();

@@ -1,38 +1,16 @@
+import {
+  applyProjectedAgentMessageDelta as applySharedAgentMessageDelta,
+  applyProjectedItemCompleted as applySharedProjectedItemCompleted,
+  applyProjectedItemStarted as applySharedProjectedItemStarted,
+  applyProjectedReasoningDelta as applySharedReasoningDelta,
+} from "../../../../../src/shared/projectedItems";
+import type { SessionFeedItem as CanonicalSessionFeedItem } from "../../../../../src/shared/sessionSnapshot";
 import type { ProjectedItem, SessionFeedItem } from "./protocolTypes";
 
 export type MobileFeedState = {
   feed: SessionFeedItem[];
   lastEventSeq: number;
 };
-
-const sessionErrorCodes = [
-  "invalid_json",
-  "invalid_payload",
-  "missing_type",
-  "unknown_type",
-  "unknown_session",
-  "busy",
-  "task_locked",
-  "validation_failed",
-  "permission_denied",
-  "provider_error",
-  "backup_error",
-  "observability_error",
-  "internal_error",
-] as const;
-
-const sessionErrorSources = [
-  "tool",
-  "provider",
-  "session",
-  "jsonrpc",
-  "backup",
-  "observability",
-  "permissions",
-] as const;
-
-type SessionErrorCode = (typeof sessionErrorCodes)[number];
-type SessionErrorSource = (typeof sessionErrorSources)[number];
 
 export function createMobileFeedState(
   feed: SessionFeedItem[] = [],
@@ -44,205 +22,64 @@ export function createMobileFeedState(
   };
 }
 
-function userMessageText(content: Array<{ type: "text"; text: string }>): string {
-  return content
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
+function asCanonicalFeed(feed: SessionFeedItem[]): CanonicalSessionFeedItem[] {
+  return feed as CanonicalSessionFeedItem[];
 }
 
-function existingTsOr(ts: string, existing?: SessionFeedItem): string {
-  return existing?.ts ?? ts;
-}
-
-function normalizeErrorCode(code: string): SessionErrorCode {
-  return sessionErrorCodes.includes(code as SessionErrorCode)
-    ? (code as SessionErrorCode)
-    : "internal_error";
-}
-
-function normalizeErrorSource(source: string): SessionErrorSource {
-  return sessionErrorSources.includes(source as SessionErrorSource)
-    ? (source as SessionErrorSource)
-    : "session";
-}
-
-function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem): SessionFeedItem {
-  switch (item.type) {
-    case "userMessage":
-      return {
-        id: item.id,
-        kind: "message",
-        role: "user",
-        ts: existingTsOr(ts, existing),
-        text: userMessageText(item.content),
-        ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
-        ...(item.annotations ? { annotations: item.annotations } : {}),
-      };
-    case "agentMessage":
-      return {
-        id: item.id,
-        kind: "message",
-        role: "assistant",
-        ts: existingTsOr(ts, existing),
-        text: item.text,
-        ...(item.annotations ? { annotations: item.annotations } : {}),
-      };
-    case "reasoning":
-      return {
-        id: item.id,
-        kind: "reasoning",
-        mode: item.mode,
-        ts: existingTsOr(ts, existing),
-        text: item.text,
-      };
-    case "toolCall":
-      return {
-        id: item.id,
-        kind: "tool",
-        ts: existingTsOr(ts, existing),
-        name: item.toolName,
-        state: item.state,
-        ...(item.args !== undefined ? { args: item.args } : {}),
-        ...(item.result !== undefined ? { result: item.result } : {}),
-        ...(item.retryOf !== undefined
-          ? { retryOf: item.retryOf }
-          : existing?.kind === "tool" && existing.retryOf !== undefined
-            ? { retryOf: existing.retryOf }
-            : {}),
-        ...(item.approval ? { approval: item.approval } : {}),
-      };
-    case "system":
-      return {
-        id: item.id,
-        kind: "system",
-        ts: existingTsOr(ts, existing),
-        line: item.line,
-      };
-    case "log":
-      return {
-        id: item.id,
-        kind: "log",
-        ts: existingTsOr(ts, existing),
-        line: item.line,
-      };
-    case "todos":
-      return {
-        id: item.id,
-        kind: "todos",
-        ts: existingTsOr(ts, existing),
-        todos: item.todos,
-      };
-    case "error":
-      return {
-        id: item.id,
-        kind: "error",
-        ts: existingTsOr(ts, existing),
-        message: item.message,
-        code: normalizeErrorCode(item.code),
-        source: normalizeErrorSource(item.source),
-        ...(item.data ? { data: item.data } : {}),
-      };
-  }
-}
-
-function upsertFeedItem(
+function preserveMobileOptimisticFields(
   feed: SessionFeedItem[],
   item: ProjectedItem,
-  ts: string,
 ): SessionFeedItem[] {
-  let index = feed.findIndex((entry) => entry.id === item.id);
-  if (index < 0 && item.type === "userMessage" && item.clientMessageId) {
-    index = feed.findIndex((entry) => entry.id === item.clientMessageId);
+  if (item.type !== "userMessage" || !item.clientMessageId) {
+    return feed;
   }
+  const index = feed.findIndex(
+    (entry) =>
+      entry.id === item.id ||
+      (entry.kind === "message" &&
+        entry.role === "user" &&
+        "clientMessageId" in entry &&
+        entry.clientMessageId === item.clientMessageId),
+  );
   const existing = index >= 0 ? feed[index] : undefined;
-  const next = toFeedItem(item, ts, existing);
-  if (index < 0) {
-    return [...feed, next];
+  if (existing?.kind !== "message" || existing.role !== "user") {
+    return feed;
   }
-  const updated = [...feed];
-  updated[index] = next;
-  return updated;
-}
-
-function applyProjectedItemStarted(
-  feed: SessionFeedItem[],
-  item: ProjectedItem,
-  ts: string,
-): SessionFeedItem[] {
-  return upsertFeedItem(feed, item, ts);
-}
-
-function applyProjectedItemCompleted(
-  feed: SessionFeedItem[],
-  item: ProjectedItem,
-  ts: string,
-): SessionFeedItem[] {
-  return upsertFeedItem(feed, item, ts);
-}
-
-function applyProjectedAgentMessageDelta(
-  feed: SessionFeedItem[],
-  itemId: string,
-  delta: string,
-  ts: string,
-): SessionFeedItem[] {
-  const index = feed.findIndex((item) => item.id === itemId);
-  if (index < 0) {
-    return [
-      ...feed,
-      {
-        id: itemId,
-        kind: "message",
-        role: "assistant",
-        ts,
-        text: delta,
-      },
-    ];
-  }
-  const existing = feed[index];
-  if (existing?.kind !== "message" || existing.role !== "assistant") {
+  if ("clientMessageId" in existing && existing.clientMessageId === item.clientMessageId) {
     return feed;
   }
   const updated = [...feed];
   updated[index] = {
     ...existing,
-    text: `${existing.text}${delta}`,
+    clientMessageId: item.clientMessageId,
   };
   return updated;
 }
 
-function applyProjectedReasoningDelta(
+function applySharedProjectedStart(
   feed: SessionFeedItem[],
-  itemId: string,
-  mode: "reasoning" | "summary",
-  delta: string,
   ts: string,
+  item: ProjectedItem,
 ): SessionFeedItem[] {
-  const index = feed.findIndex((item) => item.id === itemId);
-  if (index < 0) {
-    return [
-      ...feed,
-      {
-        id: itemId,
-        kind: "reasoning",
-        mode,
-        ts,
-        text: delta,
-      },
-    ];
-  }
-  const existing = feed[index];
-  if (existing?.kind !== "reasoning") {
-    return feed;
-  }
-  const updated = [...feed];
-  updated[index] = {
-    ...existing,
-    mode,
-    text: `${existing.text}${delta}`,
-  };
-  return updated;
+  const nextFeed = applySharedProjectedItemStarted(
+    asCanonicalFeed(feed),
+    item,
+    ts,
+  ) as SessionFeedItem[];
+  return preserveMobileOptimisticFields(nextFeed, item);
+}
+
+function applySharedProjectedCompletion(
+  feed: SessionFeedItem[],
+  ts: string,
+  item: ProjectedItem,
+): SessionFeedItem[] {
+  const nextFeed = applySharedProjectedItemCompleted(
+    asCanonicalFeed(feed),
+    item,
+    ts,
+  ) as SessionFeedItem[];
+  return preserveMobileOptimisticFields(nextFeed, item);
 }
 
 export function applyProjectedStart(
@@ -252,7 +89,7 @@ export function applyProjectedStart(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedItemStarted(state.feed as never, item as never, ts) as SessionFeedItem[],
+    feed: applySharedProjectedStart(state.feed, ts, item),
     lastEventSeq: Math.max(state.lastEventSeq, eventSeq),
   };
 }
@@ -264,7 +101,7 @@ export function applyProjectedCompletion(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedItemCompleted(state.feed as never, item as never, ts) as SessionFeedItem[],
+    feed: applySharedProjectedCompletion(state.feed, ts, item),
     lastEventSeq: Math.max(state.lastEventSeq, eventSeq),
   };
 }
@@ -277,8 +114,8 @@ export function applyAgentDelta(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedAgentMessageDelta(
-      state.feed as never,
+    feed: applySharedAgentMessageDelta(
+      asCanonicalFeed(state.feed),
       itemId,
       delta,
       ts,
@@ -296,8 +133,8 @@ export function applyReasoningDelta(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedReasoningDelta(
-      state.feed as never,
+    feed: applySharedReasoningDelta(
+      asCanonicalFeed(state.feed),
       itemId,
       mode,
       delta,

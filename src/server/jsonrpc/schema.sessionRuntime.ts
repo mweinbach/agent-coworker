@@ -128,6 +128,7 @@ export const sessionDefaultsApplyRequestSchema = z
         childModelRoutingMode: childModelRoutingModeSchema.optional(),
         preferredChildModelRef: z.string().optional(),
         allowedChildModelRefs: z.array(z.string()).optional(),
+        workflowMaxConcurrentAgents: z.number().int().min(1).max(16).optional(),
         providerOptions: editableProviderOptionsSchema.optional(),
         userName: z.string().optional(),
         userProfile: userProfileSchema.optional(),

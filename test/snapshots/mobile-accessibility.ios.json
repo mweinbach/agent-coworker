@@ -96,26 +96,6 @@
         }
       },
       {
-        "role": "button",
-        "label": "Expand reasoning",
-        "minHeight": 44,
-        "state": {
-          "expanded": false
-        }
-      },
-      {
-        "role": "group",
-        "label": "Status: done"
-      },
-      {
-        "role": "button",
-        "label": "Expand arguments",
-        "minHeight": 44,
-        "state": {
-          "expanded": false
-        }
-      },
-      {
         "role": "header",
         "label": "Sources"
       },
@@ -182,46 +162,6 @@
       {
         "scale": 2,
         "text": "Include system and observability lines in chat transcripts."
-      },
-      {
-        "scale": 2,
-        "text": "Reasoning"
-      },
-      {
-        "scale": 2,
-        "text": "expand"
-      },
-      {
-        "scale": 2,
-        "text": "First line Second line Third line..."
-      },
-      {
-        "scale": 2,
-        "text": "bash"
-      },
-      {
-        "scale": 2,
-        "text": "done"
-      },
-      {
-        "scale": 2,
-        "text": "Arguments"
-      },
-      {
-        "scale": 2,
-        "text": "expand"
-      },
-      {
-        "scale": 2,
-        "text": "{ \"command\": \"bun test\", \"cwd\": \"/workspace\", ..."
-      },
-      {
-        "scale": 2,
-        "text": "Result"
-      },
-      {
-        "scale": 2,
-        "text": "{ \"ok\": true }"
       },
       {
         "scale": 2,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
+import type { SandboxConfig } from "../../types";
 import {
   canonicalizePathForBoundaryCheckSync,
   isPathInside,
@@ -32,21 +32,7 @@ export type SandboxPolicy =
 
 export type WritableRootKind = "directory" | "file";
 
-/** User/role-facing configuration mode. `auto` resolves from role + working dirs. */
-export type SandboxMode = "auto" | "read-only" | "workspace-write" | "danger-full-access";
-
-export interface SandboxConfig {
-  mode: SandboxMode;
-  /** Outbound network access inside the sandbox. Defaults to `true`. */
-  network?: boolean;
-  /**
-   * When `true`, refuse to run a restrictive (read-only/workspace-write) command
-   * if the platform sandbox backend is unavailable, instead of running it
-   * unsandboxed after an approval. Defaults to `false` so a stock install still
-   * works on hosts without a bundled sandbox backend; set to `true` to fail closed.
-   */
-  requireBackend?: boolean;
-}
+export type { SandboxConfig, SandboxMode } from "../../types";
 
 export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   mode: "workspace-write",

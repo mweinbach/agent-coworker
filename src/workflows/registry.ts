@@ -33,6 +33,11 @@ export type ResolvedWorkflowDefinition = WorkflowCatalogEntry & {
   source: string;
 };
 
+export type ResolvedWorkflowExecutionDefinition = Pick<
+  ResolvedWorkflowDefinition,
+  "name" | "scope" | "path" | "source"
+>;
+
 const WORKFLOW_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export function assertWorkflowDefinitionName(name: string): string {
@@ -181,6 +186,26 @@ export async function resolveWorkflowDefinition(
     const targetPath = definitionPath(root.dir, safeName);
     if (await pathExists(targetPath)) {
       return await inspectDefinition({ name: safeName, scope: root.scope, path: targetPath });
+    }
+  }
+  throw new Error(`saved workflow "${safeName}" was not found`);
+}
+
+export async function resolveWorkflowDefinitionForExecution(
+  config: Pick<AgentConfig, "projectCoworkDir" | "userCoworkDir" | "builtInDir">,
+  name: string,
+): Promise<ResolvedWorkflowExecutionDefinition> {
+  const safeName = assertWorkflowDefinitionName(name);
+  for (const root of workflowDefinitionRoots(config)) {
+    await assertSafeWorkflowDirectory(root.dir);
+    const targetPath = definitionPath(root.dir, safeName);
+    if (await pathExists(targetPath)) {
+      return {
+        name: safeName,
+        scope: root.scope,
+        path: targetPath,
+        source: await readDefinitionSource(targetPath),
+      };
     }
   }
   throw new Error(`saved workflow "${safeName}" was not found`);

@@ -25,7 +25,6 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import type { PluggableList } from "unified";
 
 import {
   type CitationSource,
@@ -51,7 +50,7 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
-const preloadedCitationFaviconUrls = new Set<string>();
+type DesktopRehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>;
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
@@ -68,7 +67,7 @@ const desktopSanitizeSchema: RehypeSanitizeOptions = {
     src: [...(defaultSchema.protocols?.src ?? []), "cowork-media"],
   },
 };
-export const defaultDesktopRehypePlugins: PluggableList = [
+export const defaultDesktopRehypePlugins: DesktopRehypePlugins = [
   defaultRehypePlugins.raw,
   [rehypeSanitize, desktopSanitizeSchema],
   defaultRehypePlugins.harden,
@@ -187,26 +186,8 @@ function citationSourceTitle(source: CitationSource): string {
   return describeCitationSource(source).titleLabel;
 }
 
-function faviconUrl(hostname: string): string {
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
-}
-
-function citationFaviconSrc(source: CitationSource): string {
-  const display = describeCitationSource(source);
-  return display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
-}
-
 function CitationFavicon({ source, className }: { source: CitationSource; className?: string }) {
   const display = useMemo(() => describeCitationSource(source), [source]);
-  const src = useMemo(() => citationFaviconSrc(source), [source]);
-  // Reset during render rather than in an effect. Paging the popover between
-  // citations swaps `source` under this component, and an effect lands a frame
-  // late — long enough to paint the previous site's mark against the new host.
-  const [status, setStatus] = useState({ src, loaded: false, failed: false });
-  if (status.src !== src) {
-    setStatus({ src, loaded: false, failed: false });
-  }
-  const { loaded, failed } = status;
 
   return (
     <div
@@ -216,19 +197,6 @@ function CitationFavicon({ source, className }: { source: CitationSource; classN
       )}
     >
       <span aria-hidden="true">{display.hostLabel.charAt(0)}</span>
-      {src && !failed ? (
-        <img
-          src={src}
-          alt=""
-          className={cn(
-            "absolute inset-0 size-full rounded-full object-contain transition-opacity duration-150",
-            loaded ? "opacity-100" : "opacity-0",
-          )}
-          decoding="async"
-          onLoad={() => setStatus((current) => ({ ...current, loaded: true }))}
-          onError={() => setStatus((current) => ({ ...current, failed: true }))}
-        />
-      ) : null}
     </div>
   );
 }
@@ -307,22 +275,6 @@ function DesktopCitationChip({
     () => (currentSource ? describeCitationSource(currentSource) : null),
     [currentSource],
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.Image !== "function") {
-      return;
-    }
-
-    for (const source of sources) {
-      const src = citationFaviconSrc(source);
-      if (!src || preloadedCitationFaviconUrls.has(src)) {
-        continue;
-      }
-      preloadedCitationFaviconUrls.add(src);
-      const image = new window.Image();
-      image.src = src;
-    }
-  }, [sources]);
 
   useEffect(() => {
     if (activeIndex < sources.length) {
@@ -423,11 +375,8 @@ function DesktopCitationChip({
             className="h-auto min-w-0 gap-1 rounded-full app-border-subtle bg-muted/60 py-0.5 pl-1 pr-2 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:app-border-default hover:bg-muted"
             onPointerDown={cancelScheduledHoverClose}
           >
-            {/* The site mark identifies the source faster than its name does at
-                this size, and it costs no extra request: every chip already
-                preloads the favicons for all of its sources on mount. It stays
-                on the primary source while the popover pages through the rest,
-                so the chip does not shift under the pointer. */}
+            {/* Keep source identity deterministic and offline-safe: show the
+                hostname initial instead of fetching renderer-side favicons. */}
             {primarySource ? (
               <CitationFavicon source={primarySource} className="size-4 text-[0.55rem]" />
             ) : null}
@@ -1509,7 +1458,7 @@ export const DesktopMarkdown = memo(function DesktopMarkdown({
   >(() => [remarkRewriteDesktopFileLinks, { basePath: desktopBasePath }], [desktopBasePath]);
   // Rewrite raw-HTML <img> srcs after rehype-raw but before sanitize/harden so
   // workspace-relative raw images survive to the renderer's img component.
-  const desktopRehypePlugins = useMemo<PluggableList>(
+  const desktopRehypePlugins = useMemo<DesktopRehypePlugins>(
     () =>
       rehypePlugins ?? [
         defaultRehypePlugins.raw,

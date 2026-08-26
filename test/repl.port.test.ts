@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCliRepl } from "../src/cli/repl";
+import { pinHome } from "./helpers/platform";
 
 class FakeReadline {
   private handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -161,6 +162,7 @@ describe("CLI REPL port option handling", () => {
 
     const originalCwd = process.cwd();
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "repl-port-test-"));
+    const restoreHome = pinHome(tmpDir);
     const originalLog = console.log;
     console.log = (() => {}) as any;
 
@@ -189,6 +191,7 @@ describe("CLI REPL port option handling", () => {
     } finally {
       console.log = originalLog;
       process.chdir(originalCwd);
+      restoreHome();
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });

@@ -10,66 +10,31 @@ import {
   padding,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
+import type { ComponentProps } from "react";
 import { useState } from "react";
-import { Text, TextInput, View } from "react-native";
-import type { SFSymbol as NativeSFSymbol } from "sf-symbols-typescript";
+import { View } from "react-native";
 
-import { MAX_DYNAMIC_TYPE_MULTIPLIER } from "@/features/accessibility/mobile-accessibility";
 import { useAppTheme } from "@/theme/use-app-theme";
-
-type ComposerBarProps = {
-  value: string;
-  onChangeText: (text: string) => void;
-  onSubmit: () => void;
-  onStop: () => void;
-  canEdit: boolean;
-  canSubmit: boolean;
-  isSubmitting: boolean;
-  isBusy: boolean;
-  isStopping: boolean;
-  submitLabel?: string;
-  helperText?: string | null;
-};
+import {
+  type ComposerActionIcon,
+  type ComposerBarProps,
+  ComposerHelperText,
+  ComposerTextInput,
+  useComposerBehavior,
+} from "./composerShared";
 
 const MIN_INPUT_HEIGHT = 44;
 const MAX_INPUT_HEIGHT = 116;
 const VERTICAL_CHROME = 16;
 const BUTTON_SIZE = 44;
+type NativeSFSymbol = ComponentProps<typeof ExpoImage>["systemName"];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function asNativeSymbol(icon: string): NativeSFSymbol {
+function asNativeSymbol(icon: ComposerActionIcon): NativeSFSymbol {
   return icon as NativeSFSymbol;
-}
-
-function sendAccessibilityLabel({
-  canSubmit,
-  canEdit,
-  hasText,
-  isSubmitting,
-  submitLabel,
-}: {
-  canSubmit: boolean;
-  canEdit: boolean;
-  hasText: boolean;
-  isSubmitting: boolean;
-  submitLabel: string;
-}): string {
-  if (isSubmitting) {
-    return "Sending message";
-  }
-  if (!canEdit) {
-    return "Send unavailable while offline";
-  }
-  if (!hasText && !canSubmit) {
-    return `${submitLabel}, enter a message first`;
-  }
-  if (!canSubmit) {
-    return submitLabel;
-  }
-  return submitLabel;
 }
 
 export function ComposerBar({
@@ -82,61 +47,33 @@ export function ComposerBar({
   isSubmitting,
   isBusy,
   isStopping,
-  submitLabel = "Send",
+  submitLabel,
   helperText = null,
 }: ComposerBarProps) {
   const theme = useAppTheme();
   const [inputHeight, setInputHeight] = useState(MIN_INPUT_HEIGHT);
-  const hasText = value.trim().length > 0;
-  const accessibilityLabel = sendAccessibilityLabel({
-    canSubmit,
+  const composerBehavior = useComposerBehavior({
+    value,
+    onSubmit,
+    onStop,
     canEdit,
-    hasText,
+    canSubmit,
     isSubmitting,
+    isBusy,
+    isStopping,
     submitLabel,
   });
   const barHeight = clamp(inputHeight, MIN_INPUT_HEIGHT, MAX_INPUT_HEIGHT) + VERTICAL_CHROME;
-  const actionEnabled = isBusy ? !isStopping : canSubmit;
-  const actionFillColor = actionEnabled
+  const actionFillColor = composerBehavior.actionEnabled
     ? isBusy
       ? theme.danger
       : theme.primary
     : theme.surfaceMuted;
-  const actionIconColor = actionEnabled ? theme.primaryText : theme.textTertiary;
-  const actionAccessibilityLabel = isBusy
-    ? isStopping
-      ? "Stopping turn"
-      : "Stop turn"
-    : accessibilityLabel;
-  const performAction = () => {
-    if (!actionEnabled) {
-      return;
-    }
-    if (isBusy) {
-      onStop();
-      return;
-    }
-    onSubmit();
-  };
+  const actionIconColor = composerBehavior.actionEnabled ? theme.primaryText : theme.textTertiary;
 
   return (
     <View style={{ gap: 8, width: "100%", backgroundColor: "transparent" }}>
-      {helperText ? (
-        <Text
-          accessibilityLiveRegion="polite"
-          allowFontScaling
-          maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-          selectable
-          style={{
-            color: theme.textTertiary,
-            fontSize: 12,
-            lineHeight: 16,
-            textAlign: "center",
-          }}
-        >
-          {helperText}
-        </Text>
-      ) : null}
+      <ComposerHelperText helperText={helperText} />
       <Host
         colorScheme={theme.isDark ? "dark" : "light"}
         style={{
@@ -182,18 +119,11 @@ export function ComposerBar({
                   justifyContent: "center",
                 }}
               >
-                <TextInput
+                <ComposerTextInput
                   value={value}
                   onChangeText={onChangeText}
-                  editable={canEdit}
-                  placeholder="Message…"
+                  canEdit={canEdit}
                   placeholderTextColor={theme.textTertiary}
-                  accessibilityLabel="Message"
-                  accessibilityHint={canEdit ? "Enter a message" : "Message editing is unavailable"}
-                  accessibilityState={{ disabled: !canEdit }}
-                  allowFontScaling
-                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-                  multiline
                   onContentSizeChange={(event) => {
                     setInputHeight(
                       clamp(
@@ -220,10 +150,10 @@ export function ComposerBar({
           </Group>
           <Group modifiers={[frame({ width: BUTTON_SIZE, height: BUTTON_SIZE })]}>
             <Button
-              onPress={actionEnabled ? performAction : undefined}
+              onPress={composerBehavior.actionEnabled ? composerBehavior.performAction : undefined}
               modifiers={[
-                accessibilityLabelModifier(actionAccessibilityLabel),
-                disabledModifier(!actionEnabled),
+                accessibilityLabelModifier(composerBehavior.actionAccessibilityLabel),
+                disabledModifier(!composerBehavior.actionEnabled),
                 buttonStyle("plain"),
                 foregroundStyle(actionIconColor),
                 frame({ width: BUTTON_SIZE, height: BUTTON_SIZE }),
@@ -239,7 +169,7 @@ export function ComposerBar({
               ]}
             >
               <ExpoImage
-                systemName={asNativeSymbol(isBusy ? "stop.fill" : "arrow.up")}
+                systemName={asNativeSymbol(composerBehavior.actionIcon)}
                 size={16}
                 color={actionIconColor}
               />

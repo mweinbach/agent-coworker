@@ -212,7 +212,7 @@ describe("tool card formatting ask summaries", () => {
 
   test("preserves basenames when truncating long Windows paths", () => {
     const longPath =
-      "C:\\Users\\maxw6\\.cowork\\chats\\20260726T202054Z-use-a-workflow-and-do-research-into-kimi-b4\\research\\kimi-k3.md";
+      "C:\\Users\\maxw6\\.cowork\\chats\\20260726T202054Z-use-a-workflow-and-summarize-kimi-b4\\notes\\kimi-k3.md";
     const out = formatToolCard("read", { filePath: longPath }, "file contents", "output-available");
     expect(out.subtitle).toContain("kimi-k3.md");
     expect(out.subtitle).not.toContain("Completed");

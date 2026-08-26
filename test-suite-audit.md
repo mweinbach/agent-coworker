@@ -1,5 +1,7 @@
 # Test Suite Audit — 2026-07-13
 
+> **Historical status:** This report is preserved as a historical audit. The dedicated Research product, service, UI, protocol, and test stack referenced below was subsequently retired; those references are historical context, not current implementation targets.
+
 Full-suite profile (Windows, bun 1.4.0-canary, `bun test --max-concurrency 1`): 658 files, 7,564 tests, 271s wall / 262s in-test. Produced by a 46-reviewer + 4-infra-specialist audit over every test file; 23 high-severity findings were queued for adversarial verification but only 8 verdicts completed (session limit) — 2 CONFIRMED, 5 PARTIAL (real but overstated), 1 REFUTED. Treat unverified findings as high-confidence leads, not certainties.
 
 Already fixed in commits 1d7277f8 and 925155b8: nested-bun-test reporter-text assertions (2 files), providerStatus real-network leak, 2 unguarded Windows dir-symlinks.

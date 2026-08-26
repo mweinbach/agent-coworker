@@ -11,6 +11,7 @@ import {
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
 import { listWorkspaceSummaries, switchWorkspaceSummary } from "../workspaceCatalog";
+import { listWorkspaceChatThreads } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createWorkspaceRouteHandlers(
@@ -101,34 +102,11 @@ export function createWorkspaceRouteHandlers(
       const params = parsed.data;
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
 
-      const threads = new Map<
-        string,
-        ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>
-      >();
-      for (const record of context.threads.listPersisted({ cwd })) {
-        if (
-          !context.utils.shouldIncludeThreadSummary({
-            titleSource: record.titleSource,
-            messageCount: record.messageCount,
-            hasPendingAsk: record.hasPendingAsk,
-            hasPendingApproval: record.hasPendingApproval,
-            executionState: record.executionState ?? null,
-          })
-        ) {
-          continue;
-        }
-        threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
-      }
-      for (const runtime of context.threads.listLiveRoot({ cwd })) {
-        threads.set(runtime.id, context.utils.buildThreadFromSession(runtime));
-      }
-
+      const threads = listWorkspaceChatThreads(context, { cwd }).threads;
       const state = await context.workspaceControl.readState(cwd);
 
       context.jsonrpc.sendResult(ws, message.id, {
-        threads: [...threads.values()].sort((left, right) =>
-          right.updatedAt.localeCompare(left.updatedAt),
-        ),
+        threads,
         state,
       });
     },

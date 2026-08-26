@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import { extractSkillTriggers, readSkillDocument } from "../skills/metadata";
 import type {
   InstalledPluginCatalogEntry,
   PluginAppSummary,
@@ -112,67 +113,6 @@ export type ParsedPluginSkill = {
 
 export type ParsedPluginApp = PluginAppSummary;
 
-type ParsedSkillFrontMatter = {
-  name: string;
-  description: string;
-  rawFrontMatter: Record<string, unknown>;
-};
-
-const skillFrontMatterSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-    description: z.string().trim().min(1).max(1024),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    triggers: z.union([z.string(), z.array(z.unknown())]).optional(),
-  })
-  .passthrough();
-
-function splitFrontMatter(raw: string): { frontMatterRaw: string | null } {
-  const re = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
-  const match = raw.match(re);
-  return { frontMatterRaw: match?.[1] ?? null };
-}
-
-function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
-  try {
-    const parsed = Bun.YAML.parse(frontMatterRaw);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseTriggerValue(value: unknown): string[] {
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim());
-}
-
-function extractTriggers(name: string, frontMatter?: Record<string, unknown>): string[] {
-  if (frontMatter) {
-    const direct = parseTriggerValue(frontMatter.triggers);
-    if (direct.length > 0) return direct;
-    const metadata = isRecord(frontMatter.metadata) ? frontMatter.metadata : null;
-    if (metadata) {
-      const metadataTriggers = parseTriggerValue(metadata.triggers);
-      if (metadataTriggers.length > 0) return metadataTriggers;
-    }
-  }
-  return [name];
-}
-
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
   if (
@@ -218,26 +158,6 @@ function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta | null {
   }
 
   return Object.keys(out).length > 0 ? out : null;
-}
-
-async function parseSkillFrontMatter(
-  skillPath: string,
-  expectedName: string,
-): Promise<ParsedSkillFrontMatter | null> {
-  const raw = await fs.readFile(skillPath, "utf-8");
-  const { frontMatterRaw } = splitFrontMatter(raw);
-  if (!frontMatterRaw) return null;
-  const parsed = parseYamlFrontMatter(frontMatterRaw);
-  if (!parsed) return null;
-  const validated = skillFrontMatterSchema.safeParse(parsed);
-  if (!validated.success || validated.data.name !== expectedName) {
-    return null;
-  }
-  return {
-    name: validated.data.name,
-    description: validated.data.description,
-    rawFrontMatter: parsed,
-  };
 }
 
 function mimeTypeForIconPath(targetPath: string): string {
@@ -710,7 +630,7 @@ export async function validatePluginBundledSkills(
   for (const dirent of dirents) {
     const skillPath = path.join(dirent.skillsPath, dirent.name, "SKILL.md");
     try {
-      const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
+      const parsed = await readSkillDocument(skillPath, { expectedName: dirent.name });
       if (!parsed) {
         warnings.push(
           `Ignoring plugin skill "${dirent.name}" from ${skillPath}: invalid or missing frontmatter.`,
@@ -742,7 +662,7 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
     const skillRoot = path.join(dirent.skillsPath, dirent.name);
     const skillPath = path.join(skillRoot, "SKILL.md");
     try {
-      const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
+      const parsed = await readSkillDocument(skillPath, { expectedName: dirent.name });
       if (!parsed) {
         warnings.push(
           `[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}.`,
@@ -751,9 +671,9 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
       }
       const interfaceMeta = await readSkillInterface(skillRoot);
       skills.push({
-        rawName: parsed.name,
-        description: parsed.description,
-        triggers: extractTriggers(parsed.name, parsed.rawFrontMatter),
+        rawName: parsed.frontMatter.name,
+        description: parsed.frontMatter.description,
+        triggers: extractSkillTriggers(parsed.frontMatter.name, parsed.rawFrontMatter),
         rootDir: skillRoot,
         skillPath,
         ...(interfaceMeta ? { interface: interfaceMeta } : {}),

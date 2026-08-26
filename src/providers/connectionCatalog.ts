@@ -28,6 +28,7 @@ import {
   isFireworksInferenceProvider,
   resolveFireworksInferenceApiKey,
 } from "./fireworksShared";
+import { resolveGoogleApiKey } from "./googleApiKey";
 import { lmStudioCatalogStateMessage } from "./lmstudio/catalog";
 import { isLmStudioError, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { MINIMAX_BASE_URL, resolveMinimaxApiKey } from "./minimaxShared";
@@ -141,20 +142,6 @@ function resolveOpenAiApiKey(opts: {
 }): string | undefined {
   const env = opts.env ?? process.env;
   return opts.savedKey?.trim() || env.OPENAI_API_KEY?.trim() || undefined;
-}
-
-function resolveGoogleApiKey(opts: {
-  savedKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  const env = opts.env ?? process.env;
-  return (
-    opts.savedKey?.trim() ||
-    env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
-    env.GEMINI_API_KEY?.trim() ||
-    env.GOOGLE_API_KEY?.trim() ||
-    undefined
-  );
 }
 
 function resolveAnthropicApiKey(opts: {

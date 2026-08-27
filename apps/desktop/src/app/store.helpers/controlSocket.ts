@@ -36,6 +36,7 @@ import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
 type ProviderStatusEvent = Extract<SessionEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
 type ProviderAuthChallengeEvent = Extract<SessionEvent, { type: "provider_auth_challenge" }>;
+type WorkspaceSessions = Extract<SessionEvent, { type: "sessions" }>["sessions"];
 
 function sanitizeProviderAuthChallenge(
   evt: ProviderAuthChallengeEvent,
@@ -119,6 +120,7 @@ export function createControlSocketHelpers(
   const sessionSnapshotWaiters = new Set<symbol>();
   const disposedWorkspaces = new Set<string>();
   const pendingWorkspaceSessionRefreshes = new Set<string>();
+  const workspaceSessionRefreshRequests = new Map<string, Promise<WorkspaceSessions | null>>();
 
   function isWorkspaceDisposed(workspaceId: string): boolean {
     return disposedWorkspaces.has(workspaceId);
@@ -500,6 +502,9 @@ export function createControlSocketHelpers(
     for (const workspaceId of controlStoreSettersByWorkspace.keys()) {
       workspaceIds.add(workspaceId);
     }
+    for (const workspaceId of workspaceSessionRefreshRequests.keys()) {
+      workspaceIds.add(workspaceId);
+    }
     for (const workspaceId of RUNTIME.skillInstallWaiters.keys()) {
       workspaceIds.add(workspaceId);
     }
@@ -643,22 +648,26 @@ export function createControlSocketHelpers(
       if (!ready) {
         return false;
       }
-      if (isWorkspaceDisposed(workspaceId)) {
-        return false;
+      while (
+        !isWorkspaceDisposed(workspaceId) &&
+        RUNTIME.jsonRpcSockets.get(workspaceId) === socket
+      ) {
+        const bootstrap = jsonRpcBootstrapPromises.get(workspaceId);
+        if (!bootstrap) {
+          return true;
+        }
+        const remainingMs = timeoutMs - (Date.now() - startedAt);
+        if (
+          remainingMs <= 0 ||
+          !(await waitForOperation(
+            waitForPromiseCompletion(bootstrap, remainingMs),
+            options.signal,
+          ))
+        ) {
+          return false;
+        }
       }
-      const bootstrap = jsonRpcBootstrapPromises.get(workspaceId);
-      if (!bootstrap) {
-        return true;
-      }
-      const elapsedMs = Date.now() - startedAt;
-      const remainingMs = Math.max(0, timeoutMs - elapsedMs);
-      if (remainingMs <= 0) {
-        return false;
-      }
-      return await waitForOperation(
-        waitForPromiseCompletion(bootstrap, remainingMs),
-        options.signal,
-      );
+      return false;
     });
   }
 
@@ -667,12 +676,17 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     options: AbortableActionOptions = {},
-  ): Promise<Extract<SessionEvent, { type: "sessions" }>["sessions"] | null> {
-    const isCurrent = () => options.signal?.aborted !== true && !isWorkspaceDisposed(workspaceId);
-    if (!isCurrent()) {
+  ): Promise<WorkspaceSessions | null> {
+    if (options.signal?.aborted || isWorkspaceDisposed(workspaceId)) {
       return null;
     }
-    return await withPendingWaiterCount(workspaceSessionWaiters, async () => {
+    const isCurrent = (): boolean =>
+      options.signal?.aborted !== true &&
+      !isWorkspaceDisposed(workspaceId) &&
+      workspaceSessionRefreshRequests.get(workspaceId) === request;
+    const request = withPendingWaiterCount(workspaceSessionWaiters, async () => {
+      // Register the promise before opening a socket can start bootstrap.
+      await Promise.resolve();
       if (!isCurrent()) {
         return null;
       }
@@ -771,7 +785,13 @@ export function createControlSocketHelpers(
       }
       void deps.persist(get);
       return sessions;
+    }).finally(() => {
+      if (workspaceSessionRefreshRequests.get(workspaceId) === request) {
+        workspaceSessionRefreshRequests.delete(workspaceId);
+      }
     });
+    workspaceSessionRefreshRequests.set(workspaceId, request);
+    return await request;
   }
 
   async function requestSessionSnapshot(
@@ -803,6 +823,9 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
+    const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
+    const isCurrent = () =>
+      !isWorkspaceDisposed(workspaceId) && RUNTIME.jsonRpcSockets.get(workspaceId) === socket;
     const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
     const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
     set(() => ({
@@ -811,8 +834,17 @@ export function createControlSocketHelpers(
     }));
 
     const agentProfilesCatalogGeneration = getAgentProfilesCatalogGeneration(workspaceId);
+    const sessionsRequest =
+      workspaceSessionRefreshRequests.get(workspaceId) ??
+      requestWorkspaceSessions(get, set, workspaceId);
     await Promise.allSettled([
-      requestWorkspaceSessions(get, set, workspaceId),
+      sessionsRequest.then((sessions) => {
+        if (sessions !== null || !isCurrent()) return sessions;
+        return (
+          workspaceSessionRefreshRequests.get(workspaceId) ??
+          requestWorkspaceSessions(get, set, workspaceId)
+        );
+      }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/state/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", {
         cwd,
@@ -846,7 +878,7 @@ export function createControlSocketHelpers(
         cwd,
       }),
     ]);
-    if (isWorkspaceDisposed(workspaceId)) {
+    if (!isCurrent()) {
       return;
     }
     if (refreshGeneration === RUNTIME.providerStatusRefreshGeneration) {
@@ -863,7 +895,7 @@ export function createControlSocketHelpers(
 
     const selectedInstallationId =
       get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId;
-    if (selectedInstallationId) {
+    if (selectedInstallationId && isCurrent()) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", {
         cwd,
         installationId: selectedInstallationId,
@@ -872,7 +904,7 @@ export function createControlSocketHelpers(
 
     const selectedPluginId = get().workspaceRuntimeById[workspaceId]?.selectedPluginId;
     const selectedPluginScope = get().workspaceRuntimeById[workspaceId]?.selectedPluginScope;
-    if (selectedPluginId) {
+    if (selectedPluginId && isCurrent()) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
         cwd,
         pluginId: selectedPluginId,
@@ -912,6 +944,9 @@ export function createControlSocketHelpers(
       // Re-run bootstrap after the current pass if the socket re-opens mid-bootstrap.
       jsonRpcBootstrapQueuedByWorkspace.add(workspaceId);
       const rerun = existing.finally(async () => {
+        if (jsonRpcBootstrapPromises.get(workspaceId) !== rerun) {
+          return;
+        }
         jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
         if (isWorkspaceDisposed(workspaceId)) {
           return;
@@ -2077,6 +2112,7 @@ export function createControlSocketHelpers(
     jsonRpcBootstrapPromises.delete(workspaceId);
     jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     pendingWorkspaceSessionRefreshes.delete(workspaceId);
+    workspaceSessionRefreshRequests.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
     controlStoreSettersByWorkspace.delete(workspaceId);
   }
@@ -2123,6 +2159,7 @@ export function createControlSocketHelpers(
           jsonRpcBootstrapPromises.delete(workspaceId);
           jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
           pendingWorkspaceSessionRefreshes.delete(workspaceId);
+          workspaceSessionRefreshRequests.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
           controlStoreSettersByWorkspace.delete(workspaceId);
           return;
@@ -2138,6 +2175,7 @@ export function createControlSocketHelpers(
         jsonRpcBootstrapPromises.clear();
         jsonRpcBootstrapQueuedByWorkspace.clear();
         pendingWorkspaceSessionRefreshes.clear();
+        workspaceSessionRefreshRequests.clear();
         controlStoreGettersByWorkspace.clear();
         controlStoreSettersByWorkspace.clear();
         controlSessionWaiters.clear();

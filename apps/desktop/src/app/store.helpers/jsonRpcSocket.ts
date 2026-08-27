@@ -569,10 +569,15 @@ export async function requestJsonRpc<T = Record<string, unknown>>(
     throw new Error("JSON-RPC workspace socket is unavailable");
   }
   throwIfOperationAborted(options.signal);
-  return (await waitForOperation(
+  const result = await waitForOperation(
     socket.request(method, params, getJsonRpcRequestRetryOptions(method, params)),
     options.signal,
-  )) as T;
+  );
+  // Closing a socket cannot revoke a reply that already settled its request.
+  if (isWorkspaceDisposed(workspaceId) || RUNTIME.jsonRpcSockets.get(workspaceId) !== socket) {
+    throw new Error("JSON-RPC workspace connection changed.");
+  }
+  return result as T;
 }
 
 function hasStableStringKey(params: unknown, key: string): boolean {

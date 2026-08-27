@@ -32,6 +32,7 @@ export function SidebarCollapseControl({
       </Button>
       <div
         aria-hidden={!sidebarCollapsed}
+        inert={!sidebarCollapsed}
         className={cn(
           "app-topbar__new-chat-reveal flex items-center overflow-hidden transition-[max-width,opacity,transform,margin] duration-200 ease-out",
           sidebarCollapsed

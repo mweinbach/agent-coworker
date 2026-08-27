@@ -21,8 +21,6 @@ export type MiniMaxModelSpec = {
   };
 };
 
-export const MINIMAX_DEFAULT_MODEL: MiniMaxModelId = "MiniMax-M3";
-
 // MiniMax publishes a 1M-token context window for M3 with a 512K guaranteed floor
 // and a 524,288 max output cap. The OpenAI-compatible endpoint uses
 // `max_completion_tokens` (legacy `max_tokens` is deprecated) and routes reasoning

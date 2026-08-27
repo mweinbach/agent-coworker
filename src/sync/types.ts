@@ -21,14 +21,6 @@ export type CloudSyncSettings = {
 export const CLOUD_SYNC_PAYLOAD_VERSION = 1 as const;
 export const CLOUD_SYNC_SETTINGS_DEDUPE_KEY = "settings:v1" as const;
 
-export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
-  enabled: false,
-  provider: "none",
-  syncSettings: true,
-  syncWorkspaceMetadata: false,
-  syncThreads: false,
-};
-
 function normalizeCloudSyncEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();

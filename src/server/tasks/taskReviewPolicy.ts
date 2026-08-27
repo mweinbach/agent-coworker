@@ -138,14 +138,6 @@ export function getTaskReviewRoundsForContext(
     : getTaskReviewRounds(context.activity ?? []);
 }
 
-export function getPendingTaskReview(activity: readonly TaskActivity[]): TaskReviewRound | null {
-  return (
-    getTaskReviewRounds(activity).find(
-      (round) => round.verdict !== "pass" && round.addressedAt === null,
-    ) ?? null
-  );
-}
-
 export function getPendingTaskReviewFromRecords(
   reviews: readonly TaskReviewRecord[],
 ): TaskReviewRound | null {

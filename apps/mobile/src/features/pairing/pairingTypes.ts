@@ -10,12 +10,3 @@ export type PairingQrPayload = {
   expiresAt: number;
   rawTicket: string;
 };
-
-export type TrustedDesktopSummary = {
-  macDeviceId: string;
-  macIdentityPublicKey: string;
-  relay: string;
-  displayName: string | null;
-  fingerprint: string;
-  lastConnectedAt: string | null;
-};

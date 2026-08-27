@@ -186,5 +186,3 @@ export function createTaskReviewTool(ctx: ToolContext) {
     },
   });
 }
-
-export const __internal = { parseVerdict, reviewBriefing, reviewPrompt };

@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import {
   REQUIREMENT_KINDS,
-  TASK_STATUSES,
   taskActivitySchema,
   taskArtifactDetailSchema,
   taskArtifactRevisionSchema,
@@ -344,7 +343,3 @@ export const jsonRpcTaskNotificationSchemas = {
     })
     .strict(),
 } as const;
-
-export const __taskSchemaInternals = {
-  taskStatusSchema: z.enum(TASK_STATUSES),
-};

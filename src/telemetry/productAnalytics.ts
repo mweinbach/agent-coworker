@@ -382,14 +382,6 @@ function normalizeAnonymousId(value: string | null | undefined): string | null {
   return trimmed;
 }
 
-export function identifyAnonymous(anonymousId?: string | null): string | null {
-  const normalized = normalizeAnonymousId(anonymousId);
-  if (anonymousId !== undefined && normalized) {
-    activeConfig = activeConfig ? { ...activeConfig, anonymousId: normalized } : activeConfig;
-  }
-  return normalized ?? activeConfig?.anonymousId ?? null;
-}
-
 export function resolveProductAnalyticsConfig(
   context: Omit<ProductAnalyticsInitContext, "loadSdk">,
 ): ResolvedProductAnalyticsConfig {

@@ -1283,12 +1283,13 @@ describe("sessionDb", () => {
       expect(persisted?.title).toBe("Legacy Session");
       expect(persisted?.messages).toHaveLength(1);
       expect(persisted?.providerState).toBeNull();
+      expect(persisted?.profile).toBeNull();
     } finally {
       db.close();
     }
   });
 
-  test("imports providerOptions from version 7 legacy snapshots", async () => {
+  test("imports provider options and agent profiles from version 7 legacy snapshots", async () => {
     const paths = await makeTmpCoworkHome();
     const now = new Date().toISOString();
 
@@ -1313,6 +1314,7 @@ describe("sessionDb", () => {
           nickname: null,
           taskType: "verify",
           targetPaths: ["src/auth", "test/auth"],
+          profile: makeAgentProfileSnapshot(),
           requestedModel: null,
           effectiveModel: "gpt-5.2",
           requestedReasoningEffort: null,
@@ -1370,11 +1372,37 @@ describe("sessionDb", () => {
       expect(persisted?.taskType).toBe("verify");
       expect(persisted?.targetPaths).toEqual(["src/auth", "test/auth"]);
       expect(db.listAgentSessions("root-1")[0]?.executionState).toBe("completed");
+      expect(persisted?.profile).toEqual(makeAgentProfileSnapshot());
+      expect(db.listAgentSessions("root-1")[0]?.profile).toEqual(makeAgentProfileSnapshot());
+      expect(db.getSessionSnapshot("legacy-7")?.profile).toEqual(makeAgentProfileSnapshot());
       expect(db.getSessionSnapshot("legacy-7")?.workflowRuns).toEqual([
         expect.objectContaining({ runId: "wf_legacy", error: "legacy run failed" }),
       ]);
     } finally {
       db.close();
+    }
+
+    // An interrupted migration can encounter a session row it already inserted.
+    // Reimport a changed profile to cover the ON CONFLICT update as well.
+    const legacyPath = path.join(paths.sessionsDir, "legacy-7.json");
+    const revisedProfile = { ...makeAgentProfileSnapshot(), displayName: "Updated Reviewer" };
+    const legacy = JSON.parse(await fs.readFile(legacyPath, "utf8"));
+    legacy.session.profile = revisedProfile;
+    await fs.writeFile(legacyPath, JSON.stringify(legacy));
+    const migrationDb = new Database(db.dbPath, { create: false, strict: false });
+    try {
+      migrationDb.exec("DELETE FROM schema_migrations WHERE version = 2");
+    } finally {
+      migrationDb.close();
+    }
+
+    const reopened = await SessionDb.create({ paths });
+    try {
+      expect(reopened.getSessionRecord("legacy-7")?.profile).toEqual(revisedProfile);
+      expect(reopened.listAgentSessions("root-1")[0]?.profile).toEqual(revisedProfile);
+      expect(reopened.getSessionSnapshot("legacy-7")?.profile).toEqual(revisedProfile);
+    } finally {
+      reopened.close();
     }
   });
 

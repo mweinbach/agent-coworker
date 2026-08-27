@@ -18,7 +18,7 @@ import path from "node:path";
  * Counts may only shrink. When a migration removes a file's last offense (or
  * lowers its count), regenerate the baseline:
  *
- *   PLATFORM_BOUNDARY_UPDATE=1 bun test test/platform-boundary.test.ts
+ *   PLATFORM_BOUNDARY_UPDATE=1 bun run test -- test/platform-boundary.test.ts
  *
  * The regeneration is itself ratcheted: it refuses to raise a count or add a
  * file, so it can only record progress.
@@ -210,7 +210,7 @@ describe("platform boundary", () => {
 
     expect(
       fs.existsSync(BASELINE_PATH),
-      "Missing baseline. Generate it: PLATFORM_BOUNDARY_UPDATE=1 bun test test/platform-boundary.test.ts",
+      "Missing baseline. Generate it: PLATFORM_BOUNDARY_UPDATE=1 bun run test -- test/platform-boundary.test.ts",
     ).toBe(true);
 
     const failures: string[] = [];

@@ -77,6 +77,20 @@ describe("repository complexity report", () => {
   });
 
   test.each([
+    "apps/desktop/electron/qualityGateMain.ts",
+    "apps\\desktop\\electron\\qualityGateMain.ts",
+  ])("classifies the Electron quality entrypoint as test code: %s", (filePath) => {
+    const report = buildComplexityReport(
+      [],
+      biomeReport([hotspot(filePath, 47), hotspot("apps/desktop/electron/main.ts", 16)]),
+    );
+    expect(report.hotspots).toEqual([
+      { path: "apps/desktop/electron/qualityGateMain.ts", line: 1, score: 47, test: true },
+      { path: "apps/desktop/electron/main.ts", line: 1, score: 16, test: false },
+    ]);
+  });
+
+  test.each([
     ["parser errors", { unchanged: 3, errors: 1, diagnosticsNotPrinted: 0 }],
     ["truncated diagnostics", { unchanged: 3, errors: 0, diagnosticsNotPrinted: 1 }],
     ["no scanned files", { unchanged: 0, errors: 0, diagnosticsNotPrinted: 0 }],

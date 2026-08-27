@@ -60,7 +60,9 @@ export function buildComplexityReport(files: TrackedFile[], rawBiomeReport: unkn
         path: filePath,
         line: location.start.line,
         score: Number(score),
-        test: /(^|\/)(tests?|quality-gates)\/|\.(test|spec|pw)\.[^.]+$/.test(filePath),
+        test:
+          filePath === "apps/desktop/electron/qualityGateMain.ts" ||
+          /(^|\/)(tests?|quality-gates)\/|\.(test|spec|pw)\.[^.]+$/.test(filePath),
       };
     })
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path, "en") || a.line - b.line);

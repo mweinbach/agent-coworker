@@ -7,7 +7,7 @@ import {
   type CitationSource,
   extractReferencedCitationSourcesFromToolResult,
 } from "../../shared/providerCitationSources";
-import { asArray, asRecord, asString } from "../../shared/recordParsing";
+import { asArray, asNonEmptyString, asRecord, asString } from "../../shared/recordParsing";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../types";
 import {
   codeModeDisplayToolName,
@@ -48,16 +48,6 @@ function fileChangeOutput(value: unknown): unknown {
   );
 }
 
-function mergedFileChangePayload(
-  payload: Record<string, unknown> | null,
-  item: Record<string, unknown> | null,
-) {
-  return {
-    ...(item ?? {}),
-    ...(payload ?? {}),
-  };
-}
-
 function dynamicToolErrorText(item: Record<string, unknown>): string {
   const explicitError = asString(item.error);
   if (explicitError) return explicitError;
@@ -84,11 +74,6 @@ function projectedToolOutput(
   return citationSources.length > 0 ? { contentItems: output, citationSources } : output;
 }
 
-function assistantPhase(record: Record<string, unknown> | null | undefined): string | undefined {
-  const phase = asString(record?.phase)?.trim();
-  return phase ? phase : undefined;
-}
-
 function isExecCustomToolName(name: string): boolean {
   return name === "exec" || name === "functions.exec";
 }
@@ -106,7 +91,7 @@ async function routeStreamingNotification(
   switch (notification.method) {
     case "item/started":
       if (item?.type === "agentMessage") {
-        const phase = assistantPhase(item);
+        const phase = asNonEmptyString(item?.phase);
         await params.onModelStreamPart?.({
           type: "text-start",
           id: item.id,
@@ -154,7 +139,7 @@ async function routeStreamingNotification(
       break;
     case "item/agentMessage/delta":
       {
-        const phase = assistantPhase(payload);
+        const phase = asNonEmptyString(payload?.phase);
         await params.onModelStreamPart?.({
           type: "text-delta",
           id: asString(payload?.itemId),
@@ -184,7 +169,7 @@ async function routeStreamingNotification(
             : "fileChange",
         output:
           notification.method === "item/fileChange/patchUpdated"
-            ? fileChangeOutput(mergedFileChangePayload(payload, item))
+            ? fileChangeOutput({ ...item, ...payload })
             : (asString(payload?.delta) ??
               asString(payload?.diff) ??
               asString(payload?.patch) ??
@@ -202,7 +187,7 @@ async function routeStreamingNotification(
       break;
     case "item/completed":
       if (item?.type === "agentMessage") {
-        const phase = assistantPhase(item);
+        const phase = asNonEmptyString(item?.phase);
         await params.onModelStreamPart?.({
           type: "text-end",
           id: item.id,
@@ -309,7 +294,6 @@ export function createCodexTurnNotificationRouter(
 ): CodexTurnNotificationRouter {
   const textByItemId = new Map<string, string>();
   const phaseByItemId = new Map<string, string>();
-  const itemOrder: string[] = [];
   const pendingCodeModeExecByCallId = new Map<string, PendingCodeModeExec>();
   const codeModeContinuationByCellId = new Map<string, CodeModeContinuation>();
   const codeModeContinuationByWaitCallId = new Map<string, CodeModeContinuation>();
@@ -319,7 +303,6 @@ export function createCodexTurnNotificationRouter(
     if (!id) return null;
     if (!textByItemId.has(id)) {
       textByItemId.set(id, initialText);
-      itemOrder.push(id);
     }
     return id;
   };
@@ -632,12 +615,12 @@ export function createCodexTurnNotificationRouter(
 
     if (notification.method === "item/started" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id), asString(item.text) ?? "");
-      rememberAssistantPhase(id ?? undefined, assistantPhase(item));
+      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
     } else if (notification.method === "item/agentMessage/delta") {
       const id = ensureAssistantItem(asString(payload?.itemId));
-      const phase = assistantPhase(payload) ?? (id ? phaseByItemId.get(id) : undefined);
+      const phase = asNonEmptyString(payload?.phase) ?? (id ? phaseByItemId.get(id) : undefined);
       rememberAssistantPhase(id ?? undefined, phase);
-      if (phase && !assistantPhase(payload)) {
+      if (phase && !asNonEmptyString(payload?.phase)) {
         routePayload = { ...(payload ?? {}), phase };
       }
       if (id) {
@@ -645,7 +628,7 @@ export function createCodexTurnNotificationRouter(
       }
     } else if (notification.method === "item/completed" && item?.type === "agentMessage") {
       const id = ensureAssistantItem(asString(item.id));
-      rememberAssistantPhase(id ?? undefined, assistantPhase(item));
+      rememberAssistantPhase(id ?? undefined, asNonEmptyString(item?.phase));
       const text = asString(item.text);
       if (id && text) textByItemId.set(id, text);
     }
@@ -659,9 +642,9 @@ export function createCodexTurnNotificationRouter(
       completionDisposeExtras();
     },
     assistantText: () =>
-      itemOrder
-        .filter((id) => phaseByItemId.get(id) !== "commentary")
-        .map((id) => textByItemId.get(id)?.trim() ?? "")
+      [...textByItemId]
+        .filter(([id]) => phaseByItemId.get(id) !== "commentary")
+        .map(([, text]) => text.trim())
         .filter(Boolean)
         .join("\n"),
     waitForCompletion,
@@ -673,7 +656,7 @@ export function assistantTextFromTurn(turn: unknown): string {
   return items
     .map((item) => {
       const record = asRecord(item);
-      return record?.type === "agentMessage" && assistantPhase(record) !== "commentary"
+      return record?.type === "agentMessage" && asNonEmptyString(record?.phase) !== "commentary"
         ? (asString(record.text) ?? "")
         : "";
     })

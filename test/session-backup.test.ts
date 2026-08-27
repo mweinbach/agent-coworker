@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { which } from "../src/platform/exec";
+import { hostPlatform } from "../src/platform/host";
 import { __internal, SessionBackupManager } from "../src/server/sessionBackup";
 import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
 import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
@@ -496,6 +498,62 @@ describe("SessionBackupManager", () => {
     const removedAgain = await manager.deleteCheckpoint(checkpoint.id);
     expect(removedAgain).toBe(false);
   });
+
+  for (const snapshotKind of ["tar_gz", "directory"] as const) {
+    for (const reopen of [false, true]) {
+      test.skipIf(snapshotKind === "tar_gz" && (hostPlatform() === "win32" || !which("tar")))(
+        `checkpoint IDs stay unique after middle deletion (${snapshotKind}, reopen=${reopen})`,
+        async () => {
+          const { root, home, workspace } = await makeTmpWorkspace();
+          const run = async () => {
+            const file = path.join(workspace, "a.txt");
+            await fs.writeFile(file, "initial\n");
+            const options = {
+              sessionId: crypto.randomUUID(),
+              workingDirectory: workspace,
+              homedir: home,
+            };
+            let manager = await SessionBackupManager.create(options);
+            expect(manager.getPublicState().originalSnapshot.kind).toBe(snapshotKind);
+
+            await fs.writeFile(file, "second\n");
+            const removed = await manager.createCheckpoint("manual");
+            await fs.writeFile(file, "third\n");
+            const retained = await manager.createCheckpoint("manual");
+            expect(await manager.deleteCheckpoint(removed.id)).toBe(true);
+
+            if (reopen) {
+              await manager.close();
+              manager = await SessionBackupManager.create(options);
+            }
+
+            await fs.writeFile(file, "fourth\n");
+            const next = await manager.createCheckpoint("manual");
+            expect(next.id).not.toBe(retained.id);
+            expect(next.index).toBeGreaterThan(retained.index);
+            await manager.reloadFromDisk();
+            expect(manager.getPublicState().checkpoints.map((checkpoint) => checkpoint.id)).toEqual(
+              ["cp-0001", retained.id, next.id],
+            );
+            await manager.restoreCheckpoint(retained.id);
+            expect(await fs.readFile(file, "utf-8")).toBe("third\n");
+            await manager.restoreCheckpoint(next.id);
+            expect(await fs.readFile(file, "utf-8")).toBe("fourth\n");
+          };
+
+          try {
+            if (snapshotKind === "directory") {
+              await withMissingPathEnv(workspace, run);
+            } else {
+              await run();
+            }
+          } finally {
+            await fs.rm(root, { recursive: true, force: true });
+          }
+        },
+      );
+    }
+  }
 
   test("create reopens a closed backup and clears closed metadata", async () => {
     const { home, workspace } = await makeTmpWorkspace();

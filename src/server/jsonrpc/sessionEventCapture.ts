@@ -22,23 +22,31 @@ export function createSessionEventCapture({
   ): Promise<T> => {
     const sinkId = createSinkId();
     return await new Promise<T>((resolve, reject) => {
+      let settled = false;
       const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         removeBindingSink(binding, sinkId);
         reject(new Error("Timed out waiting for control event"));
       }, timeoutMs);
 
       addBindingSink(binding, sinkId, (event) => {
-        if (!predicate(event)) return;
+        if (settled || !predicate(event)) return;
+        settled = true;
         clearTimeout(timeout);
         removeBindingSink(binding, sinkId);
         resolve(event);
       });
 
-      void Promise.resolve(action()).catch((error) => {
-        clearTimeout(timeout);
-        removeBindingSink(binding, sinkId);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+      void Promise.resolve()
+        .then(action)
+        .catch((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          removeBindingSink(binding, sinkId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
     });
   };
 
@@ -51,7 +59,6 @@ export function createSessionEventCapture({
   ): Promise<T | null> => {
     const sinkId = createSinkId();
     return await new Promise<T | null>((resolve, reject) => {
-      let actionResolved = false;
       let settled = false;
       let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -81,14 +88,11 @@ export function createSessionEventCapture({
         settle(event);
       });
 
-      void Promise.resolve(action())
+      void Promise.resolve()
+        .then(action)
         .then(() => {
-          actionResolved = true;
-          idleTimer = setTimeout(() => {
-            if (actionResolved) {
-              settle(null);
-            }
-          }, idleMs);
+          if (settled) return;
+          idleTimer = setTimeout(() => settle(null), idleMs);
         })
         .catch((error) => {
           if (settled) return;
@@ -156,7 +160,8 @@ export function createSessionEventCapture({
         scheduleIdleSettle();
       });
 
-      void Promise.resolve(action())
+      void Promise.resolve()
+        .then(action)
         .then(() => {
           actionResolved = true;
           scheduleIdleSettle();

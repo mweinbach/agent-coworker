@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
 
 import { AxeBuilder } from "@axe-core/playwright";
-import { expect } from "@playwright/test";
-import type { Page, TestInfo } from "playwright";
+import { expect, type TestInfo } from "@playwright/test";
+import type { Page } from "playwright";
 
 import {
   DESKTOP_LAYOUT_BREAKPOINTS,
@@ -298,11 +298,11 @@ export async function assertNoViewportClipping(
               ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
               clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
               rect.height <= clippingAncestor.clientHeight + clippingTolerance;
-            const canRecoverX =
+            const canRecoverX: boolean =
               canScrollX ||
               (recoverablyClippedX &&
                 rect.width <= clippingAncestor.clientWidth + clippingTolerance);
-            const canRecoverY =
+            const canRecoverY: boolean =
               canScrollY ||
               (recoverablyClippedY &&
                 rect.height <= clippingAncestor.clientHeight + clippingTolerance);

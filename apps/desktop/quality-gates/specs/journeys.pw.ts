@@ -699,7 +699,7 @@ for (const zoom of [
     }
 
     await composer.evaluate((textarea) => {
-      textarea.wrap = "off";
+      textarea.setAttribute("wrap", "off");
       textarea.style.setProperty("field-sizing", "fixed");
       textarea.style.flex = "none";
       textarea.style.maxWidth = "320px";

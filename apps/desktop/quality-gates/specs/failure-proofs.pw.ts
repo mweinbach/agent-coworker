@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 
-import type { TestInfo } from "playwright";
+import type { TestInfo } from "@playwright/test";
 
 import { assertNoSeriousAxeViolations, settleQualityPage } from "../assertions";
 import { expect, test } from "../fixtures";

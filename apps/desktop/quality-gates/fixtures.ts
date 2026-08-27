@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { test as base, _electron as electron, expect } from "@playwright/test";
+import { test as base, _electron as electron, expect, type TestInfo } from "@playwright/test";
 import electronPath from "electron";
-import type { ElectronApplication, Page, TestInfo } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import { hostPlatform } from "../../../src/platform/host";
 
 export type QualityMode = "light" | "dark" | "system" | "reduced-motion" | "forced-colors";
@@ -277,6 +277,9 @@ async function launchQualityHarness(
   }
   let electronApp: ElectronApplication;
   try {
+    if (typeof electronPath !== "string") {
+      throw new Error("The Electron package did not resolve an executable path");
+    }
     electronApp = await electron.launch({
       executablePath: electronPath,
       args: launchArgs,
@@ -284,9 +287,7 @@ async function launchQualityHarness(
       artifactsDir: runtimeDir,
       tracesDir: runtimeDir,
       colorScheme: qualityColorScheme(options.mode),
-      forcedColors: options.mode === "forced-colors" ? "active" : "none",
       locale: "en-US",
-      reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
       timezoneId: "UTC",
       env: processEnvironment({
         COWORK_QUALITY_CAPTURE_READY_FILE: captureReadyPath,
@@ -359,7 +360,7 @@ async function launchQualityHarness(
   await context.addInitScript((now) => {
     const NativeDate = Date;
     class FixedDate extends NativeDate {
-      constructor(...args: ConstructorParameters<DateConstructor>) {
+      constructor(...args: [] | ConstructorParameters<DateConstructor>) {
         if (args.length === 0) {
           super(now);
           return;
@@ -570,10 +571,10 @@ async function launchQualityHarness(
       openWindow: async (trigger) => {
         const nextWindow = electronApp.waitForEvent("window");
         await trigger();
-        const window = await nextWindow;
-        configurePage(window);
-        await window.waitForFunction(() => Boolean(window.__coworkQualityGate));
-        return window;
+        const windowPage = await nextWindow;
+        configurePage(windowPage);
+        await windowPage.waitForFunction(() => Boolean(window.__coworkQualityGate));
+        return windowPage;
       },
       releaseBootstrap: async () => {
         await electronApp.evaluate(() => {

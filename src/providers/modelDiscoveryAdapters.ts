@@ -1,8 +1,4 @@
-import {
-  defaultSupportedModel,
-  listSupportedModels,
-  type SupportedModel,
-} from "../models/registry";
+import { listSupportedModels, type SupportedModel } from "../models/registry";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
@@ -27,7 +23,6 @@ import type {
   ModelDiscoverySource,
 } from "./modelDiscoveryCache";
 
-type StaticProvider = Exclude<ProviderName, "lmstudio">;
 type OpenAiCompatibleModelListProvider = Extract<
   ProviderName,
   | "openai"
@@ -619,37 +614,6 @@ export function createAnthropicModelDiscoveryAdapter(opts: {
         fetchImpl: opts.fetchImpl,
         signal,
       }),
-  };
-}
-
-function supportedModelToCachedModel(
-  model: ReturnType<typeof listSupportedModels>[number],
-): CachedModelDiscoveryModel {
-  return {
-    id: model.id,
-    displayName: model.displayName,
-    knowledgeCutoff: model.knowledgeCutoff,
-    supportsImageInput: model.supportsImageInput,
-  };
-}
-
-export function discoverStaticProviderModels(provider: StaticProvider): ModelDiscoveryResult {
-  const defaultModel = defaultSupportedModel(provider).id;
-  return {
-    provider,
-    source: "static",
-    models: listSupportedModels(provider).map((model) => ({
-      ...supportedModelToCachedModel(model),
-      ...(model.id === defaultModel ? { isDefault: true } : {}),
-    })),
-  };
-}
-
-export function createStaticModelDiscoveryAdapter(provider: StaticProvider): ModelDiscoveryAdapter {
-  return {
-    provider,
-    source: "static",
-    discover: async () => discoverStaticProviderModels(provider),
   };
 }
 

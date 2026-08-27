@@ -4,8 +4,6 @@ import path from "node:path";
 
 export type ImportSource = "claude" | "codex";
 
-export const IMPORT_SOURCES: readonly ImportSource[] = ["claude", "codex"] as const;
-
 export interface ExternalHome {
   source: ImportSource;
   /** Resolved home directory (e.g. ~/.claude or ~/.codex). */
@@ -66,14 +64,4 @@ export async function resolveExternalHome(
     pluginScanRoots: pluginScanRootsForSource(source, homeDir),
     skillsDir: path.join(homeDir, "skills"),
   };
-}
-
-export async function listAvailableExternalHomes(
-  opts: { homeBaseOverride?: string } = {},
-): Promise<ExternalHome[]> {
-  return await Promise.all(
-    IMPORT_SOURCES.map((source) =>
-      resolveExternalHome(source, { homeBaseOverride: opts.homeBaseOverride }),
-    ),
-  );
 }

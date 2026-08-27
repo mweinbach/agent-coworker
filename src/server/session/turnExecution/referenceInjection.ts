@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 
 import { buildPluginCatalogSnapshot } from "../../../plugins";
 import { discoverSkillsForConfig } from "../../../skills";
-import {
-  isSkillBodyLoadAllowed,
-  type LoadedSkillBody,
-  loadSkillBodyByName,
-} from "../../../skills/loadSkillBody";
+import { type LoadedSkillBody, loadSkillBodyByName } from "../../../skills/loadSkillBody";
 import type { PluginCatalogSnapshot, ReferencedPluginContext, TurnReference } from "../../../types";
 import type { SessionContext } from "../SessionContext";
 
@@ -60,7 +56,7 @@ export async function resolveReferencedSkills(opts: {
   const discovered = await discoverSkillsForConfig(context.state.config);
   for (const name of skillNames) {
     const discoveredSkill = discovered.find((skill) => skill.enabled && skill.name === name);
-    if (discoveredSkill && isSkillBodyLoadAllowed(context.state.config, name)) {
+    if (discoveredSkill) {
       const stat = await fs.stat(discoveredSkill.path).catch(() => null);
       if (stat?.isFile() && stat.size > MAX_REFERENCED_SKILL_BODY_BYTES) {
         log(
@@ -145,7 +141,7 @@ export async function resolveReferencedPlugins(
   const catalog = pluginCatalog ?? (await buildPluginCatalogSnapshot(context.state.config));
   const enabledSkillNames = new Set(
     (await discoverSkillsForConfig(context.state.config, { pluginCatalog: catalog }))
-      .filter((skill) => skill.enabled && isSkillBodyLoadAllowed(context.state.config, skill.name))
+      .filter((skill) => skill.enabled)
       .map((skill) => skill.name),
   );
   const out: ReferencedPluginContext[] = [];
@@ -159,12 +155,7 @@ export async function resolveReferencedPlugins(
       name: entry.name,
       displayName: entry.displayName || entry.name,
       skillNames: entry.skills
-        .filter(
-          (skill) =>
-            skill.enabled &&
-            enabledSkillNames.has(skill.name) &&
-            isSkillBodyLoadAllowed(context.state.config, skill.name),
-        )
+        .filter((skill) => skill.enabled && enabledSkillNames.has(skill.name))
         .map((skill) => skill.name),
     });
   }

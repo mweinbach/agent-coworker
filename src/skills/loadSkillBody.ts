@@ -78,10 +78,6 @@ function frameUntrustedSkillBody(name: string, body: string): string {
   ].join("\n");
 }
 
-export function isSkillBodyLoadAllowed(_config: AgentConfig, _name: string): boolean {
-  return true;
-}
-
 /**
  * Resolve an enabled skill by name and return its SKILL.md body with front
  * matter stripped and any policy overlay appended. Returns null when the skill
@@ -94,8 +90,6 @@ export async function loadSkillBodyByName(
   config: AgentConfig,
   name: string,
 ): Promise<LoadedSkillBody | null> {
-  if (!isSkillBodyLoadAllowed(config, name)) return null;
-
   const discovered = await discoverSkillsForConfig(config);
   const selected = discovered.find((s) => s.enabled && s.name === name);
   if (!selected) return null;

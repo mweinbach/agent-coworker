@@ -7,7 +7,6 @@ import type {
 } from "../../shared/agents";
 import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { ServerErrorData } from "../../types";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import type { AgentWaitMode } from "../agents/types";
@@ -17,16 +16,7 @@ import {
   type PersistedSessionSummary,
 } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
-
-function isStructuredTaskLockedError(
-  error: unknown,
-): error is Error & { code: "task_locked"; source: "session"; data?: ServerErrorData } {
-  return (
-    error instanceof Error &&
-    (error as { code?: unknown }).code === "task_locked" &&
-    (error as { source?: unknown }).source === "session"
-  );
-}
+import { isTaskLockedError } from "./taskLocks";
 
 function snapshotToTopLevelSessionSummary(
   liveSnapshot: SessionSnapshot | null,
@@ -362,7 +352,7 @@ export class SessionAdminManager {
       this.context.emit({ type: "agent_spawned", sessionId: this.context.id, agent });
       this.context.queuePersistSessionSnapshot("session.agent_spawned");
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",
@@ -392,7 +382,7 @@ export class SessionAdminManager {
         ...(interrupt !== undefined ? { interrupt } : {}),
       });
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",
@@ -470,7 +460,7 @@ export class SessionAdminManager {
         agentId,
       });
     } catch (err) {
-      if (isStructuredTaskLockedError(err)) throw err;
+      if (isTaskLockedError(err)) throw err;
       this.context.emitError(
         "internal_error",
         "session",

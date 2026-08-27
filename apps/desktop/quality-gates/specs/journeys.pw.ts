@@ -165,7 +165,9 @@ test.describe("startup recovery", () => {
       .toEqual({ bundles: 1, copies: 1, reveals: 1 });
 
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+    await expect(
+      page.getByRole("status").filter({ hasText: "Restoring your workspace" }),
+    ).toBeVisible();
     await expect(page.getByRole("group", { name: "Message composer" })).toBeVisible();
   });
 });
@@ -517,29 +519,31 @@ test("preserves rail preferences through full, compact, narrow, and restored lay
   };
 
   await resizeTo(1_024, "compact");
-  await expect(rightResizer).toHaveCount(0);
-  const contextTrigger = page.getByRole("button", { name: "Show context", exact: true });
-  await contextTrigger.click();
-  const contextDrawer = page.getByRole("dialog", { name: "Context", exact: true });
-  await expect(contextDrawer).toBeVisible();
-  await expect(contextDrawer.getByRole("button", { name: "Close Context" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(contextDrawer).toHaveCount(0);
-  await expect(contextTrigger).toBeFocused();
+  const inlineContext = page.getByRole("region", { name: "Context", exact: true });
+  await expect(inlineContext).toBeVisible();
+  await expect(rightResizer).toBeVisible();
+  await page.getByRole("button", { name: "Hide context", exact: true }).click();
+  await expect(inlineContext).toBeHidden();
+  await settleQualityPage(page);
+  await assertUsablePrimaryContentWidth(page);
+  await page.getByRole("button", { name: "Show context", exact: true }).click();
+  await expect(inlineContext).toBeVisible();
 
   await resizeTo(800, "compact");
+  await expect(rightResizer).toBeVisible();
   await resizeTo(640, "narrow");
   await expect(leftResizer).toHaveCount(0);
-  await contextTrigger.click();
-  await expect(contextDrawer).toBeVisible();
+  await expect(inlineContext).toBeVisible();
+  await expect(rightResizer).toBeVisible();
   const sidebarTrigger = page.getByRole("button", { name: "Show sidebar", exact: true });
-  await sidebarTrigger.evaluate((element) => (element as HTMLButtonElement).click());
+  await sidebarTrigger.click();
   const sidebarDrawer = page.getByRole("dialog", { name: "Sidebar", exact: true });
   await expect(sidebarDrawer).toBeVisible();
-  await expect(contextDrawer).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Context", exact: true })).toHaveCount(0);
   await expect(sidebarDrawer.getByRole("button", { name: "Close Sidebar" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sidebarDrawer).toHaveCount(0);
+  await expect(sidebarTrigger).toBeFocused();
 
   await resizeTo(1_240, "full");
   await expect(leftResizer).toHaveAttribute("aria-valuenow", savedLeftWidth ?? "248");

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { getKnownResolvedModelMetadata } from "../../models/metadata";
 import {
   type JsonRpcWorkspaceSummary,
@@ -8,6 +7,7 @@ import {
 } from "../../server/jsonrpc/workspaceCatalog";
 import type { SessionDb } from "../../server/sessionDb";
 import type { WebDesktopServiceLike } from "../../server/webDesktopService";
+import { fnv1a32 } from "../../shared/fnv1a";
 import type { AgentConfig } from "../../types";
 import { getConversationSourceAdapter } from "./adapters";
 import { persistImportedConversation, selectImportModel } from "./persist";
@@ -68,15 +68,6 @@ type ServiceOptions = {
   desktopService?: WebDesktopServiceLike | null;
   onWorkspaceListChanged?: () => void;
 };
-
-function hashWorkspaceId(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
 
 function normalizeSourceRequests(
   input?: ConversationSourceRequest[] | ConversationSourceSelectionOptions,
@@ -163,7 +154,7 @@ async function ensureDesktopWorkspaceForPath(input: {
   }
 
   const now = new Date().toISOString();
-  const id = `import-${hashWorkspaceId(workspacePath)}`;
+  const id = `import-${fnv1a32(workspacePath)}`;
   const name = input.name?.trim() || path.basename(workspacePath) || workspacePath;
   const state = await input.desktopService.loadState({ fallbackCwd: input.fallbackCwd });
   const already = state.workspaces.find(

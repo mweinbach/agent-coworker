@@ -55,6 +55,17 @@ describe("web workspace state", () => {
     storage.clear();
   });
 
+  test("keeps the existing persisted workspace ID and storage key", () => {
+    const serverUrl = "ws://127.0.0.1:7337/ws";
+    const workspacePath = "/tmp/workspace-one";
+    saveServerUrl(serverUrl);
+    saveWorkspacePath(workspacePath);
+    const state = seedWorkspaceFromUrl(serverUrl, workspacePath);
+    expect(state.workspaces[0]?.id).toBe("web-2ab0a350");
+    savePersistedState(state);
+    expect(storage.has("cowork:web:state:v2:2ab0a350")).toBe(true);
+  });
+
   test("scopes browser state by server URL and workspace path", () => {
     saveServerUrl("ws://127.0.0.1:7337/ws");
     saveWorkspacePath("/tmp/workspace-one");

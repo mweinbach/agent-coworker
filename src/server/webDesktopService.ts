@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-
 import type { DesktopFeatureFlagOverrides } from "../shared/featureFlags";
 import { normalizeDesktopFeatureFlagOverrides } from "../shared/featureFlags";
+import { fnv1a32 } from "../shared/fnv1a";
 import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
   normalizeQuickChatShortcutAccelerator,
@@ -249,15 +249,6 @@ async function resolveWorkspacePath(
   }
 }
 
-function hashValue(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
 function defaultState(): DesktopPersistedState {
   return {
     version: 2,
@@ -287,7 +278,7 @@ function buildFallbackWorkspace(cwd: string, workspaceKind: WorkspaceKind): Desk
   const now = new Date().toISOString();
   return withWorkspaceKindSource(
     {
-      id: `${FALLBACK_WORKSPACE_ID_PREFIX}-${hashValue(cwd)}`,
+      id: `${FALLBACK_WORKSPACE_ID_PREFIX}-${fnv1a32(cwd)}`,
       name: workspaceBasename(cwd),
       path: cwd,
       createdAt: now,

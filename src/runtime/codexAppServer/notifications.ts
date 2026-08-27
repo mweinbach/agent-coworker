@@ -313,8 +313,11 @@ export function createCodexTurnNotificationRouter(
   let completionPromise: Promise<unknown> | null = null;
   let completionResolve: ((value: unknown) => void) | null = null;
   let completionReject: ((error: Error) => void) | null = null;
+  let completionReceived = false;
   let completionSettled = false;
   let completionDisposeExtras = () => {};
+  let disposed = false;
+  let streamParts = Promise.resolve();
   const pendingUsageByTurnId = new Map<string, RuntimeUsage>();
   let abortSettlementTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -333,12 +336,35 @@ export function createCodexTurnNotificationRouter(
     completionReject?.(error);
   };
 
-  const settleResolve = (value: unknown) => {
-    if (completionSettled) return;
-    completionSettled = true;
-    completionDisposeExtras();
-    completionResolve?.(value);
+  const completeAfterStream = (outcome: { turn: unknown } | { error: Error }) => {
+    if (completionReceived || completionSettled) return;
+    // Seal incoming events now, but keep the deadlines until delivery drains.
+    completionReceived = true;
+    void streamParts.then(() => {
+      if (completionSettled) return;
+      if ("error" in outcome) {
+        settleReject(outcome.error);
+      } else {
+        completionSettled = true;
+        completionDisposeExtras();
+        completionResolve?.(outcome.turn);
+      }
+    });
   };
+
+  const failStream = (error: unknown) => {
+    settleReject(error instanceof Error ? error : new Error(String(error)));
+  };
+
+  const emitPart = (part: unknown) => {
+    streamParts = streamParts
+      .then(async () => {
+        if (disposed || completionSettled || completion.abortSignal?.aborted) return;
+        await params.onModelStreamPart?.(part);
+      })
+      .catch(failStream);
+  };
+  const streamingParams = { ...params, onModelStreamPart: emitPart };
 
   const waitForCompletion = (): Promise<unknown> => {
     if (completionPromise) return completionPromise;
@@ -354,7 +380,7 @@ export function createCodexTurnNotificationRouter(
       );
 
       const onAbort = () => {
-        void completion.interrupt?.().catch(() => {});
+        if (!completionReceived) void completion.interrupt?.().catch(() => {});
         abortSettlementTimeout ??= setTimeout(() => {
           settleReject(new Error("Timed out waiting for codex app-server turn interruption."));
         }, 30_000);
@@ -367,6 +393,7 @@ export function createCodexTurnNotificationRouter(
       }
 
       const disposeClose = client.onClose?.(() => {
+        if (completionReceived) return;
         const expectedTurnId =
           typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
         if (expectedTurnId) {
@@ -395,6 +422,7 @@ export function createCodexTurnNotificationRouter(
   };
 
   const disposeNotification = client.onNotification((notification) => {
+    if (disposed || completionReceived || completionSettled) return;
     const payload = asRecord(notification.params);
     const item = asRecord(payload?.item);
 
@@ -439,12 +467,15 @@ export function createCodexTurnNotificationRouter(
       const status = asString(turn?.status);
       if (status === "failed") {
         const error = asRecord(turn?.error);
-        settleReject(
-          Object.assign(new Error(asString(error?.message) ?? "codex app-server turn failed."), {
-            code: "provider_error" as const,
-            source: "provider" as const,
-          }),
-        );
+        completeAfterStream({
+          error: Object.assign(
+            new Error(asString(error?.message) ?? "codex app-server turn failed."),
+            {
+              code: "provider_error" as const,
+              source: "provider" as const,
+            },
+          ),
+        });
         return;
       }
       if (
@@ -453,17 +484,17 @@ export function createCodexTurnNotificationRouter(
       ) {
         const error = asRecord(turn?.error);
         const detail = asString(error?.message);
-        settleReject(
-          Object.assign(
+        completeAfterStream({
+          error: Object.assign(
             new Error(
               `Codex app-server turn was ${status} before completion${detail ? `: ${detail}` : "."}`,
             ),
             { code: "provider_error" as const, source: "provider" as const },
           ),
-        );
+        });
         return;
       }
-      settleResolve(turn);
+      completeAfterStream({ turn });
       return;
     }
 
@@ -546,7 +577,7 @@ export function createCodexTurnNotificationRouter(
             citationSources: [],
           };
           codeModeContinuationByWaitCallId.set(callId, fallbackContinuation);
-          void params.onModelStreamPart?.({
+          emitPart({
             type: "tool-call",
             toolCallId: callId,
             toolName: fallbackContinuation.toolName,
@@ -574,7 +605,7 @@ export function createCodexTurnNotificationRouter(
         };
         if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
         if (pending.nestedToolObserved) return;
-        void params.onModelStreamPart?.({
+        emitPart({
           type: "tool-call",
           toolCallId: callId,
           toolName: pending.toolName,
@@ -582,7 +613,7 @@ export function createCodexTurnNotificationRouter(
           providerExecuted: true,
         });
         if (cellId) return;
-        void params.onModelStreamPart?.({
+        emitPart({
           type: "tool-result",
           toolCallId: callId,
           toolName: pending.toolName,
@@ -600,7 +631,7 @@ export function createCodexTurnNotificationRouter(
         const cellId = runningCodeModeCellId(output);
         if (cellId) codeModeContinuationByCellId.set(cellId, continuation);
         if (continuation.visibleToolCallId === null || cellId) return;
-        void params.onModelStreamPart?.({
+        emitPart({
           type: "tool-result",
           toolCallId: continuation.visibleToolCallId,
           toolName: continuation.toolName,
@@ -633,11 +664,14 @@ export function createCodexTurnNotificationRouter(
       if (id && text) textByItemId.set(id, text);
     }
 
-    void routeStreamingNotification(notification, params, routePayload, item);
+    void routeStreamingNotification(notification, streamingParams, routePayload, item).catch(
+      failStream,
+    );
   });
 
   return {
     dispose: () => {
+      disposed = true;
       disposeNotification();
       completionDisposeExtras();
     },

@@ -17,7 +17,7 @@ type RunTurnResult = {
   scenario: "run-turn";
   responseText: string;
   responseMessagesLength: number;
-  streamTextCalls: number;
+  runtimeTurnCalls: number;
 };
 
 function runnerPath(): string {
@@ -76,13 +76,13 @@ describe("local MCP integration", () => {
   );
 
   test(
-    "runTurnWithDeps exposes local MCP tools to streamText",
+    "runTurnWithDeps exposes local MCP tools to the runtime",
     async () => {
       await withGlobalTestLock("subprocess-env", async () => {
         const result = await runScenario<RunTurnResult>("run-turn");
         expect(result.responseText).toBe("echo:turn");
         expect(result.responseMessagesLength).toBe(0);
-        expect(result.streamTextCalls).toBe(1);
+        expect(result.runtimeTurnCalls).toBe(1);
       });
     },
     LOCAL_MCP_TEST_TIMEOUT_MS,

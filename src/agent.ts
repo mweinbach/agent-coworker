@@ -3,7 +3,6 @@ import path from "node:path";
 import { z } from "zod";
 
 import { resolveAdvancedMemoryWriteRoots } from "./advancedMemory/store";
-import { getModel as realGetModel } from "./config";
 import {
   COWORK_RUNTIME_INSTRUCTIONS_HEADING,
   prepareCoworkRuntimeToolEnv,
@@ -18,6 +17,7 @@ import type {
   RuntimeModelRawEvent,
   RuntimePrepareStep,
   RuntimeRegisterSteerHandler,
+  RuntimeRunTurnResult,
   RuntimeStepOverride,
 } from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
@@ -52,8 +52,6 @@ import type {
 import { raceWithAbort } from "./utils/abortSignal";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-/** Maximum time (ms) to wait for the legacy stream to drain after response promises settle. */
-let STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const TURN_STARTUP_CLEANUP_TIMEOUT_MS = 200;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
@@ -72,27 +70,6 @@ const messageContentPartSchema = z.union([
     .passthrough(),
 ]);
 const messageContentSchema = z.array(messageContentPartSchema);
-const usageSchema = z.object({
-  promptTokens: z.number(),
-  completionTokens: z.number(),
-  totalTokens: z.number(),
-  cachedPromptTokens: z.number().optional(),
-  cacheWritePromptTokens: z.number().optional(),
-  reasoningOutputTokens: z.number().optional(),
-  estimatedCostUsd: z.number().optional(),
-});
-const responseMessagesSchema = z.array(z.unknown());
-const stringSchema = z.string();
-const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
-  const iterable = value as { [Symbol.asyncIterator]?: unknown };
-  return typeof iterable[Symbol.asyncIterator] === "function";
-});
-const streamResultWithFullStreamSchema = z
-  .object({
-    fullStream: asyncIterableSchema.optional(),
-  })
-  .passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -400,55 +377,16 @@ type RunTurnDeps = {
   loadMCPTools: typeof loadMCPTools;
 };
 
-type LegacyStreamTextInput = Record<string, unknown>;
-type LegacyStreamTextOutput = {
-  text: string | Promise<string>;
-  reasoningText?: string | Promise<string | undefined>;
-  response?: unknown | Promise<unknown>;
-  fullStream?: AsyncIterable<unknown>;
-};
-type LegacyStreamText = (input: LegacyStreamTextInput) => Promise<LegacyStreamTextOutput>;
-type LegacyStepCountIs = (maxSteps: number) => unknown;
-type LegacyGetModel = (config: AgentConfig, id?: string) => unknown;
-
-type RunTurnOverrides = Partial<RunTurnDeps> & {
-  streamText?: LegacyStreamText;
-  stepCountIs?: LegacyStepCountIs;
-  getModel?: LegacyGetModel;
-};
-
-export function createRunTurn(overrides: RunTurnOverrides = {}) {
-  const {
-    streamText: legacyStreamText,
-    stepCountIs: legacyStepCountIs,
-    getModel: legacyGetModel,
-    ...runtimeOverrides
-  } = overrides;
+export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
     createRuntime,
     createTools,
     loadMCPServers,
     loadMCPTools,
-    ...runtimeOverrides,
+    ...overrides,
   };
-  const legacyModelResolver = legacyGetModel ?? realGetModel;
-  const useLegacyModelApi = Boolean(legacyStreamText && legacyStepCountIs);
 
-  return async function runTurn(params: RunTurnParams): Promise<{
-    text: string;
-    reasoningText?: string;
-    responseMessages: ModelMessage[];
-    usage?: {
-      promptTokens: number;
-      completionTokens: number;
-      totalTokens: number;
-      cachedPromptTokens?: number;
-      cacheWritePromptTokens?: number;
-      reasoningOutputTokens?: number;
-      estimatedCostUsd?: number;
-    };
-    providerState?: ProviderContinuationState;
-  }> {
+  return async function runTurn(params: RunTurnParams): Promise<RuntimeRunTurnResult> {
     const {
       config,
       system,
@@ -629,179 +567,47 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       },
     );
 
-    const result = await (async (): Promise<{
-      text: string;
-      reasoningText?: string;
-      responseMessages: ModelMessage[];
-      usage?: {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-        cachedPromptTokens?: number;
-        cacheWritePromptTokens?: number;
-        reasoningOutputTokens?: number;
-        estimatedCostUsd?: number;
-      };
-    }> => {
+    try {
+      const runtime = deps.createRuntime(config);
+      return await runtime.runTurn({
+        config,
+        system: turnSystem,
+        messages,
+        allMessages: params.allMessages,
+        tools,
+        maxSteps: params.maxSteps ?? 100,
+        yolo: params.yolo,
+        shellPolicy,
+        networkAllowed: policyAllowsNetwork(turnSandboxPolicy),
+        providerOptions: turnProviderOptions,
+        providerState: params.providerState,
+        toolEnv: turnToolEnv,
+        abortSignal,
+        includeRawChunks: params.includeRawChunks ?? true,
+        telemetry,
+        ...(prepareStep ? { prepareStep } : {}),
+        shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
+        ...(params.registerSteerHandler
+          ? { registerSteerHandler: params.registerSteerHandler }
+          : {}),
+        agentTargetPaths: params.agentTargetPaths,
+        askUser,
+        approveCommand,
+        updateTodos,
+        assertCanMutate: params.assertCanMutate,
+        onModelStreamPart: params.onModelStreamPart,
+        onModelRawEvent: params.onModelRawEvent,
+        onModelError: params.onModelError,
+        onModelAbort: params.onModelAbort,
+        log,
+      });
+    } finally {
       try {
-        if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
-          const stepLimitStop = legacyStepCountIs(params.maxSteps ?? 100);
-          const streamTextInput: LegacyStreamTextInput = {
-            model: legacyModelResolver(config),
-            system: turnSystem,
-            messages,
-            tools,
-            providerOptions: turnProviderOptions,
-            ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-            stopWhen:
-              params.applyTaskDirective || params.createTask
-                ? [stepLimitStop, () => taskPauseRequested || taskModeSwitchRequested]
-                : stepLimitStop,
-            ...(prepareStep ? { prepareStep } : {}),
-            abortSignal,
-            ...(typeof config.modelSettings?.maxRetries === "number"
-              ? { maxRetries: config.modelSettings.maxRetries }
-              : {}),
-            onError: async ({ error }: { error: unknown }) => {
-              log(`[model:error] ${String(error)}`);
-              await params.onModelError?.(error);
-            },
-            onAbort: async () => {
-              log("[model:abort]");
-              await params.onModelAbort?.();
-            },
-            includeRawChunks: params.includeRawChunks ?? true,
-          };
-
-          const streamResult = await legacyStreamText(streamTextInput);
-          const streamConsumption = (async () => {
-            if (!params.onModelStreamPart) return;
-            const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
-            const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
-            if (!fullStream) return;
-
-            const streamIterator = fullStream[Symbol.asyncIterator]();
-            while (true) {
-              const next = await streamIterator.next();
-              if (next.done) break;
-              await params.onModelStreamPart(next.value);
-            }
-          })();
-
-          const [text, reasoningText, response] = await Promise.all([
-            Promise.resolve(streamResult.text),
-            Promise.resolve(streamResult.reasoningText),
-            Promise.resolve(streamResult.response),
-          ]);
-
-          if (params.onModelStreamPart) {
-            // Wait for the stream consumption to fully drain rather than
-            // guessing completion via micro-tick counting (which can fire
-            // prematurely on a loaded event loop and silently drop output).
-            const drainTimeout = new Promise<"timeout">((resolve) =>
-              setTimeout(() => resolve("timeout"), STREAM_DRAIN_TIMEOUT_MS),
-            );
-
-            const drainResult = await Promise.race([
-              streamConsumption
-                .then(() => "drained" as const)
-                .catch((error) => ({ error }) as { error: unknown }),
-              drainTimeout,
-            ]);
-
-            if (drainResult === "timeout") {
-              log(
-                `[warn] Model stream did not drain within ${STREAM_DRAIN_TIMEOUT_MS}ms after response completion; continuing turn.`,
-              );
-              void streamConsumption.catch((error) => {
-                log(
-                  `[warn] Model stream ended with error after response completion: ${String(error)}`,
-                );
-              });
-            } else if (typeof drainResult === "object" && "error" in drainResult) {
-              log(`[model:error] Model stream ended with error: ${String(drainResult.error)}`);
-              await params.onModelError?.(drainResult.error);
-              throw drainResult.error;
-            }
-            // else: drained successfully, nothing to log
-          }
-
-          const parsedResponseMessages = responseMessagesSchema.safeParse(
-            (response as any)?.messages,
-          );
-          const parsedReasoningText = stringSchema.safeParse(reasoningText);
-          const parsedUsage = usageSchema.safeParse((response as any)?.usage);
-
-          return {
-            text: String(text ?? ""),
-            reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
-            responseMessages: (parsedResponseMessages.success
-              ? parsedResponseMessages.data
-              : []) as ModelMessage[],
-            usage: parsedUsage.success
-              ? {
-                  promptTokens: parsedUsage.data.promptTokens,
-                  completionTokens: parsedUsage.data.completionTokens,
-                  totalTokens: parsedUsage.data.totalTokens,
-                  ...(typeof parsedUsage.data.cachedPromptTokens === "number"
-                    ? { cachedPromptTokens: parsedUsage.data.cachedPromptTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.cacheWritePromptTokens === "number"
-                    ? { cacheWritePromptTokens: parsedUsage.data.cacheWritePromptTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.reasoningOutputTokens === "number"
-                    ? { reasoningOutputTokens: parsedUsage.data.reasoningOutputTokens }
-                    : {}),
-                  ...(typeof parsedUsage.data.estimatedCostUsd === "number"
-                    ? { estimatedCostUsd: parsedUsage.data.estimatedCostUsd }
-                    : {}),
-                }
-              : undefined,
-          };
-        }
-
-        const runtime = deps.createRuntime(config);
-        return await runtime.runTurn({
-          config,
-          system: turnSystem,
-          messages,
-          allMessages: params.allMessages,
-          tools,
-          maxSteps: params.maxSteps ?? 100,
-          yolo: params.yolo,
-          shellPolicy,
-          networkAllowed: policyAllowsNetwork(turnSandboxPolicy),
-          providerOptions: turnProviderOptions,
-          providerState: params.providerState,
-          toolEnv: turnToolEnv,
-          abortSignal,
-          includeRawChunks: params.includeRawChunks ?? true,
-          telemetry,
-          ...(prepareStep ? { prepareStep } : {}),
-          shouldStopAfterToolStep: () => taskPauseRequested || taskModeSwitchRequested,
-          ...(params.registerSteerHandler
-            ? { registerSteerHandler: params.registerSteerHandler }
-            : {}),
-          agentTargetPaths: params.agentTargetPaths,
-          askUser,
-          approveCommand,
-          updateTodos,
-          assertCanMutate: params.assertCanMutate,
-          onModelStreamPart: params.onModelStreamPart,
-          onModelRawEvent: params.onModelRawEvent,
-          onModelError: params.onModelError,
-          onModelAbort: params.onModelAbort,
-          log,
-        });
-      } finally {
-        try {
-          await closeMcp?.();
-        } catch (err) {
-          log(`[MCP] Error closing MCP connections: ${String(err)}`);
-        }
+        await closeMcp?.();
+      } catch (err) {
+        log(`[MCP] Error closing MCP connections: ${String(err)}`);
       }
-    })();
-    return result;
+    }
   };
 }
 
@@ -809,31 +615,7 @@ export const runTurn = createRunTurn();
 
 export async function runTurnWithDeps(
   params: RunTurnParams,
-  overrides: RunTurnOverrides = {},
-): Promise<{
-  text: string;
-  reasoningText?: string;
-  responseMessages: ModelMessage[];
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    cachedPromptTokens?: number;
-    cacheWritePromptTokens?: number;
-    reasoningOutputTokens?: number;
-    estimatedCostUsd?: number;
-  };
-  providerState?: ProviderContinuationState;
-}> {
+  overrides: Partial<RunTurnDeps> = {},
+): Promise<RuntimeRunTurnResult> {
   return await createRunTurn(overrides)(params);
 }
-
-/** @internal Test-only hooks — not part of the public API. */
-export const __internal = {
-  setStreamDrainTimeoutMs(ms: number) {
-    STREAM_DRAIN_TIMEOUT_MS = ms;
-  },
-  resetStreamDrainTimeoutMs() {
-    STREAM_DRAIN_TIMEOUT_MS = 30_000;
-  },
-};

@@ -1,7 +1,6 @@
 import {
   type ModelStreamChunkEvent,
   type ModelStreamRawEvent,
-  type ModelStreamUpdate,
   mapModelStreamChunk,
 } from "../../shared/modelStream";
 import {
@@ -22,6 +21,7 @@ import {
   type ConversationProjectionState,
   clearTurnProjectionState,
 } from "./conversationProjectionState";
+import type { StreamUpdateHandler } from "./conversationProjectionStreamUpdates";
 import type { ToolProjection } from "./conversationProjectionTools";
 import { makeItemId } from "./shared";
 
@@ -31,7 +31,7 @@ export function createSessionEventHandler(
   reasoning: ReasoningProjection,
   tools: ToolProjection,
   feedItems: FeedItemProjection,
-  handleModelStreamUpdate: (update: ModelStreamUpdate) => void,
+  handleModelStreamUpdate: StreamUpdateHandler,
 ) {
   const applyToolCallMetadata = (
     turnId: string,
@@ -77,6 +77,7 @@ export function createSessionEventHandler(
       case "session_busy":
         if (event.busy) {
           if (state.activeTurnId && event.turnId && state.activeTurnId !== event.turnId) {
+            handleModelStreamUpdate.flush(state.activeTurnId);
             assistant.completeAssistantStateBeforeStep(state.activeTurnId);
             clearTurnProjectionState(state, state.activeTurnId);
           }
@@ -100,7 +101,7 @@ export function createSessionEventHandler(
         }
 
         if (event.turnId) {
-          (handleModelStreamUpdate as { flush?: (turnId?: string) => void }).flush?.(event.turnId);
+          handleModelStreamUpdate.flush(event.turnId);
           assistant.completeAssistantStateBeforeStep(event.turnId);
           reasoning.completeReasoningStateForTurn(event.turnId);
           if (event.outcome === "error" || event.outcome === "cancelled") {
@@ -150,9 +151,7 @@ export function createSessionEventHandler(
       case "assistant_message":
         if (!state.activeTurnId) return;
         {
-          (handleModelStreamUpdate as { flush?: (turnId?: string) => void }).flush?.(
-            state.activeTurnId,
-          );
+          handleModelStreamUpdate.flush(state.activeTurnId);
           reasoning.completeReasoningStateForTurn(state.activeTurnId);
           const remainder = assistant.assistantRemainderForTurn(state.activeTurnId, event.text);
           const activeAssistant = state.activeAssistantByTurn.get(state.activeTurnId);
@@ -176,6 +175,7 @@ export function createSessionEventHandler(
         return;
       case "reasoning":
         if (!state.activeTurnId) return;
+        handleModelStreamUpdate.flush(state.activeTurnId);
         assistant.completeAssistantStateBeforeStep(state.activeTurnId);
         reasoning.completeReasoningStateForTurn(state.activeTurnId);
         reasoning.emitReasoningItem(

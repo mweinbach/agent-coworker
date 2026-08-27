@@ -2,9 +2,91 @@ import { describe, expect, test } from "bun:test";
 
 import { createJsonRpcNotificationProjector } from "../../../src/server/jsonrpc/notificationProjector";
 import { createThreadJournalNotificationProjector } from "../../../src/server/jsonrpc/threadJournalNotificationProjector";
+import { projectThreadTurnsFromJournal } from "../../../src/server/jsonrpc/threadReadProjector";
+import type { SessionEvent } from "../../../src/server/protocol";
+import type { PersistedThreadJournalEvent } from "../../../src/server/sessionDb";
+import type { ProjectedItem } from "../../../src/shared/projectedItems";
 import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
+  test.each(["reasoning", "turn change"] as const)(
+    "flushes pending assistant deltas before a plain %s boundary",
+    (boundary) => {
+      type Notification = {
+        method: string;
+        params?: { turn?: { id: string }; item?: ProjectedItem };
+      };
+      const outbound: Notification[] = [];
+      const journal: PersistedThreadJournalEvent[] = [];
+      const projectors = [
+        createJsonRpcNotificationProjector({
+          threadId: sessionId,
+          send: (message) => outbound.push(message as Notification),
+        }),
+        createThreadJournalNotificationProjector({
+          threadId: sessionId,
+          emit: (event) => journal.push({ ...event, seq: journal.length + 1 }),
+        }),
+      ];
+      const handle = (event: SessionEvent) => {
+        for (const projector of projectors) projector.handle(event);
+      };
+      const nextTurnId = "turn-2";
+      handle({ type: "session_busy", sessionId, busy: true, turnId, cause: "user_message" });
+      handle(streamChunk("text_delta", { id: "s0", text: "First answer." }));
+      handle(
+        boundary === "reasoning"
+          ? { type: "reasoning", sessionId, kind: "reasoning", text: "Need one more step." }
+          : {
+              type: "session_busy",
+              sessionId,
+              busy: true,
+              turnId: nextTurnId,
+              cause: "user_message",
+            },
+      );
+      const boundaryNotifications: Notification[][] = [
+        [...outbound],
+        journal.map((event) => ({
+          method: event.eventType,
+          params: event.payload as Notification["params"],
+        })),
+      ];
+      handle({ type: "session_busy", sessionId, busy: false, turnId, outcome: "completed" });
+      if (boundary === "turn change") {
+        handle({
+          type: "session_busy",
+          sessionId,
+          busy: false,
+          turnId: nextTurnId,
+          outcome: "completed",
+        });
+      }
+
+      const firstTurn = projectThreadTurnsFromJournal(journal).find((turn) => turn.id === turnId);
+      expect(
+        firstTurn?.items.filter((item) => item.type === "agentMessage").map((item) => item.text),
+      ).toEqual(["First answer."]);
+      for (const notifications of boundaryNotifications) {
+        const deltaIndex = notifications.findIndex(
+          (message) => message.method === "item/agentMessage/delta",
+        );
+        const completedIndex = notifications.findIndex(
+          (message) =>
+            message.method === "item/completed" && message.params?.item?.type === "agentMessage",
+        );
+        const boundaryIndex = notifications.findIndex((message) =>
+          boundary === "reasoning"
+            ? message.method === "item/started" && message.params?.item?.type === "reasoning"
+            : message.method === "turn/started" && message.params?.turn?.id === nextTurnId,
+        );
+        expect(deltaIndex).toBeGreaterThanOrEqual(0);
+        expect(deltaIndex).toBeLessThan(completedIndex);
+        expect(completedIndex).toBeLessThan(boundaryIndex);
+      }
+    },
+  );
+
   test("notification projector splits assistant segments when reasoning resumes within the same turn", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcNotificationProjector({

@@ -87,22 +87,3 @@ export function ComposerReasoningSelector({
     </Select>
   );
 }
-
-export function ComposerReasoningToggle({
-  enabled,
-  disabled,
-  onChange,
-}: {
-  enabled: boolean;
-  disabled?: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <ComposerReasoningSelector
-      value={enabled ? "high" : "none"}
-      options={["none", "high"]}
-      disabled={disabled}
-      onChange={(next) => onChange(next !== "none")}
-    />
-  );
-}

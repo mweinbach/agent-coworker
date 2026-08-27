@@ -33,17 +33,6 @@ export const MODEL_CHOICES: Record<ProviderName, readonly string[]> = Object.fro
   PROVIDER_NAMES.map((provider) => [provider, userFacingAvailableModelsForProvider(provider)]),
 ) as Record<ProviderName, readonly string[]>;
 
-export function modelOptionsForProvider(
-  provider: ProviderName,
-  currentModel?: string | null,
-): readonly string[] {
-  const base = MODEL_CHOICES[provider] ?? [];
-  const normalized = typeof currentModel === "string" ? currentModel.trim() : "";
-  if (!normalized) return base;
-  if (base.includes(normalized)) return base;
-  return [normalized, ...base];
-}
-
 type ProviderCatalogEntry = Extract<SessionEvent, { type: "provider_catalog" }>["all"][number];
 
 export type ProviderCatalogModelEntry = ProviderCatalogEntry["models"][number];

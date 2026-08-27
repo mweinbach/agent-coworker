@@ -14,10 +14,6 @@ export function initProductAnalytics(): void {
   rendererProductAnalyticsEnabled = getDesktopProductAnalyticsConfig()?.enabled === true;
 }
 
-export function identifyAnonymous(): string | null {
-  return null;
-}
-
 export function captureProductEvent<Name extends ProductAnalyticsEventName>(
   name: Name,
   properties?: ProductAnalyticsEventProperties<Name>,
@@ -33,8 +29,4 @@ export function captureProductEvent<Name extends ProductAnalyticsEventName>(
 export function setProductAnalyticsEnabled(enabled: boolean): void {
   rendererProductAnalyticsEnabled =
     enabled && getDesktopProductAnalyticsConfig()?.keyConfigured === true;
-}
-
-export function shutdownProductAnalytics(): void {
-  rendererProductAnalyticsEnabled = false;
 }

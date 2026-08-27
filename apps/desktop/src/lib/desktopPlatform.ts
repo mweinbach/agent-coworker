@@ -143,21 +143,6 @@ function defaultTopbarControlPlacement(platform: DesktopPlatform): TopbarControl
   return "inline";
 }
 
-/**
- * Convenience booleans for platform checks in components.
- */
-export function isMacos(info: DesktopPlatformInfo): boolean {
-  return info.platform === "macos";
-}
-
-export function isWindows(info: DesktopPlatformInfo): boolean {
-  return info.platform === "windows";
-}
-
-export function isLinux(info: DesktopPlatformInfo): boolean {
-  return info.platform === "linux";
-}
-
 export function resolveCollapsedLeftRailWidth(info: DesktopPlatformInfo): number {
   if (info.collapsedLeftRailWidth > 0) {
     return info.collapsedLeftRailWidth;

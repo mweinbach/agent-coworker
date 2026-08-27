@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { z } from "zod";
 import type { WorkspaceFileChangeEvent } from "../../../src/filesystem/workspaceFileEvents";
 import {
   type DesktopFeatureFlagOverrides,
@@ -124,6 +123,7 @@ import {
   workspaceServerStatusSchema,
   writeFileInputSchema,
 } from "../src/lib/desktopSchemas";
+import { parseWithSchema } from "./ipc/parse";
 import type { PublicTelemetryEnv } from "./services/publicTelemetryEnv";
 import { resolveDesktopTelemetryStatus } from "./services/telemetryStatus";
 
@@ -137,16 +137,6 @@ function getPreloadEnv(): NodeJS.ProcessEnv {
     ...(globalThis.__COWORK_PUBLIC_TELEMETRY_ENV__ ?? {}),
     ...process.env,
   };
-}
-
-function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
-  const parsed = schema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issue = parsed.error.issues[0];
-  const detail = issue?.message ?? "is invalid";
-  throw new Error(`${label} ${detail}`);
 }
 
 function assertStartWorkspaceServerInput(opts: StartWorkspaceServerInput): void {

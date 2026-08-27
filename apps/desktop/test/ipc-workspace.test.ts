@@ -542,7 +542,7 @@ describe("workspace IPC", () => {
     expect(savedState.showHiddenFiles).toBe(true);
   });
 
-  test("main saveState preserves popup-created threads until the main window observes them", async () => {
+  test("main saveState preserves popup threads and deduplicates incoming ids in first-seen order", async () => {
     const handlers = new Map<
       string,
       (event: unknown, args?: unknown) => Promise<unknown> | unknown
@@ -655,21 +655,23 @@ describe("workspace IPC", () => {
       },
     );
 
+    const mainThread = persistedState.threads[0];
+    const secondThread = { ...mainThread, id: "thread-second", title: "Second thread" };
     await saveStateHandler?.(
       {},
       {
         ...persistedState,
-        threads: persistedState.threads.filter(
-          (thread: { id: string }) => thread.id === "thread-main",
-        ),
+        threads: [secondThread, mainThread, { ...secondThread, title: "Latest second thread" }],
         developerMode: true,
       },
     );
 
     expect(persistedState.threads.map((thread: { id: string }) => thread.id)).toEqual([
+      "thread-second",
       "thread-main",
       "thread-popup",
     ]);
+    expect(persistedState.threads[0].title).toBe("Latest second thread");
     expect(persistedState.developerMode).toBe(true);
   });
 

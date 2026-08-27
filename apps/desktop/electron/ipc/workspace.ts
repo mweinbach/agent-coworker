@@ -131,13 +131,7 @@ function mergeMainWindowThreads(
     merged.set(thread.id, thread);
   }
 
-  return [
-    ...incomingThreads.map((thread) => thread.id),
-    ...currentThreads.map((thread) => thread.id),
-  ]
-    .filter((threadId, index, ids) => ids.indexOf(threadId) === index)
-    .map((threadId) => merged.get(threadId))
-    .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
+  return [...merged.values()];
 }
 
 async function mergePopupPersistedState(

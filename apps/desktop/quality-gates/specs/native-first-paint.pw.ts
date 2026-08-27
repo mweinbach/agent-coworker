@@ -25,7 +25,9 @@ for (const mode of ["light", "dark", "system"] as const) {
       await expect(page.locator("html")).toHaveAttribute("data-platform", hostPlatform());
       await expect(page.locator("html")).toHaveAttribute("data-theme-source", mode);
       await expect(page.locator("html")).toHaveAttribute("data-theme", resolvedTheme);
-      await expect(page.getByRole("status")).toContainText("Restoring your workspace");
+      await expect(
+        page.getByRole("status").filter({ hasText: "Restoring your workspace" }),
+      ).toBeVisible();
 
       const nativeWindow = await electronApp.evaluate(({ BrowserWindow }) => {
         const windows = BrowserWindow.getAllWindows();

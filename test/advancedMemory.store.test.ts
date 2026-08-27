@@ -16,6 +16,7 @@ import {
   slugifyMemoryName,
 } from "../src/advancedMemory/store";
 import type { AgentConfig } from "../src/types";
+import { pinHome } from "./helpers/platform";
 
 let tmpDir: string;
 let store: AdvancedMemoryStore;
@@ -179,30 +180,38 @@ describe("slugifyMemoryName", () => {
 
 describe("resolveMemoryFolderName", () => {
   test("returns (chats) for one-off chat sessions", () => {
-    const home = os.homedir();
-    const config = {
-      workingDirectory: path.join(home, ".cowork", "chats", "20260101-x-abc"),
-      projectCoworkDir: path.join(home, ".cowork", "chats", "20260101-x-abc", ".cowork"),
-    } as AgentConfig;
-    expect(resolveMemoryFolderName(config)).toBe(CHATS_FOLDER);
+    const restoreHome = pinHome(tmpDir);
+    try {
+      const workspace = path.join(tmpDir, ".cowork", "chats", "20260101-x-abc");
+      const config = {
+        workingDirectory: workspace,
+        projectCoworkDir: path.join(workspace, ".cowork"),
+      } as AgentConfig;
+      expect(resolveMemoryFolderName(config)).toBe(CHATS_FOLDER);
+    } finally {
+      restoreHome();
+    }
   });
 
   test("derives a readable slug plus a stable path hash from the workspace root", () => {
+    const workspace = path.join(tmpDir, "My Project");
     const config = {
-      workingDirectory: "/home/user/My Project",
-      projectCoworkDir: "/home/user/My Project/.cowork",
+      workingDirectory: workspace,
+      projectCoworkDir: path.join(workspace, ".cowork"),
     } as AgentConfig;
     expect(resolveMemoryFolderName(config)).toMatch(/^my-project-[a-f0-9]{12}$/);
   });
 
   test("does not collide for unrelated projects with the same basename", () => {
+    const firstWorkspace = path.join(tmpDir, "client-a", "app");
+    const secondWorkspace = path.join(tmpDir, "client-b", "app");
     const first = {
-      workingDirectory: "/home/user/client-a/app",
-      projectCoworkDir: "/home/user/client-a/app/.cowork",
+      workingDirectory: firstWorkspace,
+      projectCoworkDir: path.join(firstWorkspace, ".cowork"),
     } as AgentConfig;
     const second = {
-      workingDirectory: "/home/user/client-b/app",
-      projectCoworkDir: "/home/user/client-b/app/.cowork",
+      workingDirectory: secondWorkspace,
+      projectCoworkDir: path.join(secondWorkspace, ".cowork"),
     } as AgentConfig;
 
     expect(resolveMemoryFolderName(first)).toMatch(/^app-[a-f0-9]{12}$/);
@@ -213,23 +222,22 @@ describe("resolveMemoryFolderName", () => {
 
 describe("resolveAdvancedMemoryAccessRoots", () => {
   test("project workspaces write active folder and read active plus chats", () => {
+    const workspace = path.join(tmpDir, "My Project");
+    const memoriesDir = path.join(tmpDir, ".cowork", "memories");
     const config = {
-      workingDirectory: "/home/user/My Project",
-      projectCoworkDir: "/home/user/My Project/.cowork",
-      memoriesDir: "/home/user/.cowork/memories",
+      workingDirectory: workspace,
+      projectCoworkDir: path.join(workspace, ".cowork"),
+      memoriesDir,
     } as AgentConfig;
     const activeFolder = resolveMemoryFolderName(config);
 
     expect(resolveAdvancedMemoryAccessRoots(config)).toEqual({
-      memoriesDir: "/home/user/.cowork/memories",
+      memoriesDir,
       activeFolder,
       readableFolders: [activeFolder, CHATS_FOLDER],
       writableFolder: activeFolder,
-      readRoots: [
-        path.join("/home/user/.cowork/memories", activeFolder),
-        path.join("/home/user/.cowork/memories", CHATS_FOLDER),
-      ],
-      writeRoots: [path.join("/home/user/.cowork/memories", activeFolder)],
+      readRoots: [path.join(memoriesDir, activeFolder), path.join(memoriesDir, CHATS_FOLDER)],
+      writeRoots: [path.join(memoriesDir, activeFolder)],
     });
   });
 });

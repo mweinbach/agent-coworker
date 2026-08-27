@@ -881,6 +881,34 @@ describe("AgentSession", () => {
       }
     });
 
+    test.each(["setConfig", "applySessionDefaults"] as const)(
+      "%s applies a workflow concurrency-only update once",
+      async (entrypoint) => {
+        const persistProjectConfigPatchImpl = mock(async () => {});
+        const { session, events } = makeSession({
+          config: { ...makeConfig("/tmp/test-session"), workflowMaxConcurrentAgents: 2 },
+          persistProjectConfigPatchImpl,
+        });
+        const update = () =>
+          entrypoint === "setConfig"
+            ? session.setConfig({ workflowMaxConcurrentAgents: 3 })
+            : session.applySessionDefaults({ config: { workflowMaxConcurrentAgents: 3 } });
+
+        await update();
+
+        expect(session.getSessionConfigEvent().config.workflowMaxConcurrentAgents).toBe(3);
+        expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+          workflowMaxConcurrentAgents: 3,
+        });
+        expect(events.filter((event) => event.type === "session_config")).toHaveLength(1);
+
+        await update();
+
+        expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+        expect(events.filter((event) => event.type === "session_config")).toHaveLength(1);
+      },
+    );
+
     test("setConfig suppresses no-op writes when the effective config is unchanged", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });

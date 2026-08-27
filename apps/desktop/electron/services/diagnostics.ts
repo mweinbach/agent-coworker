@@ -422,11 +422,3 @@ export class DiagnosticsService {
     return resolved;
   }
 }
-
-export const __internal = {
-  DIAGNOSTICS_FILE_PREFIX,
-  buildSummary,
-  extractUploadResult,
-  readUploadUrl,
-  sanitizeLogTail,
-};

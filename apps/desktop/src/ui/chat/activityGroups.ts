@@ -248,16 +248,6 @@ function isAssistantFeedItem(item: ChatRenderItem): item is {
 }
 
 /**
- * Fold short assistant progress lines into neighboring activity groups so one
- * busy turn does not render as assistant → Worked → assistant → Worked.
- *
- * @deprecated Prefer {@link mergeTurnActivity}; kept for targeted tests.
- */
-export function compactProgressNarration(items: ChatRenderItem[]): ChatRenderItem[] {
-  return mergeTurnActivity(items);
-}
-
-/**
  * Merge genuine progress narration into adjacent activity without converting
  * substantive or cited assistant messages into lossy synthetic reasoning.
  */

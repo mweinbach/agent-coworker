@@ -1,5 +1,4 @@
 import {
-  formatAttachmentDisplayText,
   formatUserInputDisplayText,
   getAttachmentCountValidationMessage,
   getAttachmentUploadByteLengthValidationMessage,
@@ -30,15 +29,6 @@ export function encodeArrayBufferToBase64(buffer: ArrayBuffer): string {
     binaryChunks.push(String.fromCharCode(...chunk));
   }
   return btoa(binaryChunks.join(""));
-}
-
-export function buildAttachmentDisplayText(
-  attachments?: readonly Pick<FileAttachmentInput, "filename">[],
-): string {
-  if (!attachments || attachments.length === 0) {
-    return "";
-  }
-  return formatAttachmentDisplayText(attachments.map((attachment) => attachment.filename));
 }
 
 export function buildUserInputDisplayText(

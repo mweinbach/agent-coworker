@@ -139,5 +139,3 @@ export async function tailLog(file: string, maxBytes: number): Promise<string> {
     await handle?.close().catch(() => {});
   }
 }
-
-export { sanitizeLogMeta };

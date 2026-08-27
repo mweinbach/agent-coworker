@@ -296,7 +296,7 @@ test("preserves detached transcript ownership and exact thread anchors", async (
   const appendElapsedMs = performance.now() - appendStartedAt;
   await page.getByRole("button", { name: /^Electron release review / }).click();
   await expect(anchor).toBeAttached();
-  await expect(page.getByRole("button", { name: "3 new messages. Jump to latest" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "3 new updates. Jump to latest" })).toBeVisible();
   await expect
     .poll(async () =>
       Math.round((await measureReadingPoint(anchor, before.characterOffset)).offset),

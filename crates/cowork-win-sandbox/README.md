@@ -9,10 +9,11 @@ Job Object.
 ## CLI contract
 
 ```
-cowork-win-sandbox.exe \
+cowork-win-sandbox.exe run \
   --mode <read-only|workspace-write> \
   [--writable-root <abs-path>]... \
   --cwd <abs-path> \
+  --sandbox-home <abs-path> \
   [--allow-network] \
   -- <program> [args...]
 ```
@@ -20,25 +21,24 @@ cowork-win-sandbox.exe \
 The helper executes `<program> [args...]`, waits for it, and exits with the
 child's exit code. Stdio is inherited (passthrough).
 
-## What it enforces (v1)
+## Enforcement and setup
 
-- **Privilege reduction:** runs the child under a restricted (`LUA_TOKEN`) token
-  derived from the current process token.
-- **Containment:** assigns the child to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
-  Job Object so the whole tree is terminated when the helper exits.
+The runner uses the pinned Codex Windows sandbox engine for capability-SID ACLs,
+dedicated online/offline identities, Windows Filtering Platform rules, restricted
+tokens, and a kill-on-close Job Object. Writable roots and network policy are
+enforced, not informational flags. Protected workspace metadata remains outside
+the writable set.
 
-## Not yet implemented (tracked TODOs)
+`setup` provisions the managed sandbox home. `probe` checks readiness and exercises
+allowed writes, denied outside/metadata/junction writes, child-process writes,
+temporary scratch access, and network denial. The TypeScript adapter requires
+the capability probe to succeed before advertising enforcement; with
+`sandbox.requireBackend: true`, an unavailable backend fails closed.
 
-- **Per-root filesystem scoping** (`--writable-root` / `--mode`) via deny/allow
-  ACLs or capability SIDs — currently informational.
-- **Network isolation** (`--allow-network`) via the Windows Filtering Platform —
-  currently informational.
-
-These are the heavier parts of Codex's `windows-sandbox-rs`; they are the next
-iteration. Until then, the TypeScript sandbox manager treats restrictive Windows
-policies as backend-unavailable rather than claiming filesystem or network
-isolation. With the default `sandbox.requireBackend: true`, that fails closed;
-users may explicitly opt into unsandboxed execution by setting it to `false`.
+Cowork manages setup state only in `~/.cowork` and its managed app-server home.
+Do not import setup state from a separate native Codex installation. See
+`src/platform/sandbox/windowsSetupSync.ts` and `docs/sandbox.md` for the shared
+account and policy contracts.
 
 ## Build
 
@@ -89,7 +89,11 @@ same logic on the command line.
 ## Verification checklist (Windows runner)
 
 1. `cargo build --release` succeeds.
-2. `cowork-win-sandbox.exe --mode read-only --cwd . -- cmd /c whoami` runs and
-   reports a restricted/medium-or-lower token.
-3. The child is killed when the helper process is terminated (Job Object).
-4. Exit codes propagate correctly.
+2. Run `setup` and `probe` with absolute `--cwd` and `--sandbox-home` paths;
+   require the enforcement probe to report readiness.
+3. Run the platform sandbox enforcement integration tests used by CI, including
+   denied outside/metadata/junction writes and network access.
+4. Verify child-process containment and exit-code propagation.
+
+Formatting checks on macOS/Linux do not verify Windows enforcement. The Windows
+CI lane builds all helper binaries and runs the real setup and enforcement tests.

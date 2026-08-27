@@ -76,7 +76,8 @@
     "format:write": "bunx biome format --write .",
     "check": "bunx biome check .",
     "check:write": "bunx biome check --write .",
-    "knip": "knip --no-config-hints"
+    "knip": "knip --no-config-hints",
+    "complexity": "bun scripts/complexity.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1117.0",

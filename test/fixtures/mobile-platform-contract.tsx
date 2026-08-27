@@ -972,7 +972,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(runAccessibleLayoutAnimation(false)).toBe(true);
       expect(layoutAnimationCount).toBe(beforeLayoutAnimation + 1);
       expect(standardMotionTransform).toBe('[{"scale":0.985}]');
-      expect(reducedMotionTransform).toBeNull();
+      expect(reducedMotionTransform).toBe("[]");
 
       const snapshot = {
         accessibility: {

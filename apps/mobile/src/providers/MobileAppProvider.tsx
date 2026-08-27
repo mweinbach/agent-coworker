@@ -1,4 +1,3 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 import { AppState } from "react-native";
@@ -24,14 +23,6 @@ import { useDisplayPreferencesStore } from "../features/preferences/displayPrefe
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { createForegroundRecoveryController } from "../features/relay/foregroundRecovery";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes stale time
-    },
-  },
-});
 
 export function MobileAppProvider({ children }: PropsWithChildren) {
   const bootstrapPairing = usePairingStore((state) => state.bootstrap);
@@ -271,5 +262,5 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     };
   }, [attachPairingListeners, bootstrapPairing, resetPairingListeners, seedThread]);
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return children;
 }

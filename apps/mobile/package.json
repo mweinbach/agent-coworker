@@ -23,7 +23,6 @@
   "dependencies": {
     "@expo/ui": "~57.0.7",
     "@expo/vector-icons": "^15.1.1",
-    "@tanstack/react-query": "^5.101.4",
     "clsx": "^2.1.1",
     "commander": "7.2.0",
     "expo": "~57.0.8",

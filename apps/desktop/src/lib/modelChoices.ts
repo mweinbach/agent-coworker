@@ -11,7 +11,7 @@ import { PROVIDER_NAMES } from "./wsProtocol";
 
 export { CUSTOM_MODEL_PROVIDER_NAMES, supportsCustomModelIds };
 
-export const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
+const UI_DISABLED_PROVIDERS = new Set<ProviderName>(
   PROVIDER_NAMES.filter((provider) => !isUserFacingProviderEnabled(provider)),
 );
 
@@ -207,7 +207,7 @@ export function modelChoicesFromCatalog(
   return result;
 }
 
-export function hasConfiguredProviderStatus(
+function hasConfiguredProviderStatus(
   status: { verified?: boolean; authorized?: boolean } | undefined,
 ): boolean {
   return Boolean(status?.verified || status?.authorized);

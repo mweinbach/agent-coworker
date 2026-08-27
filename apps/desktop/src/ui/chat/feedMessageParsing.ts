@@ -173,7 +173,7 @@ function parseAttachmentNameList(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function parseUserMessageAttachments(text: string): {
+function parseUserMessageAttachments(text: string): {
   cleanText: string;
   fileNames: string[];
 } {

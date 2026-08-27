@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export const WINDOWS_SANDBOX_READINESS_FILE = "readiness.json";
+const WINDOWS_SANDBOX_READINESS_FILE = "readiness.json";
 
 export type WindowsSandboxReadiness = {
   schemaVersion: 1;

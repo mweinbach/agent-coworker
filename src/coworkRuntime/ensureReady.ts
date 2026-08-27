@@ -24,8 +24,8 @@ import type {
   RuntimeHost,
 } from "./types";
 
-export const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
-export const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
+const DEFAULT_COWORK_RUNTIME_REPOSITORY = "mweinbach/cowork-runtime";
+const DEFAULT_COWORK_RUNTIME_VERSION = "2026-06-22";
 export const COWORK_RUNTIME_INSTRUCTIONS_HEADING = "## Cowork Runtime";
 
 const DISABLE_ENV = "COWORK_DISABLE_RUNTIME";

@@ -1,6 +1,6 @@
 export const MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_ADAPTER_PROVIDER = "minimax.completions";
-export const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
+const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
 
 const MINIMAX_MODEL_IDS = ["MiniMax-M3"] as const;
 export type MiniMaxModelId = (typeof MINIMAX_MODEL_IDS)[number];

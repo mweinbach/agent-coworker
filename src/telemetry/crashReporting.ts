@@ -270,7 +270,7 @@ function filterIntegrations(
   });
 }
 
-export function buildSentryOptions(
+function buildSentryOptions(
   config: ResolvedCrashReportingConfig,
   context: CrashReportingInitContext,
 ): CrashReportingSdkOptions {
@@ -557,7 +557,7 @@ function scrubCaptureContext(
   return isRecord(scrubbed) ? (scrubbed as CrashReportingCaptureContext) : {};
 }
 
-export function scrubSentryEvent(
+function scrubSentryEvent(
   event: CrashReportingEvent,
   context: ScrubContext = activeScrubContext,
 ): CrashReportingEvent | null {
@@ -565,7 +565,7 @@ export function scrubSentryEvent(
   return isRecord(scrubbed) ? scrubbed : null;
 }
 
-export function scrubSentryBreadcrumb(
+function scrubSentryBreadcrumb(
   breadcrumb: CrashReportingEvent,
   context: ScrubContext = activeScrubContext,
 ): CrashReportingEvent | null {

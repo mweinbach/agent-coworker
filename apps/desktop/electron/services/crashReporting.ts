@@ -19,7 +19,7 @@ function appVersion(): string {
   return app.getVersion().trim() || "unknown";
 }
 
-export function resolveDesktopMainCrashReportingConfig(
+function resolveDesktopMainCrashReportingConfig(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   env: CrashReportingEnv = process.env,
 ) {
@@ -40,7 +40,7 @@ export function resolveDesktopMainCrashReportingConfig(
   });
 }
 
-export function applyCrashReportingProcessEnv(
+function applyCrashReportingProcessEnv(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
@@ -59,7 +59,7 @@ export function applyCrashReportingProcessEnv(
   env.COWORK_SENTRY_ENVIRONMENT = config.environment;
 }
 
-export function registerMainCrashReportingHandlers(): void {
+function registerMainCrashReportingHandlers(): void {
   if (processHandlersRegistered) {
     return;
   }

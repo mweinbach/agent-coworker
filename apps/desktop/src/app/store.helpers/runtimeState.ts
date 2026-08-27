@@ -478,7 +478,7 @@ export function clearWorkspaceServerRestartStabilityTimer(workspaceId: string): 
   RUNTIME.workspaceServerRestartStabilityTimers.delete(workspaceId);
 }
 
-export function clearWorkspaceServerRestartBackoffState(workspaceId: string): void {
+function clearWorkspaceServerRestartBackoffState(workspaceId: string): void {
   clearWorkspaceServerRestartStabilityTimer(workspaceId);
   RUNTIME.workspaceServerRestartAttempts.delete(workspaceId);
 }

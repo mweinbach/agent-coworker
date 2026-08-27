@@ -3,9 +3,9 @@ import { MAX_ARTIFACT_DIFF_CHANGES } from "./types";
 
 export type ChangeAction = "added" | "removed" | "modified" | "moved";
 
-export const MAX_TEXT_DIFF_LINE_CHARS = 4_096;
-export const MAX_TEXT_DIFF_DETAIL_CHARS = 4 * 1024 * 1024;
-export const MAX_UNIFIED_DIFF_CHARS = 4 * 1024 * 1024;
+const MAX_TEXT_DIFF_LINE_CHARS = 4_096;
+const MAX_TEXT_DIFF_DETAIL_CHARS = 4 * 1024 * 1024;
+const MAX_UNIFIED_DIFF_CHARS = 4 * 1024 * 1024;
 
 export class ArtifactChangeCollector<T> {
   readonly changes: T[] = [];
@@ -57,7 +57,7 @@ type SequenceOperation<T> = {
 
 const MAX_LCS_MATRIX_CELLS = 4_000_000;
 
-export function sequenceDiff<T>(
+function sequenceDiff<T>(
   before: readonly T[],
   after: readonly T[],
   equals: (left: T, right: T) => boolean = Object.is,

@@ -74,7 +74,7 @@ function parseDetail(activity: TaskActivity): unknown {
   }
 }
 
-export function getTaskReviewRounds(activity: readonly TaskActivity[]): TaskReviewRound[] {
+function getTaskReviewRounds(activity: readonly TaskActivity[]): TaskReviewRound[] {
   const ordered = [...activity].sort((left, right) => left.seq - right.seq);
   const rounds: TaskReviewRound[] = [];
   const byId = new Map<string, TaskReviewRound>();

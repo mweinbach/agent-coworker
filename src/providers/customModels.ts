@@ -147,7 +147,7 @@ export async function readCustomModelStore(paths: AiCoworkerPaths): Promise<Cust
   }
 }
 
-export async function writeCustomModelStore(
+async function writeCustomModelStore(
   paths: AiCoworkerPaths,
   store: CustomModelStore,
 ): Promise<void> {

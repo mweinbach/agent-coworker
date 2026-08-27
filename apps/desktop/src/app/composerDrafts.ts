@@ -73,7 +73,7 @@ export type PersistedComposerDraft = Omit<ComposerDraft, "attachments"> & {
 
 export type PersistedComposerDrafts = Record<string, PersistedComposerDraft>;
 
-export const EMPTY_COMPOSER_DRAFT: Readonly<ComposerDraft> = Object.freeze(
+const EMPTY_COMPOSER_DRAFT: Readonly<ComposerDraft> = Object.freeze(
   createEmptyComposerDraft(new Date(0).toISOString()),
 );
 

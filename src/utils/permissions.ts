@@ -84,7 +84,7 @@ function isPathInsideAnyRoot(filePath: string, roots: string[]): boolean {
   return roots.some((root) => isPathInside(root, resolved));
 }
 
-export function resolveAgentTargetPathRoots(
+function resolveAgentTargetPathRoots(
   config: AgentConfig,
   targetPaths: readonly string[] | null | undefined,
 ): string[] {

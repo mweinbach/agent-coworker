@@ -16,7 +16,7 @@ import { assertHostCompatible } from "./platform";
 import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { CoworkRuntimeManifest, RuntimeHost, RuntimeVerification } from "./types";
 
-export function resolveManifestPath(runtimeDir: string, relativePath: string): string {
+function resolveManifestPath(runtimeDir: string, relativePath: string): string {
   return path.join(runtimeDir, ...relativePath.split("/"));
 }
 

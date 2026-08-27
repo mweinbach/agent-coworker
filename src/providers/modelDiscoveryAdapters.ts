@@ -52,9 +52,7 @@ function modelReasoning(model: CodexAppServerModel): CachedModelDiscoveryModel["
   };
 }
 
-export function codexAppServerModelToCachedModel(
-  model: CodexAppServerModel,
-): CachedModelDiscoveryModel {
+function codexAppServerModelToCachedModel(model: CodexAppServerModel): CachedModelDiscoveryModel {
   const reasoning = modelReasoning(model);
   return {
     id: model.model || model.id,
@@ -71,7 +69,7 @@ export function codexAppServerModelToCachedModel(
   };
 }
 
-export async function discoverCodexAppServerModels(opts: {
+async function discoverCodexAppServerModels(opts: {
   codexHome?: string;
   listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
   signal?: AbortSignal;
@@ -103,7 +101,7 @@ export function createCodexAppServerModelDiscoveryAdapter(opts: {
   };
 }
 
-export async function discoverLmStudioModels(opts: {
+async function discoverLmStudioModels(opts: {
   baseUrl: string;
   apiKey?: string;
   fetchImpl?: typeof fetch;
@@ -478,7 +476,7 @@ function googleRuntimeOptions(record: Record<string, unknown>): Record<string, u
   return out;
 }
 
-export async function discoverGoogleModels(opts: {
+async function discoverGoogleModels(opts: {
   apiKey: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -551,7 +549,7 @@ function anthropicRuntimeOptions(record: Record<string, unknown>): Record<string
   return out;
 }
 
-export async function discoverAnthropicModels(opts: {
+async function discoverAnthropicModels(opts: {
   apiKey: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;

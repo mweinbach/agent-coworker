@@ -9,7 +9,7 @@ import {
 } from "./threadHomeModel";
 import type { MobileThreadSummary } from "./threadStore";
 
-export const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
+const THREAD_OFFLINE_CACHE_KEY = "threadSnapshots";
 const THREAD_OFFLINE_CACHE_VERSION = 3;
 
 export type ThreadOfflineCache = {

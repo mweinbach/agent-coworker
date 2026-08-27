@@ -392,7 +392,7 @@ function parseIntegrityManifest(value: unknown): RuntimeIntegrityManifest {
   return { ...(value as RuntimeIntegrityManifest), components, entrypoints };
 }
 
-export function assertTrustedRuntimeManifest(
+function assertTrustedRuntimeManifest(
   manifest: CoworkRuntimeManifest,
 ): asserts manifest is TrustedCoworkRuntimeManifest {
   if (manifest.schemaVersion !== 2 || !manifest.integrity) {

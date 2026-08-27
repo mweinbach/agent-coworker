@@ -24,9 +24,7 @@ type ApplyMemoryDefaults = {
   skillImprovementExcludedSkills?: string[];
 };
 
-export function normalizeMemoryGenerationModel(
-  value: string | null | undefined,
-): string | undefined {
+function normalizeMemoryGenerationModel(value: string | null | undefined): string | undefined {
   return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 

@@ -45,11 +45,11 @@ export function isFailedToolOutcome(
   );
 }
 
-export function isFailedToolItem(item: Extract<SessionFeedItem, { kind: "tool" }>): boolean {
+function isFailedToolItem(item: Extract<SessionFeedItem, { kind: "tool" }>): boolean {
   return isFailedToolOutcome(item.name, item.state, item.result);
 }
 
-export function isSuccessfulToolItem(item: Extract<SessionFeedItem, { kind: "tool" }>): boolean {
+function isSuccessfulToolItem(item: Extract<SessionFeedItem, { kind: "tool" }>): boolean {
   return item.state === "output-available" && !isFailedToolItem(item);
 }
 

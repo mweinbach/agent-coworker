@@ -126,7 +126,7 @@ function resolveDesktopConfig(opts: {
   );
 }
 
-export function applyProductAnalyticsProcessEnv(
+function applyProductAnalyticsProcessEnv(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   productAnalyticsState?: PersistedProductAnalyticsState | null,
   env: NodeJS.ProcessEnv = process.env,

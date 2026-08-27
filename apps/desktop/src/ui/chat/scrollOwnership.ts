@@ -1,4 +1,4 @@
-export const FOLLOW_TAIL_THRESHOLD_PX = 48;
+const FOLLOW_TAIL_THRESHOLD_PX = 48;
 
 export type ScrollAnchorPosition = {
   anchorId: string;

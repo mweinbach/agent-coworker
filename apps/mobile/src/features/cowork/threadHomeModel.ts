@@ -1,11 +1,11 @@
 import type { WorkspaceSummary } from "./protocolTypes";
 import type { MobileThreadSummary } from "./threadStore";
 
-export const HOME_SECTION_KEYS = ["chats", "projects"] as const;
+const HOME_SECTION_KEYS = ["chats", "projects"] as const;
 export type HomeSectionKey = (typeof HOME_SECTION_KEYS)[number];
 
-export const INITIAL_VISIBLE_CHAT_COUNT = 5;
-export const INITIAL_VISIBLE_PROJECT_THREAD_COUNT = 5;
+const INITIAL_VISIBLE_CHAT_COUNT = 5;
+const INITIAL_VISIBLE_PROJECT_THREAD_COUNT = 5;
 export const PROJECT_THREAD_PAGE_SIZE = 5;
 export const ONE_OFF_CHAT_WORKSPACE_PAGE_SIZE = 10;
 

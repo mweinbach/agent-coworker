@@ -35,7 +35,7 @@ export function isTerminalTaskStatus(status: TaskStatus): status is TerminalTask
   return TERMINAL_TASK_STATUSES.has(status);
 }
 
-export function terminalTaskLock(task: Pick<TaskRecord, "id" | "status">): TaskLockError | null {
+function terminalTaskLock(task: Pick<TaskRecord, "id" | "status">): TaskLockError | null {
   if (!isTerminalTaskStatus(task.status)) return null;
   return {
     message: `Task ${task.id} is ${task.status} and cannot accept new turns until it is reopened or retried.`,
@@ -49,9 +49,7 @@ export function terminalTaskLock(task: Pick<TaskRecord, "id" | "status">): TaskL
   };
 }
 
-export function activeSourceChatLock(
-  task: Pick<TaskRecord, "id" | "status" | "title">,
-): TaskLockError {
+function activeSourceChatLock(task: Pick<TaskRecord, "id" | "status" | "title">): TaskLockError {
   return {
     message: `Chat is locked by active task ${task.id}: ${task.title}`,
     data: {
@@ -173,7 +171,7 @@ export function registerSettlingTerminalSessionLock(
   };
 }
 
-export function getTaskThreadLock(
+function getTaskThreadLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
 ): TaskLockError | null {
@@ -185,7 +183,7 @@ export function getTaskThreadLock(
   return settlingTerminalSessionLocks.get(sessionId)?.at(-1)?.lock ?? null;
 }
 
-export function getActiveSourceChatLock(
+function getActiveSourceChatLock(
   sessionDb: TaskSessionDb | null | undefined,
   sessionId: string,
 ): TaskLockError | null {

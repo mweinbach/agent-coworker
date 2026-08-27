@@ -25,7 +25,7 @@ export function runtimeReleaseTag(version: string): string {
   return `runtime-${version}`;
 }
 
-export function compatibleHostsForAsset(asset: RuntimeAssetId): string[] {
+function compatibleHostsForAsset(asset: RuntimeAssetId): string[] {
   switch (asset) {
     case "win-x86":
       return ["win32-x64", "win32-arm64"];

@@ -22,7 +22,7 @@ import {
  * `--unshare-net` unless the policy enables it.
  */
 
-export const BWRAP_PROGRAM = "bwrap";
+const BWRAP_PROGRAM = "bwrap";
 
 export interface BwrapCommand {
   file: string;

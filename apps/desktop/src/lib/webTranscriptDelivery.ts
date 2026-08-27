@@ -15,7 +15,7 @@ import {
 import type { TranscriptBatchInput, TranscriptDeliveryFailure } from "./desktopApi";
 import { IndexedDbReliableBatchStore } from "./indexedDbReliableBatchStore";
 
-export const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
+const WEB_TRANSCRIPT_LIMITS: ReliableBatchLimits = {
   maxBatches: 512,
   maxEvents: 4_096,
   maxBytes: 4 * 1024 * 1024,

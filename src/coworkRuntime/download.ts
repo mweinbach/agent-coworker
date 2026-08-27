@@ -88,7 +88,7 @@ export function checksumFromText(raw: string, expectedFileName: string): string 
   return match[1].toLowerCase();
 }
 
-export function githubReleaseAssetUrl(opts: {
+function githubReleaseAssetUrl(opts: {
   repository: string;
   tag: string;
   fileName: string;

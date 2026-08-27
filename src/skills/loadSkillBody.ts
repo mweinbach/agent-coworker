@@ -17,7 +17,7 @@ const loadedSkills = new Map<string, SkillCacheEntry>();
  * Lets a skill carry Cowork-specific policy guidance without editing the skill
  * file itself.
  */
-export const SKILL_POLICY_OVERLAYS: Record<string, string> = {
+const SKILL_POLICY_OVERLAYS: Record<string, string> = {
   presentations: [
     "## Cowork Addendum",
     "",

@@ -10,7 +10,7 @@ import { verifyRuntime } from "./runtime";
 import { TRUSTED_COWORK_RUNTIME_KEYS } from "./trustedKeys";
 import type { InstalledRuntimePointer, RuntimeHost } from "./types";
 
-export const CURRENT_RUNTIME_FILE = "current.json";
+const CURRENT_RUNTIME_FILE = "current.json";
 
 export function coworkRuntimeRoot(home = os.homedir()): string {
   return path.join(path.resolve(home), ".cowork", "runtime");

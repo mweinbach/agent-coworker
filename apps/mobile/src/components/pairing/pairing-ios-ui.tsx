@@ -16,7 +16,7 @@ export function SectionFooter({ children }: { children: string }) {
   return <Text>{children}</Text>;
 }
 
-export function primaryActionButtonModifiers(primaryColor: string) {
+function primaryActionButtonModifiers(primaryColor: string) {
   return [
     buttonStyle(isLiquidGlassAvailable() ? "glassProminent" : "borderedProminent"),
     controlSize("large"),

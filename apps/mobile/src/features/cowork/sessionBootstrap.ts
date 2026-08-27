@@ -1,6 +1,6 @@
 import type { SecureTransportSnapshot } from "../relay/secureTransportClient";
 
-export const SESSION_RETRY_DELAY_MS = 1_000;
+const SESSION_RETRY_DELAY_MS = 1_000;
 
 type TransportSnapshot = Pick<SecureTransportSnapshot, "status" | "transportMode">;
 

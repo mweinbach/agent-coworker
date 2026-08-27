@@ -29,7 +29,7 @@ function requireString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
-export function parseRuntimeManifest(value: unknown): CoworkRuntimeManifest {
+function parseRuntimeManifest(value: unknown): CoworkRuntimeManifest {
   if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) {
     throw new Error("Unsupported or missing Cowork runtime manifest schemaVersion.");
   }

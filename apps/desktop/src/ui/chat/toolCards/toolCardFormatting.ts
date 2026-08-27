@@ -22,7 +22,7 @@ function truncate(text: string, max = 120): string {
 }
 
 /** Middle-ellipsis path display so the basename stays visible. */
-export function formatDisplayPath(path: string, max = 48): string {
+function formatDisplayPath(path: string, max = 48): string {
   const raw = path.trim();
   if (!raw) return "";
   if (raw.length <= max) return raw;

@@ -10,7 +10,7 @@ export type MobileListPerformanceContract = {
 };
 
 export const MOBILE_LONG_FIXTURE_SIZE = 1_000;
-export const MOBILE_PROFILED_ROW_WINDOW = 40;
+const MOBILE_PROFILED_ROW_WINDOW = 40;
 
 export const MOBILE_STREAM_PERFORMANCE_BUDGET = {
   deltaEvents: MOBILE_LONG_FIXTURE_SIZE,

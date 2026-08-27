@@ -251,7 +251,7 @@ function isAssistantFeedItem(item: ChatRenderItem): item is {
  * Merge genuine progress narration into adjacent activity without converting
  * substantive or cited assistant messages into lossy synthetic reasoning.
  */
-export function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
+function mergeTurnActivity(items: ChatRenderItem[]): ChatRenderItem[] {
   const out: ChatRenderItem[] = [];
   let index = 0;
 
@@ -528,7 +528,7 @@ export function unresolvedToolFailureIds(
     .map((item) => item.id);
 }
 
-export function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
+function confirmedRecoveredToolIds(feed: FeedItem[]): string[] {
   const toolById = new Map<string, Extract<FeedItem, { kind: "tool" }>>();
   for (const item of feed) {
     if (item.kind === "tool") {

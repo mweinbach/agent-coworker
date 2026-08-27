@@ -80,7 +80,7 @@ export function resolveRightRailSizing(
   }
 }
 
-export function resolveDesktopLayoutTier(viewportWidth: number): DesktopLayoutTier {
+function resolveDesktopLayoutTier(viewportWidth: number): DesktopLayoutTier {
   if (viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.narrow) {
     return "narrow";
   }

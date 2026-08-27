@@ -130,28 +130,7 @@ export async function buildPluginCatalogSnapshot(
         (metadataMarketplace ? buildMarketplaceCatalogMetadata(metadataMarketplace) : undefined);
       const discoveryKind = candidateMarketplace ? "marketplace" : candidate.discoveryKind;
       const scope = candidate.scope;
-      const pluginEnabled = isPluginEnabled(
-        {
-          id: manifest.name,
-          name: manifest.name,
-          displayName: manifest.interface?.displayName ?? manifest.name,
-          description: manifest.description,
-          scope,
-          discoveryKind,
-          installed: true,
-          enabled: true,
-          rootDir: manifest.rootDir,
-          manifestPath: manifest.manifestPath,
-          skillsPath: manifest.skillsPath,
-          ...(manifest.mcpPath ? { mcpPath: manifest.mcpPath } : {}),
-          ...(manifest.appPath ? { appPath: manifest.appPath } : {}),
-          skills: [],
-          mcpServers: [],
-          apps: [],
-          warnings: [],
-        },
-        overrides,
-      );
+      const pluginEnabled = isPluginEnabled({ id: manifest.name, scope }, overrides);
       const entry = await buildPluginCatalogEntryFromManifest({
         manifest,
         scope,

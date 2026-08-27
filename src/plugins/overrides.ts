@@ -176,7 +176,7 @@ export async function readPluginOverrides(config: AgentConfig): Promise<PluginOv
 }
 
 export function isPluginEnabled(
-  entry: PluginCatalogEntry,
+  entry: Pick<PluginCatalogEntry, "id" | "scope">,
   overrides: PluginOverrideSnapshot,
 ): boolean {
   const overrideMap =

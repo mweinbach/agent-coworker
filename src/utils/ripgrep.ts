@@ -226,9 +226,9 @@ async function installRipgrepFromGitHub(
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-rg-"));
     const archivePath = path.join(tmpRoot, asset.archiveName);
     const extractDir = path.join(tmpRoot, "extract");
-    await fs.mkdir(extractDir, { recursive: true });
 
     try {
+      await fs.mkdir(extractDir, { recursive: true });
       opts.log?.(`[ripgrep] downloading ${asset.archiveName}...`);
 
       const checksumUrl = `${baseUrl}/${asset.archiveName}.sha256`;
@@ -270,6 +270,12 @@ async function installRipgrepFromGitHub(
       return;
     } catch (err) {
       lastErr = err;
+    } finally {
+      try {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      } catch (error) {
+        opts.log?.(`[ripgrep] failed to clean up ${tmpRoot}: ${String(error)}`);
+      }
     }
   }
 

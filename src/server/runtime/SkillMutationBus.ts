@@ -73,7 +73,11 @@ export class SkillMutationBus {
     this.refreshLoop = (async () => {
       do {
         this.refreshQueued = false;
-        await this.applySignal();
+        try {
+          await this.applySignal();
+        } catch (error) {
+          console.warn("[skills] Failed to refresh local skill state:", error);
+        }
       } while (this.refreshQueued && !this.stopped);
     })().finally(() => {
       this.refreshLoop = null;
@@ -85,13 +89,14 @@ export class SkillMutationBus {
     if (!signal || signal.revision === this.lastRevision) {
       return;
     }
-    this.lastRevision = signal.revision;
     if (signal.pid === process.pid) {
+      this.lastRevision = signal.revision;
       return;
     }
     await this.options.refreshLocalSkillState({
       workingDirectory: this.options.workingDirectory,
       allWorkspaces: true,
     });
+    this.lastRevision = signal.revision;
   }
 }

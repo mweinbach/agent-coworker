@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,8 +21,17 @@ type TestableSkillMutationBus = SkillMutationBus & {
   refreshLoop: Promise<void> | null;
 };
 
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+  );
+});
+
 async function makeTempCoworkDir(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "skill-mutation-bus-"));
+  tempRoots.push(root);
   return path.join(root, ".cowork");
 }
 
@@ -35,6 +44,93 @@ function peerPid(): number {
 }
 
 describe("SkillMutationBus", () => {
+  test("observes refresh failures and retries the same revision on the next signal", async () => {
+    const userCoworkDir = await makeTempCoworkDir();
+    let attempts = 0;
+    const failure = new Error("refresh failed");
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const bus = asTestableBus(
+      new SkillMutationBus({
+        userCoworkDir,
+        workingDirectory: "/workspace-a",
+        refreshLocalSkillState: async () => {
+          if (++attempts === 1) throw failure;
+        },
+      }),
+    );
+    try {
+      await writeSharedSkillMutationSignal(resolveSharedSkillMutationSignalPath(userCoworkDir), {
+        revision: "retryable-revision",
+        pid: peerPid(),
+        at: "2026-05-19T10:00:00.000Z",
+      });
+      bus.scheduleRefresh();
+      await expect(bus.refreshLoop).resolves.toBeUndefined();
+      expect(warning).toHaveBeenCalledWith(
+        "[skills] Failed to refresh local skill state:",
+        failure,
+      );
+      expect(bus.refreshLoop).toBeNull();
+
+      bus.scheduleRefresh();
+      await bus.refreshLoop;
+      expect(attempts).toBe(2);
+
+      bus.scheduleRefresh();
+      await bus.refreshLoop;
+      expect(attempts).toBe(2);
+    } finally {
+      bus.stop();
+      warning.mockRestore();
+    }
+  });
+
+  test("continues to the queued revision after an in-flight refresh fails", async () => {
+    const userCoworkDir = await makeTempCoworkDir();
+    const signalPath = resolveSharedSkillMutationSignalPath(userCoworkDir);
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let attempts = 0;
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const bus = asTestableBus(
+      new SkillMutationBus({
+        userCoworkDir,
+        workingDirectory: "/workspace-a",
+        refreshLocalSkillState: async () => {
+          if (++attempts !== 1) return;
+          started.resolve();
+          await release.promise;
+          throw new Error("first refresh failed");
+        },
+      }),
+    );
+    try {
+      await writeSharedSkillMutationSignal(signalPath, {
+        revision: "first-revision",
+        pid: peerPid(),
+        at: "2026-05-19T10:00:00.000Z",
+      });
+      bus.scheduleRefresh();
+      const loop = bus.refreshLoop;
+      await started.promise;
+      await writeSharedSkillMutationSignal(signalPath, {
+        revision: "queued-revision",
+        pid: peerPid(),
+        at: "2026-05-19T10:00:01.000Z",
+      });
+      bus.scheduleRefresh();
+      release.resolve();
+      await expect(loop).resolves.toBeUndefined();
+      expect(attempts).toBe(2);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(bus.refreshLoop).toBeNull();
+    } finally {
+      release.resolve();
+      bus.stop();
+      warning.mockRestore();
+    }
+  });
+
   test("refreshes all local workspaces for a peer process signal", async () => {
     const userCoworkDir = await makeTempCoworkDir();
     const workingDirectory = path.join(path.dirname(userCoworkDir), "workspace");

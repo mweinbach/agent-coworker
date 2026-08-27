@@ -21,28 +21,30 @@ Electron's quality entrypoint, and TSX tests to its configuration. A reported
 export is still not proof that it can be deleted: public type surfaces, deliberate
 test seams, and dynamic consumers need inspection across the whole repository.
 
-## Baseline
+## Results
 
-| Measurement | Before | After |
-| --- | ---: | ---: |
-| Tracked paths | 2,656 | 2,660 |
-| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 |
-| Files scanned by the cognitive-complexity command | 1,876 | 1,879 |
-| Functions with cognitive complexity above 15 | 713 | 709 |
-| Source functions above 15 | 661 | 657 |
-| Test/quality-harness functions above 15 | 52 | 52 |
-| Knip unused-file candidates, corrected scan scope | 3 | 0 |
-| Knip unused-export candidates, corrected scan scope | 255 | 242 |
-| Knip unused-type candidates, corrected scan scope | 146 | 147 |
+| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep |
+| --- | ---: | ---: | ---: |
+| Tracked paths | 2,656 | 2,660 | 2,663 |
+| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 |
+| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 |
+| Functions with cognitive complexity above 15 | 713 | 709 | 709 |
+| Source functions above 15 | 661 | 657 | 657 |
+| Test/quality-harness functions above 15 | 52 | 52 | 52 |
+| Knip unused-file candidates, corrected scan scope | 3 | 0 | 0 |
+| Knip unused-export candidates, corrected scan scope | 255 | 242 | 227 |
+| Knip unused-type candidates, corrected scan scope | 146 | 147 | 133 |
 
 The original narrower Knip configuration reported 3 files, 214 exports, and 100
 types. The table instead uses the corrected configuration against the untouched
 baseline checkout, so the comparison does not mistake wider coverage for new
 dead code.
 
-Product code is 1,486 lines smaller (189 added, 1,675 removed across 55 files);
-the total repository reduction is smaller because the sweep adds regression
-coverage and the tracker. The largest reported function in `src/agent.ts` fell
+The first pass removed 1,486 net product lines (189 added, 1,675 removed across
+55 files). The continuation removes another 269 (295 added, 564 removed across
+6 files), for a cumulative reduction of 1,755 lines. Repository text now grows
+because the continuation adds regression coverage. The largest reported function
+in `src/agent.ts` fell
 from 83 to 34 after removing the test-only adapter and its nested wrapper. The
 report command itself is included in the measurements, with a score of 16.
 
@@ -53,7 +55,7 @@ The fixture repair does not change production permissions or increase timeouts.
 Baseline typecheck, lint, formatting, and protocol/doc checks passed. Biome's
 stale schema-version reference was migrated to the installed version.
 
-## Cleanup plan
+## First-pass cleanup plan
 
 Apply the ai-slop-cleaner workflow: lock behavior before edits, change one smell
 at a time, and run the full repository CI lane before each logical commit.
@@ -97,7 +99,7 @@ Large dispatchers, protocol schemas, authorization checks, persistence migration
 and vendor code are not deletion candidates solely because of size. Do not move
 branches into new single-use wrappers just to lower a metric.
 
-## Finding ledger
+## First-pass finding ledger
 
 | Finding | Status | Behavior lock / action |
 | --- | --- | --- |
@@ -123,7 +125,7 @@ branches into new single-use wrappers just to lower a metric.
 | Detached transcript journey expects obsolete unread-label wording | Implemented | Match existing updates label; count, visibility, anchor, and performance assertions are unchanged |
 | Async callback test could pass without actual backpressure | Implemented | Independent dropped-promise probe exposed the gap; assertion now waits an event-loop turn while the callback remains blocked |
 
-## Verification and remaining limits
+## First-pass verification and remaining limits
 
 - `bun run test` passes all 707 test files, following the earlier 701-file cleanup
   pass. Reproduced production defects have failing-before/passing-after
@@ -151,8 +153,8 @@ branches into new single-use wrappers just to lower a metric.
   temporary config. The full Linux recording/screenshot matrix and real Windows
   sandbox enforcement were not run on this Mac. Mobile exports are bundle checks,
   not physical-device or native-project verification.
-- Knip remains advisory and exits nonzero for the 242 export and 147 type
-  candidates. The added type candidate is the deliberately preserved
+- The first-pass Knip scan exited nonzero for 242 export and 147 type
+  candidates. Its added type candidate is the deliberately preserved
   `AgentControlTaskLockError` compatibility alias. Consumer-graph candidates are
   not permission to delete public contracts or dynamic entrypoints.
 
@@ -164,13 +166,56 @@ local contracts before substantial decomposition.
 
 | File | Largest cognitive score | Preserved responsibility |
 | --- | ---: | --- |
-| `src/runtime/googleNative/stream/processEvent.ts` | 247 | Native provider event mapping |
 | `src/runtime/codexAppServer/notifications.ts` | 205 | App-server notifications and continuation state |
-| `apps/desktop/src/ui/layout/AppTopBar.tsx` | 187 | Platform, thread, and navigation control states |
+| `apps/desktop/src/ui/layout/AppTopBar.tsx` | 179 | Platform, thread, and navigation control states |
 | `src/cli/repl/commandRouter.ts` | 162 | Distinct CLI command dispatch |
 | `apps/desktop/src/app/store.helpers/controlSocket.ts` | 161 | Control-socket lifecycle and server state |
+| `src/runtime/googleNative/stream/processEvent.ts` | 150 | Native provider event mapping |
 
-Other deferred candidates include the advanced-memory editor's write-only slug
-draft (save-path coverage is insufficient), mobile protocol/adaptor exports, and
-similar-looking record, citation, and skill-scope helpers with different contracts.
+Other deferred candidates include mobile shared-facade exports and similar-looking
+record, citation, and skill-scope helpers with different contracts. The memory
+editor draft and unused mobile protocol families were resolved in the continuation.
 No reproduced production defect from this sweep remains queued.
+
+## Continuation from `b739dbdd`
+
+The next pass starts from the clean, verified first-pass head: 709 cognitive
+hotspots, zero unused-file candidates, and 242 export / 147 type candidates.
+Freshly fetched `origin/main` is already an ancestor of the working branch.
+
+- [x] Dead code: lock the memory editor's real create/edit/save/retry paths before
+  deleting its redundant draft slug. Remove the mobile protocol declarations
+  left without consumers after the unused query layer was deleted; retain live
+  thread/snapshot compatibility and workspace validators.
+- [x] Duplication: unify repeated Google event constructors and updates while
+  preserving start/reset versus delta/merge behavior and emitted event order.
+- [x] Needless state and wrappers: use the Codex assistant text Map's existing
+  insertion order, canonical phase parsing, and direct file-change payload merge.
+- [x] UI duplication: share the toolbar's identical container, Busy status, and
+  context controls without changing branch-specific control order or layout.
+- [x] Reinforce tests, independently review the changes, run the full CI lane and
+  relevant app verification, then record measured results and commit each slice.
+
+| Finding | Result | Evidence |
+| --- | --- | --- |
+| Streamed Google native-tool arguments disappear from completed results | Fixed in live processing and replay | Eight failing-before/passing-after cases cover content/step events and search queries/URLs |
+| Repeated native stream constructors and normalization | Removed duplication; cognitive score 247 to 150 | 36 behavior locks passed before cleanup; 40,000 deterministic comparisons match the bug-fixed original's state and emitted parts |
+| Redundant Codex assistant ordering state, phase parser, payload wrapper | Removed; 17 fewer product lines | Ten new ordering, phase, stream, and merge-precedence locks passed before and after |
+| Duplicated toolbar containers, status/context controls, offsets, and mount reset | Shared existing markup; cognitive score 187 to 179 | 15 rendered locks plus platform, overlay, Canvas lifecycle, and real Electron journeys |
+| Unread memory draft slug duplicates the edit target | Deleted | Parent create/edit/failure/pending/retry/reset flows preserve target slug, folder, cwd, and trimmed payloads |
+| Unused mobile protocol scaffolding left after query-layer deletion | Removed 14 schema/type families; kept the workspace validator private | Consumer search, focused client tests, mobile typecheck; all 12 live schema contracts are byte-identical |
+
+Independent reviews found no introduced runtime, UI, authorization, or protocol
+regressions. The Google callback/identity/metadata behavior was reviewed separately
+from its numerical complexity improvement. No new dependencies or production
+helper layers were added.
+
+Continuation verification passes: `bun run test` reports 8,252 passing tests across
+710 files, with 27 existing skips. Root/harness/desktop and mobile typechecking,
+lint, formatting, and docs checks pass. Both mobile exports and the rebuilt
+10-journey real Electron run pass. All 12 live mobile schema contracts remain
+byte-identical; the server's generated JSON-RPC protocol is also unchanged.
+
+The platform limitations described above still apply. Knip's 227 export and 133
+type candidates remain advisory; its unused-file count stays at zero. Product
+fixes, refactors, and the tracker update are committed as separate logical slices.

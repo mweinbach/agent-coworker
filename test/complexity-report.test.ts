@@ -56,10 +56,10 @@ describe("repository complexity report", () => {
     );
 
     expect(report.hotspots).toEqual([
-      { path: "src/server/start.ts", line: 7, score: 30, test: false },
-      { path: "test/agent.test.ts", line: 4, score: 30, test: true },
-      { path: "apps/desktop/quality-gates/start.pw.ts", line: 1, score: 19, test: true },
-      { path: "src/agent.ts", line: 20, score: 16, test: false },
+      { path: "src/server/start.ts", line: 7, column: 1, score: 30, test: false },
+      { path: "test/agent.test.ts", line: 4, column: 1, score: 30, test: true },
+      { path: "apps/desktop/quality-gates/start.pw.ts", line: 1, column: 1, score: 19, test: true },
+      { path: "src/agent.ts", line: 20, column: 1, score: 16, test: false },
     ]);
   });
 
@@ -71,6 +71,7 @@ describe("repository complexity report", () => {
     expect(report.hotspots[0]).toEqual({
       path: "apps/desktop/test/render.test.tsx",
       line: 1,
+      column: 1,
       score: 17,
       test: true,
     });
@@ -85,8 +86,14 @@ describe("repository complexity report", () => {
       biomeReport([hotspot(filePath, 47), hotspot("apps/desktop/electron/main.ts", 16)]),
     );
     expect(report.hotspots).toEqual([
-      { path: "apps/desktop/electron/qualityGateMain.ts", line: 1, score: 47, test: true },
-      { path: "apps/desktop/electron/main.ts", line: 1, score: 16, test: false },
+      {
+        path: "apps/desktop/electron/qualityGateMain.ts",
+        line: 1,
+        column: 1,
+        score: 47,
+        test: true,
+      },
+      { path: "apps/desktop/electron/main.ts", line: 1, column: 1, score: 16, test: false },
     ]);
   });
 

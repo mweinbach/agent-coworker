@@ -1,5 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 const RULE = "lint/complexity/noExcessiveCognitiveComplexity";
@@ -19,7 +20,7 @@ const biomeReportSchema = z.object({
 });
 const locationSchema = z.object({
   path: z.string().min(1),
-  start: z.object({ line: z.number().int().positive() }),
+  start: z.object({ line: z.number().int().positive(), column: z.number().int().positive() }),
 });
 
 type TrackedFile = { path: string; lines: number | null };
@@ -59,6 +60,7 @@ export function buildComplexityReport(files: TrackedFile[], rawBiomeReport: unkn
       return {
         path: filePath,
         line: location.start.line,
+        column: location.start.column,
         score: Number(score),
         test:
           filePath === "apps/desktop/electron/qualityGateMain.ts" ||
@@ -84,14 +86,11 @@ function run(command: string[], cwd: string): string {
   return result.stdout.toString();
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  if (args.some((arg) => arg !== "--json")) {
-    throw new Error("Usage: bun run complexity [--json]");
-  }
-  const repoRoot = path.resolve(import.meta.dir, "..");
-  const deleted = new Set(run(["git", "ls-files", "--deleted", "-z"], repoRoot).split("\0"));
-  const paths = run(["git", "ls-files", "-z"], repoRoot)
+export async function scanComplexity(repoRoot: string) {
+  const deleted = new Set(
+    run(["git", "-c", "core.fsmonitor=false", "ls-files", "--deleted", "-z"], repoRoot).split("\0"),
+  );
+  const paths = run(["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], repoRoot)
     .split("\0")
     .filter((file) => file && !deleted.has(file));
   const files: TrackedFile[] = [];
@@ -112,9 +111,7 @@ async function main() {
   const biome = run(
     [
       process.execPath,
-      "run",
-      "--silent",
-      "biome",
+      fileURLToPath(import.meta.resolve("@biomejs/biome/bin/biome")),
       "lint",
       ".",
       "--only=complexity/noExcessiveCognitiveComplexity",
@@ -123,7 +120,15 @@ async function main() {
     ],
     repoRoot,
   );
-  const report = buildComplexityReport(files, JSON.parse(biome));
+  return buildComplexityReport(files, JSON.parse(biome));
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.some((arg) => arg !== "--json")) {
+    throw new Error("Usage: bun run complexity [--json]");
+  }
+  const report = await scanComplexity(path.resolve(import.meta.dir, ".."));
   if (args.includes("--json")) {
     console.log(JSON.stringify(report, null, 2));
     return;

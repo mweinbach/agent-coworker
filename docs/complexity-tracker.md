@@ -16,14 +16,30 @@ JavaScript/TypeScript files enabled by `biome.json`; Rust, Swift, Kotlin, shell,
 Python, documentation, generated artifacts, and vendored code need separate
 inspection. A high score identifies a review target, not a defect.
 
+`bun run complexity:compare --base <git-ref>` compares the current checkout with
+its merge base against that ref. The PR CI job checks out the actual PR head and
+uses the PR base SHA. Both scans use the installed Biome binary; the temporary
+base checkout disables Git hooks and is removed after success or failure.
+The comparison maps line shifts and Git-detected renames, and uses columns to
+distinguish functions on the same line. Changed declarations and unmatched moves
+are conservatively flagged as new, including visibility-only changes.
+
+CI publishes advisory annotations, a job summary, and a JSON artifact. Unchanged
+or reduced existing scores are not flagged; incomplete scans and invalid source
+fail the job. A justified dispatcher or lifecycle guard needs a specific reason
+in the PR, not a cosmetic helper extraction. Scan scope still follows each
+revision's Biome configuration, so configuration changes need review too.
+
 `bun run knip` is a separate consumer-graph check. This sweep added mobile routes,
 Electron's quality entrypoint, and TSX tests to its configuration. A reported
 export is still not proof that it can be deleted: public type surfaces, deliberate
 test seams, and dynamic consumers need inspection across the whole repository.
+The [unused-code audit](unused-code-audit.md) records every remaining candidate's
+disposition, including retained compatibility APIs and dynamic test consumers.
 
 ## Results
 
-| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep |
+| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` |
 | --- | ---: | ---: | ---: |
 | Tracked paths | 2,656 | 2,660 | 2,663 |
 | Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 |

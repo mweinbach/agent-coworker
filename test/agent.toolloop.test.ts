@@ -398,8 +398,12 @@ describe("runTurn – multi-step tool loops", () => {
       return result;
     });
     await callbackStarted.promise;
-    expect(finished).toBe(false);
-    releaseCallback.resolve();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+    } finally {
+      releaseCallback.resolve();
+    }
     expect((await turn).text).toBe("hello");
     expect(finished).toBe(true);
   });

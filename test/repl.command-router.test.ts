@@ -417,3 +417,176 @@ describe("handleSlashCommand — /connect", () => {
     expect(lines.some((l) => l.includes("not connected"))).toBe(true);
   });
 });
+
+const optionCommands = [
+  {
+    command: "verbosity",
+    field: "textVerbosity",
+    label: "verbosity",
+    values: ["low", "medium", "high"],
+  },
+  {
+    command: "reasoning-effort",
+    field: "reasoningEffort",
+    label: "reasoning effort",
+    values: ["none", "minimal", "light", "low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    command: "effort",
+    field: "reasoningEffort",
+    label: "reasoning effort",
+    values: ["none", "minimal", "light", "low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    command: "reasoning-summary",
+    field: "reasoningSummary",
+    label: "reasoning summary",
+    values: ["auto", "concise", "detailed"],
+  },
+] as const;
+
+for (const { command, field, label, values } of optionCommands) {
+  describe(`handleSlashCommand — /${command} behavior`, () => {
+    const canonicalCommand = command === "effort" ? "reasoning-effort" : command;
+
+    test.each(
+      values.flatMap((value) => [
+        ["openai", value],
+        ["codex-cli", value],
+      ]),
+    )(
+      "dispatches %s %s using the selected provider and first argument",
+      async (provider, value) => {
+        const { ctx, calls } = makeCtx({
+          getSelectedProvider: () => provider,
+          getConfig: () => ({
+            provider: "google",
+            model: "fixture",
+            workingDirectory: "/tmp/test",
+          }),
+        });
+        const lines = await captureConsole(async () => {
+          expect(await handleSlashCommand(`/${command}\t${value.toUpperCase()} ignored`, ctx)).toBe(
+            true,
+          );
+        });
+        expect(calls).toEqual([
+          {
+            method: "cowork/session/config/set",
+            params: {
+              threadId: "thread-abc",
+              config: { providerOptions: { [provider]: { [field]: value } } },
+            },
+          },
+          { method: "activateNextPrompt", params: null },
+        ]);
+        expect(lines).toEqual([`${provider} ${label} set to ${value}`]);
+      },
+    );
+
+    test("uses the configured provider when no provider is selected", async () => {
+      const { ctx, calls } = makeCtx({
+        getConfig: () => ({
+          provider: "codex-cli",
+          model: "fixture",
+          workingDirectory: "/tmp/test",
+        }),
+      });
+      await captureConsole(() => handleSlashCommand(`/${command} ${values[0]}`, ctx));
+      expect(calls[0]).toEqual({
+        method: "cowork/session/config/set",
+        params: {
+          threadId: "thread-abc",
+          config: { providerOptions: { "codex-cli": { [field]: values[0] } } },
+        },
+      });
+    });
+
+    const otherOptionValue =
+      field === "textVerbosity" ? "max" : field === "reasoningSummary" ? "high" : "auto";
+    test.each(["", "invalid", otherOptionValue])(
+      "rejects invalid argument %j before requesting a change",
+      async (value) => {
+        const { ctx, calls } = makeCtx({ getSelectedProvider: () => "openai" });
+        const lines = await captureConsole(() => handleSlashCommand(`/${command} ${value}`, ctx));
+        expect(lines).toEqual([`usage: /${canonicalCommand} <${values.join("|")}>`]);
+        expect(calls).toEqual([{ method: "activateNextPrompt", params: null }]);
+      },
+    );
+
+    test.each(["google", null])(
+      "rejects unsupported provider %j before validating the argument",
+      async (provider) => {
+        const { ctx, calls } = makeCtx({ getSelectedProvider: () => provider });
+        const lines = await captureConsole(() => handleSlashCommand(`/${command} invalid`, ctx));
+        expect(lines).toEqual([
+          "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+        ]);
+        expect(calls).toEqual([{ method: "activateNextPrompt", params: null }]);
+      },
+    );
+
+    test.each(["google", ""])(
+      "does not fall back from unsupported selected provider %j",
+      async (provider) => {
+        const { ctx, calls } = makeCtx({
+          getSelectedProvider: () => provider,
+          getConfig: () => ({
+            provider: "openai",
+            model: "fixture",
+            workingDirectory: "/tmp/test",
+          }),
+        });
+        const lines = await captureConsole(() =>
+          handleSlashCommand(`/${command} ${values[0]}`, ctx),
+        );
+        expect(lines).toEqual([
+          "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+        ]);
+        expect(calls).toEqual([{ method: "activateNextPrompt", params: null }]);
+      },
+    );
+
+    test("keeps the disconnected message and does not send a request", async () => {
+      const { ctx, calls } = makeCtx({
+        getSelectedProvider: () => "openai",
+        getThreadId: () => null,
+      });
+      const lines = await captureConsole(() => handleSlashCommand(`/${command} ${values[0]}`, ctx));
+      expect(lines).toEqual([`not connected: cannot change ${label} yet`]);
+      expect(calls).toEqual([{ method: "activateNextPrompt", params: null }]);
+    });
+
+    test("does not announce success or reactivate the prompt after a failed request", async () => {
+      let requestCount = 0;
+      const { ctx, calls } = makeCtx({
+        getSelectedProvider: () => "openai",
+        tryRequest: async () => {
+          requestCount += 1;
+          return false;
+        },
+      });
+      const lines = await captureConsole(async () => {
+        expect(await handleSlashCommand(`/${command} ${values[0]}`, ctx)).toBe(true);
+      });
+      expect(requestCount).toBe(1);
+      expect(lines).toEqual([]);
+      expect(calls).toEqual([]);
+    });
+
+    test("propagates request exceptions without announcing success or reactivating the prompt", async () => {
+      const error = new Error("request failed");
+      const { ctx, calls } = makeCtx({
+        getSelectedProvider: () => "openai",
+        tryRequest: async () => {
+          throw error;
+        },
+      });
+      const lines = await captureConsole(async () => {
+        await expect(handleSlashCommand(`/${command} ${values[0]}`, ctx)).rejects.toBe(error);
+      });
+      expect(lines).toEqual([]);
+      expect(calls).toEqual([]);
+    });
+  });
+}

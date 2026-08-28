@@ -41,11 +41,6 @@ export type ReplCommandContext = {
   resumeSession: (targetThreadId: string) => Promise<void>;
 };
 
-function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "codex-cli" | null {
-  const provider = ctx.getSelectedProvider() ?? ctx.getConfig()?.provider;
-  return isOpenAiCompatibleProviderName(provider) ? provider : null;
-}
-
 export async function handleSlashCommand(input: string, ctx: ReplCommandContext): Promise<boolean> {
   const parsed = parseReplInput(input);
   if (parsed.type === "message") return false;
@@ -155,9 +150,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     return true;
   }
 
-  if (cmd === "verbosity") {
-    const provider = currentOpenAiCompatibleProvider(ctx);
-    if (!provider) {
+  if (
+    cmd === "verbosity" ||
+    cmd === "reasoning-effort" ||
+    cmd === "effort" ||
+    cmd === "reasoning-summary"
+  ) {
+    const provider = ctx.getSelectedProvider() ?? ctx.getConfig()?.provider;
+    if (!isOpenAiCompatibleProviderName(provider)) {
       console.log(
         "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
       );
@@ -165,16 +165,36 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
+    const command = cmd === "effort" ? "reasoning-effort" : cmd;
+    const label = command.replaceAll("-", " ");
+    const option =
+      command === "verbosity"
+        ? {
+            field: "textVerbosity",
+            values: OPENAI_TEXT_VERBOSITY_VALUES,
+            accepts: isOpenAiTextVerbosity,
+          }
+        : command === "reasoning-effort"
+          ? {
+              field: "reasoningEffort",
+              values: OPENAI_REASONING_EFFORT_VALUES,
+              accepts: isOpenAiReasoningEffort,
+            }
+          : {
+              field: "reasoningSummary",
+              values: OPENAI_REASONING_SUMMARY_VALUES,
+              accepts: isOpenAiReasoningSummary,
+            };
     const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
-    if (!isOpenAiTextVerbosity(value)) {
-      console.log(`usage: /verbosity <${OPENAI_TEXT_VERBOSITY_VALUES.join("|")}>`);
+    if (!option.accepts(value)) {
+      console.log(`usage: /${command} <${option.values.join("|")}>`);
       ctx.activateNextPrompt();
       return true;
     }
 
     const activeThreadId = threadId();
     if (!activeThreadId) {
-      console.log("not connected: cannot change verbosity yet");
+      console.log(`not connected: cannot change ${label} yet`);
       ctx.activateNextPrompt();
       return true;
     }
@@ -183,94 +203,12 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       threadId: activeThreadId,
       config: {
         providerOptions: {
-          [provider]: {
-            textVerbosity: value,
-          },
+          [provider]: { [option.field]: value },
         },
       },
     });
     if (!ok) return true;
-    console.log(`${provider} verbosity set to ${value}`);
-    ctx.activateNextPrompt();
-    return true;
-  }
-
-  if (cmd === "reasoning-effort" || cmd === "effort") {
-    const provider = currentOpenAiCompatibleProvider(ctx);
-    if (!provider) {
-      console.log(
-        "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
-      );
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
-    if (!isOpenAiReasoningEffort(value)) {
-      console.log(`usage: /reasoning-effort <${OPENAI_REASONING_EFFORT_VALUES.join("|")}>`);
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const activeThreadId = threadId();
-    if (!activeThreadId) {
-      console.log("not connected: cannot change reasoning effort yet");
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: activeThreadId,
-      config: {
-        providerOptions: {
-          [provider]: {
-            reasoningEffort: value,
-          },
-        },
-      },
-    });
-    if (!ok) return true;
-    console.log(`${provider} reasoning effort set to ${value}`);
-    ctx.activateNextPrompt();
-    return true;
-  }
-
-  if (cmd === "reasoning-summary") {
-    const provider = currentOpenAiCompatibleProvider(ctx);
-    if (!provider) {
-      console.log(
-        "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
-      );
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const value = arg.split(/\s+/)[0]?.trim().toLowerCase() ?? "";
-    if (!isOpenAiReasoningSummary(value)) {
-      console.log(`usage: /reasoning-summary <${OPENAI_REASONING_SUMMARY_VALUES.join("|")}>`);
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const activeThreadId = threadId();
-    if (!activeThreadId) {
-      console.log("not connected: cannot change reasoning summary yet");
-      ctx.activateNextPrompt();
-      return true;
-    }
-
-    const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: activeThreadId,
-      config: {
-        providerOptions: {
-          [provider]: {
-            reasoningSummary: value,
-          },
-        },
-      },
-    });
-    if (!ok) return true;
-    console.log(`${provider} reasoning summary set to ${value}`);
+    console.log(`${provider} ${label} set to ${value}`);
     ctx.activateNextPrompt();
     return true;
   }

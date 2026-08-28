@@ -39,17 +39,17 @@ disposition, including retained compatibility APIs and dynamic test consumers.
 
 ## Results
 
-| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` | Completion pass |
-| --- | ---: | ---: | ---: | ---: |
-| Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 |
-| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,806 |
-| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 |
-| Functions with cognitive complexity above 15 | 713 | 709 | 709 | 710 |
-| Source functions above 15 | 661 | 657 | 657 | 657 |
-| Test/quality-harness functions above 15 | 52 | 52 | 52 | 53 |
-| Knip unused-file candidates, corrected scan scope | 3 | 0 | 0 | 0 |
-| Knip unused-export candidates, corrected scan scope | 255 | 242 | 227 | 106 |
-| Knip unused-type candidates, corrected scan scope | 146 | 147 | 133 | 130 |
+| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` | Completion `bcc432d3` | ai-slop-cleaner follow-up |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 | 2,681 |
+| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,806 | 677,438 |
+| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 | 1,893 |
+| Functions with cognitive complexity above 15 | 713 | 709 | 709 | 710 | 710 |
+| Source functions above 15 | 661 | 657 | 657 | 657 | 657 |
+| Test/quality-harness functions above 15 | 52 | 52 | 52 | 53 | 53 |
+| Knip unused-file candidates, corrected scan scope | 3 | 0 | 0 | 0 | 0 |
+| Knip unused-export candidates, corrected scan scope | 255 | 242 | 227 | 106 | 106 |
+| Knip unused-type candidates, corrected scan scope | 146 | 147 | 133 | 130 | 130 |
 
 The original narrower Knip configuration reported 3 files, 214 exports, and 100
 types. The table instead uses the corrected configuration against the untouched
@@ -176,16 +176,17 @@ branches into new single-use wrappers just to lower a metric.
 
 ## Remaining complexity targets
 
-These are review targets for focused follow-up, not known defects or justification
-for cosmetic helper extraction. The completion pass adds lifecycle contracts;
-substantial decomposition still needs a focused behavior-preserving plan.
+These remain review targets, not known defects or justification for cosmetic
+helper extraction. Scores include the ai-slop-cleaner follow-up below. The passes
+add lifecycle contracts and remove duplication; further decomposition still needs
+a focused behavior-preserving plan.
 
 | File | Largest cognitive score | Preserved responsibility |
 | --- | ---: | --- |
 | `src/runtime/codexAppServer/notifications.ts` | 208 | App-server notifications and continuation state |
 | `apps/desktop/src/ui/layout/AppTopBar.tsx` | 179 | Platform, thread, and navigation control states |
-| `src/cli/repl/commandRouter.ts` | 162 | Distinct CLI command dispatch |
-| `apps/desktop/src/app/store.helpers/controlSocket.ts` | 161 | Control-socket lifecycle and server state |
+| `apps/desktop/src/app/store.helpers/controlSocket.ts` | 160 | Control-socket lifecycle and server state |
+| `src/cli/repl/commandRouter.ts` | 150 | Distinct CLI command dispatch |
 | `src/runtime/googleNative/stream/processEvent.ts` | 150 | Native provider event mapping |
 
 Mobile shared-facade exports and similar-looking record, citation, and skill-scope
@@ -259,7 +260,8 @@ historical checkpoints, not the final platform status.
 - [x] Run the full local CI lane, refresh measurements, and commit verified slices.
   The pushed commit and GitHub job results are recorded in
   [PR #322](https://github.com/mweinbach/agent-coworker/pull/322).
-- [ ] Complete the native iOS simulator check after Xcode MCP grants worktree access.
+- [ ] Complete native iOS simulator runtime verification. Worktree access is now
+  available; the follow-up below records the scene-lifecycle launch failure.
 
 | Finding | Result | Behavior lock / evidence |
 | --- | --- | --- |
@@ -344,7 +346,75 @@ live model inference or manual TalkBack coverage. A second local fixture supplie
 an active turn for native Stop verification: the request log records exactly one
 interrupt and completion, and screenshots show the pending and restored controls.
 
-Native iOS simulator verification is pending Xcode MCP approval of the isolated
-worktree folder. Successful dependency resolution and Metro exports do not prove
-that the iOS app builds or runs, and no alternative tool is used to bypass that
-access decision.
+At this checkpoint, native iOS simulator verification awaited Xcode MCP approval
+of the isolated worktree folder. Dependency resolution and Metro exports did not
+prove that the app built or ran. The follow-up below records the subsequent native
+build and failed launch after worktree access became available.
+
+## ai-slop-cleaner follow-up from `bcc432d3`
+
+Scope: seven production modules and their tests, covering mobile bootstrap/MCP
+state, desktop control sockets, mobile trusted-session projection, Google tool
+events, and CLI provider-option commands. The report/comparison tooling was also
+checked; its Git cleanup, diagnostics, and distinct exit-code contracts were
+retained. This is a bounded follow-up to the repository inventory above.
+
+Behavior lock: new cases run against the unchanged implementation before each
+cleanup. The tests cover pagination and cached errors; readiness rejection,
+timeout, late settlement, latest store ownership, and inherited model clearing;
+selected-desktop transport fields and event ordering; Google tool flags, IDs,
+arguments, and result envelopes; and CLI provider precedence, value validation,
+aliases, request payloads, and failure/prompt behavior.
+
+Cleanup plan: delete unused work first, consolidate one duplicate at a time,
+preserve error handling and external contracts, then strengthen and rerun the
+regression suite. No new runtime abstraction, dependency, or protocol change is
+needed for these cleanups.
+
+| Pass | Changed production files | Simplification |
+| --- | --- | --- |
+| Dead code | `apps/mobile/src/features/cowork/remoteThreadBootstrap.ts`, `apps/mobile/src/features/cowork/mcpStore.ts` | Remove an unused pagination slice and a refresh alias with no callers |
+| Dead state and duplication | `apps/desktop/src/app/store.helpers/controlSocket.ts` | Remove an always-true memory flag; reuse the promise waiter; register current store bindings once |
+| Duplication | `apps/mobile/src/features/relay/secureTransportClient.ts` | Use the existing trusted-desktop projection for pairing, reconnect, and restore |
+| Duplication | `src/runtime/googleNative/nativeTools.ts`, `src/runtime/googleNative/stream/mapToStreamParts.ts` | Share identical native result bodies and tool-event construction while preserving distinct tool contracts |
+| Duplication | `src/cli/repl/commandRouter.ts` | Share the repeated option-command path and remove its now-unnecessary provider wrapper |
+| Naming/error handling | The same scoped paths | Retain existing messages, failure propagation, timeout behavior, and prompt ordering; no cosmetic rewrite |
+| Test reinforcement | Seven corresponding test files | Add 134 cases and strengthen existing assertions; retain all prior regressions |
+
+TypeScript product source is 158 lines smaller in this pass and 1,896 lines
+smaller than the original in the source scope defined above. The CLI router's
+cognitive score changes from 162 to 150, the Google event mapper from 95 to 92,
+and the largest control-socket function from 161 to 160. The number of functions
+above 15 stays at 710; the threshold count alone does not measure the removed
+duplication.
+
+Final quality gates: 8,489 tests pass across 719 files, with 27 existing skips;
+root/harness/desktop/mobile typechecks, Biome lint/check, docs consistency, and
+both mobile Hermes exports pass. Each of the five logical slices passes the full
+repository CI lane before its commit. Independent review found no remaining
+issue in the cleanup diffs. The generated JSON-RPC artifact remains byte-identical
+at 1,076,304 bytes.
+
+The final inventory contains 2,681 tracked paths, 677,438 text lines,
+and 1,893 Biome-scanned files. Knip still reports no unused files and the documented
+106 export / 130 type candidates; its advisory nonzero exit is not a clean result
+or a reason to suppress them.
+
+Native iOS: Xcode now opens the isolated worktree and successfully builds the
+app for the iPhone 17 Pro simulator on iOS 27.0. UIKit refuses to launch it:
+`UIScene life cycle is required for apps built with this SDK.` Pairing, navigation,
+and foreground-recovery checks therefore cannot run. A regression-tested,
+independently reviewed single-scene migration proposal is prepared but not
+applied. The xcode-mcp skill prohibits direct plist edits, and its plist tool
+cannot represent the required root dictionary. A one-file `Info.plist` exception
+has been requested; native runtime verification remains incomplete. The proposal
+has not been compiled or run. The simulator interaction session and temporary
+servers are closed, and existing simulator data is preserved. No physical phone
+was used. The earlier native Android journeys remain separate evidence; this
+follow-up reruns its JavaScript behavior tests and both Hermes exports.
+
+Consciously retained: Codex completion/drain state, socket identity/disposal
+guards, Google alias ownership, distinct web/URL/MCP result formats, public and
+dynamic compatibility exports, and the separate mobile context readers whose
+consolidation would introduce another dependency boundary. No helper extraction
+was used solely to lower a cognitive score.

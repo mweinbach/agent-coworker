@@ -1,7 +1,7 @@
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { DarkTheme, DefaultTheme, ThemeProvider } from "expo-router/react-navigation";
-import { useColorScheme, View } from "react-native";
+import { StatusBar, useColorScheme, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { MobileAppProvider } from "@/providers/MobileAppProvider";
@@ -21,11 +21,16 @@ export default function RootLayout() {
   });
 
   if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: theme.background }} />;
+    return (
+      <View style={{ flex: 1, backgroundColor: theme.background }}>
+        <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
+      </View>
+    );
   }
 
   return (
     <SafeAreaProvider>
+      <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
       <ThemeProvider
         value={{
           ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme),

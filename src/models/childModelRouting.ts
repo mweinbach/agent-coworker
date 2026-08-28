@@ -13,7 +13,7 @@ export type ParsedChildModelRef = {
   explicitProvider: boolean;
 };
 
-export function childModelRef(provider: ProviderName, modelId: string): string {
+function childModelRef(provider: ProviderName, modelId: string): string {
   return `${provider}:${modelId}`;
 }
 

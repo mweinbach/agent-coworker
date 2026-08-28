@@ -11,7 +11,6 @@ import {
   createLmStudioModelDiscoveryAdapter,
   discoverBedrockModels,
   discoverOpenAiCompatibleModels,
-  discoverStaticProviderModels,
 } from "../../src/providers/modelDiscoveryAdapters";
 import {
   isModelDiscoveryCacheFresh,
@@ -435,12 +434,5 @@ describe("providers/modelDiscoveryAdapters", () => {
     expect(result.source).toBe("static");
     expect(result.models.length).toBeGreaterThan(0);
     expect(result.message).toContain("not configured");
-  });
-
-  test("static adapter emits bundled registry data", () => {
-    const result = discoverStaticProviderModels("openai");
-    expect(result.source).toBe("static");
-    expect(result.models.some((model) => model.isDefault)).toBe(true);
-    expect(result.models.length).toBeGreaterThan(0);
   });
 });

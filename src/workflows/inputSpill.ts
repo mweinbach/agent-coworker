@@ -20,7 +20,7 @@ export type WorkflowInputSpill = {
   format: string;
 };
 
-export function normalizeWorkflowInputFormat(format: string | undefined): string {
+function normalizeWorkflowInputFormat(format: string | undefined): string {
   const normalized = format?.trim().replace(/^\.+/, "").toLowerCase() || DEFAULT_INPUT_FORMAT;
   if (!/^[a-z0-9][a-z0-9_-]{0,15}$/.test(normalized)) {
     throw new Error(

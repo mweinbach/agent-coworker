@@ -12,7 +12,7 @@ import {
   reasoningModeFromPart,
 } from "./shared";
 
-export function resolveReasoningText(reasoningState: BufferedReasoningState): string {
+function resolveReasoningText(reasoningState: BufferedReasoningState): string {
   if (reasoningState.textChunks) {
     reasoningState.text = reasoningState.textChunks.join("");
   }

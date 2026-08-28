@@ -40,7 +40,6 @@ type McpStoreState = {
   } | null;
 
   fetchServers(): Promise<void>;
-  refresh(): Promise<void>;
   upsertServer(
     server: JsonRpcControlRequest<"cowork/mcp/server/upsert">["server"],
     previousName?: string,
@@ -91,10 +90,6 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
-  },
-
-  async refresh() {
-    await get().fetchServers();
   },
 
   async upsertServer(server, previousName) {

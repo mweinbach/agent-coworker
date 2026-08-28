@@ -75,7 +75,6 @@ import {
 
 export type DraftProfile = AgentProfileDefinition & {
   scope: AgentProfileScope;
-  builtIn?: boolean;
   locked?: boolean;
   originalRef?: {
     scope: AgentProfileScope;
@@ -161,7 +160,6 @@ function draftFromEntry(entry: AgentProfileCatalogEntry): DraftProfile {
   return {
     ...entry.profile,
     scope: entry.scope,
-    builtIn: entry.builtIn,
     locked: entry.locked,
     originalRef: {
       scope: entry.scope,

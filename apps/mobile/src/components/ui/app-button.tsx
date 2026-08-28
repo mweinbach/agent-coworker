@@ -171,7 +171,7 @@ export function AppButton({
         paddingHorizontal: sizing.paddingHorizontal,
         paddingVertical: sizing.paddingVertical,
         boxShadow: elevated ? (isGlass ? glassShadow(theme.isDark) : theme.shadow) : undefined,
-        transform: isGlass && pressed && !reducedMotionEnabled ? [{ scale: 0.985 }] : undefined,
+        transform: isGlass && pressed && !reducedMotionEnabled ? [{ scale: 0.985 }] : [],
       })}
     >
       {shouldUseGlass ? (

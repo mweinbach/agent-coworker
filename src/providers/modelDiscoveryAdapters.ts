@@ -1,8 +1,4 @@
-import {
-  defaultSupportedModel,
-  listSupportedModels,
-  type SupportedModel,
-} from "../models/registry";
+import { listSupportedModels, type SupportedModel } from "../models/registry";
 import {
   GOOGLE_DYNAMIC_REASONING_EFFORT,
   listGoogleReasoningEffortValuesForModel,
@@ -27,7 +23,6 @@ import type {
   ModelDiscoverySource,
 } from "./modelDiscoveryCache";
 
-type StaticProvider = Exclude<ProviderName, "lmstudio">;
 type OpenAiCompatibleModelListProvider = Extract<
   ProviderName,
   | "openai"
@@ -57,9 +52,7 @@ function modelReasoning(model: CodexAppServerModel): CachedModelDiscoveryModel["
   };
 }
 
-export function codexAppServerModelToCachedModel(
-  model: CodexAppServerModel,
-): CachedModelDiscoveryModel {
+function codexAppServerModelToCachedModel(model: CodexAppServerModel): CachedModelDiscoveryModel {
   const reasoning = modelReasoning(model);
   return {
     id: model.model || model.id,
@@ -76,7 +69,7 @@ export function codexAppServerModelToCachedModel(
   };
 }
 
-export async function discoverCodexAppServerModels(opts: {
+async function discoverCodexAppServerModels(opts: {
   codexHome?: string;
   listCodexAppServerModelsImpl?: typeof listCodexAppServerModels;
   signal?: AbortSignal;
@@ -108,7 +101,7 @@ export function createCodexAppServerModelDiscoveryAdapter(opts: {
   };
 }
 
-export async function discoverLmStudioModels(opts: {
+async function discoverLmStudioModels(opts: {
   baseUrl: string;
   apiKey?: string;
   fetchImpl?: typeof fetch;
@@ -483,7 +476,7 @@ function googleRuntimeOptions(record: Record<string, unknown>): Record<string, u
   return out;
 }
 
-export async function discoverGoogleModels(opts: {
+async function discoverGoogleModels(opts: {
   apiKey: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -556,7 +549,7 @@ function anthropicRuntimeOptions(record: Record<string, unknown>): Record<string
   return out;
 }
 
-export async function discoverAnthropicModels(opts: {
+async function discoverAnthropicModels(opts: {
   apiKey: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -619,37 +612,6 @@ export function createAnthropicModelDiscoveryAdapter(opts: {
         fetchImpl: opts.fetchImpl,
         signal,
       }),
-  };
-}
-
-function supportedModelToCachedModel(
-  model: ReturnType<typeof listSupportedModels>[number],
-): CachedModelDiscoveryModel {
-  return {
-    id: model.id,
-    displayName: model.displayName,
-    knowledgeCutoff: model.knowledgeCutoff,
-    supportsImageInput: model.supportsImageInput,
-  };
-}
-
-export function discoverStaticProviderModels(provider: StaticProvider): ModelDiscoveryResult {
-  const defaultModel = defaultSupportedModel(provider).id;
-  return {
-    provider,
-    source: "static",
-    models: listSupportedModels(provider).map((model) => ({
-      ...supportedModelToCachedModel(model),
-      ...(model.id === defaultModel ? { isDefault: true } : {}),
-    })),
-  };
-}
-
-export function createStaticModelDiscoveryAdapter(provider: StaticProvider): ModelDiscoveryAdapter {
-  return {
-    provider,
-    source: "static",
-    discover: async () => discoverStaticProviderModels(provider),
   };
 }
 

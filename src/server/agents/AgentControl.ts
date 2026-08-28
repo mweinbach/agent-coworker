@@ -11,7 +11,7 @@ import {
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
 import type { AgentSession } from "../session/AgentSession";
-import type { TaskLockError } from "../session/taskLocks";
+import { makeTaskLockedError } from "../session/taskLocks";
 import type { SessionBinding } from "../startServer/types";
 import { routeAgentConfig } from "./modelRouter";
 import { resolveAgentProfileSnapshot } from "./profiles";
@@ -31,6 +31,11 @@ import type {
   AgentWaitResult,
 } from "./types";
 
+export {
+  isTaskLockedError as isAgentControlTaskLockError,
+  type TaskLockedError as AgentControlTaskLockError,
+} from "../session/taskLocks";
+
 // Defense-in-depth caps for child-agent spawning. The primary guard against
 // recursive spawning is that child sessions (sessionKind === "agent") are built
 // without an AgentControl, so only a root session can spawn. These caps bound a
@@ -43,28 +48,6 @@ import type {
 const MAX_SPAWN_DEPTH =
   Math.max(0, ...Object.values(AGENT_ROLE_DEFINITIONS).map((r) => r.maxDepth)) + 1;
 const MAX_ACTIVE_CHILDREN_PER_PARENT = 16;
-
-export type AgentControlTaskLockError = Error & {
-  code: "task_locked";
-  source: "session";
-  data: TaskLockError["data"];
-};
-
-function makeAgentControlTaskLockError(lock: TaskLockError): AgentControlTaskLockError {
-  return Object.assign(new Error(lock.message), {
-    code: "task_locked" as const,
-    source: "session" as const,
-    data: lock.data,
-  });
-}
-
-export function isAgentControlTaskLockError(error: unknown): error is AgentControlTaskLockError {
-  return (
-    error instanceof Error &&
-    (error as { code?: unknown; source?: unknown }).code === "task_locked" &&
-    (error as { source?: unknown }).source === "session"
-  );
-}
 
 function executionStateForSession(
   session: AgentSession,
@@ -141,7 +124,7 @@ export class AgentControl {
 
   private assertParentWritable(parentSessionId: string): void {
     const lock = this.deps.getParentTaskLock?.(parentSessionId) ?? null;
-    if (lock) throw makeAgentControlTaskLockError(lock);
+    if (lock) throw makeTaskLockedError(lock);
   }
 
   private trackParentControl<T>(parentSessionId: string, run: () => Promise<T>): Promise<T> {

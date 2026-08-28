@@ -287,7 +287,7 @@ export const coworkTurnCompletedNotificationSchema = z
 // Workspace control types
 // ---------------------------------------------------------------------------
 
-export const workspaceSummarySchema = z.object({
+const workspaceSummarySchema = z.object({
   id: nonEmptyStringSchema,
   name: z.string(),
   path: z.string(),
@@ -312,118 +312,7 @@ export const workspaceSwitchResultSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Skills types
-// ---------------------------------------------------------------------------
-
-export const skillEntrySchema = z.object({
-  name: nonEmptyStringSchema,
-  description: z.string().optional(),
-  enabled: z.boolean(),
-  scope: z.string().optional(),
-  source: z.string().optional(),
-});
-
-export const skillInstallationEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  skillName: nonEmptyStringSchema,
-  source: z.string().optional(),
-  scope: z.string().optional(),
-  enabled: z.boolean(),
-  updatedAt: z.string().optional(),
-});
-
-export const skillCatalogSnapshotSchema = z.object({
-  skills: z.array(skillEntrySchema),
-  installations: z.array(skillInstallationEntrySchema),
-});
-
-export const skillInstallPreviewSchema = z.object({
-  skillName: nonEmptyStringSchema,
-  source: z.string(),
-  scope: z.string(),
-  description: z.string().optional(),
-  alreadyInstalled: z.boolean().optional(),
-});
-
-// ---------------------------------------------------------------------------
-// Memory types
-// ---------------------------------------------------------------------------
-
-export const memoryEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  scope: z.enum(["workspace", "user"]),
-  content: z.string(),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
-});
-
-export const memoryListResultSchema = z.object({
-  memories: z.array(memoryEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Provider types
-// ---------------------------------------------------------------------------
-
-export const providerAuthMethodSchema = z.object({
-  id: nonEmptyStringSchema,
-  type: z.string(),
-  label: z.string(),
-});
-
-export const providerCatalogEntrySchema = z.object({
-  id: nonEmptyStringSchema,
-  name: z.string(),
-  status: z.enum(["connected", "disconnected", "error"]).optional(),
-  models: z.array(z.string()).optional(),
-  defaultModel: z.string().nullable().optional(),
-  authMethods: z.array(providerAuthMethodSchema).optional(),
-});
-
-export const providerCatalogResultSchema = z.object({
-  providers: z.array(providerCatalogEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// MCP server types
-// ---------------------------------------------------------------------------
-
-export const mcpServerEntrySchema = z.object({
-  name: nonEmptyStringSchema,
-  command: z.string().optional(),
-  url: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  enabled: z.boolean().optional(),
-  scope: z.string().optional(),
-  tools: z.array(z.string()).optional(),
-});
-
-export const mcpServerListResultSchema = z.object({
-  servers: z.array(mcpServerEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Backup types
-// ---------------------------------------------------------------------------
-
-export const backupCheckpointSchema = z.object({
-  id: nonEmptyStringSchema,
-  createdAt: z.string(),
-  label: z.string().optional(),
-});
-
-export const backupEntrySchema = z.object({
-  targetSessionId: nonEmptyStringSchema,
-  checkpoints: z.array(backupCheckpointSchema),
-});
-
-export const backupListResultSchema = z.object({
-  backups: z.array(backupEntrySchema),
-});
-
-// ---------------------------------------------------------------------------
-// Exported types — existing
+// Thread types
 // ---------------------------------------------------------------------------
 
 export type CoworkThread = z.infer<typeof coworkThreadSchema>;
@@ -454,17 +343,3 @@ export type ServerErrorData = CanonicalServerErrorData;
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 export type WorkspaceListResult = z.infer<typeof workspaceListResultSchema>;
 export type WorkspaceSwitchResult = z.infer<typeof workspaceSwitchResultSchema>;
-export type SkillEntry = z.infer<typeof skillEntrySchema>;
-export type SkillInstallationEntry = z.infer<typeof skillInstallationEntrySchema>;
-export type SkillCatalogSnapshot = z.infer<typeof skillCatalogSnapshotSchema>;
-export type SkillInstallPreview = z.infer<typeof skillInstallPreviewSchema>;
-export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
-export type MemoryListResult = z.infer<typeof memoryListResultSchema>;
-export type ProviderAuthMethod = z.infer<typeof providerAuthMethodSchema>;
-export type ProviderCatalogEntry = z.infer<typeof providerCatalogEntrySchema>;
-export type ProviderCatalogResult = z.infer<typeof providerCatalogResultSchema>;
-export type McpServerEntry = z.infer<typeof mcpServerEntrySchema>;
-export type McpServerListResult = z.infer<typeof mcpServerListResultSchema>;
-export type BackupCheckpoint = z.infer<typeof backupCheckpointSchema>;
-export type BackupEntry = z.infer<typeof backupEntrySchema>;
-export type BackupListResult = z.infer<typeof backupListResultSchema>;

@@ -25,9 +25,6 @@ import { cn } from "../../lib/utils";
 import { MAX_VISIBLE_SIDEBAR_ITEMS } from "../sidebarHelpers";
 import { SidebarThreadItem } from "./SidebarThreadItem";
 
-/** @deprecated Prefer MAX_VISIBLE_SIDEBAR_ITEMS */
-export const MAX_VISIBLE_THREADS = MAX_VISIBLE_SIDEBAR_ITEMS;
-
 const EMPTY_TASK_SUMMARIES: TaskSummary[] = [];
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item min-w-0 [&:not(:last-child)]:mb-3";
 /** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */

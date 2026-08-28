@@ -3,7 +3,6 @@ import type { BrowserWindow } from "electron";
 import {
   applyPlatformWindowCreated,
   getPlatformBrowserWindowOptions,
-  macosBrowserWindowOptions,
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
 } from "../electron/services/windowEnhancements";
@@ -129,12 +128,6 @@ describe("getPlatformBrowserWindowOptions", () => {
     expect(options.transparent).toBe(false);
     expect(options.vibrancy).toBeUndefined();
     expect(options.visualEffectState).toBeUndefined();
-  });
-});
-
-describe("macosBrowserWindowOptions (alias)", () => {
-  test("delegates to getPlatformBrowserWindowOptions", () => {
-    expect(macosBrowserWindowOptions("linux")).toEqual(getPlatformBrowserWindowOptions("linux"));
   });
 });
 

@@ -606,18 +606,23 @@ posixBackendDescribe("seatbelt argv generation", () => {
     // target the root's OWN .git/.cowork (passed as -D params, relative to the
     // root), not the ancestor `.cowork` — which an absolute-path regex would match
     // and thereby deny every write under the workspace.
-    const root = "/home/me/.cowork/chats/abc";
-    const canonicalRoot = canonicalizeRoot(root);
-    const policy: SandboxPolicy = {
-      kind: "workspace-write",
-      writableRoots: [root],
-      network: true,
-    };
-    const { args } = buildSeatbeltCommand(INNER, policy);
-    const policyText = args[1];
-    expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
-    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".git")}`))).toBe(true);
-    expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".cowork")}`))).toBe(true);
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "sb-ancestor-metadata-"));
+    try {
+      const root = path.join(base, ".cowork", "chats", "abc");
+      const canonicalRoot = canonicalizeRoot(root);
+      const policy: SandboxPolicy = {
+        kind: "workspace-write",
+        writableRoots: [root],
+        network: true,
+      };
+      const { args } = buildSeatbeltCommand(INNER, policy);
+      const policyText = args[1];
+      expect(policyText).not.toContain('(require-not (regex #"/\\.cowork(/|$)"))');
+      expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".git")}`))).toBe(true);
+      expect(args.some((a) => a.endsWith(`=${path.join(canonicalRoot, ".cowork")}`))).toBe(true);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 
   test("does not add /tmp or /private/tmp scratch for a /tmp-scoped root (macOS alias)", () => {

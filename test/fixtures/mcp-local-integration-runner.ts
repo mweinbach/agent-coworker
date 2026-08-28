@@ -18,7 +18,7 @@ type RunnerResult =
       scenario: "run-turn";
       responseText: string;
       responseMessagesLength: number;
-      streamTextCalls: number;
+      runtimeTurnCalls: number;
     };
 
 function fixturePath(name: string): string {
@@ -158,7 +158,7 @@ async function runTurnScenario(): Promise<RunnerResult> {
     );
 
     const config = makeConfig(tmpDir, tmpDir);
-    let streamTextCalls = 0;
+    let runtimeTurnCalls = 0;
 
     const response = await runTurnWithDeps(
       {
@@ -171,24 +171,21 @@ async function runTurnScenario(): Promise<RunnerResult> {
         maxSteps: 5,
       },
       {
-        streamText: async (args: any) => {
-          streamTextCalls += 1;
-          const tool = args?.tools?.["mcp__local__echo"];
-          if (!tool) {
-            throw new Error("Expected mcp__local__echo in streamText args.");
-          }
-
-          const result = await tool.execute({ text: "turn" });
-          const firstText = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
-
-          return {
-            text: firstText,
-            reasoningText: undefined,
-            response: { messages: [] as any[] },
-          };
-        },
-        stepCountIs: (_n: number) => "stop" as any,
-        getModel: (_cfg: AgentConfig, _id?: string) => "model" as any,
+        createRuntime: () => ({
+          name: "pi",
+          runTurn: async ({ tools }) => {
+            runtimeTurnCalls += 1;
+            const tool = tools.mcp__local__echo;
+            if (!tool) throw new Error("Expected mcp__local__echo in runtime tools.");
+            const result = (await tool.execute({ text: "turn" })) as {
+              content?: Array<{ type: string; text?: string }>;
+            };
+            return {
+              text: result.content?.find((part) => part.type === "text")?.text ?? "",
+              responseMessages: [],
+            };
+          },
+        }),
       },
     );
 
@@ -196,7 +193,7 @@ async function runTurnScenario(): Promise<RunnerResult> {
       scenario: "run-turn",
       responseText: response.text,
       responseMessagesLength: response.responseMessages.length,
-      streamTextCalls,
+      runtimeTurnCalls,
     };
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });

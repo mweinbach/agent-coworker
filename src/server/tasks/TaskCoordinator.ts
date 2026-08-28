@@ -488,7 +488,7 @@ function taskSnapshot(task: TaskRecord): Record<string, unknown> {
   };
 }
 
-export function buildTaskQuestionContinuationPrompt(input: {
+function buildTaskQuestionContinuationPrompt(input: {
   task: TaskRecord;
   answers: Array<{ question: string; answer: string }>;
 }): string {
@@ -500,7 +500,7 @@ export function buildTaskQuestionContinuationPrompt(input: {
   ].join("\n");
 }
 
-export function buildTaskRetryPrompt(task: TaskRecord): string {
+function buildTaskRetryPrompt(task: TaskRecord): string {
   return [
     `Retry the task "${task.title}" in its existing task thread.`,
     "The previous run failed before the task reached a review or completion state.",

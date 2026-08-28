@@ -1,6 +1,6 @@
 export const TRANSCRIPT_REQUEST_MAX_EVENTS = 100;
 export const TRANSCRIPT_EVENTS_MAX_BYTES = 256 * 1024;
-export const TRANSCRIPT_REQUEST_ENVELOPE_RESERVE_BYTES = 16 * 1024;
+const TRANSCRIPT_REQUEST_ENVELOPE_RESERVE_BYTES = 16 * 1024;
 export const TRANSCRIPT_REQUEST_BODY_MAX_BYTES =
   TRANSCRIPT_EVENTS_MAX_BYTES + TRANSCRIPT_REQUEST_ENVELOPE_RESERVE_BYTES;
 
@@ -16,7 +16,7 @@ export function measureTranscriptEventsBytes(events: unknown[]): number {
   return measureUtf8Bytes(JSON.stringify(events));
 }
 
-export function measureTranscriptRequestBytes(batchId: string, events: unknown[]): number {
+function measureTranscriptRequestBytes(batchId: string, events: unknown[]): number {
   return measureUtf8Bytes(serializeTranscriptBatchRequest(batchId, events));
 }
 

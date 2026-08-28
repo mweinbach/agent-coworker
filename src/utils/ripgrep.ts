@@ -132,19 +132,6 @@ function resolveRipgrepAssets(): RipgrepAsset[] {
   throw new Error(`Unsupported platform/arch for ripgrep auto-download: ${platform}/${arch}`);
 }
 
-async function _fetchText(url: string): Promise<string> {
-  const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-  return await res.text();
-}
-
-async function _fetchToFile(url: string, filePath: string): Promise<void> {
-  const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-  const buf = new Uint8Array(await res.arrayBuffer());
-  await fs.writeFile(filePath, buf);
-}
-
 const sha256File = sha256FileHex;
 
 function parseSha256File(text: string): string | null {
@@ -239,9 +226,9 @@ async function installRipgrepFromGitHub(
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-rg-"));
     const archivePath = path.join(tmpRoot, asset.archiveName);
     const extractDir = path.join(tmpRoot, "extract");
-    await fs.mkdir(extractDir, { recursive: true });
 
     try {
+      await fs.mkdir(extractDir, { recursive: true });
       opts.log?.(`[ripgrep] downloading ${asset.archiveName}...`);
 
       const checksumUrl = `${baseUrl}/${asset.archiveName}.sha256`;
@@ -283,6 +270,12 @@ async function installRipgrepFromGitHub(
       return;
     } catch (err) {
       lastErr = err;
+    } finally {
+      try {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      } catch (error) {
+        opts.log?.(`[ripgrep] failed to clean up ${tmpRoot}: ${String(error)}`);
+      }
     }
   }
 

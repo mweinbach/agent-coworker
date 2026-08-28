@@ -1,11 +1,13 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { INVALID_SPAN_CONTEXT, trace } from "@opentelemetry/api";
 import { z } from "zod";
 import { getAiCoworkerPaths } from "../src/connect";
 import { listSupportedModels } from "../src/models/registry";
+import { startPiModelCallSpan } from "../src/observability/modelCallSpan";
 import { upsertCustomModel } from "../src/providers/customModels";
 import { resolveGoogleInteractionsModel } from "../src/runtime/googleInteractionsModel";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
@@ -1376,26 +1378,66 @@ describe("pi runtime regressions", () => {
     });
   });
 
-  test("telemetry redaction strips API keys and token-like fields", () => {
-    const redacted = piRuntimeInternal.redactTelemetrySecrets({
+  test("model-call telemetry redacts secrets in emitted options without changing the input", () => {
+    const tracer = trace.getTracer("pi-runtime-test");
+    const startSpan = spyOn(tracer, "startSpan").mockReturnValue(
+      trace.wrapSpanContext(INVALID_SPAN_CONTEXT),
+    );
+    const getTracer = spyOn(trace, "getTracer").mockReturnValue(tracer);
+    const nested = {
+      access_token: "tok_1",
+      refresh_token: "tok_2",
+      safe: true,
+    };
+    const options: Record<string, unknown> = {
       apiKey: "key_123",
+      "api-key": "key_456",
+      password: "password_123",
+      clientSecret: "secret_123",
       headers: {
         authorization: "Bearer secret",
         "x-custom": "ok",
       },
-      nested: {
-        access_token: "tok_1",
-        refresh_token: "tok_2",
-        safe: true,
-      },
-    }) as Record<string, any>;
+      nested: [nested, ["public", { token: "tok_3" }]],
+    };
+    options.circular = options;
 
-    expect(redacted.apiKey).toBe("[REDACTED]");
-    expect(redacted.headers.authorization).toBe("[REDACTED]");
-    expect(redacted.headers["x-custom"]).toBe("ok");
-    expect(redacted.nested.access_token).toBe("[REDACTED]");
-    expect(redacted.nested.refresh_token).toBe("[REDACTED]");
-    expect(redacted.nested.safe).toBe(true);
+    try {
+      startPiModelCallSpan(
+        { isEnabled: true, recordInputs: true, recordOutputs: false },
+        makeParams(makeConfig("/tmp/pi-runtime-telemetry")),
+        "gpt-5.2",
+        1,
+        options,
+        [],
+      );
+
+      expect(getTracer).toHaveBeenCalledWith("agent-coworker.runtime");
+      expect(startSpan).toHaveBeenCalledTimes(1);
+      const serializedOptions = startSpan.mock.calls[0]?.[1]?.attributes?.["llm.input.options"];
+      expect(typeof serializedOptions).toBe("string");
+      expect(JSON.parse(String(serializedOptions))).toEqual({
+        apiKey: "[REDACTED]",
+        "api-key": "[REDACTED]",
+        password: "[REDACTED]",
+        clientSecret: "[REDACTED]",
+        headers: {
+          authorization: "[REDACTED]",
+          "x-custom": "ok",
+        },
+        nested: [
+          { access_token: "[REDACTED]", refresh_token: "[REDACTED]", safe: true },
+          ["public", { token: "[REDACTED]" }],
+        ],
+        circular: "[Circular]",
+      });
+      expect(options.apiKey).toBe("key_123");
+      expect(nested.access_token).toBe("tok_1");
+      expect(options.circular).toBe(options);
+    } finally {
+      getTracer.mockRestore();
+      startSpan.mockRestore();
+    }
   });
 
   test("step override splitting honors messages/providerOptions and keeps stream overrides", () => {

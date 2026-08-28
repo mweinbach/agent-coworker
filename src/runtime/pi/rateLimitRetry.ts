@@ -14,7 +14,7 @@ import type { AgentConfig } from "../../types";
 /** Default total attempts per model step (initial call + 3 retries). */
 export const RATE_LIMIT_RETRY_DEFAULT_MAX_ATTEMPTS = 4;
 /** First backoff delay in ms; doubles per retry (before jitter). */
-export const RATE_LIMIT_RETRY_BASE_DELAY_MS = 2_000;
+const RATE_LIMIT_RETRY_BASE_DELAY_MS = 2_000;
 /** Upper bound for a single backoff delay in ms. */
 export const RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 

@@ -146,6 +146,263 @@ function createControlledCodexTurnClient(): {
 }
 
 describe("codex app-server turn lifecycle", () => {
+  const emissionCases: Array<{
+    name: string;
+    notifications: CodexAppServerJsonRpcNotification[];
+    expectedParts: Array<Record<string, unknown>>;
+  }> = [
+    {
+      name: "assistant text",
+      notifications: [
+        { method: "item/started", params: { item: { id: "a", type: "agentMessage" } } },
+        { method: "item/agentMessage/delta", params: { itemId: "a", delta: "Done" } },
+        {
+          method: "item/completed",
+          params: { item: { id: "a", type: "agentMessage", text: "Done" } },
+        },
+      ],
+      expectedParts: [
+        { type: "text-start", id: "a" },
+        { type: "text-delta", id: "a", text: "Done" },
+        { type: "text-end", id: "a" },
+      ],
+    },
+    {
+      name: "native tool output",
+      notifications: [
+        {
+          method: "item/started",
+          params: { item: { id: "cmd", type: "commandExecution", command: "pwd", cwd: "/repo" } },
+        },
+        { method: "item/commandExecution/outputDelta", params: { itemId: "cmd", delta: "/repo" } },
+        {
+          method: "item/completed",
+          params: { item: { id: "cmd", type: "commandExecution", aggregatedOutput: "/repo" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          input: { command: "pwd", cwd: "/repo" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          output: "/repo",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "cmd",
+          toolName: "commandExecution",
+          output: "/repo",
+          error: undefined,
+          providerExecuted: true,
+        },
+      ],
+    },
+    {
+      name: "exec output",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            item: { type: "custom_tool_call", call_id: "exec", name: "exec", input: "text(1)" },
+          },
+        },
+        {
+          method: "rawResponseItem/completed",
+          params: { item: { type: "custom_tool_call_output", call_id: "exec", output: "1" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "exec",
+          toolName: "codeExecution",
+          input: "text(1)",
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "exec",
+          toolName: "codeExecution",
+          output: "1",
+          providerExecuted: true,
+        },
+      ],
+    },
+    {
+      name: "wait output without a prior exec",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            item: {
+              type: "function_call",
+              call_id: "wait",
+              name: "wait",
+              arguments: { cell_id: "cell" },
+            },
+          },
+        },
+        {
+          method: "rawResponseItem/completed",
+          params: { item: { type: "function_call_output", call_id: "wait", output: "done" } },
+        },
+      ],
+      expectedParts: [
+        {
+          type: "tool-call",
+          toolCallId: "wait",
+          toolName: "codeExecution",
+          input: { cell_id: "cell" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "wait",
+          toolName: "codeExecution",
+          output: "done",
+          providerExecuted: true,
+        },
+      ],
+    },
+  ];
+
+  for (const { name, notifications, expectedParts } of emissionCases) {
+    test.serial(`drains ${name} in order before finishing a turn`, async () => {
+      const controlled = createControlledCodexTurnClient();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const invoked: unknown[] = [];
+      const delivered: unknown[] = [];
+      let settled = false;
+      let turnPromise: Promise<unknown> | undefined;
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+      try {
+        turnPromise = createRuntime(makeConfig(process.cwd()))
+          .runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Do the work" }],
+            tools: {},
+            maxSteps: 1,
+            onModelStreamPart: async (part) => {
+              invoked.push(part);
+              if ((part as { type?: unknown }).type === expectedParts[0]?.type) {
+                entered.resolve();
+                await release.promise;
+              }
+              delivered.push(part);
+            },
+          })
+          .finally(() => {
+            settled = true;
+          });
+        await controlled.turnStartEntered;
+        controlled.resolveTurnStart({ turn: { id: "turn_1", status: "inProgress", items: [] } });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        for (const notification of notifications) {
+          controlled.emitNotification({
+            ...notification,
+            params: {
+              threadId: "thread_1",
+              turnId: "turn_1",
+              ...(notification.params as Record<string, unknown>),
+            },
+          });
+        }
+        controlled.emitNotification({
+          method: "turn/completed",
+          params: { threadId: "thread_1", turn: { id: "turn_1", status: "completed", items: [] } },
+        });
+        await entered.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(invoked.slice(2)).toEqual([expectedParts[0]]);
+        expect(delivered).toHaveLength(2);
+        release.resolve();
+        await turnPromise;
+        expect(delivered.slice(2, -2)).toEqual(expectedParts);
+        expect(delivered.slice(-2)).toEqual([
+          expect.objectContaining({ type: "finish-step" }),
+          expect.objectContaining({ type: "finish" }),
+        ]);
+      } finally {
+        release.resolve();
+        controlled.resolveTurnStart();
+        await turnPromise?.catch(() => {});
+      }
+    });
+  }
+
+  for (const asyncSink of [false, true]) {
+    test.serial(
+      `propagates a ${asyncSink ? "rejected" : "throwing"} notification sink`,
+      async () => {
+        const controlled = createControlledCodexTurnClient();
+        const failure = new Error("notification sink failed");
+        const modelErrors: unknown[] = [];
+        const delivered: unknown[] = [];
+        let turnPromise: Promise<unknown> | undefined;
+        codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+        try {
+          turnPromise = createRuntime(makeConfig(process.cwd())).runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Do the work" }],
+            tools: {},
+            maxSteps: 1,
+            onModelStreamPart: (part) => {
+              if ((part as { type?: unknown }).type === "text-delta") {
+                if (asyncSink) return Promise.reject(failure);
+                throw failure;
+              }
+              delivered.push(part);
+            },
+            onModelError: (error) => {
+              modelErrors.push(error);
+            },
+          });
+          const outcome = turnPromise.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          );
+          await controlled.turnStartEntered;
+          controlled.emitNotification({
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread_1", turnId: "turn_1", itemId: "a", delta: "Done" },
+          });
+          if (asyncSink) {
+            controlled.emitNotification({
+              method: "turn/completed",
+              params: {
+                threadId: "thread_1",
+                turn: { id: "turn_1", status: "completed", items: [] },
+              },
+            });
+          }
+          const result = await outcome;
+          expect(result).toEqual({ error: expect.objectContaining({ cause: failure }) });
+          expect(modelErrors).toEqual(["error" in result ? result.error : undefined]);
+          expect(delivered.map((part) => (part as { type: string }).type)).toEqual([
+            "start",
+            "start-step",
+          ]);
+        } finally {
+          controlled.resolveTurnStart();
+          await controlled.client.close();
+          await turnPromise?.catch(() => {});
+        }
+      },
+    );
+  }
+
   test.serial(
     "preserves diagnostics and continuation state when app-server disconnects mid-turn",
     async () => {
@@ -1132,7 +1389,9 @@ describe("codex app-server turn lifecycle", () => {
           messages: [{ role: "user", content: "Search" }],
           tools: {},
           maxSteps: 1,
-          onModelStreamPart: (part) => streamParts.push(part),
+          onModelStreamPart: (part) => {
+            streamParts.push(part);
+          },
         });
 
         await controlled.turnStartEntered;
@@ -1317,7 +1576,9 @@ describe("codex app-server turn lifecycle", () => {
         messages: [{ role: "user", content: "Read a file in code mode" }],
         tools: {},
         maxSteps: 1,
-        onModelStreamPart: (part) => streamParts.push(part),
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
       });
 
       await controlled.turnStartEntered;
@@ -1432,7 +1693,9 @@ describe("codex app-server turn lifecycle", () => {
         messages: [{ role: "user", content: "Update the plan in code mode" }],
         tools: {},
         maxSteps: 1,
-        onModelStreamPart: (part) => streamParts.push(part),
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
       });
 
       await controlled.turnStartEntered;
@@ -1549,7 +1812,9 @@ describe("codex app-server turn lifecycle", () => {
         messages: [{ role: "user", content: "Run overlapping code-mode tools" }],
         tools: {},
         maxSteps: 1,
-        onModelStreamPart: (part) => streamParts.push(part),
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
       });
 
       await controlled.turnStartEntered;
@@ -1670,7 +1935,9 @@ describe("codex app-server turn lifecycle", () => {
         messages: [{ role: "user", content: "Run code-mode tools after yielding" }],
         tools: {},
         maxSteps: 1,
-        onModelStreamPart: (part) => streamParts.push(part),
+        onModelStreamPart: (part) => {
+          streamParts.push(part);
+        },
       });
 
       await controlled.turnStartEntered;
@@ -1812,7 +2079,9 @@ describe("codex app-server turn lifecycle", () => {
         return "yes";
       },
       updateTodos: (nextTodos) => todos.push(nextTodos),
-      onModelStreamPart: (part) => streamParts.push(part),
+      onModelStreamPart: (part) => {
+        streamParts.push(part);
+      },
     });
 
     expect(todos).toContainEqual([

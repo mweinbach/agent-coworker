@@ -1618,6 +1618,10 @@ export class SessionDbRepository {
           : null;
       const providerOptions = legacy.version === 7 ? legacy.config.providerOptions : undefined;
       const sandbox = legacy.version === 7 ? legacy.config.sandbox : undefined;
+      const agentProfileJson =
+        legacy.version === 7 && legacy.session.profile
+          ? toJsonString(legacy.session.profile)
+          : null;
       const hasSubagentMetadata =
         legacy.version === 3 ||
         legacy.version === 4 ||
@@ -1673,6 +1677,7 @@ export class SessionDbRepository {
             "             nickname,",
             "             task_type,",
             "             target_paths_json,",
+            "             agent_profile_json,",
             "             requested_model,",
             "             effective_model,",
             "             requested_reasoning_effort,",
@@ -1696,7 +1701,7 @@ export class SessionDbRepository {
             "             has_pending_approval,",
             "             message_count,",
             "             last_event_seq",
-            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "           ON CONFLICT(session_id) DO UPDATE SET",
             "             session_kind = excluded.session_kind,",
             "             parent_session_id = excluded.parent_session_id,",
@@ -1707,6 +1712,7 @@ export class SessionDbRepository {
             "             nickname = excluded.nickname,",
             "             task_type = excluded.task_type,",
             "             target_paths_json = excluded.target_paths_json,",
+            "             agent_profile_json = excluded.agent_profile_json,",
             "             requested_model = excluded.requested_model,",
             "             effective_model = excluded.effective_model,",
             "             requested_reasoning_effort = excluded.requested_reasoning_effort,",
@@ -1743,6 +1749,7 @@ export class SessionDbRepository {
           nickname,
           taskType,
           targetPathsJson,
+          agentProfileJson,
           requestedModel,
           effectiveModel,
           requestedReasoningEffort,

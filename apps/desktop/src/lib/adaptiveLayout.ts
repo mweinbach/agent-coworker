@@ -1,7 +1,7 @@
 export const MAIN_WINDOW_MIN_WIDTH = 640;
 export const MAIN_WINDOW_MIN_HEIGHT = 560;
 export const MIN_PRIMARY_WORKSPACE_WIDTH = 520;
-const MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH = 320;
+export const MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH = 320;
 
 export const DESKTOP_LAYOUT_BREAKPOINTS = {
   narrow: 720,
@@ -80,7 +80,7 @@ export function resolveRightRailSizing(
   }
 }
 
-export function resolveDesktopLayoutTier(viewportWidth: number): DesktopLayoutTier {
+function resolveDesktopLayoutTier(viewportWidth: number): DesktopLayoutTier {
   if (viewportWidth < DESKTOP_LAYOUT_BREAKPOINTS.narrow) {
     return "narrow";
   }

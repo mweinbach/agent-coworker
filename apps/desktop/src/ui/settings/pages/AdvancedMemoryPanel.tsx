@@ -42,7 +42,6 @@ import { OperationFeedback } from "../../OperationFeedback";
 import { SettingsEmptyState } from "../SettingsPrimitives";
 
 export type DraftAdvancedMemory = {
-  slug: string;
   name: string;
   description: string;
   type: string;
@@ -52,7 +51,7 @@ export type DraftAdvancedMemory = {
 const MEMORY_TYPES = ["feedback", "project", "note"] as const;
 
 function emptyDraft(): DraftAdvancedMemory {
-  return { slug: "", name: "", description: "", type: "note", body: "" };
+  return { name: "", description: "", type: "note", body: "" };
 }
 
 export function AdvancedMemoryEditorDialog({
@@ -224,7 +223,6 @@ export function AdvancedMemoryPanel({ workspaceId, cwd }: { workspaceId: string;
   const openEdit = (entry: AdvancedMemoryEntry) => {
     setEditingSlug(entry.slug);
     setDraft({
-      slug: entry.slug,
       name: entry.name,
       description: entry.description,
       type: entry.type || "note",

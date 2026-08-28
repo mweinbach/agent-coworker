@@ -281,6 +281,8 @@ export class SessionMetadataManager {
         (nextConfig.preferredChildModelRef ??
           `${nextConfig.provider}:${nextConfig.preferredChildModel}`) ||
       !stringArrayEqual(baseConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs) ||
+      resolveWorkflowConcurrency(baseConfig.workflowMaxConcurrentAgents) !==
+        resolveWorkflowConcurrency(nextConfig.workflowMaxConcurrentAgents) ||
       !Object.is(
         baseConfig.toolOutputOverflowChars ?? null,
         nextConfig.toolOutputOverflowChars ?? null,

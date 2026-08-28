@@ -108,6 +108,91 @@ describe("control socket helpers over JSON-RPC", () => {
     );
   });
 
+  test("an older session refresh cannot remove the newer list, selection, or cached snapshots", async () => {
+    const workspaceId = "ws-overlapping-refresh";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [makeThread("session-old", workspaceId)],
+      selectedThreadId: "session-old",
+    });
+    const olderResponse = Promise.withResolvers<{
+      threads: ReturnType<typeof makeThreadListEntry>[];
+    }>();
+    const olderRequestStarted = Promise.withResolvers<void>();
+    let requests = 0;
+    installFakeSocket(workspaceId, async () => {
+      requests += 1;
+      if (requests === 1) {
+        olderRequestStarted.resolve();
+        return await olderResponse.promise;
+      }
+      return { threads: [makeThreadListEntry("session-new")] };
+    });
+    const helpers = createControlSocketHelpers(deps);
+    const olderRefresh = helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+    await olderRequestStarted.promise;
+
+    const newerSessions = await helpers.requestWorkspaceSessions(
+      get as never,
+      set as never,
+      workspaceId,
+    );
+    const freshSnapshot = {
+      fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
+      snapshot: { sessionId: "session-new" },
+    };
+    RUNTIME.sessionSnapshots.set("session-new", freshSnapshot as never);
+    const persistedBeforeStaleResponse = persistCalls;
+    olderResponse.resolve({ threads: [makeThreadListEntry("session-old")] });
+
+    const staleSessions = await olderRefresh;
+    expect(newerSessions?.map((session) => session.sessionId)).toEqual(["session-new"]);
+    expect(state.threads.map((thread: { id: string }) => thread.id)).toEqual(["session-new"]);
+    expect(state.selectedThreadId).toBe("session-new");
+    expect(RUNTIME.sessionSnapshots.get("session-new")).toBe(freshSnapshot as never);
+    expect(persistCalls).toBe(persistedBeforeStaleResponse);
+    expect(staleSessions).toBeNull();
+    expect(helpers.__internal.getPendingWaiterCounts().workspaceSessionWaiters).toBe(0);
+  });
+
+  test("session refresh ordering is independent for each workspace", async () => {
+    const workspaceId = "ws-refresh-first";
+    const otherWorkspaceId = "ws-refresh-second";
+    const { state, get, set } = createState(workspaceId);
+    const other = createState(otherWorkspaceId);
+    state.workspaces.push(...other.state.workspaces);
+    Object.assign(state.workspaceRuntimeById, other.state.workspaceRuntimeById);
+    const firstResponse = Promise.withResolvers<{
+      threads: ReturnType<typeof makeThreadListEntry>[];
+    }>();
+    const firstRequestStarted = Promise.withResolvers<void>();
+    installFakeSocket(workspaceId, async () => {
+      firstRequestStarted.resolve();
+      return await firstResponse.promise;
+    });
+    installFakeSocket(otherWorkspaceId, async () => ({
+      threads: [makeThreadListEntry("session-second")],
+    }));
+    const helpers = createControlSocketHelpers(deps);
+    const firstRefresh = helpers.requestWorkspaceSessions(get as never, set as never, workspaceId);
+    await firstRequestStarted.promise;
+
+    const secondRefresh = await helpers.requestWorkspaceSessions(
+      get as never,
+      set as never,
+      otherWorkspaceId,
+    );
+    firstResponse.resolve({ threads: [makeThreadListEntry("session-first")] });
+
+    expect((await firstRefresh)?.map((session) => session.sessionId)).toEqual(["session-first"]);
+    expect(secondRefresh?.map((session) => session.sessionId)).toEqual(["session-second"]);
+    expect(state.threads.map((thread: { id: string }) => thread.id).sort()).toEqual([
+      "session-first",
+      "session-second",
+    ]);
+    expect(state.selectedWorkspaceId).toBe(workspaceId);
+    expect(state.selectedThreadId).toBeNull();
+  });
+
   test("requestWorkspaceSessions preserves task-owned records without selecting them as ordinary chat", async () => {
     const workspaceId = "ws-task-thread-refresh";
     const { state, get, set } = createState(workspaceId, {

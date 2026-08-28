@@ -7,7 +7,7 @@ import { inspectWorkflowSource } from "./inspect";
 
 export const WORKFLOW_DEFINITION_MAX_BYTES = 200_000;
 
-export const WORKFLOW_DEFINITION_SCOPES = ["project", "global", "bundled"] as const;
+const WORKFLOW_DEFINITION_SCOPES = ["project", "global", "bundled"] as const;
 export type WorkflowDefinitionScope = (typeof WORKFLOW_DEFINITION_SCOPES)[number];
 export type WritableWorkflowDefinitionScope = Extract<
   WorkflowDefinitionScope,
@@ -50,7 +50,7 @@ export function assertWorkflowDefinitionName(name: string): string {
   return trimmed;
 }
 
-export function workflowDefinitionRoots(
+function workflowDefinitionRoots(
   config: Pick<AgentConfig, "projectCoworkDir" | "userCoworkDir" | "builtInDir">,
 ): Array<{ scope: WorkflowDefinitionScope; dir: string }> {
   return [

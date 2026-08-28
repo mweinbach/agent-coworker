@@ -51,6 +51,7 @@ const fontScale = 2;
 const announcements: string[] = [];
 let reducedMotionEnabled = false;
 let layoutAnimationCount = 0;
+let pairingStatus: "idle" | "error" = "idle";
 
 function mockLocalModule(alias: string, relativePath: string, factory: () => unknown): void {
   mock.module(alias, factory);
@@ -449,7 +450,12 @@ const NativeTabs = Object.assign(
 mockMobileModule("expo-router/unstable-native-tabs", () => ({ NativeTabs }));
 
 const Stack = Object.assign(
-  ({ children }: HostProps) => createElement("div", { "data-stack": true }, children),
+  ({ children, screenOptions }: HostProps) =>
+    createElement(
+      "div",
+      { "data-stack": true, "data-stack-options": JSON.stringify(screenOptions) },
+      children,
+    ),
   {
     Screen: ({ name, options }: HostProps) => {
       const optionRecord =
@@ -529,13 +535,29 @@ mockLocalModule(
   () => ({
     usePairingStore: (
       selector: (state: {
-        connectionState: { status: "idle"; lastError: null };
+        connectionState: {
+          status: "idle" | "error";
+          lastError: string | null;
+          transportMode: "native";
+          connectedMacDeviceId: null;
+        };
+        trustedMacs: [];
         connectWithQr: () => Promise<void>;
+        reconnectTrusted: () => Promise<void>;
+        forgetTrustedMac: () => Promise<void>;
       }) => unknown,
     ) =>
       selector({
-        connectionState: { status: "idle", lastError: null },
+        connectionState: {
+          status: pairingStatus,
+          lastError: pairingStatus === "error" ? "Try pairing again." : null,
+          transportMode: "native",
+          connectedMacDeviceId: null,
+        },
+        trustedMacs: [],
         connectWithQr: async () => undefined,
+        reconnectTrusted: async () => undefined,
+        forgetTrustedMac: async () => undefined,
       }),
   }),
 );
@@ -576,6 +598,9 @@ const PairingScan =
     ? (await import("../../apps/mobile/src/components/pairing/pairing-scan.ios")).PairingScanIos
     : (await import("../../apps/mobile/src/components/pairing/pairing-scan.fallback"))
         .PairingScanFallback;
+const { PairingHomeFallback } = await import(
+  "../../apps/mobile/src/components/pairing/pairing-home.fallback"
+);
 
 function serializeControls(container: Element): SnapshotControl[] {
   return Array.from(container.querySelectorAll<HTMLElement>('[data-a11y-node="true"]')).map(
@@ -828,6 +853,30 @@ async function renderMotionTransform(
 }
 
 describe(`${platform} rendered mobile navigation and accessibility contract`, () => {
+  test.each(["idle", "error"] as const)(
+    "uses phone-neutral pairing instructions in the fallback %s screen",
+    async (status) => {
+      const harness = setupJsdom({ includeAnimationFrame: true });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("Missing root container");
+      const root = createRoot(container);
+      pairingStatus = status;
+      try {
+        await act(async () => {
+          root.render(createElement(PairingHomeFallback));
+        });
+        expect(container.textContent).toContain(
+          "Your Mac and phone must be on the same network for the first pairing.",
+        );
+        expect(container.textContent).not.toContain("iPhone");
+      } finally {
+        pairingStatus = "idle";
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test("renders native tabs, independent stacks, deep links, history back, and pending badge", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
     const container = harness.dom.window.document.getElementById("root");
@@ -840,6 +889,17 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
         root.render(createElement(NavigationTree));
       });
       const snapshot = buildNavigationSnapshot(container);
+      const stackOptions = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-stack-options]"),
+        (element) => JSON.parse(element.dataset.stackOptions ?? "{}"),
+      );
+      expect(stackOptions).toHaveLength(4);
+      for (const options of stackOptions) {
+        expect(options.headerTransparent).toBe(platform === "ios");
+        expect(options.headerStyle?.backgroundColor).toBe(
+          platform === "ios" ? "transparent" : options.contentStyle.backgroundColor,
+        );
+      }
       expect(snapshot.backBehavior).toBe("history");
       expect(snapshot.initialTab).toBe("(chats)");
       expect(snapshot.tabs.map(({ label, route }) => ({ label, route }))).toEqual(
@@ -972,7 +1032,7 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
       expect(runAccessibleLayoutAnimation(false)).toBe(true);
       expect(layoutAnimationCount).toBe(beforeLayoutAnimation + 1);
       expect(standardMotionTransform).toBe('[{"scale":0.985}]');
-      expect(reducedMotionTransform).toBeNull();
+      expect(reducedMotionTransform).toBe("[]");
 
       const snapshot = {
         accessibility: {

@@ -220,17 +220,7 @@ function buildNativeGoogleToolResultOutput(
     };
   }
 
-  if (name === "nativeFileSearch") {
-    return {
-      provider: "google",
-      status: "completed",
-      callId,
-      results: extractResultEntries(result),
-      raw: result,
-    };
-  }
-
-  if (name === "nativeGoogleMaps") {
+  if (name === "nativeFileSearch" || name === "nativeGoogleMaps") {
     return {
       provider: "google",
       status: "completed",

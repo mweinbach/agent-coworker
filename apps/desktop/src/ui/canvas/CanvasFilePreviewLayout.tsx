@@ -28,11 +28,9 @@ export function CanvasFilePreviewLayout({
     <div
       className={cn(
         "flex h-full w-full min-w-0 flex-col",
-        isSpreadsheet
+        isSpreadsheet || isCanvasMode
           ? "bg-canvas text-canvas-foreground"
-          : isCanvasMode
-            ? "bg-canvas text-canvas-foreground"
-            : "bg-[var(--surface-sidebar-pane)] text-foreground",
+          : "bg-[var(--surface-sidebar-pane)] text-foreground",
         isCanvasMode && "app-canvas-mode-window",
       )}
       data-canvas-surface={isSpreadsheet ? "spreadsheet" : "document"}

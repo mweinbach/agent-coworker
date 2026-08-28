@@ -99,9 +99,6 @@ export function lockDatabasePathFor(targetPath: string, lockRoot?: string): stri
   return databasePathForIdentity(stablePathIdentity(canonicalSnapshot), resolvedLockRoot(lockRoot));
 }
 
-/** @deprecated The lock is now a SQLite file, not a directory. */
-export const lockDirPathFor = lockDatabasePathFor;
-
 function resolveLockSet(targetPath: string, lockRoot?: string): ResolvedLockSet {
   const root = resolvedLockRoot(lockRoot);
   const lexicalIdentity = stablePathIdentity(path.resolve(targetPath));

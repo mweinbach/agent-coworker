@@ -159,7 +159,6 @@ export async function loadMoreOneOffChatWorkspaces(
   const oneOffWorkspaces = sortWorkspacesByLastOpened(
     workspaces.filter((workspace) => workspace.workspaceKind === "oneOffChat"),
   );
-  const _previouslyLoaded = oneOffWorkspaces.slice(0, currentLimit);
   const newlyLoaded = oneOffWorkspaces.slice(currentLimit, nextLimit);
   const plan: RemoteThreadLoadEntry[] = newlyLoaded.map((workspace) => ({
     cwd: workspace.path,

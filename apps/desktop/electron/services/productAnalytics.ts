@@ -126,34 +126,7 @@ function resolveDesktopConfig(opts: {
   );
 }
 
-export function resolveDesktopProductAnalyticsConfig(
-  privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
-  productAnalyticsState?: PersistedProductAnalyticsState | null,
-  env: NodeJS.ProcessEnv = process.env,
-): DesktopProductAnalyticsConfig {
-  const version = appVersion();
-  const config = resolveDesktopConfig({
-    privacyTelemetrySettings,
-    productAnalyticsState,
-    env,
-    appVersion: version,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
-  return {
-    enabled: config.enabled,
-    keyConfigured: config.keyConfigured,
-    host: config.host,
-    environment: config.environment,
-    appVersion: version,
-    platform: process.platform,
-    arch: process.arch,
-    packaged: app.isPackaged,
-  };
-}
-
-export function applyProductAnalyticsProcessEnv(
+function applyProductAnalyticsProcessEnv(
   privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null,
   productAnalyticsState?: PersistedProductAnalyticsState | null,
   env: NodeJS.ProcessEnv = process.env,

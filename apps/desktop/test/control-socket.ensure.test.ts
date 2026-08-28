@@ -761,4 +761,137 @@ describe("control socket helpers over JSON-RPC", () => {
     });
     expect(helpers.__internal.getPendingWaiterCounts().sessionSnapshotWaiters).toBe(0);
   });
+
+  test("waitForControlSession reports rejected readiness and releases its waiter", async () => {
+    const workspaceId = "ws-rejected-readiness";
+    const { get, set } = createState(workspaceId);
+    const ready = Promise.withResolvers<void>();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: ready.promise,
+      request: async () => ({}),
+      respond: () => true,
+      close() {},
+    } as never);
+    const helpers = createControlSocketHelpers(deps);
+
+    const pending = helpers.waitForControlSession(get as never, set as never, workspaceId, 1_000);
+    expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(1);
+    ready.reject(new Error("Handshake failed"));
+
+    expect(await pending).toBe(false);
+    expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(0);
+  });
+
+  test.each(["resolve", "reject"] as const)(
+    "waitForControlSession stays timed out after late readiness %s",
+    async (settlement) => {
+      const workspaceId = `ws-late-readiness-${settlement}`;
+      const { get, set } = createState(workspaceId);
+      const ready = Promise.withResolvers<void>();
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: ready.promise,
+        request: async () => ({}),
+        respond: () => true,
+        close() {},
+      } as never);
+      const helpers = createControlSocketHelpers(deps);
+
+      const pending = helpers.waitForControlSession(get as never, set as never, workspaceId, 0);
+      expect(await pending).toBe(false);
+      expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(0);
+      if (settlement === "resolve") {
+        ready.resolve();
+      } else {
+        ready.reject(new Error("Late handshake failure"));
+      }
+      await flushAsyncWork();
+
+      expect(await pending).toBe(false);
+      expect(helpers.__internal.getPendingWaiterCounts().controlSessionWaiters).toBe(0);
+    },
+  );
+
+  test.each(["close", "reconnectExhausted"] as const)(
+    "control notifications and %s use the latest store setter",
+    async (terminalEvent) => {
+      const workspaceId = `ws-latest-setter-${terminalEvent}`;
+      const first = createState(workspaceId);
+      jsonRpcHandlers.set("thread/list", () => ({ threads: [] }));
+      const helpers = createControlSocketHelpers(deps);
+      const socket = helpers.ensureControlSocket(
+        first.get as never,
+        first.set as never,
+        workspaceId,
+      ) as MockJsonRpcSocket;
+      expect(
+        await helpers.waitForControlSession(first.get as never, first.set as never, workspaceId),
+      ).toBe(true);
+
+      const second = createState(workspaceId);
+      expect(
+        helpers.ensureControlSocket(second.get as never, second.set as never, workspaceId),
+      ).toBe(socket);
+      expect(
+        await helpers.waitForControlSession(second.get as never, second.set as never, workspaceId),
+      ).toBe(true);
+      expect(MockJsonRpcSocket.instances).toHaveLength(1);
+
+      socket.opts.onNotification?.({
+        method: "cowork/control/event",
+        params: {
+          type: "session_settings",
+          sessionId: "latest-control",
+          enableMcp: false,
+          enableMemory: true,
+          memoryRequireApproval: false,
+        },
+      });
+      expect(first.state.workspaces[0].defaultEnableMcp).toBe(true);
+      expect(second.state.workspaces[0].defaultEnableMcp).toBe(false);
+      expect(second.state.workspaceRuntimeById[workspaceId].controlSessionId).toBe(
+        "latest-control",
+      );
+
+      first.state.workspaceRuntimeById[workspaceId].memoriesLoading = true;
+      second.state.workspaceRuntimeById[workspaceId].memoriesLoading = true;
+      socket[terminalEvent]();
+
+      expect(first.state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(true);
+      expect(first.state.notifications).toEqual([]);
+      expect(second.state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(false);
+      expect(second.state.notifications).toHaveLength(1);
+      expect(second.state.notifications[0]).toMatchObject({
+        kind: "error",
+        title: "Not connected",
+        detail: "Unable to request memories.",
+      });
+      helpers.disposeWorkspaceControlState(workspaceId);
+    },
+  );
+
+  test("ensureControlSocket does not restore bindings after workspace disposal", async () => {
+    const workspaceId = "ws-disposed-reensure";
+    const first = createState(workspaceId);
+    jsonRpcHandlers.set("thread/list", () => ({ threads: [] }));
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(first.get as never, first.set as never, workspaceId);
+    expect(
+      await helpers.waitForControlSession(first.get as never, first.set as never, workspaceId),
+    ).toBe(true);
+    helpers.disposeWorkspaceControlState(workspaceId);
+
+    const second = createState(workspaceId);
+    expect(
+      helpers.ensureControlSocket(second.get as never, second.set as never, workspaceId),
+    ).toBeNull();
+    expect(MockJsonRpcSocket.instances).toHaveLength(1);
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
+      isDisposed: true,
+      hasLifecycleCleanup: false,
+      hasRouterCleanup: false,
+      hasBootstrapPromise: false,
+      hasStoreGetter: false,
+      hasStoreSetter: false,
+    });
+  });
 });

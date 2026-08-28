@@ -39,7 +39,7 @@ const APPROVAL_RISK_LABELS: Record<string, string> = {
   safe_auto_approved: "Auto-approved",
 };
 
-export function approvalRiskLabel(reasonCode: string): string {
+function approvalRiskLabel(reasonCode: string): string {
   return (
     APPROVAL_RISK_LABELS[reasonCode] ??
     reasonCode.replace(/_/g, " ").replace(/^\w/, (character) => character.toUpperCase())

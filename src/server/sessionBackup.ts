@@ -554,7 +554,8 @@ export class SessionBackupManager implements SessionBackupHandle {
     trigger: SessionBackupCheckpointTrigger,
   ): Promise<SessionBackupPublicCheckpoint> {
     await ensureWorkingDirectory(this.metadata.workingDirectory);
-    const index = this.metadata.checkpoints.length + 1;
+    const index =
+      this.metadata.checkpoints.reduce((max, checkpoint) => Math.max(max, checkpoint.index), 0) + 1;
     const id = makeCheckpointId(index);
     const createdAt = new Date().toISOString();
     const previousCheckpoint = this.metadata.checkpoints[this.metadata.checkpoints.length - 1];

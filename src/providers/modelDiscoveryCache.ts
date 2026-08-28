@@ -10,8 +10,8 @@ import type { AiCoworkerPaths } from "../store/connections";
 import { type ProviderName, resolveProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
-export const MODEL_DISCOVERY_CACHE_VERSION = 1;
-export const DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MODEL_DISCOVERY_CACHE_VERSION = 1;
+const DEFAULT_MODEL_DISCOVERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type ModelDiscoverySource =
   | "api"
@@ -92,7 +92,7 @@ const MAX_SANITIZED_OBJECT_KEYS = 100;
 const MAX_SANITIZED_ARRAY_ITEMS = 100;
 const MAX_SANITIZED_STRING_LENGTH = 4096;
 
-export function modelDiscoveryCacheDir(paths: AiCoworkerPaths): string {
+function modelDiscoveryCacheDir(paths: AiCoworkerPaths): string {
   return path.join(paths.rootDir, "cache", "models");
 }
 
@@ -162,7 +162,7 @@ function normalizeRuntimeRecord(value: unknown): Record<string, unknown> | undef
     : undefined;
 }
 
-export function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryModel | null {
+function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryModel | null {
   const record = asRecord(value);
   if (!record) return null;
   const id = normalizeString(record.id);
@@ -190,9 +190,7 @@ export function normalizeDiscoveredModel(value: unknown): CachedModelDiscoveryMo
   };
 }
 
-export function normalizeModelDiscoveryModels(
-  models: readonly unknown[],
-): CachedModelDiscoveryModel[] {
+function normalizeModelDiscoveryModels(models: readonly unknown[]): CachedModelDiscoveryModel[] {
   const out: CachedModelDiscoveryModel[] = [];
   const seen = new Set<string>();
   for (const rawModel of models) {

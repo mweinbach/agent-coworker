@@ -9,7 +9,7 @@ import type {
 
 export type XmlRecord = Record<string, unknown>;
 
-export type XlsxRelationship = {
+type XlsxRelationship = {
   id: string;
   type: string;
   target: string;
@@ -288,7 +288,7 @@ function readAnchorPoint(point: XmlRecord | null): { row?: number; col?: number 
   };
 }
 
-export async function readRelationships(
+async function readRelationships(
   zip: JSZip,
   ownerPart: string,
 ): Promise<Map<string, XlsxRelationship>> {
@@ -305,7 +305,7 @@ export async function readRelationships(
   return relationships;
 }
 
-export async function readXmlPart(zip: JSZip, partPath: string): Promise<XmlRecord | null> {
+async function readXmlPart(zip: JSZip, partPath: string): Promise<XmlRecord | null> {
   const file = zip.file(partPath);
   if (!file) return null;
   return asRecord(OOXML_PARSER.parse(await file.async("string")));
@@ -317,12 +317,12 @@ function relationshipPartPath(ownerPart: string): string {
   return normalizeZipPath(path.posix.join(directory, "_rels", `${filename}.rels`));
 }
 
-export function resolveRelationshipTarget(ownerPart: string, target: string): string {
+function resolveRelationshipTarget(ownerPart: string, target: string): string {
   if (target.startsWith("/")) return normalizeZipPath(target.slice(1));
   return normalizeZipPath(path.posix.join(path.posix.dirname(ownerPart), target));
 }
 
-export function normalizeZipPath(input: string): string {
+function normalizeZipPath(input: string): string {
   const parts: string[] = [];
   for (const segment of input.split("/")) {
     if (!segment || segment === ".") continue;
@@ -335,7 +335,7 @@ export function normalizeZipPath(input: string): string {
   return parts.join("/");
 }
 
-export function arrayOfRecords(value: unknown): XmlRecord[] {
+function arrayOfRecords(value: unknown): XmlRecord[] {
   if (Array.isArray(value)) {
     return value.map(asRecord).filter((record): record is XmlRecord => record !== null);
   }
@@ -353,7 +353,7 @@ export function stringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-export function readInteger(value: unknown): number | null {
+function readInteger(value: unknown): number | null {
   const raw = stringValue(value);
   if (!raw) return null;
   const parsed = Number.parseInt(raw, 10);

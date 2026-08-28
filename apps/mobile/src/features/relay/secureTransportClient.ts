@@ -16,7 +16,7 @@ const DEFAULT_RECONNECT_BASE_DELAY_MS = 500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 12;
 const DEFAULT_MAX_CONSECUTIVE_REQUEST_FAILURES = 2;
-export const DESKTOP_IDENTITY_CHANGED_ERROR =
+const DESKTOP_IDENTITY_CHANGED_ERROR =
   "Cowork Desktop restarted or rotated its certificate. Scan the QR code again to reconnect.";
 
 function desktopPermissionLabel(permission: string): string {
@@ -325,14 +325,7 @@ export class SecureTransportClient {
         trusted,
         ...this.trustedDesktops.filter((entry) => entry.macDeviceId !== trusted.macDeviceId),
       ];
-      this.activeSession = {
-        macDeviceId: trusted.macDeviceId,
-        endpointUrl,
-        sessionToken: body.sessionToken,
-        certSha256: trusted.certSha256,
-        spkiSha256: trusted.spkiSha256,
-        mobileDeviceId: trusted.mobileDeviceId,
-      };
+      this.activeSession = activeSessionFromTrustedDesktop(trusted);
       this.activeSessionRestoreBlocked = false;
       await this.persistTrustedState();
       this.setConnectionStatus("connecting");
@@ -363,14 +356,7 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.lastError = null;
-    this.activeSession = {
-      macDeviceId: trusted.macDeviceId,
-      endpointUrl: trusted.endpointUrl,
-      sessionToken: trusted.sessionToken,
-      certSha256: trusted.certSha256,
-      spkiSha256: trusted.spkiSha256,
-      mobileDeviceId: trusted.mobileDeviceId,
-    };
+    this.activeSession = activeSessionFromTrustedDesktop(trusted);
     this.activeSessionRestoreBlocked = false;
     await this.persistTrustedState();
     this.setConnectionStatus("connecting");

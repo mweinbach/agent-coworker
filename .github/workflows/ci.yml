@@ -16,6 +16,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  complexity:
+    name: Complexity comparison
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pull request head and history
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Typecheck comparison code and tests
+        run: >
+          bunx tsc --ignoreConfig --noEmit --target ESNext --module ESNext
+          --moduleResolution bundler --strict --skipLibCheck --types bun-types
+          scripts/complexity.ts scripts/complexityCompare.ts
+          test/complexity-report.test.ts test/complexity-comparison.test.ts
+          test/complexity-comparison.integration.test.ts
+
+      - name: Flag new and increased complexity
+        env:
+          COMPLEXITY_BASE: ${{ github.event.pull_request.base.sha }}
+        run: bun run complexity:compare --base "$COMPLEXITY_BASE" --json --github > "$RUNNER_TEMP/complexity-comparison.json"
+
+      - name: Upload complexity comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: complexity-comparison
+          path: ${{ runner.temp }}/complexity-comparison.json
+          if-no-files-found: error
+          retention-days: 14
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -67,6 +103,19 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: mobile
+          cache-dependency-path: |
+            .bun-version
+            bun.lock
+            package.json
+            apps/desktop/package.json
+            packages/*/package.json
+            apps/mobile/bun.lock
+            apps/mobile/package.json
+
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile --frozen-lockfile
 
       - name: Unit tests
         run: bun run test

@@ -49,34 +49,49 @@ function makeInfo(overrides: Partial<Info>): Info {
 }
 
 describe("PlatformTopBarChrome", () => {
-  test("renders macOS SidebarCollapseControl when placement is sidebar", async () => {
+  test("keeps the macOS New Chat control inert until the sidebar collapses", async () => {
     const harness = setupJsdom();
+    const onNewChat = mock(() => {});
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      await act(async () => {
-        root.render(
-          createElement(PlatformTopBarChrome, {
-            platformInfo: makeInfo({
-              platform: "macos",
-              rawPlatform: "darwin",
-              topbarControlPlacement: "sidebar",
+      for (const sidebarCollapsed of [false, true, false]) {
+        await act(async () => {
+          root.render(
+            createElement(PlatformTopBarChrome, {
+              platformInfo: makeInfo({
+                platform: "macos",
+                rawPlatform: "darwin",
+                topbarControlPlacement: "sidebar",
+              }),
+              sidebarCollapsed,
+              sidebarWidth: 280,
+              onToggleSidebar: () => {},
+              onNewChat,
+              sidebarLabel: "Close sidebar",
             }),
-            sidebarCollapsed: false,
-            sidebarWidth: 280,
-            onToggleSidebar: () => {},
-            onNewChat: () => {},
-            sidebarLabel: "Close sidebar",
-          }),
-        );
-      });
+          );
+        });
 
-      expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
-      expect(container.querySelector('button[aria-label="Close sidebar"]')).not.toBeNull();
-      expect(container.querySelector(".app-topbar__win32-left-rail")).toBeNull();
-      expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
+        expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
+        expect(container.querySelector('button[aria-label="Close sidebar"]')).not.toBeNull();
+        expect(container.querySelector(".app-topbar__win32-left-rail")).toBeNull();
+        expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
+
+        const newChatButton = container.querySelector<HTMLButtonElement>(
+          'button[aria-label="New Chat"]',
+        );
+        const newChatReveal = newChatButton?.closest(".app-topbar__new-chat-reveal");
+        expect(newChatReveal?.getAttribute("aria-hidden")).toBe(String(!sidebarCollapsed));
+        expect(newChatReveal?.hasAttribute("inert")).toBe(!sidebarCollapsed);
+
+        if (sidebarCollapsed) {
+          await act(async () => newChatButton?.click());
+        }
+      }
+      expect(onNewChat).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         root.unmount();

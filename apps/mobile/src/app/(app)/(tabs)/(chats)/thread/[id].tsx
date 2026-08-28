@@ -18,6 +18,7 @@ import { SubagentBar } from "@/components/thread/subagent-bar";
 import { ThreadRenderItem } from "@/components/thread/thread-render-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
+import { toolbarIcon } from "@/components/ui/toolbar-icon";
 import {
   minimumTouchTarget,
   useAccessibilityAnnouncement,
@@ -855,7 +856,7 @@ export default function ThreadDetailScreen() {
       {showStop ? (
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.Button
-            icon="xmark.circle.fill"
+            icon={toolbarIcon("xmark.circle.fill")}
             accessibilityLabel={isStopping ? "Stopping turn" : "Stop turn"}
             disabled={isStopping}
             onPress={() => {

@@ -1,18 +1,8 @@
 import { useAppStore } from "../app/store";
-import type { Notification } from "../app/types";
-
-const MAX_NOTIFICATIONS = 50;
+import { pushNotification } from "../app/store.helpers";
 
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? filePath;
-}
-
-function pushNotification(notifications: Notification[], entry: Notification): Notification[] {
-  const next = [...notifications, entry];
-  if (next.length > MAX_NOTIFICATIONS) {
-    return next.slice(next.length - MAX_NOTIFICATIONS);
-  }
-  return next;
 }
 
 export function reportSpreadsheetBackgroundSaveFailure(filePath: string, message: string): void {

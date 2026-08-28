@@ -1,4 +1,9 @@
-import { assertNoSeriousAxeViolations, assertNoViewportClipping } from "../assertions";
+import {
+  assertNoSeriousAxeViolations,
+  assertNoViewportClipping,
+  assertUsablePrimaryContentWidth,
+  settleQualityPage,
+} from "../assertions";
 import { expect, test } from "../fixtures";
 
 async function captureExpectedFailure(action: () => Promise<void>): Promise<Error> {
@@ -9,6 +14,57 @@ async function captureExpectedFailure(action: () => Promise<void>): Promise<Erro
   }
   throw new Error("Expected the quality assertion to fail");
 }
+
+test.describe("compact primary content width", () => {
+  test.use({
+    qualityOptions: {
+      height: 820,
+      mode: "light",
+      scenario: "product",
+      startupDelayMs: 0,
+      width: 800,
+    },
+  });
+
+  test("allows the inline context rail but rejects a primary pane below 320px", async ({
+    quality,
+  }) => {
+    const { page } = quality;
+    await expect(page.getByRole("region", { name: "Context", exact: true })).toBeVisible();
+    await assertUsablePrimaryContentWidth(page);
+    await page.locator('[data-slot="primary-content-pane"]').evaluate((element) => {
+      (element as HTMLElement).style.flex = "0 0 319px";
+    });
+    const error = await captureExpectedFailure(() => assertUsablePrimaryContentWidth(page));
+    expect(error.message).toContain("at least 320px");
+  });
+
+  test("keeps the 520px minimum when the context rail is collapsed", async ({ quality }) => {
+    const { page } = quality;
+    await page.getByRole("button", { name: "Hide context", exact: true }).click();
+    await settleQualityPage(page);
+    await expect(page.getByRole("region", { name: "Context", exact: true })).toBeHidden();
+    await assertUsablePrimaryContentWidth(page);
+    await page.locator('[data-slot="primary-content-pane"]').evaluate((element) => {
+      (element as HTMLElement).style.flex = "0 0 519px";
+    });
+    const error = await captureExpectedFailure(() => assertUsablePrimaryContentWidth(page));
+    expect(error.message).toContain("at least 520px");
+  });
+
+  test("keeps the 520px minimum when Canvas uses a context overlay", async ({ quality }) => {
+    const { page } = quality;
+    await page.evaluate(() => window.__coworkQualityGate?.showFilePreview());
+    await settleQualityPage(page);
+    await expect(page.getByRole("dialog", { name: "Context", exact: true })).toBeVisible();
+    await assertUsablePrimaryContentWidth(page);
+    await page.locator('[data-slot="primary-content-pane"]').evaluate((element) => {
+      (element as HTMLElement).style.flex = "0 0 519px";
+    });
+    const error = await captureExpectedFailure(() => assertUsablePrimaryContentWidth(page));
+    expect(error.message).toContain("at least 520px");
+  });
+});
 
 test("clipping gate rejects an entirely off-viewport critical control", async ({ quality }) => {
   const { page } = quality;

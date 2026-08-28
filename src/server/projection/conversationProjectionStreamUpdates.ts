@@ -250,3 +250,5 @@ export function createStreamUpdateHandler(
 
   return handler;
 }
+
+export type StreamUpdateHandler = ReturnType<typeof createStreamUpdateHandler>;

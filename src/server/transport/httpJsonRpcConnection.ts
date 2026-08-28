@@ -6,7 +6,7 @@ import type {
 import type { AgentServerRuntime } from "../runtime/ServerRuntime";
 import type { StartServerSocketData } from "../startServer/types";
 
-export const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
+const HTTP_RPC_RESPONSE_TIMEOUT_MS = 30_000;
 export const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 export type HttpJsonRpcConnection = {

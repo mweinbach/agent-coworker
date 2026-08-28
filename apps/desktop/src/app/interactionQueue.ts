@@ -1,6 +1,6 @@
 import type { ChatInteraction } from "./types";
 
-export function isInteractionOutstanding(interaction: ChatInteraction): boolean {
+function isInteractionOutstanding(interaction: ChatInteraction): boolean {
   return interaction.status !== "resolved";
 }
 
@@ -30,7 +30,7 @@ export function countAllOutstandingInteractions(
   );
 }
 
-export function orderedInteractionThreadIds(
+function orderedInteractionThreadIds(
   interactionsByThread: Readonly<Record<string, readonly ChatInteraction[]>>,
 ): string[] {
   return Object.entries(interactionsByThread)

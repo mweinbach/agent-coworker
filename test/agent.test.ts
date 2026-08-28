@@ -4,11 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { RunTurnParams } from "../src/agent";
-import { __internal as agentInternal, createRunTurn } from "../src/agent";
+import { createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import type { RuntimeRunTurnParams, RuntimeRunTurnResult } from "../src/runtime/types";
 import { SessionCostTracker } from "../src/session/costTracker";
 import { buildTurnSystemPrompt } from "../src/turnSystemPrompt";
-import type { AgentConfig } from "../src/types";
+import type { AgentConfig, ModelMessage } from "../src/types";
 import { deriveActiveWorkspaceContext } from "../src/workspace/context";
 
 // ---------------------------------------------------------------------------
@@ -55,19 +56,22 @@ async function makeTempWorkspaceConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Mocks -- we mock the heavy external dependencies so the tests are fast
-// and deterministic.  We use mock.module() for each dependency.
+// Inject runtime and tool dependencies so these tests exercise the same harness
+// path as production without making provider requests.
 // ---------------------------------------------------------------------------
 
-const mockStreamText = mock(async () => ({
-  text: "hello from model",
-  reasoningText: undefined as string | undefined,
-  response: { messages: [{ role: "assistant", content: "hi" }] },
+const mockRuntimeRunTurn = mock(
+  async (_params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => ({
+    text: "hello from model",
+    reasoningText: undefined as string | undefined,
+    responseMessages: [{ role: "assistant", content: "hi" }],
+  }),
+);
+
+const mockCreateRuntime = mock((_config: AgentConfig) => ({
+  name: "pi" as const,
+  runTurn: mockRuntimeRunTurn,
 }));
-
-const mockStepCountIs = mock((_n: number) => "step-count-sentinel");
-
-const mockGetModel = mock((_config: AgentConfig, _id?: string) => "model-sentinel");
 
 const mockCreateTools = mock((_ctx: any) => ({
   bash: { type: "builtin" },
@@ -106,23 +110,18 @@ describe("runTurn", () => {
 
   beforeEach(async () => {
     await observabilityRuntimeInternal.resetForTests();
-    agentInternal.setStreamDrainTimeoutMs(500);
-
-    mockStreamText.mockClear();
-    mockStepCountIs.mockClear();
-    mockGetModel.mockClear();
+    mockRuntimeRunTurn.mockClear();
+    mockCreateRuntime.mockClear();
     mockCreateTools.mockClear();
     mockLoadMCPServers.mockClear();
     mockLoadMCPTools.mockClear();
 
     // Reset to default return value
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "hello from model",
       reasoningText: undefined as string | undefined,
-      response: { messages: [{ role: "assistant", content: "hi" }] },
+      responseMessages: [{ role: "assistant", content: "hi" }],
     }));
-    mockStepCountIs.mockImplementation((_n: number) => "step-count-sentinel");
-    mockGetModel.mockImplementation((_config: AgentConfig, _id?: string) => "model-sentinel");
     mockCreateTools.mockImplementation((_ctx: any) => ({
       bash: { type: "builtin" },
       read: { type: "builtin" },
@@ -134,9 +133,7 @@ describe("runTurn", () => {
     }));
 
     runTurn = createRunTurn({
-      streamText: mockStreamText,
-      stepCountIs: mockStepCountIs,
-      getModel: mockGetModel,
+      createRuntime: mockCreateRuntime,
       createTools: mockCreateTools,
       loadMCPServers: mockLoadMCPServers,
       loadMCPTools: mockLoadMCPTools,
@@ -144,7 +141,6 @@ describe("runTurn", () => {
   });
 
   afterEach(() => {
-    agentInternal.resetStreamDrainTimeoutMs();
     mock.restore();
   });
 
@@ -156,8 +152,8 @@ describe("runTurn", () => {
     const params = makeParams({ system: "Custom system prompt" });
     await runTurn(params);
 
-    expect(mockStreamText).toHaveBeenCalledTimes(1);
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.system).toContain("Custom system prompt");
     expect(callArg.system).toContain("## Active Workspace Context");
     expect(callArg.system).toContain(
@@ -174,7 +170,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ system, enableMcp: false }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.system).not.toContain("`mcp__{serverName}__{toolName}`");
     expect(callArg.system).toContain("Header");
     expect(callArg.system).toContain("Footer");
@@ -192,7 +188,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true, system: "Base system prompt" }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.system).toContain("## Active MCP Tools");
     expect(callArg.system).toContain("`mcp__{serverName}__{toolName}`");
   });
@@ -563,7 +559,7 @@ describe("runTurn", () => {
 
     await runTurn(params);
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.system).toContain("## Active Workspace Context");
     expect(callArg.system).toContain(
       `- Workspace root: ${path.dirname(params.config.projectCoworkDir)}`,
@@ -579,7 +575,7 @@ describe("runTurn", () => {
   // Messages
   // -------------------------------------------------------------------------
 
-  test("calls streamText with the correct messages", async () => {
+  test("calls runtime with the correct messages", async () => {
     const msgs = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
       { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -587,7 +583,7 @@ describe("runTurn", () => {
     const params = makeParams({ messages: msgs });
     await runTurn(params);
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.messages).toBe(msgs);
   });
 
@@ -616,7 +612,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ messages: msgs, log }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.messages).toBe(msgs);
     const serialized = JSON.stringify(callArg.messages);
     expect(serialized).toContain('"type":"tool-call"');
@@ -634,7 +630,7 @@ describe("runTurn", () => {
       },
     };
     await runTurn(makeParams({ config: makeConfig({ providerOptions }), log }));
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
     expect(callArg.providerOptions.google.thinkingConfig.thinkingLevel).toBe("high");
     expect(typeof callArg.prepareStep).toBe("function");
@@ -672,7 +668,7 @@ describe("runTurn", () => {
       },
     };
     await runTurn(makeParams({ config: makeConfig({ providerOptions }), log }));
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     const replayMessages = [
       {
         role: "assistant",
@@ -715,7 +711,7 @@ describe("runTurn", () => {
       }),
     );
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     const replayMessages = [
       {
         role: "assistant",
@@ -758,7 +754,7 @@ describe("runTurn", () => {
       makeParams({ config: makeConfig({ provider: "openai", providerOptions }), messages: msgs }),
     );
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBe(providerOptions);
   });
 
@@ -766,22 +762,22 @@ describe("runTurn", () => {
   // Return text
   // -------------------------------------------------------------------------
 
-  test("returns text from streamText result", async () => {
-    mockStreamText.mockImplementation(async () => ({
+  test("returns text from runtime result", async () => {
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "model output text",
       reasoningText: undefined,
-      response: { messages: [] },
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
     expect(result.text).toBe("model output text");
   });
 
-  test("returns empty string when text is null/undefined", async () => {
-    mockStreamText.mockImplementation(async () => ({
-      text: undefined,
+  test("preserves an empty runtime text result", async () => {
+    mockRuntimeRunTurn.mockImplementation(async () => ({
+      text: "",
       reasoningText: undefined,
-      response: { messages: [] },
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
@@ -793,10 +789,10 @@ describe("runTurn", () => {
   // -------------------------------------------------------------------------
 
   test("returns reasoningText when available", async () => {
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "answer",
       reasoningText: "Let me think...",
-      response: { messages: [] },
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
@@ -804,25 +800,25 @@ describe("runTurn", () => {
   });
 
   test("returns undefined when reasoningText is undefined", async () => {
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "answer",
       reasoningText: undefined,
-      response: { messages: [] },
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
     expect(result.reasoningText).toBeUndefined();
   });
 
-  test("returns undefined when reasoningText is not a string", async () => {
-    mockStreamText.mockImplementation(async () => ({
+  test("preserves an empty reasoning string returned by the runtime", async () => {
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "answer",
-      reasoningText: 42,
-      response: { messages: [] },
+      reasoningText: "",
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
-    expect(result.reasoningText).toBeUndefined();
+    expect(result.reasoningText).toBe("");
   });
 
   // -------------------------------------------------------------------------
@@ -830,40 +826,47 @@ describe("runTurn", () => {
   // -------------------------------------------------------------------------
 
   test("returns responseMessages from result", async () => {
-    const fakeMsgs = [
+    const fakeMsgs: ModelMessage[] = [
       { role: "assistant", content: "first" },
       { role: "assistant", content: "second" },
     ];
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
-      response: { messages: fakeMsgs },
+      responseMessages: fakeMsgs,
     }));
 
     const result = await runTurn(makeParams());
     expect(result.responseMessages).toEqual(fakeMsgs);
   });
 
-  test("returns empty array when responseMessages is undefined", async () => {
-    mockStreamText.mockImplementation(async () => ({
+  test("preserves an empty runtime message list", async () => {
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
-      response: {},
+      responseMessages: [],
     }));
 
     const result = await runTurn(makeParams());
     expect(result.responseMessages).toEqual([]);
   });
 
-  test("returns empty array when response is undefined", async () => {
-    mockStreamText.mockImplementation(async () => ({
+  test("preserves provider continuation state returned by the runtime", async () => {
+    const providerState = {
+      provider: "google" as const,
+      model: "gemini-3-flash-preview",
+      interactionId: "interaction-1",
+      updatedAt: new Date(0).toISOString(),
+    };
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
-      response: undefined,
+      responseMessages: [],
+      providerState,
     }));
 
     const result = await runTurn(makeParams());
-    expect(result.responseMessages).toEqual([]);
+    expect(result.providerState).toBe(providerState);
   });
 
   // -------------------------------------------------------------------------
@@ -871,19 +874,17 @@ describe("runTurn", () => {
   // -------------------------------------------------------------------------
 
   test("keeps canonical usage counters and preserves recognized pricing fields", async () => {
-    mockStreamText.mockImplementation(async () => ({
+    mockRuntimeRunTurn.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
-      response: {
-        messages: [],
-        usage: {
-          promptTokens: 100,
-          completionTokens: 50,
-          totalTokens: 150,
-          cachedPromptTokens: 20,
-          estimatedCostUsd: 0.1234,
-          reasoningTokens: 5,
-        },
+      responseMessages: [],
+      usage: {
+        promptTokens: 100,
+        completionTokens: 50,
+        totalTokens: 150,
+        cachedPromptTokens: 20,
+        estimatedCostUsd: 0.1234,
+        reasoningOutputTokens: 5,
       },
     }));
 
@@ -894,6 +895,7 @@ describe("runTurn", () => {
       totalTokens: 150,
       cachedPromptTokens: 20,
       estimatedCostUsd: 0.1234,
+      reasoningOutputTokens: 5,
     });
   });
 
@@ -963,26 +965,26 @@ describe("runTurn", () => {
   // maxSteps
   // -------------------------------------------------------------------------
 
-  test("passes default maxSteps of 100 to stepCountIs", async () => {
+  test("passes default maxSteps of 100 to the runtime", async () => {
     await runTurn(makeParams());
 
-    expect(mockStepCountIs).toHaveBeenCalledWith(100);
+    expect(mockRuntimeRunTurn.mock.calls[0][0].maxSteps).toBe(100);
   });
 
-  test("passes overridden maxSteps to stepCountIs", async () => {
+  test("passes overridden maxSteps to the runtime", async () => {
     await runTurn(makeParams({ maxSteps: 25 }));
 
-    expect(mockStepCountIs).toHaveBeenCalledWith(25);
+    expect(mockRuntimeRunTurn.mock.calls[0][0].maxSteps).toBe(25);
   });
 
-  test("stopWhen receives the result of stepCountIs", async () => {
+  test("does not stop after a tool step without a task transition", async () => {
     await runTurn(makeParams());
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.stopWhen).toBe("step-count-sentinel");
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.shouldStopAfterToolStep()).toBe(false);
   });
 
-  test("task input directives stop the legacy loop after the current tool step", async () => {
+  test("task input directives stop the runtime after the current tool step", async () => {
     await runTurn(
       makeParams({
         taskContext: {
@@ -1006,17 +1008,16 @@ describe("runTurn", () => {
       }),
     );
 
-    const streamInput = mockStreamText.mock.calls[0]?.[0] as {
-      stopWhen: [unknown, () => boolean];
+    const streamInput = mockRuntimeRunTurn.mock.calls[0]?.[0] as {
+      shouldStopAfterToolStep: () => boolean;
     };
-    expect(streamInput.stopWhen[0]).toBe("step-count-sentinel");
-    expect(streamInput.stopWhen[1]()).toBe(false);
+    expect(streamInput.shouldStopAfterToolStep()).toBe(false);
 
     const toolContext = mockCreateTools.mock.calls[0]?.[0] as {
       applyTaskDirective: (directive: unknown) => Promise<unknown>;
     };
     await toolContext.applyTaskDirective({ type: "request_input" });
-    expect(streamInput.stopWhen[1]()).toBe(true);
+    expect(streamInput.shouldStopAfterToolStep()).toBe(true);
   });
 
   test("successful task creation stops the source chat loop after the tool step", async () => {
@@ -1029,49 +1030,48 @@ describe("runTurn", () => {
       }),
     );
 
-    const streamInput = mockStreamText.mock.calls[0]?.[0] as {
-      stopWhen: [unknown, () => boolean];
+    const streamInput = mockRuntimeRunTurn.mock.calls[0]?.[0] as {
+      shouldStopAfterToolStep: () => boolean;
     };
-    expect(streamInput.stopWhen[0]).toBe("step-count-sentinel");
-    expect(streamInput.stopWhen[1]()).toBe(false);
+    expect(streamInput.shouldStopAfterToolStep()).toBe(false);
 
     const toolContext = mockCreateTools.mock.calls[0]?.[0] as {
       createTask: (input: unknown) => Promise<unknown>;
     };
     await toolContext.createTask({ title: "Managed task" });
-    expect(streamInput.stopWhen[1]()).toBe(true);
+    expect(streamInput.shouldStopAfterToolStep()).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  // Config -> getModel
+  // Runtime selection
   // -------------------------------------------------------------------------
 
-  test("passes config to getModel", async () => {
+  test("passes config to the runtime factory", async () => {
     const config = makeConfig({ model: "test-model-42" });
     await runTurn(makeParams({ config }));
 
-    expect(mockGetModel).toHaveBeenCalledTimes(1);
-    expect(mockGetModel.mock.calls[0][0]).toBe(config);
+    expect(mockCreateRuntime).toHaveBeenCalledTimes(1);
+    expect(mockCreateRuntime.mock.calls[0][0]).toBe(config);
   });
 
-  test("uses getModel result as model in streamText", async () => {
-    mockGetModel.mockReturnValue("special-model");
-    await runTurn(makeParams());
+  test("passes the selected model configuration to the runtime", async () => {
+    const config = makeConfig({ model: "special-model" });
+    await runTurn(makeParams({ config }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.model).toBe("special-model");
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.config).toBe(config);
   });
 
   // -------------------------------------------------------------------------
   // providerOptions
   // -------------------------------------------------------------------------
 
-  test("passes providerOptions from config to streamText", async () => {
+  test("passes providerOptions from config to runtime", async () => {
     const providerOptions = { anthropic: { thinking: { type: "enabled", budgetTokens: 5000 } } };
     const config = makeConfig({ providerOptions });
     await runTurn(makeParams({ config }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBe(providerOptions);
   });
 
@@ -1080,7 +1080,7 @@ describe("runTurn", () => {
     delete config.providerOptions;
     await runTurn(makeParams({ config }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBeUndefined();
   });
 
@@ -1116,48 +1116,44 @@ describe("runTurn", () => {
       }),
     );
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.experimental_telemetry).toBeDefined();
-    expect(callArg.experimental_telemetry.isEnabled).toBe(true);
-    expect(callArg.experimental_telemetry.recordInputs).toBe(false);
-    expect(callArg.experimental_telemetry.recordOutputs).toBe(false);
-    expect(callArg.experimental_telemetry.functionId).toBe("session.turn");
-    expect(callArg.experimental_telemetry.metadata.sessionId).toBe("session-123");
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.telemetry).toBeDefined();
+    expect(callArg.telemetry.isEnabled).toBe(true);
+    expect(callArg.telemetry.recordInputs).toBe(false);
+    expect(callArg.telemetry.recordOutputs).toBe(false);
+    expect(callArg.telemetry.functionId).toBe("session.turn");
+    expect(callArg.telemetry.metadata.sessionId).toBe("session-123");
   });
 
   // -------------------------------------------------------------------------
   // Model stream passthrough
   // -------------------------------------------------------------------------
 
-  test("passes includeRawChunks=true by default to streamText", async () => {
+  test("passes includeRawChunks=true by default to runtime", async () => {
     await runTurn(makeParams());
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.includeRawChunks).toBe(true);
   });
 
-  test("passes includeRawChunks override to streamText", async () => {
+  test("passes includeRawChunks override to runtime", async () => {
     await runTurn(makeParams({ includeRawChunks: false }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.includeRawChunks).toBe(false);
   });
 
-  test("forwards ordered fullStream parts to onModelStreamPart callback", async () => {
+  test("passes the stream callback to the runtime without changing event order", async () => {
     const parts = [
       { type: "start" },
       { type: "text-delta", id: "t1", text: "hello" },
       { type: "finish", finishReason: "stop" },
     ];
 
-    mockStreamText.mockImplementation(async () => ({
-      text: "hello",
-      reasoningText: undefined,
-      response: { messages: [] },
-      fullStream: (async function* () {
-        for (const part of parts) yield part;
-      })(),
-    }));
+    mockRuntimeRunTurn.mockImplementation(async (params) => {
+      for (const part of parts) await params.onModelStreamPart?.(part);
+      return { text: "hello", responseMessages: [] };
+    });
 
     const seen: unknown[] = [];
     await runTurn(
@@ -1171,36 +1167,23 @@ describe("runTurn", () => {
     expect(seen).toEqual(parts);
   });
 
-  test("does not hang when fullStream never closes after provider-native tool usage", async () => {
-    mockStreamText.mockImplementation(async () => ({
-      text: "completed response",
-      reasoningText: undefined,
-      response: { messages: [{ role: "assistant", content: "done" }] },
-      fullStream: (async function* () {
-        yield { type: "start" };
-        await new Promise(() => {});
-      })(),
-    }));
+  test("keeps MCP connections open until the runtime completes", async () => {
+    const started = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<RuntimeRunTurnResult>();
+    const close = mock(async () => {});
+    mockLoadMCPServers.mockResolvedValue([{ name: "test" }]);
+    mockLoadMCPTools.mockResolvedValue({ tools: {}, errors: [], close } as any);
+    mockRuntimeRunTurn.mockImplementation(async () => {
+      started.resolve();
+      return completed.promise;
+    });
 
-    const log = mock(() => {});
-    const seen: unknown[] = [];
-    const result = await Promise.race([
-      runTurn(
-        makeParams({
-          log,
-          onModelStreamPart: async (part) => {
-            seen.push(part);
-          },
-        }),
-      ),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
-    ]);
-
-    expect(result).not.toBe("timeout");
-    if (result === "timeout") return;
-    expect(result.text).toBe("completed response");
-    expect(seen).toEqual([{ type: "start" }]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Model stream did not drain"));
+    const pending = runTurn(makeParams({ enableMcp: true }));
+    await started.promise;
+    expect(close).not.toHaveBeenCalled();
+    completed.resolve({ text: "complete", responseMessages: [] });
+    await expect(pending).resolves.toMatchObject({ text: "complete" });
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   // -------------------------------------------------------------------------
@@ -1247,11 +1230,11 @@ describe("runTurn", () => {
     expect(ctx.turnUserPrompt).toBe("find the latest filing");
   });
 
-  test("builtin tools are included in tools passed to streamText", async () => {
+  test("builtin tools are included in tools passed to runtime", async () => {
     mockCreateTools.mockReturnValue({ myTool: { type: "custom" } });
     await runTurn(makeParams());
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("myTool");
   });
 
@@ -1291,7 +1274,7 @@ describe("runTurn", () => {
     expect(mockLoadMCPTools.mock.calls[0][0]).toBe(mcpServers);
   });
 
-  test("MCP tools are merged into tools passed to streamText", async () => {
+  test("MCP tools are merged into tools passed to runtime", async () => {
     mockCreateTools.mockReturnValue({ bash: { type: "builtin" } });
     mockLoadMCPServers.mockResolvedValue([
       { name: "s", transport: { type: "stdio", command: "x", args: [] } },
@@ -1303,7 +1286,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("bash");
     expect(callArg.tools).toHaveProperty("mcp__s__doThing");
   });
@@ -1326,7 +1309,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true, agentRole: "research" }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.tools).toEqual({
       read: { type: "builtin-read" },
       mcp__s__search: { type: "mcp-read", annotations: { readOnlyHint: true } },
@@ -1347,14 +1330,14 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true, log }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
     expect(callArg.tools.bash.type).toBe("builtin-bash");
     expect(callArg.tools).toHaveProperty("mcp__bash");
     expect(callArg.tools["mcp__bash"].type).toBe("mcp-bash");
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Tool name collision"));
   });
 
-  test("forwards modelSettings maxRetries to streamText", async () => {
+  test("forwards modelSettings maxRetries to runtime", async () => {
     const config = makeConfig({
       modelSettings: {
         maxRetries: 1,
@@ -1363,27 +1346,27 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ config }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.maxRetries).toBe(1);
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.config.modelSettings.maxRetries).toBe(1);
   });
 
-  test("stream onError callback forwards to onModelError", async () => {
+  test("passes onModelError through to the runtime", async () => {
     const onModelError = mock(async () => {});
     await runTurn(makeParams({ onModelError }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(typeof callArg.onError).toBe("function");
-    await callArg.onError({ error: new Error("stream failed") });
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.onModelError).toBe(onModelError);
+    await callArg.onModelError(new Error("stream failed"));
     expect(onModelError).toHaveBeenCalledTimes(1);
   });
 
-  test("stream onAbort callback forwards to onModelAbort", async () => {
+  test("passes onModelAbort through to the runtime", async () => {
     const onModelAbort = mock(async () => {});
     await runTurn(makeParams({ onModelAbort }));
 
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(typeof callArg.onAbort).toBe("function");
-    await callArg.onAbort({ steps: [] });
+    const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.onModelAbort).toBe(onModelAbort);
+    await callArg.onModelAbort();
     expect(onModelAbort).toHaveBeenCalledTimes(1);
   });
 
@@ -1498,7 +1481,7 @@ describe("runTurn", () => {
       healthChanged: false,
     });
     await turnPromise;
-    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    expect(mockRuntimeRunTurn).toHaveBeenCalledTimes(1);
   });
 
   test("closes MCP connections when a sibling cold-start step fails", async () => {
@@ -1513,15 +1496,15 @@ describe("runTurn", () => {
 
     await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow("otel exploded");
     expect(closeMcp).toHaveBeenCalledTimes(1);
-    expect(mockStreamText).not.toHaveBeenCalled();
+    expect(mockRuntimeRunTurn).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
   // Error propagation
   // -------------------------------------------------------------------------
 
-  test("propagates errors from streamText", async () => {
-    mockStreamText.mockRejectedValue(new Error("API rate limit exceeded"));
+  test("propagates errors from runtime", async () => {
+    mockRuntimeRunTurn.mockRejectedValue(new Error("API rate limit exceeded"));
 
     await expect(runTurn(makeParams())).rejects.toThrow("API rate limit exceeded");
   });

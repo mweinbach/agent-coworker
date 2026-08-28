@@ -66,7 +66,7 @@ export function normalizeEffort(value: string | undefined): string | undefined {
     : undefined;
 }
 
-export function normalizeSummary(value: string | undefined): string | undefined {
+function normalizeSummary(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return ["auto", "concise", "detailed", "none"].includes(value) ? value : undefined;
 }

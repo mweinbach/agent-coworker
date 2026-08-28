@@ -1,3 +1,4 @@
+import { fnv1a32 } from "../../../../src/shared/fnv1a";
 import { normalizeCloudSyncSettings, type PersistedState } from "../app/types";
 import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
@@ -10,25 +11,16 @@ const SERVER_URL_KEY = "cowork:web:serverUrl";
 const WORKSPACE_PATH_KEY = "cowork:web:workspacePath";
 const DESKTOP_SERVICE_SCOPE = "__desktop_service__";
 
-function hashScope(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
 function normalizeScopeValue(value: string | null | undefined): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
 function createScopedWorkspaceId(serverUrl: string, workspacePath: string): string {
-  return `web-${hashScope(`${serverUrl}\0${workspacePath}`)}`;
+  return `web-${fnv1a32(`${serverUrl}\0${workspacePath}`)}`;
 }
 
 function createScopedStateKey(serverUrl: string, workspacePath: string): string {
-  return `${STATE_KEY_PREFIX}:${hashScope(`${serverUrl}\0${workspacePath}`)}`;
+  return `${STATE_KEY_PREFIX}:${fnv1a32(`${serverUrl}\0${workspacePath}`)}`;
 }
 
 function getCurrentScope(): { serverUrl: string; workspacePath: string } | null {
@@ -60,7 +52,7 @@ export function getCurrentWebWorkspaceScopeHash(): string | null {
   if (!scope) {
     return null;
   }
-  return hashScope(`${scope.serverUrl}\0${scope.workspacePath}`);
+  return fnv1a32(`${scope.serverUrl}\0${scope.workspacePath}`);
 }
 
 export function getCurrentWebWorkspaceScopeKey(): string | null {

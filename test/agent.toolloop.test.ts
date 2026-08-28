@@ -1,20 +1,27 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import type { RunTurnParams } from "../src/agent";
-import { createRunTurn } from "../src/agent";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+  type ToolCall,
+} from "@earendil-works/pi-ai";
+import { z } from "zod";
+import { createRunTurn, type RunTurnParams } from "../src/agent";
+import type { loadMCPServers, loadMCPTools } from "../src/mcp";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import type { PiStreamFunction } from "../src/runtime/pi/types";
+import { createPiRuntime } from "../src/runtime/piRuntime";
+import type { RuntimeToolMap } from "../src/runtime/types";
+import type { ToolContext } from "../src/tools/context";
 import type { AgentConfig } from "../src/types";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base = "/tmp/agent-test";
   return {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+    preferredChildModel: "claude-opus-4-7",
+    modelSettings: { maxRetries: 0 },
     workingDirectory: base,
     outputDirectory: path.join(base, "output"),
     uploadsDirectory: path.join(base, "uploads"),
@@ -27,6 +34,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
+    observabilityEnabled: false,
     ...overrides,
   };
 }
@@ -35,110 +43,98 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
   return {
     config: makeConfig(),
     system: "You are a helpful assistant.",
-    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] as any[],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
     log: mock(() => {}),
     askUser: mock(async () => "yes"),
     approveCommand: mock(async () => true),
-    // The model/tool boundary is mocked; do not inspect a developer machine's runtime.
     toolEnv: { COWORK_DISABLE_RUNTIME: "1" },
     ...overrides,
   };
 }
 
-/**
- * Creates a mock streamText implementation backed by an async iterable of
- * stream parts. The text/reasoningText/response are returned as deferred
- * promises that only resolve once the fullStream generator has been fully
- * consumed. This mirrors the real SDK behavior where these promises settle
- * after (or around the same time as) the stream completes, and avoids the
- * race where `Promise.all` wins before the settle loop can drain the stream.
- */
-function makeStreamTextWithFullStream(
-  parts: unknown[],
-  opts: {
-    text?: string;
-    reasoningText?: string | undefined;
-    responseMessages?: any[];
-    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
-  } = {},
-) {
-  const { text = "", reasoningText = undefined, responseMessages = [], usage = undefined } = opts;
-
-  return async () => {
-    let resolveText!: (v: string) => void;
-    let resolveReasoningText!: (v: string | undefined) => void;
-    let resolveResponse!: (v: any) => void;
-
-    const textPromise = new Promise<string>((r) => {
-      resolveText = r;
-    });
-    const reasoningTextPromise = new Promise<string | undefined>((r) => {
-      resolveReasoningText = r;
-    });
-    const responsePromise = new Promise<any>((r) => {
-      resolveResponse = r;
-    });
-
-    const fullStream = (async function* () {
-      for (const part of parts) {
-        yield part;
-      }
-      // Stream fully consumed -- resolve the companion promises so that
-      // Promise.all in the agent can settle.
-      await Promise.resolve();
-      resolveText(text);
-      resolveReasoningText(reasoningText);
-      resolveResponse({
-        messages: responseMessages,
-        ...(usage ? { usage } : {}),
-      });
-    })();
-
-    return {
-      text: textPromise,
-      reasoningText: reasoningTextPromise,
-      response: responsePromise,
-      fullStream,
-    };
+function assistant(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+  errorMessage?: string,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+    content,
+    usage: {
+      input: 10,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 11,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: 0,
+    ...(errorMessage ? { errorMessage } : {}),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Shared mock factories
-// ---------------------------------------------------------------------------
+// Only the provider stream is scripted; PI owns event mapping, tool execution and history.
+function providerStream(message: AssistantMessage) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "start", partial: message });
+  for (const [contentIndex, part] of message.content.entries()) {
+    if (part.type === "text") {
+      stream.push({ type: "text_start", contentIndex, partial: message });
+      stream.push({ type: "text_delta", contentIndex, delta: part.text, partial: message });
+      stream.push({ type: "text_end", contentIndex, content: part.text, partial: message });
+    } else if (part.type === "toolCall") {
+      stream.push({ type: "toolcall_start", contentIndex, partial: message });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex,
+        delta: JSON.stringify(part.arguments),
+        partial: message,
+      });
+      stream.push({ type: "toolcall_end", contentIndex, toolCall: part, partial: message });
+    }
+  }
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    stream.push({ type: "error", reason: message.stopReason, error: message });
+  } else {
+    stream.push({ type: "done", reason: message.stopReason, message });
+  }
+  return stream;
+}
+
+const bashCall: ToolCall = {
+  type: "toolCall",
+  id: "tc-1",
+  name: "bash",
+  arguments: { command: "ls" },
+};
 
 function makeMockDeps() {
-  const mockStreamText = mock(async () => ({
-    text: "hello",
-    reasoningText: undefined as string | undefined,
-    response: { messages: [] as any[] },
-  }));
-
-  const mockStepCountIs = mock((_n: number) => "step-count-sentinel");
-  const mockGetModel = mock((_config: AgentConfig, _id?: string) => "model-sentinel");
-  const mockCreateTools = mock((_ctx: any) => ({
-    bash: { type: "builtin" },
-    read: { type: "builtin" },
-  }));
-  const mockLoadMCPServers = mock(async (_config: AgentConfig) => [] as any[]);
-  const mockLoadMCPTools = mock(async (_servers: any[], _opts?: any) => ({
-    tools: {} as Record<string, any>,
-    errors: [] as string[],
-  }));
-
+  const mockPiStream = mock<PiStreamFunction>(() =>
+    providerStream(assistant([{ type: "text", text: "hello" }])),
+  );
+  const mockExecuteBash = mock(async (_input: unknown) => "file.txt");
+  const mockExecuteRead = mock(async (_input: unknown) => "contents");
+  const mockCreateTools = mock(
+    (_ctx: ToolContext): RuntimeToolMap => ({
+      bash: { inputSchema: z.object({ command: z.string() }), execute: mockExecuteBash },
+      read: { inputSchema: z.object({ path: z.string() }), execute: mockExecuteRead },
+    }),
+  );
+  const mockLoadMCPServers = mock<typeof loadMCPServers>(async () => []);
+  const mockLoadMCPTools = mock<typeof loadMCPTools>(async () => ({ tools: {}, errors: [] }));
   return {
-    mockStreamText,
-    mockStepCountIs,
-    mockGetModel,
+    mockPiStream,
+    mockExecuteBash,
+    mockExecuteRead,
     mockCreateTools,
     mockLoadMCPServers,
     mockLoadMCPTools,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("runTurn – multi-step tool loops", () => {
   let deps: ReturnType<typeof makeMockDeps>;
@@ -148,9 +144,7 @@ describe("runTurn – multi-step tool loops", () => {
     await observabilityRuntimeInternal.resetForTests();
     deps = makeMockDeps();
     runTurn = createRunTurn({
-      streamText: deps.mockStreamText,
-      stepCountIs: deps.mockStepCountIs,
-      getModel: deps.mockGetModel,
+      createRuntime: () => createPiRuntime({ piStreamImpl: deps.mockPiStream }),
       createTools: deps.mockCreateTools,
       loadMCPServers: deps.mockLoadMCPServers,
       loadMCPTools: deps.mockLoadMCPTools,
@@ -161,399 +155,265 @@ describe("runTurn – multi-step tool loops", () => {
     mock.restore();
   });
 
-  // -------------------------------------------------------------------------
-  // 1. Multi-step tool loop: all parts forwarded in order
-  // -------------------------------------------------------------------------
+  function toolThenText() {
+    deps.mockPiStream
+      .mockImplementationOnce(() => providerStream(assistant([bashCall], "toolUse")))
+      .mockImplementationOnce(() =>
+        providerStream(assistant([{ type: "text", text: "I found file.txt." }])),
+      );
+  }
 
-  test("multi-step tool loop forwards all stream parts to onModelStreamPart in order", async () => {
-    const streamParts = [
-      { type: "start" },
-      { type: "start-step", stepNumber: 0 },
-      { type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
-      { type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: "file.txt" },
-      { type: "finish-step", stepNumber: 0, finishReason: "tool-calls" },
-      { type: "start-step", stepNumber: 1 },
-      { type: "text-delta", id: "t1", text: "Here are the files." },
-      { type: "finish-step", stepNumber: 1, finishReason: "stop" },
-      { type: "finish", finishReason: "stop" },
-    ];
-
-    deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream(streamParts, {
-        text: "Here are the files.",
-        responseMessages: [{ role: "assistant", content: "Here are the files." }],
-      }),
-    );
-
-    const seen: unknown[] = [];
-    await runTurn(
+  test("executes a tool between provider calls and forwards stream parts in order", async () => {
+    toolThenText();
+    const seen: Array<Record<string, unknown>> = [];
+    const result = await runTurn(
       makeParams({
-        onModelStreamPart: async (part) => {
-          seen.push(part);
+        onModelStreamPart: (part) => {
+          seen.push(part as Record<string, unknown>);
         },
       }),
     );
 
-    expect(seen).toEqual(streamParts);
-    expect(seen.length).toBe(9);
-    // Verify ordering: start before start-step, tool-call before tool-result, etc.
-    expect((seen[0] as any).type).toBe("start");
-    expect((seen[1] as any).type).toBe("start-step");
-    expect((seen[1] as any).stepNumber).toBe(0);
-    expect((seen[2] as any).type).toBe("tool-call");
-    expect((seen[3] as any).type).toBe("tool-result");
-    expect((seen[4] as any).type).toBe("finish-step");
-    expect((seen[5] as any).type).toBe("start-step");
-    expect((seen[5] as any).stepNumber).toBe(1);
-    expect((seen[6] as any).type).toBe("text-delta");
-    expect((seen[7] as any).type).toBe("finish-step");
-    expect((seen[8] as any).type).toBe("finish");
-  });
-
-  // -------------------------------------------------------------------------
-  // 2. Multi-step tool loop: responseMessages accumulates tool history
-  // -------------------------------------------------------------------------
-
-  test("responseMessages accumulates tool call/result history from multi-step execution", async () => {
-    const toolCallMsg = {
-      role: "assistant",
-      content: [
-        { type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
-      ],
-    };
-    const toolResultMsg = {
-      role: "tool",
-      content: [{ type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: "file.txt" }],
-    };
-    const finalAssistantMsg = {
-      role: "assistant",
-      content: [{ type: "text", text: "I found file.txt." }],
-    };
-
-    const allResponseMessages = [toolCallMsg, toolResultMsg, finalAssistantMsg];
-
-    deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream([{ type: "start" }, { type: "finish", finishReason: "stop" }], {
-        text: "I found file.txt.",
-        responseMessages: allResponseMessages,
+    expect(seen.map((part) => part.type)).toEqual([
+      "start-step",
+      "start",
+      "tool-input-start",
+      "tool-input-delta",
+      "tool-input-end",
+      "tool-call",
+      "finish",
+      "finish-step",
+      "tool-result",
+      "start-step",
+      "start",
+      "text-start",
+      "text-delta",
+      "text-end",
+      "finish",
+      "finish-step",
+    ]);
+    expect(deps.mockExecuteBash).toHaveBeenCalledWith(
+      { command: "ls" },
+      { abortSignal: undefined },
+    );
+    expect(deps.mockPiStream).toHaveBeenCalledTimes(2);
+    expect(deps.mockPiStream.mock.calls[1]?.[1].messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "tc-1",
+        content: [{ type: "text", text: "file.txt" }],
+        isError: false,
       }),
     );
-
-    const result = await runTurn(
-      makeParams({
-        onModelStreamPart: async () => {},
-      }),
-    );
-
-    expect(result.responseMessages).toEqual(allResponseMessages);
-    expect(result.responseMessages.length).toBe(3);
-    expect(result.responseMessages[0]).toBe(toolCallMsg);
-    expect(result.responseMessages[1]).toBe(toolResultMsg);
-    expect(result.responseMessages[2]).toBe(finalAssistantMsg);
     expect(result.text).toBe("I found file.txt.");
   });
 
-  // -------------------------------------------------------------------------
-  // 3. Abort signal propagation
-  // -------------------------------------------------------------------------
-
-  test("abortSignal is passed to streamText and onModelAbort is called", async () => {
-    const abortController = new AbortController();
-    const onModelAbort = mock(async () => {});
-
-    // streamText that records the abort signal and captures the onAbort callback
-    let capturedAbortSignal: AbortSignal | undefined;
-    let capturedOnAbort: (() => void) | undefined;
-
-    deps.mockStreamText.mockImplementation(async (opts: any) => {
-      capturedAbortSignal = opts.abortSignal;
-      capturedOnAbort = opts.onAbort;
-
-      return {
-        text: "partial",
-        reasoningText: undefined,
-        response: { messages: [] },
-        fullStream: (async function* () {
-          yield { type: "start" };
-          // Abort mid-stream
-          abortController.abort();
-          // Fire the onAbort callback like the SDK would
-          if (capturedOnAbort) await capturedOnAbort();
-          yield { type: "finish", finishReason: "abort" };
-        })(),
-      };
-    });
-
-    const result = await Promise.race([
-      runTurn(
-        makeParams({
-          abortSignal: abortController.signal,
-          onModelAbort,
-          onModelStreamPart: async () => {},
-        }),
-      ),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
+  test("responseMessages accumulates actual tool call and result history", async () => {
+    toolThenText();
+    const result = await runTurn(makeParams());
+    expect(result.responseMessages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "tc-1",
+            toolName: "bash",
+            output: { type: "text", value: "file.txt" },
+            isError: false,
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "I found file.txt." }] },
     ]);
-
-    expect(result).not.toBe("timeout");
-    expect(capturedAbortSignal).toBe(abortController.signal);
-    expect(onModelAbort).toHaveBeenCalledTimes(1);
+    expect(result.usage).toMatchObject({ promptTokens: 20, completionTokens: 2, totalTokens: 22 });
   });
 
-  // -------------------------------------------------------------------------
-  // 4. MCP cleanup on streamText error
-  // -------------------------------------------------------------------------
+  test("passes the abort signal to the provider and reports an aborted turn once", async () => {
+    const controller = new AbortController();
+    const onModelAbort = mock(async () => {});
+    const onModelError = mock(async () => {});
+    deps.mockPiStream.mockImplementation((_model, _context, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      controller.abort();
+      return providerStream(assistant([], "aborted", "Model turn aborted."));
+    });
+    await expect(
+      runTurn(makeParams({ abortSignal: controller.signal, onModelAbort, onModelError })),
+    ).rejects.toThrow("aborted");
+    expect(onModelAbort).toHaveBeenCalledTimes(1);
+    expect(onModelError).not.toHaveBeenCalled();
+  });
 
-  test("closeMcp is called when streamText rejects after MCP tools are loaded", async () => {
-    const mockClose = mock(async () => {});
-
+  test("closes MCP connections when the provider rejects after tools are loaded", async () => {
+    const close = mock(async () => {});
     deps.mockLoadMCPServers.mockResolvedValue([
       { name: "test-mcp", transport: { type: "stdio", command: "echo", args: [] } },
     ]);
     deps.mockLoadMCPTools.mockResolvedValue({
-      tools: { "mcp__test-mcp__action": { type: "mcp" } },
+      tools: { "mcp__test-mcp__action": { execute: async () => "ok" } },
       errors: [],
-      close: mockClose,
+      close,
     });
-
-    deps.mockStreamText.mockRejectedValue(new Error("Provider connection failed"));
-
+    deps.mockPiStream.mockImplementation(() => {
+      throw new Error("Provider connection failed");
+    });
     await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow(
       "Provider connection failed",
     );
-
-    expect(mockClose).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
-  // -------------------------------------------------------------------------
-  // 5. Tool-related stream parts forwarded correctly
-  // -------------------------------------------------------------------------
-
-  test("tool-related stream parts are forwarded through onModelStreamPart", async () => {
-    const toolParts = [
-      { type: "tool-input-start", toolCallId: "tc-1", toolName: "bash" },
-      { type: "tool-input-delta", toolCallId: "tc-1", delta: '{"command' },
-      { type: "tool-input-end", toolCallId: "tc-1" },
-      { type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
-      { type: "tool-result", toolCallId: "tc-1", toolName: "bash", output: "ok" },
-      { type: "tool-error", toolCallId: "tc-2", toolName: "read", error: "not found" },
-      { type: "tool-output-denied", toolCallId: "tc-3", toolName: "bash", reason: "blocked" },
-    ];
-
-    deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream(
-        [{ type: "start" }, ...toolParts, { type: "finish", finishReason: "stop" }],
-        { text: "done" },
-      ),
-    );
-
-    const seen: unknown[] = [];
-    await runTurn(
+  test("maps tool input events and emits tool errors from actual failed executions", async () => {
+    deps.mockExecuteRead.mockRejectedValue(new Error("not found"));
+    deps.mockPiStream
+      .mockImplementationOnce(() =>
+        providerStream(
+          assistant(
+            [
+              bashCall,
+              { type: "toolCall", id: "tc-2", name: "read", arguments: { path: "missing.txt" } },
+              { type: "toolCall", id: "tc-3", name: "missing", arguments: {} },
+            ],
+            "toolUse",
+          ),
+        ),
+      )
+      .mockImplementationOnce(() => providerStream(assistant([{ type: "text", text: "done" }])));
+    const seen: Array<Record<string, unknown>> = [];
+    const result = await runTurn(
       makeParams({
-        onModelStreamPart: async (part) => {
-          seen.push(part);
+        onModelStreamPart: (part) => {
+          seen.push(part as Record<string, unknown>);
         },
       }),
     );
-
-    // All tool-related parts should appear in the collected output
-    for (const toolPart of toolParts) {
-      const found = seen.find(
-        (s: any) => s.type === toolPart.type && s.toolCallId === (toolPart as any).toolCallId,
-      );
-      expect(found).toBeDefined();
-    }
-
-    // Verify specific parts are present
-    const toolInputStarts = seen.filter((s: any) => s.type === "tool-input-start");
-    expect(toolInputStarts.length).toBe(1);
-
-    const toolInputDeltas = seen.filter((s: any) => s.type === "tool-input-delta");
-    expect(toolInputDeltas.length).toBe(1);
-
-    const toolInputEnds = seen.filter((s: any) => s.type === "tool-input-end");
-    expect(toolInputEnds.length).toBe(1);
-
-    const toolCalls = seen.filter((s: any) => s.type === "tool-call");
-    expect(toolCalls.length).toBe(1);
-
-    const toolResults = seen.filter((s: any) => s.type === "tool-result");
-    expect(toolResults.length).toBe(1);
-
-    const toolErrors = seen.filter((s: any) => s.type === "tool-error");
-    expect(toolErrors.length).toBe(1);
-
-    const toolOutputDenied = seen.filter((s: any) => s.type === "tool-output-denied");
-    expect(toolOutputDenied.length).toBe(1);
-  });
-
-  // -------------------------------------------------------------------------
-  // 6. Step events forwarded
-  // -------------------------------------------------------------------------
-
-  test("start-step and finish-step events with stepNumber are forwarded", async () => {
-    const parts = [
-      { type: "start" },
-      { type: "start-step", stepNumber: 0 },
-      { type: "text-delta", id: "t1", text: "step zero" },
-      { type: "finish-step", stepNumber: 0, finishReason: "tool-calls" },
-      { type: "start-step", stepNumber: 1 },
-      { type: "text-delta", id: "t2", text: "step one" },
-      { type: "finish-step", stepNumber: 1, finishReason: "stop" },
-      { type: "finish", finishReason: "stop" },
-    ];
-
-    deps.mockStreamText.mockImplementation(
-      makeStreamTextWithFullStream(parts, { text: "step zerostep one" }),
-    );
-
-    const seen: unknown[] = [];
-    await runTurn(
-      makeParams({
-        onModelStreamPart: async (part) => {
-          seen.push(part);
-        },
-      }),
-    );
-
-    const startSteps = seen.filter((s: any) => s.type === "start-step");
-    expect(startSteps.length).toBe(2);
-    expect((startSteps[0] as any).stepNumber).toBe(0);
-    expect((startSteps[1] as any).stepNumber).toBe(1);
-
-    const finishSteps = seen.filter((s: any) => s.type === "finish-step");
-    expect(finishSteps.length).toBe(2);
-    expect((finishSteps[0] as any).stepNumber).toBe(0);
-    expect((finishSteps[0] as any).finishReason).toBe("tool-calls");
-    expect((finishSteps[1] as any).stepNumber).toBe(1);
-    expect((finishSteps[1] as any).finishReason).toBe("stop");
-  });
-
-  // -------------------------------------------------------------------------
-  // 7. Error during stream consumption
-  // -------------------------------------------------------------------------
-
-  test("error during fullStream consumption fails the turn instead of claiming partial success", async () => {
-    const partsBeforeError = [
-      { type: "start" },
-      { type: "start-step", stepNumber: 0 },
-      { type: "text-delta", id: "t1", text: "partial" },
-    ];
-
-    deps.mockStreamText.mockImplementation(async () => {
-      // The stream yields 3 parts, then throws. Meanwhile text/reasoningText/response
-      // are pre-resolved promises, so Promise.all resolves quickly. The settle loop
-      // then sees the stream settled (with error) and logs the warning.
-      return {
-        text: Promise.resolve("partial response"),
-        reasoningText: Promise.resolve(undefined),
-        response: Promise.resolve({
-          messages: [{ role: "assistant", content: "partial response" }],
-        }),
-        fullStream: (async function* () {
-          for (const part of partsBeforeError) {
-            yield part;
-          }
-          throw new Error("Stream interrupted");
-        })(),
-      };
+    expect(seen).toContainEqual({ type: "tool-input-start", id: "tc-1", toolName: "bash" });
+    expect(seen).toContainEqual({
+      type: "tool-input-delta",
+      id: "tc-1",
+      delta: '{"command":"ls"}',
     });
+    expect(seen).toContainEqual({ type: "tool-input-end", id: "tc-1" });
+    expect(seen).toContainEqual({
+      type: "tool-call",
+      toolCallId: "tc-1",
+      toolName: "bash",
+      input: { command: "ls" },
+    });
+    expect(seen).toContainEqual({
+      type: "tool-result",
+      toolCallId: "tc-1",
+      toolName: "bash",
+      output: "file.txt",
+    });
+    expect(seen.filter((part) => part.type === "tool-error")).toEqual([
+      { type: "tool-error", toolCallId: "tc-2", toolName: "read", error: "not found" },
+      {
+        type: "tool-error",
+        toolCallId: "tc-3",
+        toolName: "missing",
+        error: "Tool missing not found",
+      },
+    ]);
+    expect(result.responseMessages.filter((message) => message.role === "tool")).toHaveLength(3);
+    expect(result.text).toBe("done");
+  });
 
-    const log = mock(() => {});
+  test("emits numbered step boundaries for actual model calls", async () => {
+    toolThenText();
+    const seen: Array<Record<string, unknown>> = [];
+    await runTurn(
+      makeParams({
+        onModelStreamPart: (part) => {
+          seen.push(part as Record<string, unknown>);
+        },
+      }),
+    );
+    expect(
+      seen.filter((part) => part.type === "start-step").map((part) => part.stepNumber),
+    ).toEqual([1, 2]);
+    expect(
+      seen
+        .filter((part) => part.type === "finish-step")
+        .map((part) => [part.stepNumber, part.finishReason]),
+    ).toEqual([
+      [1, "toolUse"],
+      [2, "stop"],
+    ]);
+  });
+
+  test("maxSteps stops the real loop after executing the first tool call", async () => {
+    toolThenText();
+    const result = await runTurn(makeParams({ maxSteps: 1 }));
+    expect(deps.mockPiStream).toHaveBeenCalledTimes(1);
+    expect(deps.mockExecuteBash).toHaveBeenCalledTimes(1);
+    expect(result.responseMessages).toHaveLength(2);
+    expect(result.text).toBe("");
+  });
+
+  test("a provider error after visible text fails instead of claiming partial success", async () => {
+    deps.mockPiStream.mockImplementation(() =>
+      providerStream(assistant([{ type: "text", text: "partial" }], "error", "Stream interrupted")),
+    );
     const onModelError = mock(async () => {});
-    const seen: unknown[] = [];
-
+    const seen: Array<Record<string, unknown>> = [];
     await expect(
       runTurn(
         makeParams({
-          log,
           onModelError,
-          onModelStreamPart: async (part) => {
-            seen.push(part);
+          onModelStreamPart: (part) => {
+            seen.push(part as Record<string, unknown>);
           },
         }),
       ),
     ).rejects.toThrow("Stream interrupted");
-
-    expect(seen).toEqual(partsBeforeError);
+    expect(seen).toContainEqual({ type: "text-delta", id: "s0", text: "partial" });
+    expect(seen.some((part) => part.type === "finish-step")).toBe(false);
     expect(onModelError).toHaveBeenCalledTimes(1);
-    expect(log.mock.calls.some(([line]) => line.includes("Stream interrupted"))).toBe(true);
+    expect(deps.mockPiStream).toHaveBeenCalledTimes(1);
   });
 
-  // -------------------------------------------------------------------------
-  // 8. Stream already settled before settle loop
-  // -------------------------------------------------------------------------
-
-  test("stream that settles before Promise.all resolves takes the settled branch", async () => {
-    // Create a fullStream that completes synchronously/instantly relative to the promises,
-    // so that streamConsumptionSettled === true before the settle loop starts.
-    let streamDone = false;
-
-    deps.mockStreamText.mockImplementation(async () => {
-      // We use deferred promises for text/reasoningText/response so that
-      // fullStream finishes first, then the promises resolve.
-      let resolveText!: (v: string) => void;
-      let resolveReasoningText!: (v: undefined) => void;
-      let resolveResponse!: (v: any) => void;
-
-      const textPromise = new Promise<string>((r) => {
-        resolveText = r;
-      });
-      const reasoningTextPromise = new Promise<undefined>((r) => {
-        resolveReasoningText = r;
-      });
-      const responsePromise = new Promise<any>((r) => {
-        resolveResponse = r;
-      });
-
-      const fullStream = (async function* () {
-        yield { type: "start" };
-        yield { type: "text-delta", id: "t1", text: "fast" };
-        yield { type: "finish", finishReason: "stop" };
-        streamDone = true;
-        // Now that stream is done, resolve the promises
-        // Use microtask delay to ensure the stream consumption promise settles first
-        await Promise.resolve();
-        resolveText("fast");
-        resolveReasoningText(undefined);
-        resolveResponse({ messages: [{ role: "assistant", content: "fast" }] });
-      })();
-
-      return {
-        text: textPromise,
-        reasoningText: reasoningTextPromise,
-        response: responsePromise,
-        fullStream,
-      };
-    });
-
-    const seen: unknown[] = [];
-    const result = await runTurn(
+  test("waits for asynchronous stream callbacks before completing the turn", async () => {
+    const callbackStarted = Promise.withResolvers<void>();
+    const releaseCallback = Promise.withResolvers<void>();
+    let finished = false;
+    const turn = runTurn(
       makeParams({
         onModelStreamPart: async (part) => {
-          seen.push(part);
+          if ((part as { type: string }).type === "text-delta") {
+            callbackStarted.resolve();
+            await releaseCallback.promise;
+          }
         },
       }),
-    );
-
-    expect(streamDone).toBe(true);
-    expect(seen.length).toBe(3);
-    expect((seen[0] as any).type).toBe("start");
-    expect((seen[1] as any).type).toBe("text-delta");
-    expect((seen[2] as any).type).toBe("finish");
-    expect(result.text).toBe("fast");
+    ).then((result) => {
+      finished = true;
+      return result;
+    });
+    await callbackStarted.promise;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+    } finally {
+      releaseCallback.resolve();
+    }
+    expect((await turn).text).toBe("hello");
+    expect(finished).toBe(true);
   });
-
-  // -------------------------------------------------------------------------
-  // 9. extractTurnUserPrompt edge cases
-  // -------------------------------------------------------------------------
 
   describe("extractTurnUserPrompt edge cases via tool context", () => {
     test("array content with multiple text parts joins them with newline", async () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(
@@ -577,7 +437,7 @@ describe("runTurn – multi-step tool loops", () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(
@@ -598,7 +458,7 @@ describe("runTurn – multi-step tool loops", () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(
@@ -629,7 +489,7 @@ describe("runTurn – multi-step tool loops", () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(
@@ -650,7 +510,7 @@ describe("runTurn – multi-step tool loops", () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(
@@ -669,7 +529,7 @@ describe("runTurn – multi-step tool loops", () => {
       let capturedCtx: any;
       deps.mockCreateTools.mockImplementation((ctx: any) => {
         capturedCtx = ctx;
-        return { bash: { type: "builtin" } };
+        return {};
       });
 
       await runTurn(

@@ -8,7 +8,7 @@ import type {
   ReliableBatchStore,
 } from "../../../../src/shared/reliableBatchQueue";
 
-export const RELIABLE_BATCH_DB_NAME = "cowork-reliable-batch-outbox-v1";
+const RELIABLE_BATCH_DB_NAME = "cowork-reliable-batch-outbox-v1";
 
 const DB_VERSION = 2;
 const BATCHES_STORE = "batches";

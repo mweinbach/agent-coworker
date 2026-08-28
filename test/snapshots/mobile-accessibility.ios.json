@@ -202,7 +202,7 @@
     ]
   },
   "motion": {
-    "reducedMotionTransform": null,
+    "reducedMotionTransform": "[]",
     "standardMotionTransform": "[{\"scale\":0.985}]"
   },
   "navigation": {

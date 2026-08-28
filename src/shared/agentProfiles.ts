@@ -210,7 +210,7 @@ export function createAgentProfileSnapshot(
   });
 }
 
-export function dedupeStrings(values: readonly string[]): string[] {
+function dedupeStrings(values: readonly string[]): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const value of values) {

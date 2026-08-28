@@ -45,8 +45,8 @@ type ComposerBehaviorProps = Pick<
   | "submitLabel"
 >;
 
-export const DEFAULT_SUBMIT_LABEL = "Send";
-export const COMPOSER_PLACEHOLDER = "Message…";
+const DEFAULT_SUBMIT_LABEL = "Send";
+const COMPOSER_PLACEHOLDER = "Message…";
 
 function sendAccessibilityLabel({
   canSubmit,

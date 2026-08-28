@@ -3,7 +3,7 @@ import type { SystemAppearance, ThemeSource } from "./desktopApi";
 export const THEME_SOURCE_STORAGE_KEY = "cowork.themeSource";
 export const RESOLVED_THEME_STORAGE_KEY = "cowork.resolvedTheme";
 
-export function parseThemeSource(value: string | null | undefined): ThemeSource {
+function parseThemeSource(value: string | null | undefined): ThemeSource {
   return value === "light" || value === "dark" ? value : "system";
 }
 

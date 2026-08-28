@@ -1,10 +1,14 @@
 import { promises as fs } from "node:fs";
 
 import { AxeBuilder } from "@axe-core/playwright";
-import { expect } from "@playwright/test";
-import type { Page, TestInfo } from "playwright";
+import { expect, type TestInfo } from "@playwright/test";
+import type { Page } from "playwright";
 
-import { DESKTOP_LAYOUT_BREAKPOINTS, MIN_PRIMARY_WORKSPACE_WIDTH } from "../src/lib/adaptiveLayout";
+import {
+  DESKTOP_LAYOUT_BREAKPOINTS,
+  MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH,
+  MIN_PRIMARY_WORKSPACE_WIDTH,
+} from "../src/lib/adaptiveLayout";
 import axeBaseline from "./axe-baseline.json" with { type: "json" };
 
 const knownColorContrastSelectors = axeBaseline.colorContrast.selectors;
@@ -294,11 +298,11 @@ export async function assertNoViewportClipping(
               ["auto", "scroll"].includes(ancestorStyle.overflowY) &&
               clippingAncestor.scrollHeight > clippingAncestor.clientHeight + clippingTolerance &&
               rect.height <= clippingAncestor.clientHeight + clippingTolerance;
-            const canRecoverX =
+            const canRecoverX: boolean =
               canScrollX ||
               (recoverablyClippedX &&
                 rect.width <= clippingAncestor.clientWidth + clippingTolerance);
-            const canRecoverY =
+            const canRecoverY: boolean =
               canScrollY ||
               (recoverablyClippedY &&
                 rect.height <= clippingAncestor.clientHeight + clippingTolerance);
@@ -385,15 +389,30 @@ export async function assertNoViewportClipping(
 
 export async function assertUsablePrimaryContentWidth(
   page: Page,
-  minimumWidth = MIN_PRIMARY_WORKSPACE_WIDTH,
+  minimumWidth?: number,
 ): Promise<void> {
-  const primaryContentWidth = await page
+  const { primaryContentWidth, compactInlineContext } = await page
     .locator('[data-slot="primary-content-pane"]')
-    .evaluate((element) => element.getBoundingClientRect().width);
+    .evaluate((element) => {
+      const shell = element.closest("[data-layout-tier]");
+      const tier = shell?.getAttribute("data-layout-tier");
+      const inlineContext = shell?.querySelector(
+        '[data-side="right"][data-presentation="inline"][data-active="true"]',
+      );
+      return {
+        primaryContentWidth: element.getBoundingClientRect().width,
+        compactInlineContext:
+          (tier === "compact" || tier === "narrow") &&
+          (inlineContext?.getBoundingClientRect().width ?? 0) > 0,
+      };
+    });
+  const requiredWidth =
+    minimumWidth ??
+    (compactInlineContext ? MIN_COMPACT_PRIMARY_WORKSPACE_WIDTH : MIN_PRIMARY_WORKSPACE_WIDTH);
   expect(
     primaryContentWidth,
-    `Primary content must retain at least ${minimumWidth}px of usable width`,
-  ).toBeGreaterThanOrEqual(minimumWidth);
+    `Primary content must retain at least ${requiredWidth}px of usable width`,
+  ).toBeGreaterThanOrEqual(requiredWidth);
 }
 
 export async function assertKeyboardFocusJourney(page: Page): Promise<void> {

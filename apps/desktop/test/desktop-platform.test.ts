@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  getDesktopPlatformInfo,
-  isLinux,
-  isMacos,
-  isWindows,
-  normalizePlatform,
-} from "../src/lib/desktopPlatform";
+import { getDesktopPlatformInfo, normalizePlatform } from "../src/lib/desktopPlatform";
 import { setupJsdom } from "./jsdomHarness";
 
 type DesktopRootDataset = Partial<
@@ -61,23 +55,6 @@ describe("normalizePlatform", () => {
   test("maps unknown to other", () => {
     expect(normalizePlatform("freebsd")).toBe("other");
     expect(normalizePlatform(undefined)).toBe("other");
-  });
-});
-
-describe("platform booleans", () => {
-  test("isMacos only returns true for macos", () => {
-    expect(isMacos({ platform: "macos" } as never)).toBe(true);
-    expect(isMacos({ platform: "windows" } as never)).toBe(false);
-  });
-
-  test("isWindows only returns true for windows", () => {
-    expect(isWindows({ platform: "windows" } as never)).toBe(true);
-    expect(isWindows({ platform: "macos" } as never)).toBe(false);
-  });
-
-  test("isLinux only returns true for linux", () => {
-    expect(isLinux({ platform: "linux" } as never)).toBe(true);
-    expect(isLinux({ platform: "other" } as never)).toBe(false);
   });
 });
 

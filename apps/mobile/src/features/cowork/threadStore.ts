@@ -46,8 +46,6 @@ export type MobileThreadSummary = {
   pendingServerRequest: PendingServerRequest | null;
 };
 
-export type MobileThreadFeedEntry = SessionFeedItem;
-
 export type ThreadFeedMutation = {
   kind: "hydrate" | "started" | "delta" | "completed" | "local" | "removed";
   revision: number;

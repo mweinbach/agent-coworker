@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 
-import { expect } from "@playwright/test";
-import type { Page, TestInfo } from "playwright";
+import { expect, type TestInfo } from "@playwright/test";
+import type { Page } from "playwright";
 
 const PIXEL_CHANNEL_TOLERANCE = 8;
 const MAX_DIFFERENT_PIXELS = 24;

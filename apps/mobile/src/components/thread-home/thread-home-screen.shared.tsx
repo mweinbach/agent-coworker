@@ -22,6 +22,7 @@ import {
 
 import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
+import { toolbarIcon } from "@/components/ui/toolbar-icon";
 import {
   minimumTouchTarget,
   runAccessibleLayoutAnimation,
@@ -740,18 +741,18 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
         }}
       />
       <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel="Open menu">
+        <Stack.Toolbar.Menu icon={toolbarIcon("ellipsis")} accessibilityLabel="Open menu">
           {MENU_ACTIONS.map((action) => (
             <Stack.Toolbar.MenuAction
               key={action.title}
-              icon={action.icon}
+              icon={toolbarIcon(action.icon)}
               onPress={() => router.push(action.href)}
             >
               {action.title}
             </Stack.Toolbar.MenuAction>
           ))}
           <Stack.Toolbar.MenuAction
-            icon={projectsFirst ? "bubble.left.fill" : "folder.fill"}
+            icon={toolbarIcon(projectsFirst ? "bubble.left.fill" : "folder.fill")}
             onPress={() => {
               runAccessibleLayoutAnimation(reducedMotionEnabled);
               reorderSections(0, 2);
@@ -763,7 +764,7 @@ export function SharedThreadHomeScreen({ platform }: { platform: MobilePlatformC
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
-          icon="square.and.pencil"
+          icon={toolbarIcon("square.and.pencil")}
           accessibilityLabel="New chat"
           onPress={handleCompose}
         />

@@ -450,7 +450,12 @@ const NativeTabs = Object.assign(
 mockMobileModule("expo-router/unstable-native-tabs", () => ({ NativeTabs }));
 
 const Stack = Object.assign(
-  ({ children }: HostProps) => createElement("div", { "data-stack": true }, children),
+  ({ children, screenOptions }: HostProps) =>
+    createElement(
+      "div",
+      { "data-stack": true, "data-stack-options": JSON.stringify(screenOptions) },
+      children,
+    ),
   {
     Screen: ({ name, options }: HostProps) => {
       const optionRecord =
@@ -884,6 +889,17 @@ describe(`${platform} rendered mobile navigation and accessibility contract`, ()
         root.render(createElement(NavigationTree));
       });
       const snapshot = buildNavigationSnapshot(container);
+      const stackOptions = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-stack-options]"),
+        (element) => JSON.parse(element.dataset.stackOptions ?? "{}"),
+      );
+      expect(stackOptions).toHaveLength(4);
+      for (const options of stackOptions) {
+        expect(options.headerTransparent).toBe(platform === "ios");
+        expect(options.headerStyle?.backgroundColor).toBe(
+          platform === "ios" ? "transparent" : options.contentStyle.backgroundColor,
+        );
+      }
       expect(snapshot.backBehavior).toBe("history");
       expect(snapshot.initialTab).toBe("(chats)");
       expect(snapshot.tabs.map(({ label, route }) => ({ label, route }))).toEqual(

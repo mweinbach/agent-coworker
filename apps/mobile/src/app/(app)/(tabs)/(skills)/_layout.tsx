@@ -1,4 +1,5 @@
 import { Stack } from "expo-router/stack";
+import { Platform } from "react-native";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -8,6 +9,7 @@ export const unstable_settings = {
 
 export default function SkillsStackLayout() {
   const theme = useAppTheme();
+  const useNativeChrome = Platform.OS === "ios";
 
   return (
     <Stack
@@ -19,9 +21,10 @@ export default function SkillsStackLayout() {
         headerLargeTitleShadowVisible: false,
         headerLargeTitleStyle: { color: theme.text },
         headerShadowVisible: false,
+        headerStyle: { backgroundColor: useNativeChrome ? "transparent" : theme.backgroundMuted },
         headerTintColor: theme.text,
         headerTitleStyle: { color: theme.text },
-        headerTransparent: true,
+        headerTransparent: useNativeChrome,
         contentStyle: { backgroundColor: theme.backgroundMuted },
       }}
     >

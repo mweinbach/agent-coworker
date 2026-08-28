@@ -266,6 +266,11 @@ async function launchQualityHarness(
 
   const errors: string[] = [];
   const mainLogs: string[] = [];
+  const mediaOptions = {
+    colorScheme: qualityColorScheme(options.mode),
+    forcedColors: options.mode === "forced-colors" ? "active" : "none",
+    reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
+  } as const;
   const pages: Page[] = [];
   const recorder =
     options.recordVideo === false ? null : await startScreenRecorder(runtimeDir, options);
@@ -286,7 +291,7 @@ async function launchQualityHarness(
       cwd: repoRoot,
       artifactsDir: runtimeDir,
       tracesDir: runtimeDir,
-      colorScheme: qualityColorScheme(options.mode),
+      colorScheme: mediaOptions.colorScheme,
       locale: "en-US",
       timezoneId: "UTC",
       env: processEnvironment({
@@ -408,11 +413,7 @@ async function launchQualityHarness(
       globalThis.__coworkQualityGateMain?.releaseBootstrap();
     });
   }
-  await page.emulateMedia({
-    colorScheme: qualityColorScheme(options.mode),
-    forcedColors: options.mode === "forced-colors" ? "active" : "none",
-    reducedMotion: options.mode === "reduced-motion" ? "reduce" : "no-preference",
-  });
+  await page.emulateMedia(mediaOptions);
   await page.addStyleTag({
     content: `
       *, *::before, *::after {
@@ -573,6 +574,7 @@ async function launchQualityHarness(
         await trigger();
         const windowPage = await nextWindow;
         configurePage(windowPage);
+        await windowPage.emulateMedia(mediaOptions);
         await windowPage.waitForFunction(() => Boolean(window.__coworkQualityGate));
         return windowPage;
       },

@@ -54,6 +54,9 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
   completion.
 - Disconnect/reconnect, drafts, tool-failure history, and attachment-only transcript semantics.
 - File Explorer, Markdown preview, Canvas popout, and all three desktop resizers.
+- Actual color-scheme, reduced-motion, and forced-colors media queries on the
+  initial window and a Canvas popup across all five quality modes. `openWindow`
+  applies the requested media settings before returning a secondary page.
 - Settings persistence through the production preload/state bridge.
 - Active Task blocking questions, artifact review, and cancellation controls.
 - Mention geometry at 100%, 150%, and 200% zoom.

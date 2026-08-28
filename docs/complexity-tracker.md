@@ -41,9 +41,9 @@ disposition, including retained compatibility APIs and dynamic test consumers.
 
 | Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` | Completion `bcc432d3` | ai-slop-cleaner follow-up |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 | 2,681 |
-| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,806 | 677,438 |
-| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 | 1,893 |
+| Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 | 2,682 |
+| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,806 | 677,546 |
+| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 | 1,894 |
 | Functions with cognitive complexity above 15 | 713 | 709 | 709 | 710 | 710 |
 | Source functions above 15 | 661 | 657 | 657 | 657 | 657 |
 | Test/quality-harness functions above 15 | 52 | 52 | 52 | 53 | 53 |
@@ -388,14 +388,14 @@ and the largest control-socket function from 161 to 160. The number of functions
 above 15 stays at 710; the threshold count alone does not measure the removed
 duplication.
 
-Final quality gates: 8,489 tests pass across 719 files, with 27 existing skips;
+Five-pass local quality gates: 8,489 tests pass across 719 files, with 27 existing skips;
 root/harness/desktop/mobile typechecks, Biome lint/check, docs consistency, and
 both mobile Hermes exports pass. Each of the five logical slices passes the full
 repository CI lane before its commit. Independent review found no remaining
 issue in the cleanup diffs. The generated JSON-RPC artifact remains byte-identical
 at 1,076,304 bytes.
 
-The final inventory contains 2,681 tracked paths, 677,438 text lines,
+The five-pass inventory contains 2,681 tracked paths, 677,438 text lines,
 and 1,893 Biome-scanned files. Knip still reports no unused files and the documented
 106 export / 130 type candidates; its advisory nonzero exit is not a clean result
 or a reason to suppress them.
@@ -418,3 +418,55 @@ guards, Google alias ownership, distinct web/URL/MCP result formats, public and
 dynamic compatibility exports, and the separate mobile context readers whose
 consolidation would introduce another dependency boundary. No helper extraction
 was used solely to lower a cognitive score.
+
+## Late PR review after `1ad4ea11`
+
+All ten CI jobs passed on `1ad4ea11`, including 8,478 Linux unit tests across 719
+files, the 59-test Electron matrix and four failure probes, and native sandbox
+checks on macOS and both Windows architectures. Linux's 38 skips include 11
+macOS-only Seatbelt cases that passed in the local suite. Two late review comments
+were then checked against that commit before making further changes.
+
+The Android XML asset finding did not reproduce. Installed Metro defaults already
+include `xml`; Expo's source transformer and native vector loader support the
+toolbar's XML path. [Expo documents this Icon support](https://docs.expo.dev/versions/latest/sdk/ui/jetpack-compose/icon/).
+The actual project configuration, all six assets in the fresh Android export,
+their hashes against the prior native captures, and 16 targeted tests provide
+evidence beyond the mocked component tests. No asset or dependency change was
+made for this finding; a release APK runtime check is not claimed.
+
+The popup media finding was real: `fixtures.ts` applied media emulation only to
+the initial page. A new `specs/media-modes.pw.ts` checks actual `matchMedia` values
+on the initial window and a Canvas popup across all five quality modes. Before
+the fix, three modes passed and reduced-motion/forced-colors failed on the popup.
+The fixture now shares the existing media configuration and awaits emulation in
+`openWindow` before returning the secondary page. All five cases then pass.
+Independent review confirms that error propagation and window cleanup remain
+intact; no product code, helper layer, or dependency was added.
+
+Correct media emulation changes four forced-colors Canvas references: Markdown,
+text, spreadsheet, and presentation. Each native Linux capture was visually
+reviewed before copying it into the repository. System text colors, control
+borders, and shadow handling now reflect forced-colors mode; content and layout
+remain unchanged. All other screenshot baselines are byte-identical. Screenshot
+tolerances, performance budgets, skip rules, and error filters are unchanged.
+
+After code and baseline freeze, all 8,489 unit tests pass across 719 files, with
+27 existing skips. Root/harness/desktop/mobile typechecks, standalone comparison
+typechecking, Biome lint/check, and docs consistency pass. The clean Linux
+Electron matrix passes 64 tests with four opt-in probes skipped; all four probes
+pass separately by producing the expected failures and diagnostic artifacts.
+The normal matrix makes no baseline updates, and the product screenshot check
+passes. A hash audit matches all 1,989 relevant source, test, and build files to
+the isolated Linux copy. Its image and toolchain match the pinned CI environment.
+
+One negative-run cleanup recorded a Node-internal `timer._onTimeout` exception.
+Its stack did not identify a cause in the changed files. Neither the focused
+native green run nor the full 64-test matrix reproduced it; its cause remains
+unconfirmed, and no ignore was added. The full matrix reports no unexpected main,
+renderer, or network errors.
+
+The final inventory in the table includes this review follow-up. Product-source
+reduction remains 1,896 lines, and Knip remains at zero unused files plus 106
+export and 130 type candidates. Native iOS runtime verification still requires
+the explicit plist exception described above.

@@ -39,17 +39,17 @@ disposition, including retained compatibility APIs and dynamic test consumers.
 
 ## Results
 
-| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` |
-| --- | ---: | ---: | ---: |
-| Tracked paths | 2,656 | 2,660 | 2,663 |
-| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 |
-| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 |
-| Functions with cognitive complexity above 15 | 713 | 709 | 709 |
-| Source functions above 15 | 661 | 657 | 657 |
-| Test/quality-harness functions above 15 | 52 | 52 | 52 |
-| Knip unused-file candidates, corrected scan scope | 3 | 0 | 0 |
-| Knip unused-export candidates, corrected scan scope | 255 | 242 | 227 |
-| Knip unused-type candidates, corrected scan scope | 146 | 147 | 133 |
+| Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` | Completion pass |
+| --- | ---: | ---: | ---: | ---: |
+| Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 |
+| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,735 |
+| Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 |
+| Functions with cognitive complexity above 15 | 713 | 709 | 709 | 710 |
+| Source functions above 15 | 661 | 657 | 657 | 657 |
+| Test/quality-harness functions above 15 | 52 | 52 | 52 | 53 |
+| Knip unused-file candidates, corrected scan scope | 3 | 0 | 0 | 0 |
+| Knip unused-export candidates, corrected scan scope | 255 | 242 | 227 | 106 |
+| Knip unused-type candidates, corrected scan scope | 146 | 147 | 133 | 130 |
 
 The original narrower Knip configuration reported 3 files, 214 exports, and 100
 types. The table instead uses the corrected configuration against the untouched
@@ -62,7 +62,7 @@ The first pass removed 1,486 net product lines (189 added, 1,675 removed across
 because the continuation adds regression coverage. The largest reported function
 in `src/agent.ts` fell
 from 83 to 34 after removing the test-only adapter and its nested wrapper. The
-report command itself is included in the measurements, with a score of 16.
+report command itself is included in the measurements; its first-pass score was 16.
 
 The initial full suite failed in five files: three used synthetic `/home` paths
 that hit the macOS automounter; two React Native tests lacked initial mock exports.
@@ -177,21 +177,22 @@ branches into new single-use wrappers just to lower a metric.
 ## Remaining complexity targets
 
 These are review targets for focused follow-up, not known defects or justification
-for cosmetic helper extraction. Event routing and lifecycle behavior need stronger
-local contracts before substantial decomposition.
+for cosmetic helper extraction. The completion pass adds lifecycle contracts;
+substantial decomposition still needs a focused behavior-preserving plan.
 
 | File | Largest cognitive score | Preserved responsibility |
 | --- | ---: | --- |
-| `src/runtime/codexAppServer/notifications.ts` | 205 | App-server notifications and continuation state |
+| `src/runtime/codexAppServer/notifications.ts` | 208 | App-server notifications and continuation state |
 | `apps/desktop/src/ui/layout/AppTopBar.tsx` | 179 | Platform, thread, and navigation control states |
 | `src/cli/repl/commandRouter.ts` | 162 | Distinct CLI command dispatch |
 | `apps/desktop/src/app/store.helpers/controlSocket.ts` | 161 | Control-socket lifecycle and server state |
 | `src/runtime/googleNative/stream/processEvent.ts` | 150 | Native provider event mapping |
 
-Other deferred candidates include mobile shared-facade exports and similar-looking
-record, citation, and skill-scope helpers with different contracts. The memory
-editor draft and unused mobile protocol families were resolved in the continuation.
-No reproduced production defect from this sweep remains queued.
+Mobile shared-facade exports and similar-looking record, citation, and skill-scope
+helpers retain distinct contracts; their classification is recorded in the unused
+code audit. The memory editor draft and unused mobile protocol families were
+resolved in the continuation. The completion ledger below records the later
+lifecycle and native-platform findings.
 
 ## Continuation from `b739dbdd`
 
@@ -235,3 +236,105 @@ byte-identical; the server's generated JSON-RPC protocol is also unchanged.
 The platform limitations described above still apply. Knip's 227 export and 133
 type candidates remain advisory; its unused-file count stays at zero. Product
 fixes, refactors, and the tracker update are committed as separate logical slices.
+
+## Completion pass from `5ba8f6f8`
+
+This pass covers the four agreed follow-ups: native platform verification,
+desktop socket and Codex notification lifecycles, PR complexity comparison, and
+classification of every remaining Knip candidate. Earlier results above are
+historical checkpoints, not the final platform status.
+
+- [x] Audit all 361 unused-export/type candidates, including the task enum
+  exposed by deleting its unused test hook. Delete 12 declarations, make 113
+  internal declarations private, and document why 236 contracts and dynamic
+  test APIs remain. Do not suppress the retained findings.
+- [x] Reproduce and repair stale desktop responses, replacement/disposal races,
+  cold-start refresh ownership, and cancelled-caller bootstrap recovery.
+- [x] Reproduce and repair Codex callback ordering, completion backpressure, and
+  callback failures without losing abort, disconnect, or timeout behavior.
+- [x] Add the tested PR comparison job, including safe temporary-checkout cleanup
+  and disabled Git hooks. Keep complexity findings advisory.
+- [x] Finish the Linux Electron matrix, reviewed visual baselines, and native
+  Android journeys; record the iOS access limit separately.
+- [x] Run the full local CI lane, refresh measurements, and commit verified slices.
+  The pushed commit and GitHub job results are recorded in
+  [PR #322](https://github.com/mweinbach/agent-coworker/pull/322).
+- [ ] Complete the native iOS simulator check after Xcode MCP grants worktree access.
+
+| Finding | Result | Behavior lock / evidence |
+| --- | --- | --- |
+| Workspace responses survive socket replacement, disposal, or a newer refresh | Fixed | Deferred-response lifecycle tests, coalesced cold bootstrap, cancelled-caller recovery, and the real WebSocket integration test |
+| Codex turn completion outruns asynchronous stream callbacks | Fixed | Ordered callback delivery, rejected callbacks, duplicate/foreign-turn filtering, tool-output interleavings, and abort/disconnect/deadline tests |
+| An apparently unused Electron export is loaded through a cache-busted dynamic import | Retained | Full-suite failure reproduced; `MAX_READ_FILE_BYTES` restored and all visibility candidates checked for dynamic consumers |
+| Comparison checkout can run a local Git hook or survive a failed partial checkout | Fixed | Real temporary-repository tests prove hooks do not execute and partially registered worktrees are removed |
+| Desktop gates expect obsolete drawer, composer, and startup behavior | Fixed | Tests assert the existing inline context layout and usable width, scoped recovery status, and editable disconnected composer; deliberate failures still fail |
+| Electron quality code is excluded from normal TypeScript checking | Fixed | Quality harness included in the desktop project; incorrect Playwright types and browser callback shadowing corrected |
+| Linux images predate the current compact layout and semantic typography | Refreshed after review | 33 baselines and the matching product image pass a clean 59-test Linux matrix; all four deliberate failure probes pass without relaxing tolerances or budgets |
+| iOS lockfile still describes the older Expo/React Native native graph | Fixed dependency graph | Scoped CocoaPods resolution matches the already locked JavaScript dependencies; a repeated deployment-mode install succeeds |
+| Releasing a glass button sends a null transform to React Native | Fixed | Rendered press/release and reduced-motion regressions; native Android scanner and manual pairing input no longer crash |
+| Light-mode status icons lack contrast and Android instructions name an iPhone | Fixed | Rendered font-loading/light/dark states and both platform pairing states; native light/dark pairing screens inspected |
+| Saved-desktop swipe rows crash without a gesture root | Fixed | Rendered router ancestry regression; native pairing, saved-desktop swipe actions, and background recovery pass |
+| Android content starts underneath transparent navigation headers | Fixed | All four stack options checked on both platforms; Android screenshots confirm reserved header space while iOS options remain unchanged |
+| Expo Link discards a row's dynamic style callback | Fixed | Installed Link/Slot regression fails before the fix; row geometry, press feedback, navigation, and accessibility labels pass on both platform branches |
+| SF Symbol toolbar icons make Android actions disappear | Fixed | Installed Android renderer and iOS converters cover compose, menus, section order, and stop states; native glyphs render, and one Stop tap sends one interrupt, disables repeats, then restores the composer |
+| Native settings switch thumbs ignore taps | Fixed | Native switch callback and parent-row regressions cover both starting values; emulator thumb and row taps each toggle once and the value survives a cold launch |
+
+The completion snapshot contains 1,738 fewer product source lines than the
+original: 858 additions and 2,596 deletions across 146 files under `src/`,
+`apps/desktop/src/`, `apps/desktop/electron/`, and `apps/mobile/src/`. This is the
+same source scope used for the earlier line comparisons. Repository text grows
+because the sweep adds regression tests, audit records, and verification tooling;
+native projects and assets are included in the inventory but not this source-line
+subtotal. The extra hotspot relative to `5ba8f6f8` is in a regression test; the
+source-hotspot count remains 657.
+
+The completion measurements include code commit `0d1439bc` and this tracker
+update. Final local verification passes: 8,353 tests across 718 files, with 27
+existing skips; root, harness, desktop, and mobile TypeScript checks; standalone
+strict checking of the comparison script/tests; Biome lint and formatting; docs
+consistency; and fresh iOS/Android Hermes exports. All 45 mobile test files also
+pass independently. One earlier full run overlapped the deliberately failing
+asset regressions; the recorded final run starts after the corrected assets are
+frozen and passes all six asset cases and eight native-toolbar cases.
+
+The generated server JSON-RPC protocol remains byte-identical at 1,076,304 bytes,
+and all 12 live mobile schema contracts remain unchanged. Knip reports no unused
+files and retains exactly the documented 106 value exports and 130 types. Its
+nonzero exit remains advisory, not an unreported clean result.
+
+Windows x64 and ARM64 sandbox enforcement passed on the first pushed checkpoint
+`5ba8f6f8` in GitHub run `33125942642`. The later checkpoint also exercises the
+new complexity job. The PR links the final pushed head's complete CI results so
+these earlier platform checks are not mistaken for final-head verification.
+
+The merge-base comparison reports 13 source and one test function as new or
+increased. Six source reports come from making unchanged declarations private.
+The comparison deliberately reports visibility changes as unmatched declarations.
+Those reports do not mean the implementation became more complex. The agent-loop
+callback also moves when its test-only wrapper is removed. Actual increases in
+notification, socket, snapshot migration, and ripgrep installation paths retain
+the guards required by their reproduced ordering, ownership, persistence, and
+cleanup failures. The PR records those reasons instead of extracting single-use
+helpers to lower the numbers.
+
+The local Linux matrix used the CI image pinned to
+`sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`
+on `linux/amd64`, Bun `1.4.1-canary.1+731aa92da`, locked Playwright `1.62.1`,
+and Electron `43.2.0`. A hash audit matched all 1,447 checked source/build files
+to the tested mirror. The clean run made no snapshot updates. Its four opt-in
+failure cases were skipped only in the normal matrix and passed separately by
+producing the expected renderer, mention-geometry, visual, and Axe failures.
+
+Android verification uses an isolated API 36 emulator and a temporary pinned-TLS
+desktop fixture, not the connected physical phone or a real account. It covers
+pairing input validation, trust persistence, authenticated event delivery,
+conversation hydration, native tabs/detail navigation, saved-desktop swipes,
+and foreground reconnection without pairing again. These checks do not claim
+live model inference or manual TalkBack coverage. A second local fixture supplies
+an active turn for native Stop verification: the request log records exactly one
+interrupt and completion, and screenshots show the pending and restored controls.
+
+Native iOS simulator verification is pending Xcode MCP approval of the isolated
+worktree folder. Successful dependency resolution and Metro exports do not prove
+that the iOS app builds or runs, and no alternative tool is used to bypass that
+access decision.

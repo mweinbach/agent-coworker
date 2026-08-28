@@ -36,66 +36,71 @@ export function HubLinkRow({
         accessibilityHint="Opens a screen"
         accessibilityLabel={accessibilityLabel}
         accessibilityRole="link"
-        style={({ pressed }) => ({
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          minHeight: minimumTouchTarget(),
-          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
-          borderBottomColor: theme.borderMuted,
-          backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
-          paddingHorizontal: 16,
-          paddingVertical: 10,
-        })}
       >
-        <View
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 9,
-            borderCurve: "continuous",
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: theme.primaryMuted,
-          }}
-        >
-          <SFSymbol name={icon} size={20} color={theme.primary} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-          <Text
-            allowFontScaling
-            maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-            style={{ color: theme.text, fontSize: 17, fontWeight: "400" }}
+        {({ pressed }) => (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              minHeight: minimumTouchTarget(),
+              borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+              borderBottomColor: theme.borderMuted,
+              backgroundColor: pressed ? theme.surfaceMuted : theme.surface,
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+            }}
           >
-            {label}
-          </Text>
-          {description ? (
-            <Text
-              allowFontScaling
-              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
-              style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
-            >
-              {description}
-            </Text>
-          ) : null}
-        </View>
-        <View style={{ maxWidth: "34%", alignItems: "flex-end", gap: 4 }}>
-          {detail ? (
-            <Text
-              allowFontScaling
-              maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+            <View
               style={{
-                color: theme.textTertiary,
-                fontSize: 13,
-                textAlign: "right",
+                width: 34,
+                height: 34,
+                borderRadius: 9,
+                borderCurve: "continuous",
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: theme.primaryMuted,
               }}
             >
-              {detail}
-            </Text>
-          ) : null}
-          <SFSymbol name="chevron.right" size={14} color={theme.textTertiary} />
-        </View>
+              <SFSymbol name={icon} size={20} color={theme.primary} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+              <Text
+                allowFontScaling
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                style={{ color: theme.text, fontSize: 17, fontWeight: "400" }}
+              >
+                {label}
+              </Text>
+              {description ? (
+                <Text
+                  allowFontScaling
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                  style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 18 }}
+                >
+                  {description}
+                </Text>
+              ) : null}
+            </View>
+            <View style={{ maxWidth: "34%", alignItems: "flex-end", gap: 4 }}>
+              {detail ? (
+                <Text
+                  allowFontScaling
+                  maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                  style={{
+                    color: theme.textTertiary,
+                    fontSize: 13,
+                    textAlign: "right",
+                  }}
+                >
+                  {detail}
+                </Text>
+              ) : null}
+              <SFSymbol name="chevron.right" size={14} color={theme.textTertiary} />
+            </View>
+          </View>
+        )}
       </Pressable>
     </Link>
   );

@@ -325,14 +325,7 @@ export class SecureTransportClient {
         trusted,
         ...this.trustedDesktops.filter((entry) => entry.macDeviceId !== trusted.macDeviceId),
       ];
-      this.activeSession = {
-        macDeviceId: trusted.macDeviceId,
-        endpointUrl,
-        sessionToken: body.sessionToken,
-        certSha256: trusted.certSha256,
-        spkiSha256: trusted.spkiSha256,
-        mobileDeviceId: trusted.mobileDeviceId,
-      };
+      this.activeSession = activeSessionFromTrustedDesktop(trusted);
       this.activeSessionRestoreBlocked = false;
       await this.persistTrustedState();
       this.setConnectionStatus("connecting");
@@ -363,14 +356,7 @@ export class SecureTransportClient {
     this.eventAbortController?.abort();
     this.eventAbortController = null;
     this.lastError = null;
-    this.activeSession = {
-      macDeviceId: trusted.macDeviceId,
-      endpointUrl: trusted.endpointUrl,
-      sessionToken: trusted.sessionToken,
-      certSha256: trusted.certSha256,
-      spkiSha256: trusted.spkiSha256,
-      mobileDeviceId: trusted.mobileDeviceId,
-    };
+    this.activeSession = activeSessionFromTrustedDesktop(trusted);
     this.activeSessionRestoreBlocked = false;
     await this.persistTrustedState();
     this.setConnectionStatus("connecting");

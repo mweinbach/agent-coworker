@@ -174,14 +174,12 @@ describe("mobile secure transport client", () => {
       headers?: Record<string, string>;
     }> = [];
     const plaintextMessages: string[] = [];
+    const streamRequests: unknown[] = [];
     __internal.setPinnedHttpsFetchForTesting(
       mock(async (request: { url: string; method: string; body?: string }) => {
         requests.push(request);
         if (request.url.endsWith("/pair")) {
           return Response.json({ sessionToken: "session-token" }) as unknown as Response;
-        }
-        if (request.url.endsWith("/events")) {
-          return await new Promise<Response>(() => {});
         }
         if (request.url.endsWith("/rpc")) {
           return new Response("server-response", { status: 200 });
@@ -189,13 +187,25 @@ describe("mobile secure transport client", () => {
         return new Response("", { status: 404 });
       }) as never,
     );
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (request) => {
+        streamRequests.push(request);
+        return () => {};
+      }),
+    );
     const client = new SecureTransportClient();
     client.subscribe({
       onPlaintextMessage: (text) => plaintextMessages.push(text),
     });
 
-    await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    const snapshot = await client.connectFromQrPayload(buildPayload({ hosts: ["192.168.1.10"] }));
+    await waitFor(() => streamRequests.length === 1);
     await client.sendPlaintext('{"jsonrpc":"2.0","method":"thread/list","id":1}');
+
+    expect(snapshot).toMatchObject({
+      connectedMacDeviceId: "desktop-identity",
+      relayUrl: "https://192.168.1.10:9443",
+    });
 
     const pairedDeviceId = JSON.parse(
       requests.find((request) => request.url.endsWith("/pair"))?.body ?? "{}",
@@ -212,7 +222,20 @@ describe("mobile secure transport client", () => {
       certSha256: "a".repeat(64),
       spkiSha256: "b".repeat(43),
     });
+    expect(streamRequests).toEqual([
+      {
+        url: "https://192.168.1.10:9443/events",
+        method: "GET",
+        headers: {
+          authorization: "Bearer session-token",
+          "x-cowork-mobile-device-id": pairedDeviceId,
+        },
+        certSha256: "a".repeat(64),
+        spkiSha256: "b".repeat(43),
+      },
+    ]);
     expect(plaintextMessages).toEqual(["server-response"]);
+    await client.disconnect();
   });
 
   test("does not deliver HTTP notification ack bodies as plaintext messages", async () => {
@@ -815,6 +838,107 @@ describe("mobile secure transport client", () => {
       connectedMacDeviceId: null,
       lastError: expect.stringContaining("Pairing failed against all advertised hosts"),
     });
+  });
+
+  test("reconnects with the selected desktop's endpoint, pins, token, device ID, and identity", async () => {
+    secureStoreValues.set(
+      "cowork.h3.trustedDesktops.v2",
+      JSON.stringify([
+        {
+          macDeviceId: "previous-desktop",
+          endpointUrl: "https://previous.example:9443",
+          certSha256: "a".repeat(64),
+          spkiSha256: "b".repeat(43),
+          mobileDeviceId: "previous-mobile",
+        },
+        {
+          macDeviceId: "selected-desktop",
+          endpointUrl: "https://selected.example:10443",
+          certSha256: "c".repeat(64),
+          spkiSha256: "d".repeat(43),
+          mobileDeviceId: "selected-mobile",
+        },
+      ]),
+    );
+    secureStoreValues.set("cowork_session_token_previous-desktop", "previous-token");
+    secureStoreValues.set("cowork_session_token_selected-desktop", "selected-token");
+    secureStoreValues.set("cowork.h3.mobileDeviceId.v1", "fallback-mobile");
+    secureStoreValues.set(
+      "cowork.h3.activeSession.v1",
+      JSON.stringify({ macDeviceId: "previous-desktop" }),
+    );
+    const streamRequests: unknown[] = [];
+    const rpcRequests: unknown[] = [];
+    const streamLifecycle: string[] = [];
+    const states: string[] = [];
+    __internal.setPinnedHttpsStreamForTesting(
+      mock(async (request) => {
+        streamRequests.push(request);
+        streamLifecycle.push(`open:${request.url}`);
+        return () => streamLifecycle.push(`close:${request.url}`);
+      }),
+    );
+    __internal.setPinnedHttpsFetchForTesting(
+      mock(async (request) => {
+        rpcRequests.push(request);
+        return new Response("", { status: 200 });
+      }),
+    );
+    const client = new SecureTransportClient();
+    client.subscribe({
+      onStateChanged(snapshot) {
+        states.push(`${snapshot.connectedMacDeviceId}:${snapshot.status}`);
+      },
+    });
+
+    await client.getSnapshot();
+    await waitFor(() => states.includes("previous-desktop:connected"));
+    const snapshot = await client.reconnectTrustedDesktop("selected-desktop");
+    await waitFor(() => states.includes("selected-desktop:connected"));
+    await client.sendPlaintext('{"jsonrpc":"2.0","method":"thread/list","id":1}');
+
+    expect(snapshot).toMatchObject({
+      connectedMacDeviceId: "selected-desktop",
+      relayUrl: "https://selected.example:10443",
+      lastError: null,
+    });
+    const selectedSessionFields = {
+      headers: {
+        authorization: "Bearer selected-token",
+        "x-cowork-mobile-device-id": "selected-mobile",
+      },
+      certSha256: "c".repeat(64),
+      spkiSha256: "d".repeat(43),
+    };
+    expect(streamRequests).toHaveLength(2);
+    expect(streamRequests[1]).toEqual({
+      ...selectedSessionFields,
+      url: "https://selected.example:10443/events",
+      method: "GET",
+    });
+    expect(rpcRequests).toEqual([
+      {
+        ...selectedSessionFields,
+        url: "https://selected.example:10443/rpc",
+        method: "POST",
+        headers: { ...selectedSessionFields.headers, "content-type": "application/json" },
+        body: '{"jsonrpc":"2.0","method":"thread/list","id":1}',
+      },
+    ]);
+    expect(streamLifecycle).toEqual([
+      "open:https://previous.example:9443/events",
+      "close:https://previous.example:9443/events",
+      "open:https://selected.example:10443/events",
+    ]);
+    expect(states).toEqual([
+      "previous-desktop:connected",
+      "selected-desktop:connecting",
+      "selected-desktop:connected",
+    ]);
+    expect(JSON.parse(secureStoreValues.get("cowork.h3.activeSession.v1") ?? "null")).toEqual({
+      macDeviceId: "selected-desktop",
+    });
+    await client.disconnect();
   });
 
   test("clears stale errors when reconnecting a trusted desktop", async () => {

@@ -42,7 +42,7 @@ disposition, including retained compatibility APIs and dynamic test consumers.
 | Measurement | Original `e0e682ee` | First pass `b739dbdd` | Continued sweep `5ba8f6f8` | Completion pass |
 | --- | ---: | ---: | ---: | ---: |
 | Tracked paths | 2,656 | 2,660 | 2,663 | 2,680 |
-| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,735 |
+| Tracked text lines (includes tests/docs/generated/vendor content) | 673,216 | 672,647 | 673,463 | 676,806 |
 | Files scanned by the cognitive-complexity command | 1,876 | 1,879 | 1,882 | 1,892 |
 | Functions with cognitive complexity above 15 | 713 | 709 | 709 | 710 |
 | Source functions above 15 | 661 | 657 | 657 | 657 |
@@ -267,6 +267,7 @@ historical checkpoints, not the final platform status.
 | Codex turn completion outruns asynchronous stream callbacks | Fixed | Ordered callback delivery, rejected callbacks, duplicate/foreign-turn filtering, tool-output interleavings, and abort/disconnect/deadline tests |
 | An apparently unused Electron export is loaded through a cache-busted dynamic import | Retained | Full-suite failure reproduced; `MAX_READ_FILE_BYTES` restored and all visibility candidates checked for dynamic consumers |
 | Comparison checkout can run a local Git hook or survive a failed partial checkout | Fixed | Real temporary-repository tests prove hooks do not execute and partially registered worktrees are removed |
+| General CI tests lack the installed Expo SDK used by the new boundary tests | Fixed | A clean Linux run reproduces the missing module and passes after the locked install; parsed workflow tests guard mandatory installation before the suite and its cache inputs |
 | Desktop gates expect obsolete drawer, composer, and startup behavior | Fixed | Tests assert the existing inline context layout and usable width, scoped recovery status, and editable disconnected composer; deliberate failures still fail |
 | Electron quality code is excluded from normal TypeScript checking | Fixed | Quality harness included in the desktop project; incorrect Playwright types and browser callback shadowing corrected |
 | Linux images predate the current compact layout and semantic typography | Refreshed after review | 33 baselines and the matching product image pass a clean 59-test Linux matrix; all four deliberate failure probes pass without relaxing tolerances or budgets |
@@ -289,13 +290,22 @@ subtotal. The extra hotspot relative to `5ba8f6f8` is in a regression test; the
 source-hotspot count remains 657.
 
 The completion measurements include code commit `0d1439bc` and this tracker
-update. Final local verification passes: 8,353 tests across 718 files, with 27
+update. Final local verification passes: 8,355 tests across 718 files, with 27
 existing skips; root, harness, desktop, and mobile TypeScript checks; standalone
 strict checking of the comparison script/tests; Biome lint and formatting; docs
 consistency; and fresh iOS/Android Hermes exports. All 45 mobile test files also
 pass independently. One earlier full run overlapped the deliberately failing
 asset regressions; the recorded final run starts after the corrected assets are
 frozen and passes all six asset cases and eight native-toolbar cases.
+
+A subsequent clean-CI check exposed a dependency setup gap in the new tests that
+exercise the real Expo SDK: the general Tests job installed only root dependencies.
+The job now installs the existing locked mobile dependency graph before running
+the suite and shares the Mobile job's package-cache inputs. Fresh checkout
+instructions document both installs; tests do not download dependencies or skip
+the actual SDK coverage. Two parsed-workflow regressions fail before that change.
+An independent Linux run installs the frozen graph and passes the real SDK tests
+plus related mobile and workflow tests, with no product or lockfile changes.
 
 The generated server JSON-RPC protocol remains byte-identical at 1,076,304 bytes,
 and all 12 live mobile schema contracts remain unchanged. Knip reports no unused

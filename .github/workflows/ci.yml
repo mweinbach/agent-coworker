@@ -103,6 +103,19 @@ jobs:
 
       - name: Setup dependencies
         uses: ./.github/actions/setup-bun
+        with:
+          cache-scope: mobile
+          cache-dependency-path: |
+            .bun-version
+            bun.lock
+            package.json
+            apps/desktop/package.json
+            packages/*/package.json
+            apps/mobile/bun.lock
+            apps/mobile/package.json
+
+      - name: Install mobile dependencies
+        run: bun install --cwd apps/mobile --frozen-lockfile
 
       - name: Unit tests
         run: bun run test

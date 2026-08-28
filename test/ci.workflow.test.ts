@@ -11,6 +11,20 @@ const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as {
 };
 const setupBunAction = readFileSync(setupBunActionPath, "utf8");
 const bunVersion = readFileSync(bunVersionPath, "utf8").trim();
+const { jobs } = Bun.YAML.parse(workflow) as {
+  jobs: Record<
+    string,
+    {
+      steps: Array<{
+        uses?: string;
+        run?: string;
+        if?: string;
+        "continue-on-error"?: boolean;
+        with?: Record<string, string>;
+      }>;
+    }
+  >;
+};
 
 describe("main CI workflow", () => {
   test("pins Bun version via .bun-version file", () => {
@@ -37,6 +51,36 @@ describe("main CI workflow", () => {
     expect(setupBunAction).toContain("bun install --frozen-lockfile");
     expect(setupBunAction).not.toContain("node_modules");
     expect(workflow).toContain("run: bun install --cwd apps/mobile --frozen-lockfile");
+  });
+
+  test("installs locked mobile SDK dependencies before the full test suite", () => {
+    const steps = jobs.test.steps;
+    const setupIndex = steps.findIndex((step) => step.uses === "./.github/actions/setup-bun");
+    const installIndex = steps.findIndex(
+      (step) => step.run === "bun install --cwd apps/mobile --frozen-lockfile",
+    );
+    const testIndex = steps.findIndex((step) => step.run === "bun run test");
+
+    expect(setupIndex).toBeGreaterThanOrEqual(0);
+    expect(installIndex).toBeGreaterThan(setupIndex);
+    expect(testIndex).toBeGreaterThan(installIndex);
+    expect(steps[installIndex].if).toBeUndefined();
+    expect(steps[installIndex]["continue-on-error"]).toBeUndefined();
+  });
+
+  test("shares the mobile dependency cache and lock inputs with the Mobile job", () => {
+    const testSetup = jobs.test.steps.find((step) => step.uses === "./.github/actions/setup-bun");
+    const mobileSetup = jobs.mobile.steps.find(
+      (step) => step.uses === "./.github/actions/setup-bun",
+    );
+    const inputs = testSetup?.with;
+    const cachePaths = inputs?.["cache-dependency-path"]?.trim().split(/\s+/) ?? [];
+
+    expect(inputs?.["cache-scope"]).toBe("mobile");
+    expect(inputs).toEqual(mobileSetup?.with);
+    expect(cachePaths).toContain("bun.lock");
+    expect(cachePaths).toContain("apps/mobile/bun.lock");
+    expect(cachePaths).toContain("apps/mobile/package.json");
   });
 
   test("keeps the core reliability guardrails", () => {

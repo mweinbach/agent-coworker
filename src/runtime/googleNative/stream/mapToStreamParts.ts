@@ -61,31 +61,19 @@ export function mapGoogleEventToStreamParts(
       return parts;
     }
 
-    if (contentType === "function_call") {
+    if (
+      contentType === "function_call" ||
+      (contentType && isNativeGoogleToolCallContentType(contentType))
+    ) {
       const block = contentBlocks.get(index);
-      if (block?.type !== "toolCall") return [];
-      const parts: Array<Record<string, unknown>> = [
-        { type: "tool-input-start", id: block.id, toolName: block.name },
-      ];
-      if (Object.keys(block.arguments).length > 0) {
-        parts.push({
-          type: "tool-input-delta",
-          id: block.id,
-          delta: safeJsonStringify(block.arguments),
-        });
-      }
-      return parts;
-    }
-
-    if (contentType && isNativeGoogleToolCallContentType(contentType)) {
-      const block = contentBlocks.get(index);
-      if (block?.type !== "providerToolCall") return [];
+      const expectedBlockType = contentType === "function_call" ? "toolCall" : "providerToolCall";
+      if (block?.type !== expectedBlockType) return [];
       const parts: Array<Record<string, unknown>> = [
         {
           type: "tool-input-start",
           id: block.id,
           toolName: block.name,
-          providerExecuted: true,
+          ...(block.type === "providerToolCall" ? { providerExecuted: true } : {}),
         },
       ];
       if (Object.keys(block.arguments).length > 0) {
@@ -132,17 +120,14 @@ export function mapGoogleEventToStreamParts(
       return [{ type: "tool-input-delta", id: block.id, delta: deltaText }];
     }
 
-    if (deltaType === "function_call") {
+    if (
+      deltaType === "function_call" ||
+      (deltaType && isNativeGoogleToolCallContentType(deltaType))
+    ) {
       const block = contentBlocks.get(index);
       const deltaArgs = asRecord(delta?.arguments);
-      if (block?.type !== "toolCall" || !deltaArgs) return [];
-      return [{ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(deltaArgs) }];
-    }
-
-    if (deltaType && isNativeGoogleToolCallContentType(deltaType)) {
-      const block = contentBlocks.get(index);
-      const deltaArgs = asRecord(delta?.arguments);
-      if (block?.type !== "providerToolCall" || !deltaArgs) return [];
+      const expectedBlockType = deltaType === "function_call" ? "toolCall" : "providerToolCall";
+      if (block?.type !== expectedBlockType || !deltaArgs) return [];
       return [{ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(deltaArgs) }];
     }
 

@@ -442,8 +442,10 @@ describe("mobile control stores", () => {
   });
 
   test("MCP store reads and validates servers through the control endpoints", async () => {
+    let failServerRead = false;
     const { client, calls } = createFakeClient((method) => {
       if (method === "cowork/mcp/servers/read") {
+        if (failServerRead) throw new Error("Desktop disconnected.");
         return {
           event: {
             type: "mcp_servers",
@@ -492,8 +494,16 @@ describe("mobile control stores", () => {
       throw new Error(`Unexpected method: ${method}`);
     });
     setActiveCoworkJsonRpcClient(client);
+    useMcpStore.setState({ error: "Previous refresh failed." });
 
     await useMcpStore.getState().fetchServers();
+    expect(useMcpStore.getState()).toMatchObject({
+      servers: [{ name: "docs" }],
+      files: [],
+      warnings: [],
+      loading: false,
+      error: null,
+    });
     await useMcpStore.getState().validateServer("docs");
 
     expect(calls.map((entry) => entry.method)).toEqual([
@@ -501,5 +511,14 @@ describe("mobile control stores", () => {
       "cowork/mcp/server/validate",
     ]);
     expect(useMcpStore.getState().validationByName.docs?.toolCount).toBe(3);
+
+    const servers = useMcpStore.getState().servers;
+    failServerRead = true;
+    await useMcpStore.getState().fetchServers();
+    expect(useMcpStore.getState().servers).toBe(servers);
+    expect(useMcpStore.getState()).toMatchObject({
+      loading: false,
+      error: "Desktop disconnected.",
+    });
   });
 });

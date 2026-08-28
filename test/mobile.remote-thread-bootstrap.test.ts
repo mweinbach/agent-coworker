@@ -244,6 +244,42 @@ describe("mobile remote thread bootstrap", () => {
     expect(result.totalsByWorkspaceId).toEqual({});
   });
 
+  test("loadMoreOneOffChatWorkspaces requests only the next page in last-opened order", async () => {
+    const { client, calls } = createStubClient({
+      "/chat-middle": async () => ({ threads: [makeThread("middle", "/chat-middle")], total: 1 }),
+      "/chat-oldest": async () => ({ threads: [makeThread("oldest", "/chat-oldest")], total: 2 }),
+    });
+    const workspaces = [
+      { ...makeWorkspace("chat-oldest", "/chat-oldest"), lastOpenedAt: "2026-01-01T00:00:00Z" },
+      makeWorkspace("project", "/project", "project"),
+      { ...makeWorkspace("chat-newest", "/chat-newest"), lastOpenedAt: "2026-01-03T00:00:00Z" },
+      { ...makeWorkspace("chat-middle", "/chat-middle"), lastOpenedAt: "2026-01-02T00:00:00Z" },
+    ];
+
+    const result = await loadMoreOneOffChatWorkspaces(client, workspaces, 1, 5);
+
+    expect(calls.map((call) => call.cwd)).toEqual(["/chat-middle", "/chat-oldest"]);
+    expect(result.threads.map((thread) => thread.id)).toEqual(["middle", "oldest"]);
+    expect(result.totalsByWorkspaceId).toEqual({ "chat-middle": 1, "chat-oldest": 2 });
+    expect(result.nextLimit).toBe(3);
+    expect(workspaces.map((workspace) => workspace.id)).toEqual([
+      "chat-oldest",
+      "project",
+      "chat-newest",
+      "chat-middle",
+    ]);
+  });
+
+  test("loadMoreOneOffChatWorkspaces sends no requests after the final page", async () => {
+    const { client, calls } = createStubClient({});
+    const workspaces = [makeWorkspace("chat-1", "/chat-1")];
+
+    const result = await loadMoreOneOffChatWorkspaces(client, workspaces, 1, 5);
+
+    expect(calls).toEqual([]);
+    expect(result).toEqual({ threads: [], totalsByWorkspaceId: {}, nextLimit: 1 });
+  });
+
   test("loadMoreOneOffChatWorkspaces propagates load errors instead of resolving with empty threads", async () => {
     const { client } = createStubClient({
       "/chat-1": async () => {

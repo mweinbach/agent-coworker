@@ -2,6 +2,7 @@ import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { DarkTheme, DefaultTheme, ThemeProvider } from "expo-router/react-navigation";
 import { StatusBar, useColorScheme, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { MobileAppProvider } from "@/providers/MobileAppProvider";
@@ -29,29 +30,31 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
-      <ThemeProvider
-        value={{
-          ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme),
-          colors: {
-            ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme).colors,
-            background: theme.background,
-            card: theme.surface,
-            border: theme.border,
-            primary: theme.primary,
-            text: theme.text,
-          },
-        }}
-      >
-        <MobileAppProvider>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(pairing)" />
-            <Stack.Screen name="(app)" />
-          </Stack>
-        </MobileAppProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
+        <ThemeProvider
+          value={{
+            ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme),
+            colors: {
+              ...(resolvedScheme === "light" ? DefaultTheme : DarkTheme).colors,
+              background: theme.background,
+              card: theme.surface,
+              border: theme.border,
+              primary: theme.primary,
+              text: theme.text,
+            },
+          }}
+        >
+          <MobileAppProvider>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(pairing)" />
+              <Stack.Screen name="(app)" />
+            </Stack>
+          </MobileAppProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

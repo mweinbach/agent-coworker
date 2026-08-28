@@ -1,12 +1,13 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createElement, type ReactNode } from "react";
+import { createContext, createElement, type ReactNode, useContext } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
 let colorScheme: "light" | "dark" = "light";
 let fontsLoaded = true;
+const GestureRootContext = createContext(false);
 
 function mockMobileModule(alias: string, factory: () => unknown) {
   mock.module(alias, factory);
@@ -29,9 +30,27 @@ mockMobileModule("react-native", () => ({
     createElement("span", { "data-status-bar-style": barStyle }),
 }));
 mockMobileModule("react-native-safe-area-context", () => ({ SafeAreaProvider: Container }));
+mockMobileModule("react-native-gesture-handler", () => ({
+  GestureHandlerRootView: ({
+    children,
+    style,
+  }: {
+    children?: ReactNode;
+    style: { flex: number };
+  }) =>
+    createElement(
+      GestureRootContext.Provider,
+      { value: true },
+      createElement("div", { "data-gesture-root-flex": style.flex }, children),
+    ),
+}));
 mockMobileModule("expo-font", () => ({ useFonts: () => [fontsLoaded] }));
 mockMobileModule("expo-router", () => ({
-  Stack: Object.assign(Container, { Screen: () => null }),
+  Stack: Object.assign(
+    ({ children }: { children?: ReactNode }) =>
+      createElement("div", { "data-gestures-enabled": useContext(GestureRootContext) }, children),
+    { Screen: () => null },
+  ),
 }));
 mockMobileModule("expo-router/react-navigation", () => ({
   DarkTheme: { colors: {} },
@@ -65,6 +84,15 @@ for (const font of [
 const { default: RootLayout } = await import("../apps/mobile/src/app/_layout");
 
 afterAll(() => mock.restore());
+
+test("keeps every app route inside a full-size gesture root", () => {
+  fontsLoaded = true;
+
+  const html = renderToStaticMarkup(createElement(RootLayout));
+
+  expect(html).toContain('data-gestures-enabled="true"');
+  expect(html).toContain('data-gesture-root-flex="1"');
+});
 
 describe("mobile status bar contrast", () => {
   test.each([

@@ -28,7 +28,6 @@ import {
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
-  type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
 import { throwIfOperationAborted, waitForOperation } from "./operationIntent";
 import { getAgentProfilesCatalogGeneration, RUNTIME } from "./runtimeState";
@@ -319,35 +318,6 @@ export function createControlSocketHelpers(
     );
   }
 
-  function waitForReady(
-    socket: Pick<WorkspaceJsonRpcSocket, "readyPromise">,
-    timeoutMs = requestTimeoutMs,
-  ): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(false);
-      }, timeoutMs);
-
-      void socket.readyPromise.then(
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(true);
-        },
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(false);
-        },
-      );
-    });
-  }
-
   function waitForPromiseCompletion(
     promise: Promise<unknown>,
     timeoutMs = requestTimeoutMs,
@@ -466,20 +436,6 @@ export function createControlSocketHelpers(
     void deps.persist(get);
   }
 
-  function rememberControlStoreSet(workspaceId: string, set: StoreSet) {
-    if (isWorkspaceDisposed(workspaceId)) {
-      return;
-    }
-    controlStoreSettersByWorkspace.set(workspaceId, set);
-  }
-
-  function rememberControlStoreGet(workspaceId: string, get: StoreGet) {
-    if (isWorkspaceDisposed(workspaceId)) {
-      return;
-    }
-    controlStoreGettersByWorkspace.set(workspaceId, get);
-  }
-
   function getControlStoreGet(workspaceId: string): StoreGet | null {
     return controlStoreGettersByWorkspace.get(workspaceId) ?? null;
   }
@@ -534,8 +490,8 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
-    rememberControlStoreGet(workspaceId, get);
-    rememberControlStoreSet(workspaceId, set);
+    controlStoreGettersByWorkspace.set(workspaceId, get);
+    controlStoreSettersByWorkspace.set(workspaceId, set);
     const existingLifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     const existingRouterCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
     if (existingLifecycleCleanup && existingRouterCleanup) {
@@ -617,8 +573,6 @@ export function createControlSocketHelpers(
     if (isWorkspaceDisposed(workspaceId)) {
       return null;
     }
-    rememberControlStoreGet(workspaceId, get);
-    rememberControlStoreSet(workspaceId, set);
     ensureJsonRpcControlLifecycle(get, set, workspaceId);
     return ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   }
@@ -644,7 +598,10 @@ export function createControlSocketHelpers(
         return false;
       }
       const startedAt = Date.now();
-      const ready = await waitForOperation(waitForReady(socket, timeoutMs), options.signal);
+      const ready = await waitForOperation(
+        waitForPromiseCompletion(socket.readyPromise, timeoutMs),
+        options.signal,
+      );
       if (!ready) {
         return false;
       }
@@ -695,7 +652,7 @@ export function createControlSocketHelpers(
       if (!socket || !isCurrent()) {
         return null;
       }
-      await waitForReady(socket);
+      await waitForPromiseCompletion(socket.readyPromise);
       if (!isCurrent()) {
         return null;
       }
@@ -1135,13 +1092,6 @@ export function createControlSocketHelpers(
           ? { skillImprovementExcludedSkills: evt.config.skillImprovementExcludedSkills }
           : {}),
       };
-      const hasMemorySessionConfigPatch =
-        Object.hasOwn(memorySessionConfigPatch, "advancedMemory") ||
-        Object.hasOwn(memorySessionConfigPatch, "memoryGenerationModel") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementEnabled") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementModel") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementScope") ||
-        Object.hasOwn(memorySessionConfigPatch, "skillImprovementExcludedSkills");
 
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
@@ -1235,13 +1185,12 @@ export function createControlSocketHelpers(
               runtimeWorkspaceId,
               {
                 ...runtime,
-                controlSessionConfig:
-                  hasMemorySessionConfigPatch && runtime?.controlSessionConfig
-                    ? applyMemorySessionConfigPatch(
-                        runtime.controlSessionConfig,
-                        memorySessionConfigPatch,
-                      )
-                    : (runtime?.controlSessionConfig ?? null),
+                controlSessionConfig: runtime?.controlSessionConfig
+                  ? applyMemorySessionConfigPatch(
+                      runtime.controlSessionConfig,
+                      memorySessionConfigPatch,
+                    )
+                  : (runtime?.controlSessionConfig ?? null),
               },
             ]),
           ),

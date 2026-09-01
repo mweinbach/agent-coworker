@@ -352,7 +352,11 @@ export function collectText(value: unknown, opts: { includeDeleted?: boolean } =
     }
     const record = asRecord(node);
     if (!record) return;
-    for (const [childKey, child] of Object.entries(record)) visit(child, childKey);
+    for (const [childKey, child] of Object.entries(record)) {
+      // Attributed text elements (for example w:t xml:space="preserve")
+      // store their value under #text instead of directly under the tag name.
+      visit(child, childKey === "#text" ? key : childKey);
+    }
   };
   visit(value, null);
   return normalizeWhitespace(output.join(" "));

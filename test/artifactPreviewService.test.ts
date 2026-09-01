@@ -103,6 +103,21 @@ describe("ArtifactPreviewService", () => {
     }
   });
 
+  test("preserves DOCX text nodes with XML whitespace attributes", async () => {
+    const preview = await service.preview(
+      artifactBlob("report.docx", await makeDocxFixture({ preserveSpace: true })),
+    );
+
+    expect(preview.kind).toBe("docx");
+    if (preview.kind !== "docx") return;
+    expect(preview.document.headings[0]?.text).toBe("Heading");
+    expect(preview.document.paragraphs[0]?.text).toBe("Paragraph");
+    expect(preview.document.tables[0]?.rows).toEqual([["Cell"]]);
+    expect(preview.document.headers[0]?.text).toBe("Header");
+    expect(preview.document.footers[0]?.text).toBe("Footer");
+    expect(preview.document.trackedChanges[0]?.text).toBe("Inserted");
+  });
+
   test("bounds text and inline image/PDF preview payloads", async () => {
     const text = await service.preview(
       artifactBlob("large.txt", "x".repeat(MAX_PREVIEW_TEXT_CHARS + 25)),

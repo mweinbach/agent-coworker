@@ -675,9 +675,9 @@ export default function ThreadDetailScreen() {
 
   async function sendComposerSubmission(
     submission: ComposerSubmission,
-    targetThreadId = activeThread.id,
+    targetThreadId: string,
+    attempt: number,
   ) {
-    const attempt = ++submissionAttemptRef.current;
     const client = getActiveCoworkJsonRpcClient();
     const optimisticText =
       submission.text || submission.attachments.map((attachment) => attachment.filename).join(", ");
@@ -718,8 +718,9 @@ export default function ThreadDetailScreen() {
   }
 
   async function dispatchComposerSubmission(submission: ComposerSubmission) {
+    const attempt = ++submissionAttemptRef.current;
     if (!isDraftThread) {
-      await sendComposerSubmission(submission);
+      await sendComposerSubmission(submission, activeThread.id, attempt);
       return;
     }
 
@@ -732,11 +733,13 @@ export default function ThreadDetailScreen() {
         ...(activeWorkspaceCwd ? { cwd: activeWorkspaceCwd } : {}),
         clientThreadId: draftThreadId,
       });
+      if (attempt !== submissionAttemptRef.current) return;
       promoteDraftThread(draftThreadId, started.thread);
-      const pendingSend = sendComposerSubmission(submission, started.thread.id);
+      const pendingSend = sendComposerSubmission(submission, started.thread.id, attempt);
       router.replace(`/thread/${started.thread.id}` as const);
       await pendingSend;
     } catch (error) {
+      if (attempt !== submissionAttemptRef.current) return;
       const message = describeError(error, "Failed to start this conversation.");
       failComposerSubmission(draftThreadId, submission.clientMessageId, message);
       setActionError({ kind: "send", message });

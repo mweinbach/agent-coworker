@@ -10,8 +10,8 @@ import {
 import { listStyle, padding, tint } from "@expo/ui/swift-ui/modifiers";
 import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useRouter } from "expo-router";
-import { useRef, useState } from "react";
-import { Alert, Pressable, Text as RNText, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Alert, AppState, Linking, Pressable, Text as RNText, TextInput, View } from "react-native";
 
 import {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
@@ -82,7 +82,7 @@ function CameraScanner({
 export function PairingScanIos() {
   const router = useRouter();
   const theme = useAppTheme();
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [scannedPayload, setScannedPayload] = useState<string | null>(null);
   const [manualPayload, setManualPayload] = useState("");
   const connectionState = usePairingStore((state) => state.connectionState);
@@ -90,12 +90,31 @@ export function PairingScanIos() {
   const scanHandlerRef = useRef<ReturnType<typeof createPairingScanHandler> | null>(null);
 
   const granted = permission?.granted ?? false;
+  const needsSettings = permission?.canAskAgain === false;
   const pairingInFlight =
     scannedPayload !== null &&
     (connectionState.status === "pairing" || connectionState.status === "connecting");
   useAccessibilityAnnouncement(
     connectionState.lastError ?? (pairingInFlight ? "Connecting to your Mac" : null),
   );
+
+  useEffect(() => {
+    let mounted = true;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      void getPermission().catch((error) => {
+        if (!mounted) return;
+        Alert.alert(
+          "Camera access unavailable",
+          error instanceof Error ? error.message : "Could not check camera permission. Try again.",
+        );
+      });
+    });
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, [getPermission]);
 
   if (!scanHandlerRef.current) {
     scanHandlerRef.current = createPairingScanHandler({
@@ -116,6 +135,25 @@ export function PairingScanIos() {
 
   async function onBarcodeScanned(result: BarcodeScanningResult) {
     await scanHandlerRef.current?.handleScan(result);
+  }
+
+  async function enableCamera() {
+    try {
+      if (needsSettings) {
+        await Linking.openSettings();
+      } else {
+        await requestPermission();
+      }
+    } catch (error) {
+      Alert.alert(
+        needsSettings ? "Unable to open Settings" : "Camera access unavailable",
+        error instanceof Error
+          ? error.message
+          : needsSettings
+            ? "Open your device Settings to enable camera access for Cowork."
+            : "Could not request camera permission. Try again.",
+      );
+    }
   }
 
   async function pairManualPayload() {
@@ -165,15 +203,19 @@ export function PairingScanIos() {
               <ContentUnavailableView
                 title="Camera Access Needed"
                 systemImage="camera.viewfinder"
-                description="Allow camera access to scan the QR code shown on your Mac."
+                description={
+                  needsSettings
+                    ? "Enable camera access for Cowork in Settings, then return to scan the QR code."
+                    : "Allow camera access to scan the QR code shown on your Mac."
+                }
                 modifiers={[padding({ vertical: 8 })]}
               />
               <PairingActionButton
-                title="Allow Camera Access"
+                title={needsSettings ? "Open Settings" : "Allow Camera Access"}
                 systemImage="camera.fill"
                 primaryColor={theme.primary}
                 onPress={() => {
-                  void requestPermission();
+                  void enableCamera();
                 }}
               />
             </Section>

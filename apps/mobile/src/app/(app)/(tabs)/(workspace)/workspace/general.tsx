@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Switch, Text, TextInput, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
@@ -8,6 +8,7 @@ import {
   MAX_DYNAMIC_TYPE_MULTIPLIER,
   minimumTouchTarget,
 } from "@/features/accessibility/mobile-accessibility";
+import { getOfflineCacheScope } from "@/features/cowork/offlineCacheStorage";
 import { useProviderStore } from "@/features/cowork/providerStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
@@ -74,32 +75,55 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
+type RoutingDraft = {
+  desktopId: string | null;
+  workspaceCwd: string | null;
+  preferredChildModel: string;
+  preferredChildModelRef: string;
+  allowedChildModelRefs: string;
+};
+
 export default function WorkspaceGeneralScreen() {
   const theme = useAppTheme();
   const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));
+  const desktopId = getOfflineCacheScope().desktopId;
   const activeWorkspaceName = useWorkspaceStore((state) => state.activeWorkspaceName);
   const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
   const applyWorkspaceDefaults = useWorkspaceStore((state) => state.applyWorkspaceDefaults);
+  const error = useWorkspaceStore((state) => state.error);
   const catalog = useProviderStore((state) => state.catalog);
   const refreshProviders = useProviderStore((state) => state.refresh);
 
-  const [preferredChildModel, setPreferredChildModel] = useState("");
-  const [preferredChildModelRef, setPreferredChildModelRef] = useState("");
-  const [allowedChildModelRefs, setAllowedChildModelRefs] = useState("");
+  const [routingDraft, setRoutingDraft] = useState<RoutingDraft | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
+  const savedRouting: RoutingDraft = {
+    desktopId,
+    workspaceCwd: activeWorkspaceCwd,
+    preferredChildModel: controlSnapshot?.sessionConfig?.preferredChildModel ?? "",
+    preferredChildModelRef: controlSnapshot?.sessionConfig?.preferredChildModelRef ?? "",
+    allowedChildModelRefs: (controlSnapshot?.sessionConfig?.allowedChildModelRefs ?? []).join(", "),
+  };
+  const currentRouting =
+    routingDraft?.desktopId === desktopId && routingDraft.workspaceCwd === activeWorkspaceCwd
+      ? routingDraft
+      : savedRouting;
+  const { preferredChildModel, preferredChildModelRef, allowedChildModelRefs } = currentRouting;
+  const updateRoutingDraft = (patch: Partial<Omit<RoutingDraft, "desktopId" | "workspaceCwd">>) => {
+    setRoutingDraft((current) => ({
+      ...(current?.desktopId === desktopId && current.workspaceCwd === activeWorkspaceCwd
+        ? current
+        : savedRouting),
+      ...patch,
+    }));
+  };
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void refreshProviders();
     }
-  }, [isConnected, refreshProviders]);
-
-  useEffect(() => {
-    const config = controlSnapshot?.sessionConfig;
-    setPreferredChildModel(config?.preferredChildModel ?? "");
-    setPreferredChildModelRef(config?.preferredChildModelRef ?? "");
-    setAllowedChildModelRefs((config?.allowedChildModelRefs ?? []).join(", "));
-  }, [controlSnapshot]);
+  }, [isConnected, activeWorkspaceCwd, refreshProviders]);
 
   const selectedProvider = controlSnapshot?.config?.provider ?? catalog[0]?.id ?? null;
   const selectedModel = controlSnapshot?.config?.model ?? null;
@@ -120,25 +144,39 @@ export default function WorkspaceGeneralScreen() {
   const googleOptions = controlSnapshot?.sessionConfig?.providerOptions?.google;
 
   const saveSubagentDefaults = async () => {
-    await applyWorkspaceDefaults({
-      config: {
-        preferredChildModel: preferredChildModel.trim() || undefined,
-        preferredChildModelRef: preferredChildModelRef.trim() || undefined,
-        allowedChildModelRefs: allowedChildModelRefs
-          .split(",")
-          .map((entry) => entry.trim())
-          .filter(Boolean),
-        childModelRoutingMode: routingMode,
-      },
-    });
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    const submittedDraft = routingDraft;
+    try {
+      const saved = await applyWorkspaceDefaults({
+        config: {
+          preferredChildModel: preferredChildModel.trim() || undefined,
+          preferredChildModelRef: preferredChildModelRef.trim() || undefined,
+          allowedChildModelRefs: allowedChildModelRefs
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+          childModelRoutingMode: routingMode,
+        },
+      });
+      if (saved) setRoutingDraft((current) => (current === submittedDraft ? null : current));
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
-  if (!isConnected) {
+  if (!isConnected || !activeWorkspaceCwd) {
     return (
       <Screen scroll>
         <SectionCard
           title="General"
-          description="Connect to a desktop to manage workspace defaults."
+          description={
+            isConnected
+              ? "Waiting for the desktop workspace."
+              : "Connect to a desktop to manage workspace defaults."
+          }
         >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Workspace defaults stay disabled until the direct desktop connection is active.
@@ -150,6 +188,15 @@ export default function WorkspaceGeneralScreen() {
 
   return (
     <Screen scroll avoidKeyboard contentStyle={{ gap: 18 }}>
+      {error ? (
+        <Text
+          accessibilityRole="alert"
+          accessibilityLiveRegion="assertive"
+          style={{ color: theme.danger }}
+        >
+          {error}
+        </Text>
+      ) : null}
       <SectionCard
         title={activeWorkspaceName ?? "Workspace"}
         description={activeWorkspaceCwd ?? "No workspace path available"}
@@ -405,7 +452,7 @@ export default function WorkspaceGeneralScreen() {
             <TextInput
               accessibilityLabel="Preferred child model"
               value={preferredChildModel}
-              onChangeText={setPreferredChildModel}
+              onChangeText={(value) => updateRoutingDraft({ preferredChildModel: value })}
               placeholder="gpt-5.4-mini"
               placeholderTextColor={theme.textTertiary}
               style={{
@@ -427,7 +474,7 @@ export default function WorkspaceGeneralScreen() {
             <TextInput
               accessibilityLabel="Preferred child model reference"
               value={preferredChildModelRef}
-              onChangeText={setPreferredChildModelRef}
+              onChangeText={(value) => updateRoutingDraft({ preferredChildModelRef: value })}
               placeholder="provider:model"
               placeholderTextColor={theme.textTertiary}
               style={{
@@ -450,7 +497,7 @@ export default function WorkspaceGeneralScreen() {
               <TextInput
                 accessibilityLabel="Allowed child model references"
                 value={allowedChildModelRefs}
-                onChangeText={setAllowedChildModelRefs}
+                onChangeText={(value) => updateRoutingDraft({ allowedChildModelRefs: value })}
                 placeholder="provider:model, provider:model"
                 placeholderTextColor={theme.textTertiary}
                 multiline
@@ -473,6 +520,8 @@ export default function WorkspaceGeneralScreen() {
           <Pressable
             accessibilityLabel="Save routing defaults"
             accessibilityRole="button"
+            accessibilityState={{ busy: isSaving, disabled: isSaving }}
+            disabled={isSaving}
             onPress={() => {
               void saveSubagentDefaults();
             }}
@@ -488,7 +537,7 @@ export default function WorkspaceGeneralScreen() {
             })}
           >
             <Text style={{ color: theme.primaryText, fontWeight: "700" }}>
-              Save routing defaults
+              {isSaving ? "Saving…" : "Save routing defaults"}
             </Text>
           </Pressable>
         </View>

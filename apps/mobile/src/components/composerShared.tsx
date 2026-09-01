@@ -103,7 +103,7 @@ export function useComposerBehavior({
         ? "Stopping turn"
         : "Stop turn"
       : submitAccessibilityLabel,
-    actionBusy: isStopping,
+    actionBusy: isBusy ? isStopping : isSubmitting,
     actionEnabled,
     actionIcon: isBusy ? "stop.fill" : "arrow.up",
     performAction: () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { GroupedScreen, GroupedSection } from "@/components/pairing/grouped-list";
@@ -39,6 +39,8 @@ export default function SkillsScreen() {
   const workspaceLoading = useWorkspaceStore((s) => s.loading);
   const [sourceInput, setSourceInput] = useState("");
   const [targetScope, setTargetScope] = useState<"project" | "global">("project");
+  const installInFlight = useRef(false);
+  const [installFailed, setInstallFailed] = useState(false);
   useAccessibilityAnnouncement(error);
 
   useEffect(() => {
@@ -46,6 +48,22 @@ export default function SkillsScreen() {
       void fetchSkills();
     }
   }, [isConnected, activeWorkspaceCwd, fetchSkills]);
+
+  const submitInstallation = async () => {
+    if (!sourceInput.trim() || installInFlight.current) return;
+    installInFlight.current = true;
+    setInstallFailed(false);
+    const submittedSource = sourceInput;
+    try {
+      const installed = await installSkill(submittedSource.trim(), targetScope);
+      setInstallFailed(!installed);
+      if (installed) {
+        setSourceInput((current) => (current === submittedSource ? "" : current));
+      }
+    } finally {
+      installInFlight.current = false;
+    }
+  };
 
   if (!isConnected) {
     return (
@@ -94,8 +112,7 @@ export default function SkillsScreen() {
           selectable
           style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21, padding: 16 }}
         >
-          This is the same managed skill surface the desktop control session exposes, now reachable
-          directly from a top-level mobile page.
+          Manage the skills available to Cowork in this workspace.
         </Text>
       </GroupedSection>
 
@@ -193,9 +210,7 @@ export default function SkillsScreen() {
                 disabled: Boolean(mutationPending.install) || !sourceInput.trim(),
               }}
               onPress={() => {
-                if (!sourceInput.trim()) return;
-                void installSkill(sourceInput.trim(), targetScope);
-                setSourceInput("");
+                void submitInstallation();
               }}
               disabled={Boolean(mutationPending.install) || !sourceInput.trim()}
               style={({ pressed }) => ({
@@ -260,9 +275,12 @@ export default function SkillsScreen() {
           <GroupedSection title="Error" footer={error}>
             <View style={{ padding: 16 }}>
               <Pressable
-                accessibilityLabel="Retry loading skills"
+                accessibilityLabel={installFailed ? "Retry installation" : "Retry loading skills"}
                 accessibilityRole="button"
-                onPress={() => void fetchSkills()}
+                disabled={
+                  Boolean(mutationPending.install) || (installFailed && !sourceInput.trim())
+                }
+                onPress={() => void (installFailed ? submitInstallation() : fetchSkills())}
                 style={({ pressed }) => ({
                   minHeight: minimumTouchTarget(),
                   justifyContent: "center",

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { createContext, createElement, type ReactNode, useContext } from "react";
@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 const mobileRequire = createRequire(path.resolve("apps/mobile/package.json"));
 let colorScheme: "light" | "dark" = "light";
 let fontsLoaded = true;
+let fontError: Error | null = null;
 const GestureRootContext = createContext(false);
 
 function mockMobileModule(alias: string, factory: () => unknown) {
@@ -44,7 +45,7 @@ mockMobileModule("react-native-gesture-handler", () => ({
       createElement("div", { "data-gesture-root-flex": style.flex }, children),
     ),
 }));
-mockMobileModule("expo-font", () => ({ useFonts: () => [fontsLoaded] }));
+mockMobileModule("expo-font", () => ({ useFonts: () => [fontsLoaded, fontError] }));
 mockMobileModule("expo-router", () => ({
   Stack: Object.assign(
     ({ children }: { children?: ReactNode }) =>
@@ -84,6 +85,18 @@ for (const font of [
 const { default: RootLayout } = await import("../apps/mobile/src/app/_layout");
 
 afterAll(() => mock.restore());
+beforeEach(() => {
+  fontError = null;
+});
+
+test("keeps navigation reachable when a bundled font fails to load", () => {
+  fontsLoaded = false;
+  fontError = new Error("Font asset could not be loaded");
+
+  const html = renderToStaticMarkup(createElement(RootLayout));
+
+  expect(html).toContain('data-gestures-enabled="true"');
+});
 
 test("keeps every app route inside a full-size gesture root", () => {
   fontsLoaded = true;

@@ -502,6 +502,71 @@ describe("mobile ThreadDetailScreen", () => {
     }
   });
 
+  test.each(["resolve", "reject"])(
+    "does not send or fail a canceled draft when thread creation later %ss",
+    async (completion) => {
+      mockRouteThreadId = "draft-canceled";
+      mockThread.id = mockRouteThreadId;
+      mockThread.composerDraft = "  Keep this exact draft\n";
+      let resolveStart: (result: Awaited<ReturnType<typeof mockStartThread>>) => void = () => {};
+      let rejectStart: (error: Error) => void = () => {};
+      mockStartThread.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveStart = resolve;
+            rejectStart = reject;
+          }),
+      );
+      mockCancelComposerSubmission.mockImplementationOnce(() => {
+        mockThread.composerSubmission = null;
+        return true;
+      });
+      const harness = setupJsdom();
+      const container = harness.dom.window.document.getElementById("root")!;
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(createElement(ThreadDetailScreen)));
+        await act(async () => latestComposerProps.onSubmit());
+        mockThread.composerSubmission = mockBeginComposerSubmission.mock.results.at(-1)?.value;
+        await act(async () => root.render(createElement(ThreadDetailScreen)));
+        await act(async () => latestComposerProps.onStop());
+
+        await act(async () => {
+          if (completion === "resolve") {
+            resolveStart({
+              thread: {
+                id: "remote-canceled",
+                title: "Canceled",
+                preview: "",
+                modelProvider: "opencode",
+                model: "gpt-5",
+                cwd: "/workspace",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                messageCount: 0,
+                lastEventSeq: 0,
+                status: { type: "idle" },
+              },
+            });
+          } else {
+            rejectStart(new Error("Thread creation failed after cancellation"));
+          }
+          await Promise.resolve();
+        });
+
+        expect(mockCancelComposerSubmission).toHaveBeenCalledTimes(1);
+        expect(mockStartTurn).not.toHaveBeenCalled();
+        expect(mockPromoteDraftThread).not.toHaveBeenCalled();
+        expect(mockFailComposerSubmission).not.toHaveBeenCalled();
+        expect(mockRouterReplace).not.toHaveBeenCalled();
+        expect(mockThread.composerDraft).toBe("  Keep this exact draft\n");
+      } finally {
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
   test("creates and sends a connected mobile draft as one real idempotent conversation", async () => {
     mockRouteThreadId = "draft-mobile-1";
     mockThread.id = "draft-mobile-1";

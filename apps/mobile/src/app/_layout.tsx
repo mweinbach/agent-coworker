@@ -12,7 +12,7 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
   const resolvedScheme = resolveColorScheme(colorScheme);
   const theme = useAppTheme();
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     IBMPlexSans: require("../../assets/fonts/IBMPlexSans-Variable.ttf"),
     "IBMPlexSans-Italic": require("../../assets/fonts/IBMPlexSans-Italic-Variable.ttf"),
     IBMPlexMono: require("../../assets/fonts/IBMPlexMono-Regular.ttf"),
@@ -21,7 +21,7 @@ export default function RootLayout() {
     "IBMPlexMono-Bold": require("../../assets/fonts/IBMPlexMono-Bold.ttf"),
   });
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded && !fontError) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.background }}>
         <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />

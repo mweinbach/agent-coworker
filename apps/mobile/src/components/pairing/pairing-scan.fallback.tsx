@@ -1,7 +1,7 @@
 import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
-import { useRef, useState } from "react";
-import { Alert, Text, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Alert, AppState, Linking, Text, TextInput, View } from "react-native";
 
 import { GroupedScreen, GroupedSection } from "@/components/pairing/grouped-list";
 import { AppButton } from "@/components/ui/app-button";
@@ -18,7 +18,7 @@ import { useAppTheme } from "@/theme/use-app-theme";
 export function PairingScanFallback() {
   const router = useRouter();
   const theme = useAppTheme();
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [scannedPayload, setScannedPayload] = useState<string | null>(null);
   const [manualPayload, setManualPayload] = useState("");
   const connectionState = usePairingStore((state) => state.connectionState);
@@ -26,12 +26,31 @@ export function PairingScanFallback() {
   const scanHandlerRef = useRef<ReturnType<typeof createPairingScanHandler> | null>(null);
 
   const granted = permission?.granted ?? false;
+  const needsSettings = permission?.canAskAgain === false;
   const pairingInFlight =
     scannedPayload !== null &&
     (connectionState.status === "pairing" || connectionState.status === "connecting");
   useAccessibilityAnnouncement(
     connectionState.lastError ?? (pairingInFlight ? "Connecting to your Mac" : null),
   );
+
+  useEffect(() => {
+    let mounted = true;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      void getPermission().catch((error) => {
+        if (!mounted) return;
+        Alert.alert(
+          "Camera access unavailable",
+          error instanceof Error ? error.message : "Could not check camera permission. Try again.",
+        );
+      });
+    });
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, [getPermission]);
 
   if (!scanHandlerRef.current) {
     scanHandlerRef.current = createPairingScanHandler({
@@ -54,6 +73,25 @@ export function PairingScanFallback() {
     await scanHandlerRef.current?.handleScan(result);
   }
 
+  async function enableCamera() {
+    try {
+      if (needsSettings) {
+        await Linking.openSettings();
+      } else {
+        await requestPermission();
+      }
+    } catch (error) {
+      Alert.alert(
+        needsSettings ? "Unable to open Settings" : "Camera access unavailable",
+        error instanceof Error
+          ? error.message
+          : needsSettings
+            ? "Open your device Settings to enable camera access for Cowork."
+            : "Could not request camera permission. Try again.",
+      );
+    }
+  }
+
   async function pairManualPayload() {
     const payload = manualPayload.trim();
     if (!payload || pairingInFlight) {
@@ -66,16 +104,24 @@ export function PairingScanFallback() {
     <GroupedScreen>
       <GroupedSection footer="Point your camera at the QR code shown in Cowork Desktop under Remote Access.">
         {!granted ? (
-          <View style={{ padding: 12 }}>
+          <View style={{ padding: 12, gap: 12 }}>
+            {needsSettings ? (
+              <Text
+                maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+                style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 20 }}
+              >
+                Enable camera access for Cowork in Settings, then return to scan the QR code.
+              </Text>
+            ) : null}
             <AppButton
               fullWidth
               variant="glass"
               icon="camera.fill"
               onPress={() => {
-                void requestPermission();
+                void enableCamera();
               }}
             >
-              Allow Camera Access
+              {needsSettings ? "Open Settings" : "Allow Camera Access"}
             </AppButton>
           </View>
         ) : (

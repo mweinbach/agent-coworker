@@ -115,6 +115,7 @@ export default function ProvidersScreen() {
   const lastAuthChallenge = useProviderStore((s) => s.lastAuthChallenge);
   const lastAuthResult = useProviderStore((s) => s.lastAuthResult);
   const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName);
+  const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const controlSnapshot = useWorkspaceStore((s) => s.controlSnapshot);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -124,10 +125,10 @@ export default function ProvidersScreen() {
   useAccessibilityAnnouncement(error ?? lastAuthResult?.message ?? null);
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && activeWorkspaceCwd) {
       void refresh();
     }
-  }, [isConnected, refresh]);
+  }, [isConnected, activeWorkspaceCwd, refresh]);
 
   const selectedProvider = controlSnapshot?.config?.provider ?? catalog[0]?.id ?? null;
   const selectedModel = controlSnapshot?.config?.model ?? null;
@@ -136,10 +137,17 @@ export default function ProvidersScreen() {
     [catalog, selectedProvider],
   );
 
-  if (!isConnected) {
+  if (!isConnected || !activeWorkspaceCwd) {
     return (
       <Screen scroll>
-        <SectionCard title="Providers" description="Connect to a desktop to manage providers.">
+        <SectionCard
+          title="Providers"
+          description={
+            isConnected
+              ? "Waiting for the desktop workspace."
+              : "Connect to a desktop to manage providers."
+          }
+        >
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Provider management will load here once connected to a workspace.
           </Text>

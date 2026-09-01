@@ -189,26 +189,46 @@ function ReasoningTimelineNode({
 
 function ToolStateIndicator({ state }: { state: ToolFeedState }) {
   const theme = useAppTheme();
+  const label = {
+    "input-streaming": "Preparing",
+    "input-available": "Running",
+    "approval-requested": "Needs approval",
+    "output-available": "Completed",
+    "output-error": "Failed",
+    "output-denied": "Denied",
+  }[state];
+  const failed = state === "output-error" || state === "output-denied";
+  const needsApproval = state === "approval-requested";
+  const running = state === "input-streaming" || state === "input-available";
+  const color =
+    failed || needsApproval ? theme.danger : running ? theme.primary : theme.textTertiary;
 
-  if (state === "output-available") return null;
-  if (state === "output-error" || state === "output-denied") {
-    return <SFSymbol name="xmark.circle.fill" size={12} color={theme.danger} />;
-  }
-  if (state === "approval-requested") {
-    return (
-      <View
-        style={{
-          borderRadius: 999,
-          backgroundColor: theme.dangerMuted,
-          paddingHorizontal: 6,
-          paddingVertical: 2,
-        }}
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Tool status: ${label}`}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        borderRadius: 999,
+        backgroundColor: needsApproval ? theme.dangerMuted : undefined,
+        paddingHorizontal: needsApproval ? 6 : 0,
+        paddingVertical: needsApproval ? 2 : 0,
+      }}
+    >
+      {failed || running ? (
+        <SFSymbol name={failed ? "xmark.circle.fill" : "clock"} size={12} color={color} />
+      ) : null}
+      <Text
+        allowFontScaling
+        maxFontSizeMultiplier={MAX_DYNAMIC_TYPE_MULTIPLIER}
+        style={{ color, fontSize: 10, fontWeight: "700" }}
       >
-        <Text style={{ color: theme.danger, fontSize: 10, fontWeight: "700" }}>Review</Text>
-      </View>
-    );
-  }
-  return <SFSymbol name="clock" size={12} color={theme.primary} />;
+        {label}
+      </Text>
+    </View>
+  );
 }
 
 type ActivityTimelineEntry = ActivityGroupSummary["entries"][number];
@@ -249,7 +269,7 @@ function ActivityTimelineEntryView({
   return (
     <TimelineNode iconName={toolIconName(formatting.title)} isLast={isLast}>
       <View style={{ gap: 2, paddingTop: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
           <Text
             selectable
             style={{
@@ -257,6 +277,7 @@ function ActivityTimelineEntryView({
               fontSize: 14,
               fontWeight: "600",
               lineHeight: 20,
+              flexShrink: 1,
             }}
           >
             {formatting.title}

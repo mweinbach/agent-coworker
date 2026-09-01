@@ -132,6 +132,7 @@ mockLocalModule(
     useWorkspaceStore: (selector: any) =>
       selector({
         activeWorkspaceName: "Desktop project",
+        activeWorkspaceCwd: "/workspace",
         controlSnapshot: { config: { provider: "google", model: "gemini" } },
       }),
   }),

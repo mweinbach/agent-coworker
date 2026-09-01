@@ -45,18 +45,36 @@ async function loadPreferences(): Promise<DisplayPreferences | null> {
   }
 }
 
-export const useDisplayPreferencesStore = create<DisplayPreferencesState>((set) => ({
-  showDebugMessages: false,
-  hydrated: false,
-  async hydrate() {
-    const stored = await loadPreferences();
-    set({
-      hydrated: true,
-      showDebugMessages: stored?.showDebugMessages ?? false,
-    });
-  },
-  setShowDebugMessages(value) {
-    set({ showDebugMessages: value });
-    void persistPreferences({ showDebugMessages: value });
-  },
-}));
+export const useDisplayPreferencesStore = create<DisplayPreferencesState>((set, get) => {
+  let hydration: Promise<void> | null = null;
+  let mutationRevision = 0;
+  let writes: Promise<void> = Promise.resolve();
+
+  return {
+    showDebugMessages: false,
+    hydrated: false,
+    async hydrate() {
+      if (get().hydrated) return;
+      if (!hydration) {
+        const revision = mutationRevision;
+        hydration = loadPreferences()
+          .then((stored) => {
+            set(
+              revision === mutationRevision
+                ? { hydrated: true, showDebugMessages: stored?.showDebugMessages ?? false }
+                : { hydrated: true },
+            );
+          })
+          .finally(() => {
+            hydration = null;
+          });
+      }
+      await hydration;
+    },
+    setShowDebugMessages(value) {
+      mutationRevision += 1;
+      set({ showDebugMessages: value, hydrated: true });
+      writes = writes.then(() => persistPreferences({ showDebugMessages: value }));
+    },
+  };
+});

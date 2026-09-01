@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { useThreadStore } from "@/features/cowork/threadStore";
-import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
+import { summarizeLoadedUsage } from "@/features/cowork/usageSummary";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -29,26 +29,12 @@ function UsageRow({ label, value }: { label: string; value: string }) {
 
 export default function UsageScreen() {
   const theme = useAppTheme();
-  const threads = useThreadStore((s) => s.threads);
   const snapshots = useThreadStore((s) => s.snapshots);
-  const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName);
-  const controlSnapshot = useWorkspaceStore((s) => s.controlSnapshot);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
-  // Aggregate usage from thread snapshots
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCost = 0;
-  for (const snapshot of Object.values(snapshots)) {
-    const usage = snapshot.sessionUsage as Record<string, unknown> | null | undefined;
-    if (usage) {
-      if (typeof usage.inputTokens === "number") totalInputTokens += usage.inputTokens;
-      if (typeof usage.outputTokens === "number") totalOutputTokens += usage.outputTokens;
-      if (typeof usage.totalCostUsd === "number") totalCost += usage.totalCostUsd;
-    }
-  }
+  const usage = summarizeLoadedUsage(Object.values(snapshots));
 
-  if (!isConnected) {
+  if (!isConnected && usage.sessionsWithUsage === 0) {
     return (
       <Screen scroll>
         <SectionCard title="Usage" description="Connect to a desktop to view usage statistics.">
@@ -63,16 +49,21 @@ export default function UsageScreen() {
   return (
     <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard
-        title={activeWorkspaceName ?? "Workspace"}
-        description={`${controlSnapshot?.config?.provider ?? "provider"} / ${controlSnapshot?.config?.model ?? "model"}`}
+        title="Loaded chat usage"
+        description="Includes only conversations loaded on this phone, not your full desktop history."
       >
         <View>
-          <UsageRow label="Threads" value={String(threads.length)} />
-          <UsageRow label="Input tokens" value={totalInputTokens.toLocaleString()} />
-          <UsageRow label="Output tokens" value={totalOutputTokens.toLocaleString()} />
-          {totalCost > 0 ? (
-            <UsageRow label="Estimated cost" value={`$${totalCost.toFixed(4)}`} />
-          ) : null}
+          <UsageRow label="Chats with usage" value={String(usage.sessionsWithUsage)} />
+          <UsageRow label="Input tokens" value={usage.inputTokens.toLocaleString()} />
+          <UsageRow label="Output tokens" value={usage.outputTokens.toLocaleString()} />
+          <UsageRow
+            label="Estimated cost"
+            value={
+              usage.estimatedCostUsd === null
+                ? "Unavailable"
+                : `$${usage.estimatedCostUsd.toFixed(4)}`
+            }
+          />
         </View>
       </SectionCard>
     </Screen>

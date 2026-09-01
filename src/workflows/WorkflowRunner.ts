@@ -13,13 +13,15 @@ import { compileWorkflowSource } from "./compile";
 import { runWorkflowAgent, WorkflowAgentError } from "./hostAgent";
 import { spillWorkflowPromptToFile, WORKFLOW_INLINE_PROMPT_CHARS } from "./inputSpill";
 import { digestAgentCall, hashWorkflowArgs, WorkflowJournal } from "./journal";
-import { AgentScheduler, resolveWorkflowConcurrency } from "./scheduler";
+import {
+  AgentScheduler,
+  resolveWorkflowConcurrency,
+  WORKFLOW_MAX_AGENTS_PER_RUN,
+} from "./scheduler";
 import { workflowAgentCallSchema, workflowHostMessageSchema, workflowMetaSchema } from "./schema";
 import type { WorkflowCompileFailure, WorkflowJournalEntry, WorkflowRunSummary } from "./types";
 import { WORKFLOW_WORKER_BOOTSTRAP } from "./workerBootstrap";
 
-/** Hard backstop against a runaway loop authoring unbounded agents. */
-const MAX_AGENTS_PER_RUN = 1000;
 /** Ceiling on the whole run, independent of any per-agent timeout. */
 const DEFAULT_RUN_TIMEOUT_MS = 3_600_000;
 /** Cap script `log()` fan-out so a runaway loop cannot OOM the host. */
@@ -226,6 +228,9 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
         liveAgentIds.delete(agentId);
       })
       .finally(() => closingAgents.delete(agentId));
+    // Terminal teardown stops waiting after abort, but the underlying close can
+    // still reject later. Keep its rejection observed independently of waiters.
+    void closing.catch(() => {});
     closingAgents.set(agentId, closing);
     await waitForSettledOrAbort(closing);
   };
@@ -316,32 +321,24 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   };
 
   const budgetBlocksNewAgents = () =>
-    budgetStopped || (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd);
+    budgetStopped ||
+    // Other workflows and parent work share this tracker. The startup allowance
+    // alone cannot stop admission after those callers exhaust the session cap.
+    opts.ctx.costTracker?.getBudgetStatus?.()?.stopTriggered === true ||
+    (workflowBudgetLimitUsd !== null && spentUsd >= workflowBudgetLimitUsd);
 
   const handleAgentCall = async (callId: number, payload: unknown) => {
     if (terminalClaimed) return;
     const index = callIndex++;
-    if (index >= MAX_AGENTS_PER_RUN) {
-      const message = `workflow exceeded the ${MAX_AGENTS_PER_RUN}-agent ceiling`;
-      progress.push({
-        index,
-        label: `agent-${index + 1}`,
-        phase: currentPhase,
-        state: "errored",
-        agentId: null,
-        usdCost: null,
-        error: message,
-      });
-      emitProgress();
-      postWorker({
-        t: "agentResult",
-        callId,
-        ok: true,
-        payload: JSON.stringify({
-          ok: false,
-          message,
-        }),
-      });
+    if (index >= WORKFLOW_MAX_AGENTS_PER_RUN) {
+      const message = `workflow exceeded the ${WORKFLOW_MAX_AGENTS_PER_RUN}-agent ceiling`;
+      if (!claimTerminal("errored")) return;
+      clearTimeout(runTimer);
+      runAbortController.abort();
+      markNonTerminalAgents("errored", message);
+      await teardown(message);
+      emitProgress("errored", message);
+      fail(new Error(message));
       return;
     }
 
@@ -601,6 +598,7 @@ export async function runWorkflow(opts: WorkflowRunOptions): Promise<WorkflowRun
   };
 
   worker.onmessage = (event: MessageEvent) => {
+    if (terminalClaimed || finished) return;
     const parsedMessage = workflowHostMessageSchema.safeParse(event.data);
     if (!parsedMessage.success) {
       if (!claimTerminal("errored")) return;

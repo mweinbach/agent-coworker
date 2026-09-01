@@ -1,3 +1,5 @@
+import { WORKFLOW_MAX_AGENTS_PER_RUN } from "./scheduler";
+
 /**
  * Source of the worker thread that executes a model-authored workflow script.
  *
@@ -15,11 +17,14 @@
  *
  * The script is authored by a language model, so it is untrusted input.
  *
- *   • The `node:vm` context provides the AUTHORITY boundary. A fresh realm has no
- *     ambient capabilities and confines the function-constructor chain:
+ *   • The `node:vm` context restricts ambient host capabilities and confines the
+ *     function-constructor chain for realm-native values:
  *     `(function(){}).constructor("return typeof Bun")()` evaluates to `undefined`
  *     inside it, where in a merely parameter-shadowed scope
  *     `[].constructor.constructor("return process")()` reaches the real global.
+ *     Host callbacks must also translate errors into realm-native values; even
+ *     a rejected import can otherwise hand the script a host constructor. This
+ *     is an in-process restriction, not an OS-level sandbox.
  *
  *   • The `Worker` provides the AVAILABILITY boundary. `vm` cannot interrupt
  *     `while(true){}`; without a separate thread one such script would freeze the
@@ -300,10 +305,19 @@ const HOST_SOURCE = `
 export const WORKFLOW_WORKER_BOOTSTRAP = `
 import vm from "node:vm";
 
-const post = (msg) => postMessage(msg);
+let stopped = false;
+const post = (msg) => {
+  if (!stopped) postMessage(msg);
+};
+const halt = (message) => {
+  if (stopped) return;
+  stopped = true;
+  postMessage({ t: "error", message });
+};
 const pending = new Map();
 const activeRpcs = new Set();
 let nextCallId = 0;
+let agentCalls = 0;
 
 const rpc = (make) => {
   const call = new Promise((resolve, reject) => {
@@ -335,6 +349,7 @@ const drainRpcs = async () => {
 let onBudgetUpdate = null;
 
 self.onmessage = async (ev) => {
+  if (stopped) return;
   const msg = ev.data;
 
   if (msg.t === "agentResult" || msg.t === "metaAck") {
@@ -359,8 +374,30 @@ self.onmessage = async (ev) => {
       JSON.stringify(ALLOWED_GLOBALS),
     )}), context);
 
+    // Capture the realm's constructor before module evaluation can replace its
+    // globals. A host Error (including DataCloneError) exposes the host Function
+    // constructor even when the operation that produced it was correctly denied.
+    const makeRealmError = vm.runInContext(
+      "((RealmError) => (message) => new RealmError(message))(Error)",
+      context
+    );
+    const toRealmError = (error) => {
+      let message = "workflow host call failed";
+      try {
+        message = error && error.message ? String(error.message) : String(error);
+      } catch {}
+      return makeRealmError(message);
+    };
+    const postFromRealm = (message) => {
+      try {
+        post(message);
+      } catch (error) {
+        throw toRealmError(error);
+      }
+    };
+
     const denyImport = () => {
-      throw new Error(
+      throw makeRealmError(
         "imports are not available in workflow scripts; everything you need is the argument to the default export"
       );
     };
@@ -395,9 +432,19 @@ self.onmessage = async (ev) => {
     }
 
     const bridge = {
-      agent: (payload) => rpc((callId) => ({ t: "agent", callId, payload })),
-      phase: (title) => post({ t: "phase", title }),
-      log: (message) => post({ t: "log", message }),
+      agent: (payload) => {
+        if (stopped || agentCalls >= ${WORKFLOW_MAX_AGENTS_PER_RUN}) {
+          const message = "workflow exceeded the ${WORKFLOW_MAX_AGENTS_PER_RUN}-agent ceiling";
+          halt(message);
+          return Promise.reject(makeRealmError(message));
+        }
+        agentCalls += 1;
+        return rpc((callId) => ({ t: "agent", callId, payload })).catch((error) => {
+          throw toRealmError(error);
+        });
+      },
+      phase: (title) => postFromRealm({ t: "phase", title }),
+      log: (message) => postFromRealm({ t: "log", message }),
       set onBudget(fn) { onBudgetUpdate = fn; },
     };
 

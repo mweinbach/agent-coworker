@@ -22,7 +22,7 @@ export function attachAgentSessionCostTrackerListeners(
         host.context.emit({
           type: "session_usage",
           sessionId: host.id,
-          usage: event.cumulative,
+          usage: tracker.getCompactSnapshot(),
         });
         host.queuePersistSessionSnapshot("session.usage_changed");
         return;

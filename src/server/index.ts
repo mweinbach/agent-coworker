@@ -13,7 +13,7 @@ import {
 } from "../telemetry/crashReporting";
 import { initProductAnalytics, shutdownProductAnalytics } from "../telemetry/productAnalytics";
 import { VERSION } from "../version";
-import { createGracefulShutdown } from "./runtime/gracefulShutdown";
+import { createGracefulShutdown, registerParentManagedShutdown } from "./runtime/gracefulShutdown";
 
 // Keep server output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
@@ -212,7 +212,8 @@ export function resolveListeningHints(host: string): string[] {
   return resolveListeningHintsFromInterfaces(host, os.networkInterfaces());
 }
 
-async function main() {
+async function main(parentExitSignal?: AbortSignal) {
+  if (parentExitSignal?.aborted) return;
   const { dir, host, port, yolo, json, mobileH3, mobileH3Host, mobileH3Port } = parseArgs(
     process.argv.slice(2),
   );
@@ -300,6 +301,7 @@ async function main() {
   const onShutdownSignal = () => {
     void shutdown();
   };
+  parentExitSignal?.addEventListener("abort", onShutdownSignal, { once: true });
   process.on("SIGINT", onShutdownSignal);
   process.on("SIGTERM", onShutdownSignal);
   if (process.platform !== "win32") {
@@ -314,6 +316,10 @@ async function main() {
       // ignore
     }
   });
+  if (parentExitSignal?.aborted) {
+    await shutdown();
+    return;
+  }
 
   if (json) {
     const hostHints = resolveListeningHints(host);
@@ -373,7 +379,16 @@ async function main() {
 }
 
 if (import.meta.main) {
-  main().catch((err) => {
+  const parentExit = new AbortController();
+  const disposeParentShutdown = registerParentManagedShutdown({
+    env: process.env,
+    stdin: process.stdin,
+    onParentExit: () => parentExit.abort(),
+  });
+  process.once("exit", disposeParentShutdown);
+  main(parentExit.signal).catch((err) => {
+    disposeParentShutdown();
+    process.off("exit", disposeParentShutdown);
     if (String(err) === "Error: help") return;
     captureError(err, {
       tags: { operation: "server_startup" },

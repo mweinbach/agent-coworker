@@ -164,16 +164,14 @@ describe("runTurn", () => {
     );
   });
 
-  test("removes MCP namespacing guidance when MCP tools are not active", async () => {
+  test("preserves custom MCP instructions when MCP tools are not active", async () => {
     const system =
-      "Header\nMCP tool names are namespaced as `mcp__{serverName}__{toolName}` to prevent collisions.\nFooter";
+      "Header\nOnly call `mcp__{serverName}__{toolName}` after the user approves.\nFooter";
 
     await runTurn(makeParams({ system, enableMcp: false }));
 
     const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
-    expect(callArg.system).not.toContain("`mcp__{serverName}__{toolName}`");
-    expect(callArg.system).toContain("Header");
-    expect(callArg.system).toContain("Footer");
+    expect(callArg.system.startsWith(system)).toBe(true);
     expect(callArg.system).not.toContain("## Active MCP Tools");
   });
 
@@ -186,9 +184,12 @@ describe("runTurn", () => {
       errors: [],
     });
 
-    await runTurn(makeParams({ enableMcp: true, system: "Base system prompt" }));
+    const system =
+      "Base system prompt\nOnly call `mcp__{serverName}__{toolName}` after the user approves.";
+    await runTurn(makeParams({ enableMcp: true, system }));
 
     const callArg = mockRuntimeRunTurn.mock.calls[0][0] as any;
+    expect(callArg.system.startsWith(system)).toBe(true);
     expect(callArg.system).toContain("## Active MCP Tools");
     expect(callArg.system).toContain("`mcp__{serverName}__{toolName}`");
   });
@@ -306,7 +307,7 @@ describe("runTurn", () => {
     expect(runtimeParams.tools).not.toHaveProperty("edit");
   });
 
-  test("adds Cowork runtime dependency instructions when runtime node modules are available", async () => {
+  test("does not expose dependency wiring or instructions for an explicitly disabled runtime", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-turn-artifact-runtime-"));
     const nodeModulesPath = path.join(workspaceRoot, "artifact-runtime", "node", "node_modules");
     const nodePath = path.join(
@@ -360,15 +361,15 @@ describe("runTurn", () => {
     );
 
     const toolCtx = createToolsForTurn.mock.calls[0][0] as any;
-    expect(toolCtx.toolEnv.COWORK_RUNTIME_NODE_MODULES).toBe(nodeModulesPath);
+    expect(toolCtx.toolEnv.COWORK_RUNTIME_NODE).toBeUndefined();
+    expect(toolCtx.toolEnv.COWORK_RUNTIME_NODE_MODULES).toBeUndefined();
+    expect(toolCtx.toolEnv.COWORK_RUNTIME_NODE_RESOLVER).toBeUndefined();
 
     const runtimeParams = runtimeRunTurn.mock.calls[0][0] as any;
-    expect(runtimeParams.system).toContain("## Cowork Runtime");
-    expect(runtimeParams.system).toContain(nodePath);
-    expect(runtimeParams.system).toContain("versioned runtime");
-    expect(runtimeParams.system).toContain("@oai/artifact-tool");
-    expect(runtimeParams.system).not.toContain("cmd /c mklink /J");
-    expect(runtimeParams.system).not.toContain("ln -s");
+    expect(runtimeParams.system).not.toContain("## Cowork Runtime");
+    expect(runtimeParams.system).not.toContain(nodePath);
+    expect(runtimeParams.system).not.toContain(nodeModulesPath);
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {

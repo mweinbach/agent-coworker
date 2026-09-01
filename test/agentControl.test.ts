@@ -103,6 +103,27 @@ function makeChildSession(config: AgentConfig) {
   return session;
 }
 
+function makeControlWithChildren(children: ReturnType<typeof makeChildSession>[]) {
+  const bindings = new Map<string, SessionBinding>(
+    children.map((session) => [
+      session.id,
+      { session, runtime: null, socket: null, sinks: new Map() },
+    ]),
+  );
+  return new AgentControl({
+    sessionBindings: bindings,
+    sessionDb: null,
+    getConnectedProviders: async () => ["openai"],
+    buildSession: () => {
+      throw new Error("A registered child should not be rebuilt");
+    },
+    loadAgentPrompt: async () => "child system prompt",
+    disposeBinding: () => {},
+    emitParentAgentStatus: () => {},
+    emitParentLog: () => {},
+  });
+}
+
 function makePersistedChildRecord(
   config: AgentConfig,
   overrides: Partial<PersistedSessionRecord> = {},
@@ -404,6 +425,7 @@ describe("AgentControl.spawn", () => {
         const childIndex = nextChildIndex++;
         const childSession = makeChildSession(parentConfig);
         childSession.id = `child-${childIndex}`;
+        childSession.getLatestAssistantText = () => "Inherited parent assistant message";
         childSession.waitForPersistenceIdle = mock(async () => {
           admissions[childIndex]?.resolve();
           await persistenceGate.promise;
@@ -437,6 +459,10 @@ describe("AgentControl.spawn", () => {
         ]);
         expect(admission).toBe("admitted");
       }
+
+      const initializing = await control.list("root-1");
+      expect(initializing).toHaveLength(16);
+      expect(initializing.every((child) => child.executionState === "pending_init")).toBe(true);
 
       await expect(
         control.spawn({
@@ -488,7 +514,7 @@ describe("AgentControl.spawn", () => {
     ).rejects.toThrow(/maximum spawn depth/);
   });
 
-  test("rejects spawning past the active-children limit", async () => {
+  test("rejects spawning past the active-children limit while children are running", async () => {
     const parentConfig = makeConfig();
     const bindings = new Map<string, SessionBinding>([
       [
@@ -504,7 +530,6 @@ describe("AgentControl.spawn", () => {
         session: {
           isAgentOf: (parent: string) => parent === "root-1",
           persistenceStatus: "active",
-          // These 16 children are actively running, so they each occupy a slot.
           isBusy: true,
           getSessionInfoEvent: () => ({ executionState: "running" }),
           getLatestAssistantText: () => null,
@@ -655,6 +680,7 @@ describe("AgentControl.spawn", () => {
 
   test("releases a reserved spawn slot when setup fails before binding registration", async () => {
     const parentConfig = makeConfig();
+    const turnGate = Promise.withResolvers<void>();
     let nextId = 0;
     let promptLoads = 0;
     const bindings = new Map<string, SessionBinding>([
@@ -679,7 +705,7 @@ describe("AgentControl.spawn", () => {
         isAgentOf: (parent: string) => parent === "root-1",
         beginDisconnectedReplayBuffer: () => {},
         waitForPersistenceIdle: async () => {},
-        sendUserMessage: async () => {},
+        sendUserMessage: async () => await turnGate.promise,
         getSessionInfoEvent: () => ({ mode: "collaborative", depth: 1, executionState: "running" }),
         getLatestAssistantText: () => null,
         getPublicConfig: () => parentConfig,
@@ -717,21 +743,25 @@ describe("AgentControl.spawn", () => {
       }),
     ).rejects.toThrow("prompt load failed");
 
-    const results = await Promise.allSettled(
-      Array.from({ length: 16 }, () =>
-        control.spawn({ parentSessionId: "root-1", parentConfig, role: "worker", message: "go" }),
-      ),
-    );
-    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 16 }, () =>
+          control.spawn({ parentSessionId: "root-1", parentConfig, role: "worker", message: "go" }),
+        ),
+      );
+      expect(results.every((result) => result.status === "fulfilled")).toBe(true);
 
-    await expect(
-      control.spawn({
-        parentSessionId: "root-1",
-        parentConfig,
-        role: "worker",
-        message: "one too many after the failed attempt",
-      }),
-    ).rejects.toThrow(/active child agents/);
+      await expect(
+        control.spawn({
+          parentSessionId: "root-1",
+          parentConfig,
+          role: "worker",
+          message: "one too many after the failed attempt",
+        }),
+      ).rejects.toThrow(/active child agents/);
+    } finally {
+      turnGate.resolve();
+    }
   });
 
   test("cancelAll waits for pending child spawn registration before settling", async () => {
@@ -1413,6 +1443,121 @@ describe("AgentControl.spawn", () => {
 });
 
 describe("AgentControl persisted child control", () => {
+  test("reserves a follow-up before the child reports busy", async () => {
+    const child = makeChildSession(makeConfig());
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    child.sendUserMessage = mock(async () => {
+      await pending;
+    });
+    const control = makeControlWithChildren([child]);
+    try {
+      await control.sendInput({
+        parentSessionId: "root-1",
+        agentId: child.id,
+        message: "First follow-up",
+      });
+      await expect(
+        control.sendInput({
+          parentSessionId: "root-1",
+          agentId: child.id,
+          message: "Competing follow-up",
+        }),
+      ).rejects.toThrow("busy");
+      expect(child.sendUserMessage).toHaveBeenCalledTimes(1);
+      const waiting = await control.wait({
+        parentSessionId: "root-1",
+        agentIds: [child.id],
+        timeoutMs: 0,
+      });
+      expect(waiting.timedOut).toBe(true);
+      expect(waiting.agents[0]?.executionState).toBe("running");
+      expect((await control.list("root-1"))[0]).toMatchObject({
+        executionState: "running",
+        busy: true,
+      });
+      expect(
+        (await control.inspect({ parentSessionId: "root-1", agentId: child.id })).agent,
+      ).toMatchObject({ executionState: "running", busy: true });
+    } finally {
+      finish();
+    }
+  });
+
+  test("limits resumed children even while their follow-up startup is pending", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const children = Array.from({ length: 17 }, (_, index) => {
+      const child = makeChildSession(makeConfig());
+      child.id = `completed-${index}`;
+      const getInfo = child.getSessionInfoEvent;
+      child.getSessionInfoEvent = () => ({ ...getInfo(), executionState: "completed" });
+      child.getLatestAssistantText = () => "Previous result";
+      child.sendUserMessage = mock(async () => {
+        await pending;
+      });
+      return child;
+    });
+    const control = makeControlWithChildren(children);
+    try {
+      const outcomes = await Promise.allSettled(
+        children.map((child) =>
+          control.sendInput({
+            parentSessionId: "root-1",
+            agentId: child.id,
+            message: "Continue",
+          }),
+        ),
+      );
+      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(16);
+      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+      expect(children.at(-1)?.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      finish();
+    }
+  });
+
+  test("explicit follow-up starts a fresh run for an interrupted child", async () => {
+    const child = makeChildSession(makeConfig());
+    const turnGate = Promise.withResolvers<void>();
+    let executionState = "errored";
+    const getInfo = child.getSessionInfoEvent;
+    child.getSessionInfoEvent = () => ({ ...getInfo(), executionState });
+    child.currentTurnOutcome = "error";
+    child.getLatestAssistantText = () => "Previous partial work";
+    child.sendUserMessage = mock(async () => {
+      await turnGate.promise;
+      child.currentTurnOutcome = "completed";
+      executionState = "completed";
+    });
+    const control = makeControlWithChildren([child]);
+    try {
+      await control.sendInput({
+        parentSessionId: "root-1",
+        agentId: child.id,
+        message: "Inspect the interruption and continue",
+      });
+      expect(
+        (await control.inspect({ parentSessionId: "root-1", agentId: child.id })).agent,
+      ).toMatchObject({ executionState: "running", busy: true });
+      turnGate.resolve();
+      const result = await control.wait({
+        parentSessionId: "root-1",
+        agentIds: [child.id],
+        timeoutMs: 1_000,
+      });
+      expect(result.readyAgentIds).toEqual([child.id]);
+      expect(result.erroredAgentIds).toEqual([]);
+      expect(result.agents[0]?.executionState).toBe("completed");
+    } finally {
+      turnGate.resolve();
+    }
+  });
+
   test("sendInput hydrates a persisted child session before dispatching", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
@@ -1492,7 +1637,7 @@ describe("AgentControl persisted child control", () => {
     expect(emitParentAgentStatus).toHaveBeenCalled();
   });
 
-  test("wait keeps hydrated stale running child status running when no assistant result exists", async () => {
+  test("wait reports interrupted child execution as errored when no assistant result exists", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     const getSessionInfoEvent = childSession.getSessionInfoEvent;
@@ -1525,14 +1670,15 @@ describe("AgentControl persisted child control", () => {
       timeoutMs: 10,
     });
 
-    expect(result.timedOut).toBe(true);
+    expect(result.timedOut).toBe(false);
     expect(result.mode).toBe("any");
     expect(result.agents).toHaveLength(1);
-    expect(result.agents[0]?.executionState).toBe("running");
-    expect(result.readyAgentIds).toEqual([]);
+    expect(result.agents[0]?.executionState).toBe("errored");
+    expect(result.readyAgentIds).toEqual(["child-1"]);
+    expect(result.erroredAgentIds).toEqual(["child-1"]);
   });
 
-  test("wait treats stale running child with an assistant result as completed", async () => {
+  test("wait does not mistake inherited assistant text for interrupted child completion", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     const getSessionInfoEvent = childSession.getSessionInfoEvent;
@@ -1570,8 +1716,9 @@ describe("AgentControl persisted child control", () => {
     });
 
     expect(result.timedOut).toBe(false);
-    expect(result.agents[0]?.executionState).toBe("completed");
+    expect(result.agents[0]?.executionState).toBe("errored");
     expect(result.readyAgentIds).toEqual(["child-1"]);
+    expect(result.erroredAgentIds).toEqual(["child-1"]);
     expect(result.inspections).toEqual([
       expect.objectContaining({
         agentId: "child-1",
@@ -1722,7 +1869,7 @@ describe("AgentControl persisted child control", () => {
     );
   });
 
-  test("list keeps hydrated stale pending_init child status pending when no assistant result exists", async () => {
+  test("list marks an unowned persisted pending_init child errored", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     const getSessionInfoEvent = childSession.getSessionInfoEvent;
@@ -1751,7 +1898,7 @@ describe("AgentControl persisted child control", () => {
     const summaries = await control.list("root-1");
 
     expect(summaries).toHaveLength(1);
-    expect(summaries[0]?.executionState).toBe("pending_init");
+    expect(summaries[0]?.executionState).toBe("errored");
   });
 
   test("resume reopens a hydrated closed child session", async () => {

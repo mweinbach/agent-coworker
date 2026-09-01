@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import type { SpreadsheetBatchPatchOperation } from "../shared/spreadsheetPreview";
 import { parseAddress } from "./spreadsheetA1";
+import { readCsvDialect } from "./spreadsheetCsv";
 import type { OpsOutcome } from "./spreadsheetEditTypes";
+
+const MAX_CSV_EXPANSION_ENTRIES = 50_000;
 
 export async function runCsvOps(
   filePath: string,
@@ -10,11 +13,12 @@ export async function runCsvOps(
 ): Promise<OpsOutcome> {
   const raw = (await fs.readFile(filePath)).toString("utf8");
   const hasBom = raw.charCodeAt(0) === 0xfeff;
-  const text = hasBom ? raw.slice(1) : raw;
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const hasTrailingNewline = /\r?\n$/.test(text);
+  const { delimiter, preamble, content: text } = readCsvDialect(raw);
+  const eol = text.match(/\r\n|\r|\n/)?.[0] ?? "\n";
+  const hasTrailingNewline = /[\r\n]$/.test(text);
 
-  const rows = parseCsv(text);
+  const rows = parseCsv(text, delimiter);
+  let expansionEntries = 0;
   for (const [index, op] of operations.entries()) {
     if (op.type === "format" || op.type === "merge" || op.type === "columnWidth") {
       return {
@@ -39,14 +43,30 @@ export async function runCsvOps(
         error: { kind: "parse_error", message: `Invalid cell address: ${op.address}` },
       };
     }
+    expansionEntries +=
+      Math.max(0, addr.row + 1 - rows.length) +
+      Math.max(0, addr.col + 1 - (rows[addr.row]?.length ?? 0));
+    if (expansionEntries > MAX_CSV_EXPANSION_ENTRIES) {
+      return {
+        ok: false,
+        index,
+        error: {
+          kind: "parse_error",
+          message: `CSV edits may add at most ${MAX_CSV_EXPANSION_ENTRIES} rows and cells per batch.`,
+        },
+      };
+    }
     while (rows.length <= addr.row) rows.push([]);
     const row = rows[addr.row] as string[];
     while (row.length <= addr.col) row.push("");
     row[addr.col] = op.rawInput;
   }
 
-  let out = rows.map((cells) => cells.map(csvQuoteField).join(",")).join(eol);
+  let out = rows
+    .map((cells) => cells.map((cell) => csvQuoteField(cell, delimiter)).join(delimiter))
+    .join(eol);
   if (hasTrailingNewline) out += eol;
+  out = preamble + out;
   if (hasBom) out = `﻿${out}`;
 
   await writeFileAtomic(filePath, out);
@@ -54,7 +74,7 @@ export async function runCsvOps(
 }
 
 /** Quote-aware CSV parse into a 2D array of decoded field values. */
-function parseCsv(text: string): string[][] {
+function parseCsv(text: string, delimiter: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -82,7 +102,7 @@ function parseCsv(text: string): string[][] {
       i += 1;
       continue;
     }
-    if (ch === ",") {
+    if (ch === delimiter) {
       row.push(field);
       field = "";
       i += 1;
@@ -109,8 +129,8 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-function csvQuoteField(value: string): string {
-  if (/[",\r\n]/.test(value)) {
+function csvQuoteField(value: string, delimiter: string): string {
+  if (/["\r\n]/.test(value) || value.includes(delimiter)) {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;

@@ -12,6 +12,7 @@ import type { AgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import {
   type H3TrustedDevicePermissionKey,
   loadH3PairingStoreState,
+  rememberH3TrustedDevice,
 } from "../src/server/transport/h3/pairing";
 import { startH3MobileServer } from "../src/server/transport/h3/server";
 import { type CoworkPairingTicket, encodeCoworkPairingTicket } from "../src/shared/coworkTicket";
@@ -385,6 +386,70 @@ describe("H3 mobile server pairing", () => {
           params: { threadId: "thread-1", input: "hello" },
         },
       ]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("closes the old authenticated stream when a device re-pairs", async () => {
+    const storeRoot = await createTempRoot();
+    await rememberH3TrustedDevice(storeRoot, {
+      deviceId: "phone-1",
+      identityPub: "original-identity",
+      sessionToken: "original-token",
+    });
+    let closedConnections = 0;
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {
+        closedConnections += 1;
+      },
+    } satisfies Partial<AgentServerRuntime>;
+    const server = await startH3MobileServer({
+      runtime: runtime as AgentServerRuntime,
+      hostname: "127.0.0.1",
+      hostHints: ["127.0.0.1"],
+      storeRootPath: storeRoot,
+      enableH3: false,
+    });
+
+    try {
+      await server.updateTrustedDevicePermissions("phone-1", { conversations: true });
+      const events = await fetchH3(`${server.url}/events`, {
+        headers: {
+          authorization: "Bearer original-token",
+          "x-cowork-mobile-device-id": "phone-1",
+        },
+      });
+      const reader = events.body?.getReader();
+      expect(reader).toBeDefined();
+      await reader?.read();
+
+      const pairing = await fetchH3(`${server.url}/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: server.ticketUrl,
+          nonce: server.nonce,
+          deviceId: "phone-1",
+          identityPub: "replacement-identity",
+        }),
+      });
+
+      expect(pairing.status).toBe(200);
+      expect(closedConnections).toBe(1);
+      await expect(reader?.read()).resolves.toEqual({ done: true, value: undefined });
+      const denied = await fetchH3(`${server.url}/rpc`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer original-token",
+          "x-cowork-mobile-device-id": "phone-1",
+        },
+        body: JSON.stringify({ id: 1, method: "thread/list" }),
+      });
+      expect(denied.status).toBe(401);
     } finally {
       await server.stop();
     }

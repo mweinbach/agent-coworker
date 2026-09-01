@@ -22,10 +22,6 @@ export async function hardenPrivateFile(filePath: string): Promise<void> {
 
 export async function quarantineCorruptedDb(dbPath: string): Promise<void> {
   const backupPath = `${dbPath}.corrupt.${new Date().toISOString().replaceAll(":", "-")}.bak`;
-  try {
-    await fs.rename(dbPath, backupPath);
-  } catch {
-    // If we cannot move the corrupted file, attempt to overwrite in place.
-    await fs.rm(dbPath, { force: true });
-  }
+  // Recovery must stop if the only existing copy cannot be preserved.
+  await fs.rename(dbPath, backupPath);
 }

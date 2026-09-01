@@ -186,6 +186,7 @@ export async function createAgentServerRuntime(
   const env: Record<string, string | undefined> & {
     COWORK_BUILTIN_DIR?: string;
   } = { ...rawEnv };
+  const homedir = opts.homedir ?? home(env);
   const parsedJsonRpcMaxPendingRequests = Number(
     env.COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS ?? "128",
   );
@@ -213,7 +214,7 @@ export async function createAgentServerRuntime(
       ? env.COWORK_BUILTIN_DIR
       : undefined;
 
-  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  let config = await loadConfig({ cwd: opts.cwd, env, homedir, builtInDir });
   const mergedProviderOptions = mergeRuntimeProviderOptions(
     opts.providerOptions,
     config.providerOptions,
@@ -244,7 +245,7 @@ export async function createAgentServerRuntime(
   const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
   const emitObservabilityEvent = opts.emitObservabilityEventImpl ?? lazyEmitObservabilityEvent;
   const sessionDb = await SessionDb.create({
-    paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
+    paths: getAiCoworkerPathsImpl({ homedir }),
     emitTelemetry: (name, status, attributes, durationMs) => {
       void emitObservabilityEvent(config, {
         name,
@@ -257,7 +258,7 @@ export async function createAgentServerRuntime(
       });
     },
   });
-  const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
+  const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir });
   // Must complete before any session can start a turn: flips execution states
   // left as running/pending_init by a previous process that died mid-turn.
   try {
@@ -371,7 +372,7 @@ export async function createAgentServerRuntime(
       const cwd = typeof params.cwd === "string" ? params.cwd : null;
       if (cwd) taskSubscribers.notify(cwd, method, params);
     },
-    quiesceTaskThreads: async (task, reason) => {
+    quiesceTaskThreads: async (task) => {
       const waits: Promise<void>[] = [];
       const sessionIds = new Set(task.threads.map((thread) => thread.sessionId));
       if (task.sourceSessionId) sessionIds.add(task.sourceSessionId);
@@ -386,9 +387,9 @@ export async function createAgentServerRuntime(
           );
           continue;
         }
-        const disposeRuntime = () => {
+        const releaseRuntimeResources = () => {
           try {
-            runtime.lifecycle.dispose(`task ${task.id} ${reason}`, {
+            runtime.lifecycle.releaseTurnResources({
               closeSharedCodexClient: true,
             });
           } catch {
@@ -405,12 +406,12 @@ export async function createAgentServerRuntime(
                 ...(taskLock ? { taskLock } : {}),
               })
               .catch((error) => {
-                disposeRuntime();
+                releaseRuntimeResources();
                 throw error;
               }),
           );
         } catch {
-          disposeRuntime();
+          releaseRuntimeResources();
         }
       }
       const settled = await Promise.allSettled(waits);
@@ -421,12 +422,12 @@ export async function createAgentServerRuntime(
     },
   });
   const threadJournal = new ThreadJournal(sessionDb);
-  const worktreeService = new WorktreeService({ homedir: opts.homedir });
+  const worktreeService = new WorktreeService({ homedir });
   const loadThreadSessionBootstrap = async (cwd: string) => {
     const threadConfig = await loadConfig({
       cwd,
       env: { ...env, AGENT_WORKING_DIR: cwd },
-      homedir: opts.homedir,
+      homedir,
       builtInDir,
     });
     const providerOptions = mergeRuntimeProviderOptions(
@@ -451,7 +452,7 @@ export async function createAgentServerRuntime(
     discoveredSkills,
     fileLog,
     yolo: opts.yolo,
-    homedir: opts.homedir,
+    homedir,
     connectProviderImpl: opts.connectProviderImpl,
     getAiCoworkerPathsImpl,
     runTurnImpl: opts.runTurnImpl,
@@ -498,7 +499,7 @@ export async function createAgentServerRuntime(
     worktreeService,
     getConfig: () => config,
     loadThreadSessionBootstrap,
-    homedir: opts.homedir,
+    homedir,
     onThreadListChanged: broadcastWorkspaceListChanged,
   });
   threadManagement = new ThreadManagementService([localThreadHost]);
@@ -544,7 +545,7 @@ export async function createAgentServerRuntime(
   workspaceControl = new WorkspaceControl({
     env,
     builtInDir,
-    homedir: opts.homedir,
+    homedir,
     yolo: opts.yolo,
     runtimeProviderOptions: opts.providerOptions,
     fallbackWorkingDirectory: config.workingDirectory,
@@ -569,7 +570,7 @@ export async function createAgentServerRuntime(
       const fresh = await loadConfig({
         cwd: targetCwd,
         env: { ...env, AGENT_WORKING_DIR: targetCwd },
-        homedir: opts.homedir,
+        homedir,
         builtInDir,
       });
       const providerOptions = mergeRuntimeProviderOptions(
@@ -599,7 +600,7 @@ export async function createAgentServerRuntime(
     void runStartupMaintenance({
       sessionDb,
       sessionsDir: aiCoworkerPaths.sessionsDir,
-      homedir: opts.homedir,
+      homedir,
       log: (line) => console.warn(line),
     }).catch(() => {
       // best-effort housekeeping only
@@ -612,7 +613,7 @@ export async function createAgentServerRuntime(
     const loadSystemPromptWithSkills =
       opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills;
     const runtimeSetup = ensureRuntimeReady({
-      homedir: opts.homedir,
+      homedir,
       env,
       // Retained as well as forwarded: the desktop stops rendering the spawn-time
       // progress card once the socket is listening, so post-listen clients read
@@ -628,7 +629,7 @@ export async function createAgentServerRuntime(
       if (coworkRuntimeSetup) Object.assign(env, coworkRuntimeSetup.runtimeEnv);
     });
     const defaultSkillsSetup = ensureDefaultSkillsReady({
-      homedir: opts.homedir,
+      homedir,
       env,
       config,
       log: (line) => {
@@ -699,6 +700,8 @@ export async function createAgentServerRuntime(
     addBindingSink: (binding, sinkId, sink) => registry.addBindingSink(binding, sinkId, sink),
     removeBindingSink: (binding, sinkId) => registry.removeBindingSink(binding, sinkId),
     countLiveConnectionSinks: (binding) => registry.countLiveConnectionSinks(binding),
+    getThreadProjectionSeed: (binding, threadId) =>
+      threadJournal.captureProjectionSeed(binding, threadId),
     listThreadJournalEvents: (threadId, journalOpts) => threadJournal.list(threadId, journalOpts),
     getThreadJournalTailSeq: (threadId) => sessionDb.getThreadJournalTailSeq(threadId),
     enqueueThreadJournalEvent: async (event) => await threadJournal.enqueue(event),
@@ -712,11 +715,7 @@ export async function createAgentServerRuntime(
     }) ?? null;
   const conversationImports = createConversationImportService({
     sessionDb,
-    // HOME is normally unset on Windows; the old `env.HOME ?? process.cwd()`
-    // fallback made external-conversation discovery silently probe the
-    // workspace cwd and find nothing there. platform home() resolves the real
-    // profile dir on every OS (with the COWORK_HOME_OVERRIDE test lever).
-    homedir: opts.homedir ?? home(env),
+    homedir,
     getConfig: () => config,
     desktopService: opts.desktopService ?? null,
     onWorkspaceListChanged: broadcastWorkspaceListChanged,
@@ -735,7 +734,7 @@ export async function createAgentServerRuntime(
 
   const jsonRpcRouteContext: JsonRpcRouteContext = {
     getConfig: () => config,
-    homedir: opts.homedir,
+    homedir,
     ...(pluginInstallEventsTimeoutMs !== undefined ? { pluginInstallEventsTimeoutMs } : {}),
     skillImprovement,
     tasks,
@@ -819,6 +818,10 @@ export async function createAgentServerRuntime(
     },
     journal: {
       enqueue: async (event) => await threadJournal.enqueue(event),
+      flushProjection: (threadId) => {
+        const binding = registry.sessionBindings.get(threadId);
+        if (binding) threadJournal.flushProjection(binding, threadId);
+      },
       waitForIdle: async (threadId) => await threadJournal.waitForIdle(threadId),
       list: (threadId, journalOpts) => threadJournal.list(threadId, journalOpts),
       replay: (ws, threadId, afterSeq, limit) =>
@@ -885,7 +888,7 @@ export async function createAgentServerRuntime(
     },
     utils: {
       resolveWorkspacePath: (params, method) =>
-        requireWorkspacePath(params, method, config.workingDirectory, opts.homedir),
+        requireWorkspacePath(params, method, config.workingDirectory, homedir),
       extractTextInput: extractJsonRpcTextInput,
       extractInput: extractJsonRpcInput,
       buildThreadFromSession: (runtime) =>
@@ -909,7 +912,7 @@ export async function createAgentServerRuntime(
             params ?? {},
             message.method,
             config.workingDirectory,
-            opts.homedir,
+            homedir,
           );
           workspaceControl.registerSubscriber(ws, cwd);
         }

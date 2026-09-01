@@ -1,19 +1,13 @@
 import { IdempotencyConflictError } from "../../../shared/idempotencyLedger";
 import { resolveToolRetryIntent, type ToolRetryIntent } from "../../../shared/toolRetry";
 import type { SessionEvent } from "../../protocol";
+import type { UserMessageAdmission } from "../../session/TurnExecutionManager";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 
-import {
-  captureBindingOutcome,
-  type JsonRpcSessionError,
-  sendSessionMutationError,
-} from "./outcomes";
+import { type JsonRpcSessionError, sendSessionMutationError } from "./outcomes";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome =
-  | Extract<SessionEvent, { type: "session_busy" }>
-  | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
   | Extract<SessionEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
@@ -146,11 +140,11 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
         });
         return;
       }
-      const outcome = await captureBindingOutcome(
-        context,
-        binding,
-        () => {
-          return runtime.turns.sendUserMessage(
+      // Other requests share the session event stream, but only this request's
+      // admission receipt can acknowledge its user message.
+      const outcome = await new Promise<UserMessageAdmission>((resolve, reject) => {
+        void runtime.turns
+          .sendUserMessage(
             text,
             clientMessageId,
             undefined,
@@ -160,20 +154,23 @@ export function createTurnRouteHandlers(context: JsonRpcRouteContext): JsonRpcRe
             {
               allowThreadManagementTools: ws.data?.taskReadAllowed !== false,
               idempotencyClaim,
+              onAdmission: resolve,
               ...(toolRetryIntent ? { toolRetryIntent } : {}),
             },
-          );
-        },
-        (event): event is JsonRpcTurnStartOutcome =>
-          (event.type === "session_busy" &&
-            event.sessionId === binding.runtime?.id &&
-            event.busy === true &&
-            typeof event.turnId === "string" &&
-            event.turnId.trim().length > 0) ||
-          context.utils.isSessionError(event),
-      );
-      if (outcome.type === "error") {
-        sendSessionMutationError(context, ws, message.id, outcome);
+          )
+          .then(() => reject(new Error("Turn finished without an admission outcome.")), reject);
+      }).catch((error: unknown) => {
+        runtime.turns.rejectUserMessageClaim(
+          idempotencyClaim,
+          error instanceof Error
+            ? error.message
+            : "The original user-message request was not accepted.",
+        );
+        throw error;
+      });
+      if (outcome.status === "rejected") {
+        runtime.turns.rejectUserMessageClaim(idempotencyClaim, outcome.error.message);
+        sendSessionMutationError(context, ws, message.id, outcome.error);
         return;
       }
       context.jsonrpc.sendResult(ws, message.id, {

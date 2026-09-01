@@ -825,6 +825,95 @@ describe("task artifact versions", () => {
     }
   });
 
+  test("failed restore preserves the exact live bytes authorized by the user", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, artifact, artifactPath, first, detail } =
+        await createTaskWithRestorableArtifactVersion(harness);
+      await fs.writeFile(artifactPath, "unrecorded user edit\n");
+      const live = await harness.artifactStore.fingerprintFile(artifactPath);
+      if (!live) throw new Error("Expected live artifact");
+      harness.sessionDb.captureTaskArtifactVersion = async () => {
+        throw new Error("Injected artifact version persistence failure");
+      };
+
+      await expect(
+        harness.coordinator.restoreArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          versionId: first.id,
+          expectedRevision: task.revision,
+          expectedSha256: live.sha256,
+        }),
+      ).rejects.toThrow("Injected artifact version persistence failure");
+
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("unrecorded user edit\n");
+      expect(harness.coordinator.get(task.id, harness.workspacePath)).toEqual(task);
+      expect(harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id)).toEqual(detail);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("failed restore does not overwrite an edit made after the restored bytes were written", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, artifact, artifactPath, first, detail } =
+        await createTaskWithRestorableArtifactVersion(harness);
+      harness.sessionDb.captureTaskArtifactVersion = async () => {
+        await fs.writeFile(artifactPath, "newer external edit\n");
+        throw new Error("Injected artifact version persistence failure");
+      };
+
+      await expect(
+        harness.coordinator.restoreArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          versionId: first.id,
+          expectedRevision: task.revision,
+        }),
+      ).rejects.toThrow();
+
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("newer external edit\n");
+      expect(harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id)).toEqual(detail);
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
+  test("keeps committed restored bytes when notification delivery fails", async () => {
+    const harness = await createHarness();
+    try {
+      const { task, artifact, artifactPath, first } =
+        await createTaskWithRestorableArtifactVersion(harness);
+      const coordinator = new TaskCoordinator({
+        sessionDb: harness.sessionDb,
+        artifactStore: harness.artifactStore,
+        notify: () => {
+          throw new Error("Injected notification failure");
+        },
+      });
+
+      await expect(
+        coordinator.restoreArtifactVersion({
+          taskId: task.id,
+          workspacePath: harness.workspacePath,
+          artifactId: artifact.id,
+          versionId: first.id,
+          expectedRevision: task.revision,
+        }),
+      ).rejects.toThrow("Injected notification failure");
+
+      const restored = harness.sessionDb.getTaskArtifactDetail(task.id, artifact.id);
+      expect(restored?.versions.at(-1)?.sha256).toBe(first.sha256);
+      expect(await fs.readFile(artifactPath, "utf8")).toBe("version one\n");
+    } finally {
+      harness.sessionDb.close();
+    }
+  });
+
   test("captures a legacy artifact baseline lazily and only once", async () => {
     const harness = await createHarness();
     try {

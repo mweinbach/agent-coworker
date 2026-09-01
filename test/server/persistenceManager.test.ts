@@ -79,6 +79,40 @@ describe("session snapshot persistence reliability", () => {
     );
   });
 
+  test("captures canonical and rich snapshots before asynchronous writes can advance state", async () => {
+    let state = "first message";
+    let lastSeq = 0;
+    const persistedSnapshots: Array<{ lastEventSeq: number; state: string }> = [];
+    const persistSessionMutation = mock(async (_mutation: PersistedSessionMutation) => {
+      lastSeq += 1;
+      if (lastSeq === 1) {
+        state = "second message";
+        manager.queuePersistSessionSnapshot("session.user_message");
+      }
+      return lastSeq;
+    });
+    const { manager } = createPersistenceHarness({
+      persistSessionMutation,
+      persistSessionSnapshot: async (_sessionId, snapshot) => {
+        persistedSnapshots.push(snapshot as { lastEventSeq: number; state: string });
+      },
+      buildCanonicalSnapshot: () => ({ state }) as never,
+      buildSessionSnapshotAt: (_updatedAt, lastEventSeq) => ({ lastEventSeq, state }),
+    });
+
+    manager.queuePersistSessionSnapshot("session.user_message");
+    await manager.waitForIdle({ throwOnError: true });
+
+    expect(persistSessionMutation.mock.calls.map(([mutation]) => mutation.snapshot)).toEqual([
+      { state: "first message" },
+      { state: "second message" },
+    ]);
+    expect(persistedSnapshots).toEqual([
+      { lastEventSeq: 1, state: "first message" },
+      { lastEventSeq: 2, state: "second message" },
+    ]);
+  });
+
   test("keeps exhausted mutation reasons pending until a later recovery succeeds", async () => {
     let failing = true;
     const persistSessionMutation = mock(async () => {
@@ -114,7 +148,7 @@ describe("session snapshot persistence reliability", () => {
     let lastSeq = 20;
     const persistedSnapshots: Array<{ lastEventSeq: number; state: string }> = [];
     const observedSeqs: number[] = [];
-    const persistSessionMutation = mock(async () => ++lastSeq);
+    const persistSessionMutation = mock(async (_mutation: PersistedSessionMutation) => ++lastSeq);
     const persistSessionSnapshot = mock(async (_sessionId: string, snapshot: unknown) => {
       if (snapshotUnavailable) throw new Error("rich snapshot unavailable");
       persistedSnapshots.push(snapshot as { lastEventSeq: number; state: string });
@@ -155,15 +189,21 @@ describe("session snapshot persistence reliability", () => {
     expect(observedSeqs).toEqual([21, 22]);
   });
 
-  test("reuses an exhausted canonical checkpoint when its original reason is retried", async () => {
+  test("persists newer state queued with the same reason as an exhausted checkpoint", async () => {
+    let state = "first message";
     let snapshotUnavailable = true;
-    const persistSessionMutation = mock(async () => 14);
-    const persistSessionSnapshot = mock(async () => {
+    let lastSeq = 13;
+    const persistedSnapshots: Array<{ lastEventSeq: number; state: string }> = [];
+    const persistSessionMutation = mock(async (_mutation: PersistedSessionMutation) => ++lastSeq);
+    const persistSessionSnapshot = mock(async (_sessionId: string, snapshot: unknown) => {
       if (snapshotUnavailable) throw new Error("snapshot storage offline");
+      persistedSnapshots.push(snapshot as { lastEventSeq: number; state: string });
     });
     const { manager } = createPersistenceHarness({
       persistSessionMutation,
       persistSessionSnapshot,
+      buildCanonicalSnapshot: () => ({ state }) as never,
+      buildSessionSnapshotAt: (_updatedAt, lastEventSeq) => ({ lastEventSeq, state }),
     });
 
     manager.queuePersistSessionSnapshot("session.workflow_completed");
@@ -171,14 +211,18 @@ describe("session snapshot persistence reliability", () => {
       "snapshot storage offline",
     );
 
+    state = "second message";
     snapshotUnavailable = false;
     manager.queuePersistSessionSnapshot("session.workflow_completed");
     await manager.waitForIdle({ throwOnError: true });
 
-    expect(persistSessionMutation).toHaveBeenCalledTimes(1);
-    expect(persistSessionSnapshot).toHaveBeenLastCalledWith(
-      "session-1",
-      expect.objectContaining({ lastEventSeq: 14 }),
-    );
+    expect(persistSessionMutation.mock.calls.map(([mutation]) => mutation.snapshot)).toEqual([
+      { state: "first message" },
+      { state: "second message" },
+    ]);
+    expect(persistedSnapshots).toEqual([
+      { lastEventSeq: 14, state: "first message" },
+      { lastEventSeq: 15, state: "second message" },
+    ]);
   });
 });

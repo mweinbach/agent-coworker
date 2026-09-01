@@ -52,7 +52,7 @@ import type {
 import { raceWithAbort } from "./utils/abortSignal";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-const TURN_STARTUP_CLEANUP_TIMEOUT_MS = 200;
+const TURN_MCP_CLEANUP_TIMEOUT_MS = 200;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z
   .object({
@@ -327,6 +327,39 @@ type TurnMcpLoad = {
   close?: () => Promise<void>;
 };
 
+async function cleanupTurnMcp(
+  mcpLoadPromise: Promise<TurnMcpLoad>,
+  params: Pick<RunTurnParams, "log" | "abortSignal">,
+): Promise<void> {
+  // Keep ownership of late-created connections and late cleanup failures even
+  // when a connector ignores cancellation or never settles.
+  const cleanup = mcpLoadPromise
+    .then(async (loaded) => {
+      await loaded.close?.();
+    })
+    .catch((error: unknown) => {
+      params.log(`[MCP] Error closing MCP connections: ${String(error)}`);
+    });
+  if (params.abortSignal?.aborted) return;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await raceWithAbort(
+      Promise.race([
+        cleanup,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, TURN_MCP_CLEANUP_TIMEOUT_MS);
+        }),
+      ]),
+      params.abortSignal,
+    );
+  } catch {
+    // Cancellation stops waiting, not cleanup. Preserve the turn's result/error.
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 /**
  * Loads this turn's MCP tools. Per-server failures degrade gracefully into
  * `errors`; loader failures themselves reject and abort the turn.
@@ -419,155 +452,131 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     ]);
     const [turnToolEnv, mcpLoad, telemetry] = await raceWithAbort(startup, abortSignal).catch(
       async (error: unknown): Promise<never> => {
-        // A dependency can ignore cancellation or hang forever. Still close
-        // late-created MCP connections, but never let cleanup strand Stop.
-        const cleanup = mcpLoadPromise
-          .then(async (settledMcpLoad) => {
-            await settledMcpLoad.close?.();
-          })
-          .catch((closeError: unknown) => {
-            log(`[MCP] Error closing MCP connections: ${String(closeError)}`);
-          });
-
-        if (!abortSignal?.aborted) {
-          let cleanupTimeout: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await Promise.race([
-              cleanup,
-              new Promise<void>((resolve) => {
-                cleanupTimeout = setTimeout(resolve, TURN_STARTUP_CLEANUP_TIMEOUT_MS);
-              }),
-            ]);
-          } finally {
-            if (cleanupTimeout !== undefined) clearTimeout(cleanupTimeout);
-          }
-        }
-
+        await cleanupTurnMcp(mcpLoadPromise, params);
         throw error;
       },
     );
-    const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
-    const turnSandboxPolicy = resolveSandboxPolicy({
-      config: config.sandbox,
-      // Honor an explicit `no_project_write` shell policy even without an
-      // agentRole; otherwise this precomputed policy (preferred by the bash
-      // tool over deriving from shellPolicy) would run mutating commands with
-      // project write access despite the no-project-write shell policy.
-      readOnlyRole:
-        (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
-        shellPolicy === "no_project_write",
-      workingDirectory: config.workingDirectory,
-      projectRoot: path.dirname(config.projectCoworkDir),
-      outputDirectory: config.outputDirectory,
-      uploadsDirectory: config.uploadsDirectory,
-      toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
-      targetPaths: params.agentTargetPaths,
-      yolo: params.yolo,
-    });
-
-    let taskPauseRequested = false;
-    let taskModeSwitchRequested = false;
-    const toolCtx = {
-      config,
-      log,
-      askUser,
-      approveCommand,
-      updateTodos,
-      spawnDepth: params.spawnDepth ?? 0,
-      abortSignal,
-      availableSkills: discoveredSkills,
-      turnUserPrompt: extractTurnUserPrompt(messages),
-      getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
-      harnessContext: params.harnessContext,
-      taskContext: params.taskContext,
-      getTaskContext: params.getTaskContext,
-      getTaskReviewMaterial: params.getTaskReviewMaterial,
-      applyTaskDirective: params.applyTaskDirective
-        ? async (directive: TaskDirective) => {
-            const directiveResult = await params.applyTaskDirective?.(directive);
-            if (!directiveResult) throw new Error("Task directive handler is unavailable");
-            if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
-            return directiveResult;
-          }
-        : undefined,
-      createTask: params.createTask
-        ? async (input: TaskCreationInput) => {
-            const result = await params.createTask?.(input);
-            if (!result) throw new Error("Task creation handler is unavailable");
-            taskModeSwitchRequested = true;
-            return result;
-          }
-        : undefined,
-      agentRole: params.agentRole,
-      agentProfile: params.agentProfile,
-      agentTargetPaths: params.agentTargetPaths,
-      sessionId: params.sessionId,
-      shellPolicy,
-      sandboxPolicy: turnSandboxPolicy,
-      yolo: params.yolo,
-      agentControl: params.agentControl,
-      threadControl: params.threadControl,
-      allowThreadManagementTools: params.allowThreadManagementTools,
-      costTracker: params.costTracker,
-      toolEnv: turnToolEnv,
-      onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
-      onWorkflowProgress: params.onWorkflowProgress,
-      onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
-      onSkillUsed: params.onSkillUsed,
-      assertCanMutate: params.assertCanMutate,
-    };
-    const useProviderNativeTools = providerOwnsExecutableTools(config);
-    const rawBuiltInTools = deps.createTools(toolCtx);
-    const builtInTools = useProviderNativeTools
-      ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
-          preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
-        })
-      : rawBuiltInTools;
-
-    const mcpTools: Record<string, any> = mcpLoad.tools;
-    if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
-    const closeMcp = mcpLoad.close;
-
-    const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
-    const roleFilteredTools = params.agentRole
-      ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
-          // Child agents inherit the parent session's MCP tools; agent profiles
-          // can still narrow that set via filterToolsForProfile below.
-          allowProfileMcp: true,
-        })
-      : mergedTools;
-    const filteredTools = params.agentProfile
-      ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
-      : roleFilteredTools;
-    const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
-    const mcpToolNames = Object.keys(tools)
-      .filter((name) => name.startsWith("mcp__"))
-      .sort();
-    const turnSystem = appendRuntimeInstructions(
-      buildTurnSystemPrompt(
-        system,
-        config,
-        mcpToolNames,
-        params.harnessContext,
-        params.referencedPlugins,
-        params.taskContext,
-      ),
-      turnToolEnv,
-    );
-    const turnProviderOptions = config.providerOptions;
-    const googlePrepareStep =
-      config.provider === "google" && Object.keys(tools).length > 0
-        ? buildGooglePrepareStep(turnProviderOptions, log)
-        : undefined;
-    const prepareStep = composePrepareSteps(
-      params.prepareStep,
-      googlePrepareStep,
-      (nextMessages) => {
-        latestTurnMessages = nextMessages;
-      },
-    );
-
     try {
+      const shellPolicy = params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole);
+      const turnSandboxPolicy = resolveSandboxPolicy({
+        config: config.sandbox,
+        // Honor an explicit `no_project_write` shell policy even without an
+        // agentRole; otherwise this precomputed policy (preferred by the bash
+        // tool over deriving from shellPolicy) would run mutating commands with
+        // project write access despite the no-project-write shell policy.
+        readOnlyRole:
+          (params.agentRole ? getAgentRoleDefinition(params.agentRole).readOnly : false) ||
+          shellPolicy === "no_project_write",
+        workingDirectory: config.workingDirectory,
+        projectRoot: path.dirname(config.projectCoworkDir),
+        outputDirectory: config.outputDirectory,
+        uploadsDirectory: config.uploadsDirectory,
+        toolRuntimeWritableRoots: [...resolveAdvancedMemoryWriteRoots(config)],
+        targetPaths: params.agentTargetPaths,
+        yolo: params.yolo,
+      });
+
+      let taskPauseRequested = false;
+      let taskModeSwitchRequested = false;
+      const toolCtx = {
+        config,
+        log,
+        askUser,
+        approveCommand,
+        updateTodos,
+        spawnDepth: params.spawnDepth ?? 0,
+        abortSignal,
+        availableSkills: discoveredSkills,
+        turnUserPrompt: extractTurnUserPrompt(messages),
+        getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
+        harnessContext: params.harnessContext,
+        taskContext: params.taskContext,
+        getTaskContext: params.getTaskContext,
+        getTaskReviewMaterial: params.getTaskReviewMaterial,
+        applyTaskDirective: params.applyTaskDirective
+          ? async (directive: TaskDirective) => {
+              const directiveResult = await params.applyTaskDirective?.(directive);
+              if (!directiveResult) throw new Error("Task directive handler is unavailable");
+              if (directiveResult.continuation === "pause_for_input") taskPauseRequested = true;
+              return directiveResult;
+            }
+          : undefined,
+        createTask: params.createTask
+          ? async (input: TaskCreationInput) => {
+              const result = await params.createTask?.(input);
+              if (!result) throw new Error("Task creation handler is unavailable");
+              taskModeSwitchRequested = true;
+              return result;
+            }
+          : undefined,
+        agentRole: params.agentRole,
+        agentProfile: params.agentProfile,
+        agentTargetPaths: params.agentTargetPaths,
+        sessionId: params.sessionId,
+        shellPolicy,
+        sandboxPolicy: turnSandboxPolicy,
+        yolo: params.yolo,
+        agentControl: params.agentControl,
+        threadControl: params.threadControl,
+        allowThreadManagementTools: params.allowThreadManagementTools,
+        costTracker: params.costTracker,
+        toolEnv: turnToolEnv,
+        onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+        onWorkflowProgress: params.onWorkflowProgress,
+        onAdvancedMemoryChanged: params.onAdvancedMemoryChanged,
+        onSkillUsed: params.onSkillUsed,
+        assertCanMutate: params.assertCanMutate,
+      };
+      const useProviderNativeTools = providerOwnsExecutableTools(config);
+      const rawBuiltInTools = deps.createTools(toolCtx);
+      const builtInTools = useProviderNativeTools
+        ? filterToolsForCodexDynamicBoundary(rawBuiltInTools, {
+            preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+          })
+        : rawBuiltInTools;
+
+      const mcpTools: Record<string, any> = mcpLoad.tools;
+      if (mcpLoad.errors.length > 0) params.onMcpLoadErrors?.(mcpLoad.errors);
+
+      const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
+      const roleFilteredTools = params.agentRole
+        ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole), {
+            // Child agents inherit the parent session's MCP tools; agent profiles
+            // can still narrow that set via filterToolsForProfile below.
+            allowProfileMcp: true,
+          })
+        : mergedTools;
+      const filteredTools = params.agentProfile
+        ? filterToolsForProfile(roleFilteredTools, params.agentProfile)
+        : roleFilteredTools;
+      const tools = wrapToolSetWithMutationGate(filteredTools, params.assertCanMutate, abortSignal);
+      const mcpToolNames = Object.keys(tools)
+        .filter((name) => name.startsWith("mcp__"))
+        .sort();
+      const turnSystem = appendRuntimeInstructions(
+        buildTurnSystemPrompt(
+          system,
+          config,
+          mcpToolNames,
+          params.harnessContext,
+          params.referencedPlugins,
+          params.taskContext,
+        ),
+        turnToolEnv,
+      );
+      const turnProviderOptions = config.providerOptions;
+      const googlePrepareStep =
+        config.provider === "google" && Object.keys(tools).length > 0
+          ? buildGooglePrepareStep(turnProviderOptions, log)
+          : undefined;
+      const prepareStep = composePrepareSteps(
+        params.prepareStep,
+        googlePrepareStep,
+        (nextMessages) => {
+          latestTurnMessages = nextMessages;
+        },
+      );
+
       const runtime = deps.createRuntime(config);
       return await runtime.runTurn({
         config,
@@ -602,11 +611,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         log,
       });
     } finally {
-      try {
-        await closeMcp?.();
-      } catch (err) {
-        log(`[MCP] Error closing MCP connections: ${String(err)}`);
-      }
+      await cleanupTurnMcp(mcpLoadPromise, params);
     }
   };
 }

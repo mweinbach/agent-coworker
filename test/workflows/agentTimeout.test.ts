@@ -230,4 +230,35 @@ describe("workflow agent end-to-end timeouts", () => {
       releaseClose();
     }
   });
+
+  test("observes cleanup rejections after terminal teardown stops waiting", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl({ reply: () => "completed-value" });
+    let closeAttempts = 0;
+    control.close = async () => {
+      closeAttempts += 1;
+      await Promise.resolve();
+      throw new Error("child close failed");
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const outcome = await runWorkflow({
+        ctx: makeWorkflowCtx(dir),
+        control,
+        script:
+          `${metaHeader("rejected-run-cleanup", ["main"])}` +
+          `export default async function run({ agent }) { return await agent("finished"); }`,
+      });
+      await Bun.sleep(0);
+
+      expect(outcome.ok).toBe(true);
+      expect(closeAttempts).toBeGreaterThan(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

@@ -122,4 +122,150 @@ describe("agent turn startup reliability", () => {
       expect(outcome.error.message).toBe("observability startup failed");
     }
   });
+
+  test("closes turn-owned MCP connections when tool construction fails", async () => {
+    const close = mock(async () => {});
+    const runTurn = createRunTurn({
+      createTools: () => {
+        throw new Error("Tool construction failed");
+      },
+      loadMCPServers: async () => [
+        { name: "test", transport: { type: "stdio", command: "unused", args: [] } },
+      ],
+      loadMCPTools: async () => ({ tools: {}, errors: [], close }),
+    });
+
+    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow(
+      "Tool construction failed",
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test("closes turn-owned MCP connections when the load-error callback fails", async () => {
+    const close = mock(async () => {});
+    const runTurn = createRunTurn({
+      createTools: () => ({}),
+      loadMCPServers: async () => [
+        { name: "test", transport: { type: "stdio", command: "unused", args: [] } },
+      ],
+      loadMCPTools: async () => ({ tools: {}, errors: ["Connector unavailable"], close }),
+    });
+
+    await expect(
+      runTurn(
+        makeParams({
+          enableMcp: true,
+          onMcpLoadErrors: () => {
+            throw new Error("Load-error callback failed");
+          },
+        }),
+      ),
+    ).rejects.toThrow("Load-error callback failed");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["before cleanup", "during cleanup"] as const)(
+    "Stop %s interrupts a stalled MCP close without losing late errors",
+    async (phase) => {
+      const cleanupStarted = Promise.withResolvers<void>();
+      const cleanupFinished = Promise.withResolvers<void>();
+      const cleanupErrorLogged = Promise.withResolvers<void>();
+      const logLines: string[] = [];
+      const close = mock(async () => {
+        cleanupStarted.resolve();
+        await cleanupFinished.promise;
+        throw new Error("Late cleanup failure");
+      });
+      const controller = new AbortController();
+      const runTurn = createRunTurn({
+        createRuntime: () => ({
+          name: "pi",
+          runTurn: async () => {
+            if (phase === "before cleanup") controller.abort();
+            throw new Error("Model turn aborted.");
+          },
+        }),
+        createTools: () => ({}),
+        loadMCPServers: async () => [
+          { name: "test", transport: { type: "stdio", command: "unused", args: [] } },
+        ],
+        loadMCPTools: async () => ({ tools: {}, errors: [], close }),
+      });
+      const operation = runTurn(
+        makeParams({
+          enableMcp: true,
+          abortSignal: controller.signal,
+          log: (line) => {
+            logLines.push(line);
+            if (line.includes("Late cleanup failure")) cleanupErrorLogged.resolve();
+          },
+        }),
+      );
+      const settled = operation.then(
+        () => ({ kind: "completed" as const }),
+        (error: Error) => ({ kind: "rejected" as const, error }),
+      );
+      await cleanupStarted.promise;
+      controller.abort();
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const outcome = await Promise.race([
+          settled,
+          new Promise<{ kind: "hung" }>((resolve) => {
+            timeout = setTimeout(() => resolve({ kind: "hung" }), 500);
+          }),
+        ]);
+        expect(outcome.kind).toBe("rejected");
+        if (outcome.kind === "rejected") expect(outcome.error.message).toBe("Model turn aborted.");
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+        cleanupFinished.resolve();
+        await settled;
+      }
+      await cleanupErrorLogged.promise;
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(logLines.some((line) => line.includes("Late cleanup failure"))).toBe(true);
+    },
+  );
+
+  test("bounds MCP cleanup waits after a successful turn", async () => {
+    const cleanupStarted = Promise.withResolvers<void>();
+    const cleanupFinished = Promise.withResolvers<void>();
+    const close = mock(async () => {
+      cleanupStarted.resolve();
+      await cleanupFinished.promise;
+    });
+    const runTurn = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async () => ({ text: "done", responseMessages: [] }),
+      }),
+      createTools: () => ({}),
+      loadMCPServers: async () => [
+        { name: "test", transport: { type: "stdio", command: "unused", args: [] } },
+      ],
+      loadMCPTools: async () => ({ tools: {}, errors: [], close }),
+    });
+    const operation = runTurn(makeParams({ enableMcp: true }));
+    const settled = operation.then((result) => ({ kind: "completed" as const, result }));
+    await cleanupStarted.promise;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        settled,
+        new Promise<{ kind: "hung" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "hung" }), 750);
+        }),
+      ]);
+      expect(outcome.kind).toBe("completed");
+      if (outcome.kind === "completed") expect(outcome.result.text).toBe("done");
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      cleanupFinished.resolve();
+      await settled;
+    }
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 });

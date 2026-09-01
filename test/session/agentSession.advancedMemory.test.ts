@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import type { MemoryGeneratorRunResult } from "../../src/advancedMemory/MemoryGenerator";
 import type { ModelMessage } from "../../src/types";
 import {
   AgentSession,
@@ -13,7 +14,7 @@ import {
 
 type MemoryGenerationSessionInternals = {
   memoryGenerator: {
-    run: (opts: { deltaMessages: ModelMessage[] }) => Promise<{ ran: boolean; ok: boolean }>;
+    run: (opts: { deltaMessages: ModelMessage[] }) => Promise<MemoryGeneratorRunResult>;
     consolidate: (opts: { folder?: string }) => Promise<{ ran: boolean; ok: boolean }>;
   };
   memoryGenerationQueue: Promise<void>;
@@ -31,6 +32,319 @@ type PersistedMemoryCheckpointSnapshot = {
 };
 
 describe("AgentSession advanced memory generation", () => {
+  test("checkpoints only the completed prefix when a later automatic batch fails", async () => {
+    const snapshots: unknown[] = [];
+    const { session } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      writePersistedSessionSnapshotImpl: async ({ snapshot }) => {
+        snapshots.push(snapshot);
+        return "/tmp/test-session/.cowork/sessions/mock.json";
+      },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    await flushAsyncWork();
+    snapshots.length = 0;
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return deltas.length === 1
+          ? { ran: true, ok: false, processedMessageCount: 2 }
+          : { ran: true, ok: true, processedMessageCount: deltaMessages.length };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push(
+      { role: "user", content: "already processed question" },
+      { role: "assistant", content: "already processed answer" },
+      { role: "user", content: "committed question" },
+      { role: "assistant", content: "committed answer" },
+      { role: "user", content: "retry question" },
+      { role: "assistant", content: "retry answer" },
+    );
+    internals.state.lastMemoryGeneratedIndex = 2;
+
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(4);
+    await waitForCondition(() =>
+      snapshots.some(
+        (snapshot) =>
+          (snapshot as PersistedMemoryCheckpointSnapshot).context.lastMemoryGeneratedIndex === 4,
+      ),
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(deltas[1]?.map((message) => message.content)).toEqual([
+      "retry question",
+      "retry answer",
+    ]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(6);
+  });
+
+  test("retains an automatic delta when no complete messages were processed", async () => {
+    const { session } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return {
+          ran: false,
+          ok: true,
+          processedMessageCount: deltas.length === 1 ? 0 : deltaMessages.length,
+        };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push(
+      { role: "user", content: "pending question" },
+      { role: "assistant", content: "pending answer" },
+    );
+
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(0);
+
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+    expect(deltas[1]).toEqual(deltas[0]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(2);
+  });
+
+  test("manual backfill preserves a committed prefix and leaves the failed suffix for retry", async () => {
+    const { session, events } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return deltas.length === 2
+          ? { ran: true, ok: false, processedMessageCount: 1 }
+          : { ran: true, ok: true, processedMessageCount: deltaMessages.length };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push(
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second question" },
+      { role: "assistant", content: "second answer" },
+      { role: "user", content: "third question" },
+      { role: "assistant", content: "third answer" },
+    );
+
+    await session.generateAdvancedMemoryForHistory();
+
+    expect(deltas).toHaveLength(2);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(3);
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+    expect(deltas[2]?.map((message) => message.content)).toEqual([
+      "second answer",
+      "third question",
+      "third answer",
+    ]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(6);
+  });
+
+  test.each([true, false])(
+    "manual backfill does not checkpoint an unfinished trailing prompt (completed prefix: %s)",
+    async (completedPrefix) => {
+      const { session } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      });
+      const internals = session as unknown as MemoryGenerationSessionInternals;
+      const deltas: ModelMessage[][] = [];
+      internals.memoryGenerator = {
+        run: async ({ deltaMessages }) => {
+          deltas.push(deltaMessages);
+          return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
+        },
+        consolidate: async () => ({ ran: false, ok: true }),
+      };
+      if (completedPrefix) {
+        internals.state.allMessages.push(
+          { role: "user", content: "completed question" },
+          { role: "assistant", content: "completed answer" },
+        );
+      }
+      internals.state.allMessages.push({ role: "user", content: "unfinished question" });
+
+      await session.generateAdvancedMemoryForHistory();
+      expect(internals.state.lastMemoryGeneratedIndex).toBe(completedPrefix ? 2 : 0);
+      internals.state.allMessages.push({ role: "assistant", content: "new answer" });
+      session.triggerMemoryGeneration();
+      await internals.memoryGenerationQueue;
+      expect(deltas.at(-1)?.map((message) => message.content)).toEqual([
+        "unfinished question",
+        "new answer",
+      ]);
+    },
+  );
+
+  test("generates memories for new history after reset clears the old checkpoint", async () => {
+    const { session } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        return { ran: false, ok: true, processedMessageCount: deltaMessages.length };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push({ role: "user", content: "old history" });
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    session.reset();
+    internals.state.allMessages.push({ role: "user", content: "new history" });
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+
+    expect(deltas.map((delta) => delta.map((message) => message.content))).toEqual([
+      ["old history"],
+      ["new history"],
+    ]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(1);
+  });
+
+  test("discards stale automatic jobs and completions after history reset", async () => {
+    const refresh = mock(async () => ({ prompt: "current memories", discoveredSkills: [] }));
+    const { session, events } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      loadSystemPromptWithSkillsImpl: refresh,
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const deltas: ModelMessage[][] = [];
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        if (deltas.length === 1) {
+          started.resolve();
+          await release.promise;
+        }
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
+      },
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push({ role: "user", content: "old active job" });
+    session.triggerMemoryGeneration();
+    await started.promise;
+    internals.state.allMessages.push({ role: "assistant", content: "old queued job" });
+    session.triggerMemoryGeneration();
+
+    session.reset();
+    internals.state.allMessages.push({ role: "user", content: "new history" });
+    session.triggerMemoryGeneration();
+    release.resolve();
+    await internals.memoryGenerationQueue;
+
+    expect(deltas.map((delta) => delta.map((message) => message.content))).toEqual([
+      ["old active job"],
+      ["new history"],
+    ]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(1);
+    expect(internals.state.memoryGenerationsSinceConsolidation).toBe(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === "advanced_memory_list")).toHaveLength(1);
+  });
+
+  test("stops old manual backfill chunks and queued jobs after history reset", async () => {
+    const refresh = mock(async () => ({ prompt: "current memories", discoveredSkills: [] }));
+    const { session } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      loadSystemPromptWithSkillsImpl: refresh,
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const deltas: ModelMessage[][] = [];
+    const consolidate = mock(async () => ({ ran: false, ok: true }));
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => {
+        deltas.push(deltaMessages);
+        if (deltas.length === 1) {
+          started.resolve();
+          await release.promise;
+        }
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
+      },
+      consolidate,
+    };
+    internals.state.allMessages.push(
+      { role: "user", content: "old first question" },
+      { role: "assistant", content: "old first answer" },
+      { role: "user", content: "old second question" },
+      { role: "assistant", content: "old second answer" },
+    );
+    const activeBackfill = session.generateAdvancedMemoryForHistory();
+    const queuedBackfill = session.generateAdvancedMemoryForHistory();
+    await started.promise;
+
+    session.reset();
+    internals.state.allMessages.push({ role: "user", content: "new history" });
+    session.triggerMemoryGeneration();
+    release.resolve();
+    await Promise.all([activeBackfill, queuedBackfill, internals.memoryGenerationQueue]);
+
+    expect(deltas.map((delta) => delta.map((message) => message.content))).toEqual([
+      ["old first question", "old first answer"],
+      ["new history"],
+    ]);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(1);
+    expect(consolidate).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("discards a memory prompt refresh that started before history reset", async () => {
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const { session, events } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      loadSystemPromptWithSkillsImpl: async () => {
+        started.resolve();
+        await release.promise;
+        return { prompt: "stale memories", discoveredSkills: [] };
+      },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals & {
+      state: { system: string };
+    };
+    const initialSystemPrompt = internals.state.system;
+    internals.memoryGenerator = {
+      run: async ({ deltaMessages }) => ({
+        ran: true,
+        ok: true,
+        processedMessageCount: deltaMessages.length,
+      }),
+      consolidate: async () => ({ ran: false, ok: true }),
+    };
+    internals.state.allMessages.push({ role: "user", content: "old history" });
+    session.triggerMemoryGeneration();
+    await started.promise;
+
+    session.reset();
+    release.resolve();
+    await internals.memoryGenerationQueue;
+
+    expect(internals.state.system).toBe(initialSystemPrompt);
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(0);
+    expect(events.filter((event) => event.type === "advanced_memory_list")).toEqual([]);
+  });
+
   test("snapshots the completed-turn boundary when queueing generation", async () => {
     const config = {
       ...makeConfig("/tmp/test-session"),
@@ -53,7 +367,7 @@ describe("AgentSession advanced memory generation", () => {
         deltas.push(deltaMessages);
         resolveStarted();
         await unblockRun;
-        return { ran: true, ok: true };
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
       },
       consolidate: async () => {
         throw new Error("consolidation should not run before five generations");
@@ -93,7 +407,11 @@ describe("AgentSession advanced memory generation", () => {
       state: MemoryGenerationSessionInternals["state"] & { system: string };
     };
     internals.memoryGenerator = {
-      run: async () => ({ ran: true, ok: true }),
+      run: async ({ deltaMessages }) => ({
+        ran: true,
+        ok: true,
+        processedMessageCount: deltaMessages.length,
+      }),
       consolidate: async () => {
         throw new Error("consolidation should not run before five generations");
       },
@@ -118,7 +436,11 @@ describe("AgentSession advanced memory generation", () => {
     });
     const internals = session as unknown as MemoryGenerationSessionInternals;
     internals.memoryGenerator = {
-      run: async () => ({ ran: true, ok: true }),
+      run: async ({ deltaMessages }) => ({
+        ran: true,
+        ok: true,
+        processedMessageCount: deltaMessages.length,
+      }),
       consolidate: async () => {
         throw new Error("consolidation should not run before five generations");
       },
@@ -152,7 +474,11 @@ describe("AgentSession advanced memory generation", () => {
     snapshots.length = 0;
 
     internals.memoryGenerator = {
-      run: async () => ({ ran: true, ok: true }),
+      run: async ({ deltaMessages }) => ({
+        ran: true,
+        ok: true,
+        processedMessageCount: deltaMessages.length,
+      }),
       consolidate: async () => {
         throw new Error("consolidation should not run before five generations");
       },
@@ -217,7 +543,7 @@ describe("AgentSession advanced memory generation", () => {
     internals.memoryGenerator = {
       run: async ({ deltaMessages }) => {
         deltas.push(deltaMessages);
-        return { ran: false, ok: true };
+        return { ran: false, ok: true, processedMessageCount: deltaMessages.length };
       },
       consolidate: async () => {
         throw new Error("consolidation should not run for a no-op generation");
@@ -245,7 +571,7 @@ describe("AgentSession advanced memory generation", () => {
     internals.memoryGenerator = {
       run: async ({ deltaMessages }) => {
         deltas.push(deltaMessages);
-        return { ran: true, ok: true };
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
       },
       consolidate: async ({ folder }) => {
         consolidatedFolders.push(folder);
@@ -312,7 +638,7 @@ describe("AgentSession advanced memory generation", () => {
     internals.memoryGenerator = {
       run: async ({ deltaMessages }) => {
         deltas.push(deltaMessages);
-        return { ran: true, ok: true };
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
       },
       consolidate: async () => ({ ran: false, ok: true }),
     };
@@ -369,9 +695,9 @@ describe("AgentSession advanced memory generation", () => {
     let consolidateCount = 0;
 
     internals.memoryGenerator = {
-      run: async () => {
+      run: async ({ deltaMessages }) => {
         runCount += 1;
-        return { ran: true, ok: true };
+        return { ran: true, ok: true, processedMessageCount: deltaMessages.length };
       },
       consolidate: async () => {
         consolidateCount += 1;
@@ -424,7 +750,10 @@ describe("AgentSession advanced memory generation", () => {
     let consolidateCount = 0;
 
     internals.memoryGenerator = {
-      run: async () => results.shift() ?? { ran: true, ok: true },
+      run: async ({ deltaMessages }) => {
+        const result = results.shift() ?? { ran: true, ok: true };
+        return { ...result, processedMessageCount: result.ok ? deltaMessages.length : 0 };
+      },
       consolidate: async () => {
         consolidateCount += 1;
         return { ran: true, ok: true };
@@ -455,7 +784,11 @@ describe("AgentSession advanced memory generation", () => {
     let consolidateCount = 0;
 
     internals.memoryGenerator = {
-      run: async () => ({ ran: true, ok: true }),
+      run: async ({ deltaMessages }) => ({
+        ran: true,
+        ok: true,
+        processedMessageCount: deltaMessages.length,
+      }),
       consolidate: async () => {
         consolidateCount += 1;
         return consolidateCount === 1 ? { ran: false, ok: false } : { ran: true, ok: true };
@@ -481,5 +814,50 @@ describe("AgentSession advanced memory generation", () => {
 
     expect(consolidateCount).toBe(2);
     expect(internals.state.memoryGenerationsSinceConsolidation).toBe(0);
+  });
+
+  test("manual backfill checkpoints processed history when consolidation setup fails", async () => {
+    const snapshots: unknown[] = [];
+    const { session, events } = makeSession({
+      config: { ...makeConfig("/tmp/test-session"), advancedMemory: true },
+      writePersistedSessionSnapshotImpl: async ({ snapshot }) => {
+        snapshots.push(snapshot);
+        return "/tmp/test-session/.cowork/sessions/mock.json";
+      },
+    });
+    const internals = session as unknown as MemoryGenerationSessionInternals;
+    await flushAsyncWork();
+    snapshots.length = 0;
+    const run = mock(async ({ deltaMessages }: { deltaMessages: ModelMessage[] }) => ({
+      ran: true,
+      ok: true,
+      processedMessageCount: deltaMessages.length,
+    }));
+    internals.memoryGenerator = {
+      run,
+      consolidate: async () => {
+        throw new Error("consolidator prompt missing");
+      },
+    };
+    internals.state.allMessages.push(
+      { role: "user", content: "already processed question" },
+      { role: "assistant", content: "already processed answer" },
+    );
+
+    await session.generateAdvancedMemoryForHistory();
+
+    expect(events.find((event) => event.type === "error")?.message).toContain(
+      "consolidator prompt missing",
+    );
+    expect(internals.state.lastMemoryGeneratedIndex).toBe(2);
+    await waitForCondition(() =>
+      snapshots.some(
+        (snapshot) =>
+          (snapshot as PersistedMemoryCheckpointSnapshot).context.lastMemoryGeneratedIndex === 2,
+      ),
+    );
+    session.triggerMemoryGeneration();
+    await internals.memoryGenerationQueue;
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

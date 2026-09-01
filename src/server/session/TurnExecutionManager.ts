@@ -4,6 +4,7 @@ import { type IdempotencyClaim, IdempotencyLedger } from "../../shared/idempoten
 import type { ToolRetryIntent, ToolRetryRequest } from "../../shared/toolRetry";
 import type { TurnReference } from "../../types";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
+import type { SessionEvent } from "../protocol";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -31,10 +32,15 @@ export type UserMessageReceipt = {
 
 export type UserMessageIdempotencyClaim = IdempotencyClaim<UserMessageReceipt>;
 
+export type UserMessageAdmission =
+  | { status: "accepted"; turnId: string }
+  | { status: "rejected"; error: Extract<SessionEvent, { type: "error" }> };
+
 export type SendUserMessageOptions = {
   allowThreadManagementTools?: boolean;
   idempotencyClaim?: UserMessageIdempotencyClaim | null;
   toolRetryIntent?: ToolRetryIntent;
+  onAdmission?: (outcome: UserMessageAdmission) => void;
 };
 
 export type UserMessageIdempotencyInput = {
@@ -76,6 +82,8 @@ export class TurnExecutionManager {
   private readonly steerLedger = new IdempotencyLedger<SteerReceipt>();
   private userMessageLedgerHydrated = false;
   private activeTurnSettlement: Promise<void> | null = null;
+  private activeTurnAbortController: AbortController | null = null;
+  private disposed = false;
   private readonly activeSteerSettlements = new Set<Promise<void>>();
 
   constructor(
@@ -89,6 +97,7 @@ export class TurnExecutionManager {
       triggerMemoryGeneration?: () => void;
       triggerSkillImprovementUsage?: () => void;
       onAdvancedMemoryChanged?: (folder: string) => Promise<void>;
+      prepareUserMessageTurn?: () => Promise<boolean>;
     },
   ) {
     const classifyTurnError = createTurnErrorClassifier(this.context);
@@ -212,8 +221,33 @@ export class TurnExecutionManager {
     opts?: SendUserMessageOptions,
   ) {
     const claim = opts?.idempotencyClaim ?? null;
+    let admission: UserMessageAdmission | null = null;
+    const notifyAdmission = (outcome: UserMessageAdmission) => {
+      if (admission) return;
+      admission = outcome;
+      opts?.onAdmission?.(outcome);
+    };
+    const reject = (error: Extract<SessionEvent, { type: "error" }>) => {
+      this.context.emit(error);
+      notifyAdmission({ status: "rejected", error });
+      if (claim?.kind === "owner") this.userMessageLedger.reject(claim.key, error.message);
+    };
     if (claim?.kind === "replay") {
-      await claim.outcome;
+      const outcome = await claim.outcome;
+      if (outcome.status === "accepted") {
+        notifyAdmission({ status: "accepted", turnId: outcome.value.turnId });
+      } else {
+        notifyAdmission({
+          status: "rejected",
+          error: {
+            type: "error",
+            sessionId: this.context.id,
+            code: "validation_failed",
+            source: "session",
+            message: outcome.message,
+          },
+        });
+      }
       return;
     }
     if (claim && clientMessageId && claim.key !== clientMessageId) {
@@ -222,39 +256,97 @@ export class TurnExecutionManager {
 
     const taskLock = this.getTaskLock();
     if (taskLock) {
-      this.context.emitError("task_locked", "session", taskLock.message, taskLock.data);
-      if (claim) {
-        this.userMessageLedger.reject(claim.key, taskLock.message);
-      }
+      reject({
+        type: "error",
+        sessionId: this.context.id,
+        code: "task_locked",
+        source: "session",
+        message: taskLock.message,
+        data: taskLock.data,
+      });
       return;
     }
-    const turnPromise = this.userMessageTurnRunner
-      .sendUserMessage(text, clientMessageId, displayText, attachments, inputParts, references, {
-        allowThreadManagementTools: opts?.allowThreadManagementTools,
-        ...(claim?.kind === "owner" ? { idempotencyFingerprint: claim.fingerprint } : {}),
-        ...(opts?.toolRetryIntent ? { toolRetryIntent: opts.toolRetryIntent } : {}),
-      })
-      .finally(() => {
-        if (claim) {
-          this.userMessageLedger.reject(
-            claim.key,
-            "The original user-message request was not accepted.",
-          );
-        }
+    if (this.disposed) {
+      reject({
+        type: "error",
+        sessionId: this.context.id,
+        code: "validation_failed",
+        source: "session",
+        message: "Session has been disposed and cannot accept a new turn.",
       });
-    let trackedSettlement!: Promise<void>;
-    trackedSettlement = turnPromise
-      .then(
-        () => {},
-        () => {},
-      )
-      .finally(() => {
-        if (this.activeTurnSettlement === trackedSettlement) {
-          this.activeTurnSettlement = null;
-        }
+      return;
+    }
+    if (this.activeTurnSettlement || this.context.state.running) {
+      reject({
+        type: "error",
+        sessionId: this.context.id,
+        code: "busy",
+        source: "session",
+        message: "Agent is busy",
       });
-    this.activeTurnSettlement = trackedSettlement;
-    return await turnPromise;
+      return;
+    }
+
+    // Reserve before configuration, prompt loading, or attachment validation can
+    // yield. Cancellation and disposal own this entire preparation lifetime.
+    const settlement = Promise.withResolvers<void>();
+    const abortController = new AbortController();
+    this.activeTurnSettlement = settlement.promise;
+    this.activeTurnAbortController = abortController;
+    try {
+      const prepared = (await this.deps.prepareUserMessageTurn?.()) ?? true;
+      if (abortController.signal.aborted || !prepared) {
+        reject({
+          type: "error",
+          sessionId: this.context.id,
+          code: "validation_failed",
+          source: "session",
+          message: abortController.signal.aborted
+            ? "Turn was interrupted before it could be started."
+            : "Unable to prepare the session for a new turn.",
+        });
+        return;
+      }
+      await this.userMessageTurnRunner.sendUserMessage(
+        text,
+        clientMessageId,
+        displayText,
+        attachments,
+        inputParts,
+        references,
+        {
+          allowThreadManagementTools: opts?.allowThreadManagementTools,
+          ...(claim?.kind === "owner" ? { idempotencyFingerprint: claim.fingerprint } : {}),
+          ...(opts?.toolRetryIntent ? { toolRetryIntent: opts.toolRetryIntent } : {}),
+          abortController,
+          onAdmission: notifyAdmission,
+        },
+      );
+    } finally {
+      if (!admission) {
+        notifyAdmission({
+          status: "rejected",
+          error: {
+            type: "error",
+            sessionId: this.context.id,
+            code: "validation_failed",
+            source: "session",
+            message: "The original user-message request was not accepted.",
+          },
+        });
+      }
+      if (claim) {
+        this.userMessageLedger.reject(
+          claim.key,
+          "The original user-message request was not accepted.",
+        );
+      }
+      if (this.activeTurnSettlement === settlement.promise) {
+        this.activeTurnSettlement = null;
+        this.activeTurnAbortController = null;
+      }
+      settlement.resolve();
+    }
   }
 
   claimUserMessage(input: UserMessageIdempotencyInput): UserMessageIdempotencyClaim | null {
@@ -368,13 +460,19 @@ export class TurnExecutionManager {
   }
 
   private cancelOwnTurn() {
-    if (!this.context.state.running) return;
+    if (!this.context.state.running && !this.activeTurnAbortController) return;
     this.context.state.acceptingSteers = false;
     this.context.state.activeSteerHandler = null;
+    this.activeTurnAbortController?.abort();
     if (this.context.state.abortController) {
       this.context.state.abortController.abort();
     }
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.cancelOwnTurn();
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {

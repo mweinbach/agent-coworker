@@ -149,6 +149,8 @@ export type SessionRuntimeState = {
   yolo: boolean;
   messages: ModelMessage[];
   allMessages: ModelMessage[];
+  /** Invalidates queued work when the conversation history is reset. In-memory only. */
+  historyRevision: number;
   providerState: ProviderContinuationState | null;
   running: boolean;
   connecting: boolean;
@@ -186,12 +188,6 @@ export type SessionRuntimeState = {
    */
   memoryGenerationsSinceConsolidation: number;
   costTracker: SessionCostTracker | null;
-  /**
-   * Monotonic counter for synthetic referenced-skill tool calls within the active
-   * turn. Reset at turn start so late steers cannot reuse IDs from the initial
-   * turn reference injection.
-   */
-  turnReferenceInjectionCounter: number;
   /**
    * Plugins the user @-mentioned for the active turn, resolved against the plugin
    * catalog. Turn-scoped (set before the run loop, cleared when the turn settles)

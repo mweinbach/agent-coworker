@@ -1,4 +1,6 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { hostPlatform } from "../../src/platform/host";
+import { scratchRoots } from "../../src/platform/sandbox/policy";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -200,6 +202,84 @@ describe("AgentSession", () => {
   });
 
   describe("uploadFile", () => {
+    test("preserves existing files and concurrent uploads with the same filename", async () => {
+      const dir = await fs.realpath(
+        await fs.mkdtemp(path.join(scratchRoots()[0]!, "session-upload-collision-")),
+      );
+      const uploadsDir = path.join(dir, "uploads");
+      await fs.mkdir(uploadsDir);
+      await fs.writeFile(path.join(uploadsDir, "upload.txt"), "existing content");
+      const first = makeSession({ config: makeConfig(dir) });
+      const second = makeSession({ config: makeConfig(dir) });
+      const collisionPath = path.join(uploadsDir, "upload_1.txt");
+      const writesReady = Promise.withResolvers<void>();
+      const writeFile = fs.writeFile;
+      let collisionWrites = 0;
+      const writeSpy = spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+        if (file === collisionPath) {
+          collisionWrites += 1;
+          if (collisionWrites === 2) writesReady.resolve();
+          await writesReady.promise;
+        }
+        return writeFile(file, data, options);
+      });
+
+      try {
+        await Promise.all([
+          first.session.uploadFile("upload.txt", Buffer.from("first upload").toString("base64")),
+          second.session.uploadFile("upload.txt", Buffer.from("second upload").toString("base64")),
+        ]);
+
+        const uploaded = [...first.events, ...second.events].filter(
+          (event) => event.type === "file_uploaded",
+        );
+        expect(uploaded.map((event) => event.filename).sort()).toEqual([
+          "upload_1.txt",
+          "upload_2.txt",
+        ]);
+        expect(await fs.readFile(path.join(uploadsDir, "upload.txt"), "utf8")).toBe(
+          "existing content",
+        );
+        const contents = await Promise.all(
+          uploaded.map((event) => fs.readFile(event.path, "utf8")),
+        );
+        expect(contents.sort()).toEqual(["first upload", "second upload"]);
+      } finally {
+        writeSpy.mockRestore();
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    // File symlinks require elevated privileges or Developer Mode on Windows.
+    test.skipIf(hostPlatform() === "win32")(
+      "does not follow a dangling file symlink outside the workspace",
+      async () => {
+        const dir = await fs.mkdtemp(path.join(scratchRoots()[0]!, "session-upload-link-"));
+        const workspace = path.join(dir, "workspace");
+        const uploadsDir = path.join(workspace, "uploads");
+        const outsidePath = path.join(dir, "outside.txt");
+        await fs.mkdir(uploadsDir, { recursive: true });
+        await fs.symlink(outsidePath, path.join(uploadsDir, "upload.txt"));
+        const { session, events } = makeSession({ config: makeConfig(workspace) });
+
+        try {
+          await session.uploadFile(
+            "upload.txt",
+            Buffer.from("uploaded content").toString("base64"),
+          );
+
+          await expect(fs.readFile(outsidePath, "utf8")).rejects.toThrow();
+          const uploaded = events.find((event) => event.type === "file_uploaded");
+          expect(uploaded?.filename).toBe("upload_1.txt");
+          expect(await fs.readFile(path.join(uploadsDir, "upload_1.txt"), "utf8")).toBe(
+            "uploaded content",
+          );
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
     test("rejects upload roots that resolve outside the working directory", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-upload-root-"));
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "session-upload-outside-"));

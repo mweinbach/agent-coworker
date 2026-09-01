@@ -316,6 +316,7 @@ function createSessionLifecycleService(session: AgentSession) {
       session.closeForHistory(opts),
     waitForPersistenceIdle: () => session.waitForPersistenceIdle(),
     reopenForHistory: forward(session, "reopenForHistory"),
+    releaseTurnResources: forward(session, "releaseTurnResources"),
     dispose: (reason: string, opts: { closeSharedCodexClient?: boolean } = {}) =>
       session.dispose(reason, opts),
     getMessages: (offset = 0, limit = 100) => session.getMessages(offset, limit),

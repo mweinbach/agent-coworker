@@ -9,6 +9,7 @@ const SNAPSHOT_PERSIST_RETRY_DELAY_MS = 10;
 type PendingCanonicalSnapshot = {
   primaryReason: string;
   reasons: string[];
+  revision: number;
   updatedAt: string;
   lastEventSeq: number;
   snapshot: SessionSnapshot;
@@ -16,7 +17,8 @@ type PendingCanonicalSnapshot = {
 
 export class PersistenceManager {
   private queue: Promise<void> = Promise.resolve();
-  private pendingReasons = new Set<string>();
+  private pendingReasons = new Map<string, number>();
+  private requestedRevision = 0;
   private pendingCanonicalSnapshot: PendingCanonicalSnapshot | null = null;
   private flushQueued = false;
   private lastError: unknown = null;
@@ -50,7 +52,7 @@ export class PersistenceManager {
     if (this.opts.persistenceEnabled === false) {
       return;
     }
-    this.pendingReasons.add(reason);
+    this.pendingReasons.set(reason, ++this.requestedRevision);
     if (this.flushQueued) {
       return;
     }
@@ -59,13 +61,12 @@ export class PersistenceManager {
     const run = async () => {
       try {
         while (this.pendingReasons.size > 0) {
-          const reasons = [...this.pendingReasons];
-          this.pendingReasons.clear();
-          const primaryReason = reasons.at(-1) ?? reason;
+          const reasons = this.pendingReasons;
+          this.pendingReasons = new Map();
           try {
-            await this.persistReasons(primaryReason, reasons);
+            await this.persistReasons(reasons);
           } catch (error) {
-            this.pendingReasons = new Set([...reasons, ...this.pendingReasons]);
+            this.pendingReasons = new Map([...reasons, ...this.pendingReasons]);
             throw error;
           }
         }
@@ -99,25 +100,34 @@ export class PersistenceManager {
       });
   }
 
-  private async persistReasons(primaryReason: string, reasons: string[]): Promise<void> {
+  private async persistReasons(reasons: Map<string, number>): Promise<void> {
     const pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
     if (pendingCanonicalSnapshot) {
       await this.persistReasonBatch(
         pendingCanonicalSnapshot.primaryReason,
         pendingCanonicalSnapshot.reasons,
+        pendingCanonicalSnapshot.revision,
       );
 
-      const completedReasons = new Set(pendingCanonicalSnapshot.reasons);
-      const remainingReasons = reasons.filter((reason) => !completedReasons.has(reason));
-      reasons.splice(0, reasons.length, ...remainingReasons);
-      if (remainingReasons.length === 0) return;
-      primaryReason = remainingReasons.at(-1) ?? primaryReason;
+      // Reason labels describe updates; they do not identify them. A newer
+      // update with the same label still needs its own canonical checkpoint.
+      for (const [reason, revision] of reasons) {
+        if (revision <= pendingCanonicalSnapshot.revision) reasons.delete(reason);
+      }
+      if (reasons.size === 0) return;
     }
 
-    await this.persistReasonBatch(primaryReason, reasons);
+    const reasonLabels = [...reasons.keys()];
+    const primaryReason = reasonLabels.at(-1);
+    if (primaryReason === undefined) return;
+    await this.persistReasonBatch(primaryReason, reasonLabels, Math.max(...reasons.values()));
   }
 
-  private async persistReasonBatch(primaryReason: string, reasons: string[]): Promise<void> {
+  private async persistReasonBatch(
+    primaryReason: string,
+    reasons: string[],
+    revision: number,
+  ): Promise<void> {
     const startedAt = Date.now();
     const updatedAt = this.pendingCanonicalSnapshot?.updatedAt ?? new Date().toISOString();
 
@@ -126,20 +136,24 @@ export class PersistenceManager {
         if (this.opts.sessionDb) {
           let pendingCanonicalSnapshot = this.pendingCanonicalSnapshot;
           if (!pendingCanonicalSnapshot) {
+            const canonicalSnapshot = this.opts.buildCanonicalSnapshot(updatedAt);
+            const snapshot = this.opts.buildSessionSnapshotAt(updatedAt, 0);
             const lastEventSeq = await this.opts.sessionDb.persistSessionMutation({
               sessionId: this.opts.sessionId,
               eventType: primaryReason,
               eventTs: updatedAt,
               direction: "system",
               payload: { reason: primaryReason, reasons },
-              snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
+              snapshot: canonicalSnapshot,
             });
+            snapshot.lastEventSeq = lastEventSeq;
             pendingCanonicalSnapshot = {
               primaryReason,
               reasons: [...reasons],
+              revision,
               updatedAt,
               lastEventSeq,
-              snapshot: this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
+              snapshot,
             };
             this.pendingCanonicalSnapshot = pendingCanonicalSnapshot;
           }

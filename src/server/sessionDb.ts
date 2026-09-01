@@ -2,7 +2,10 @@ import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
-import type { PersistedExternalConversationImport } from "../import/conversations/types";
+import type {
+  ConversationImportPersistResult,
+  PersistedExternalConversationImport,
+} from "../import/conversations/types";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { AgentProfileSnapshot } from "../shared/agentProfiles";
 import type {
@@ -191,6 +194,12 @@ export type PersistedSessionMutation = {
     harnessContext: HarnessContextState | null;
     costTracker: SessionUsageSnapshot | null;
   };
+};
+
+export type PersistedExternalConversationImportMutation = {
+  mutation: PersistedSessionMutation;
+  snapshot: Omit<SessionSnapshot, "lastEventSeq">;
+  record: PersistedExternalConversationImport;
 };
 
 export type PersistedModelStreamChunk = {
@@ -409,6 +418,10 @@ export class SessionDb {
     return this.readRepository.listAgentSessions(parentSessionId);
   }
 
+  listSessionTreeIds(sessionId: string): string[] {
+    return this.readRepository.listSessionTreeIds(sessionId);
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     await this.writeCoordinator.runExclusive(
       "delete_session",
@@ -566,6 +579,16 @@ export class SessionDb {
     limit?: number;
   }): PersistedExternalConversationImport[] {
     return this.readRepository.listExternalConversationImports(opts);
+  }
+
+  async persistExternalConversationImport(
+    input: PersistedExternalConversationImportMutation,
+  ): Promise<ConversationImportPersistResult> {
+    return await this.writeCoordinator.runExclusive(
+      "persist_external_conversation_import",
+      () => this.repository.persistExternalConversationImport(input),
+      { sessionId: input.mutation.sessionId, source: input.record.source },
+    );
   }
 
   async recordExternalConversationImport(

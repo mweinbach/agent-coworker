@@ -514,6 +514,36 @@ export type TaskCheckpoint = z.infer<typeof taskCheckpointSchema>;
 export type TaskSummary = z.infer<typeof taskSummarySchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 
+const taskInputResumeFailureDetailSchema = z.object({
+  kind: z.literal("input_resume_failed"),
+  message: nonEmptyStringSchema,
+});
+
+/** Read the current failure only; a retry or later failure supersedes older activity. */
+export function getTaskInputResumeFailure(
+  task: Pick<TaskRecord, "status" | "activity">,
+): string | null {
+  if (task.status !== "failed") return null;
+  let latestStatusChange: TaskActivity | undefined;
+  for (const item of task.activity) {
+    if (
+      item.kind === "status_changed" &&
+      (!latestStatusChange || item.seq > latestStatusChange.seq)
+    ) {
+      latestStatusChange = item;
+    }
+  }
+  if (!latestStatusChange?.detail) return null;
+  try {
+    const detail = taskInputResumeFailureDetailSchema.safeParse(
+      JSON.parse(latestStatusChange.detail),
+    );
+    return detail.success ? detail.data.message : null;
+  } catch {
+    return null;
+  }
+}
+
 export type TaskReviewRecord = {
   id: string;
   taskId: string;

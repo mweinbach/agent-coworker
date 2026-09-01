@@ -90,3 +90,58 @@ describe.each([
     );
   });
 });
+
+describe.each(["content", "step"] as const)("Google native %s argument buffering", (prefix) => {
+  test.each(["function_call", "google_search_call"] as const)(
+    "%s keeps a literal __jsonDelta argument separate from streamed JSON",
+    (type) => {
+      const blocks = new Map<number, GoogleInteractionsContentBlock>();
+      const calls = new Map<string, GoogleInteractionsProviderToolCallState>();
+      processStreamEvent(
+        {
+          event_type: `${prefix}.start`,
+          index: 0,
+          [prefix]: {
+            type,
+            id: "call",
+            ...(type === "function_call" ? { name: "read" } : {}),
+            arguments: { __jsonDelta: "literal", keep: true },
+          },
+        },
+        blocks,
+        calls,
+      );
+      const block = blocks.get(0);
+      if (block?.type !== "toolCall" && block?.type !== "providerToolCall") {
+        throw new Error("Expected a tool call");
+      }
+      const argumentsRecord = block.arguments;
+      processStreamEvent(
+        {
+          event_type: `${prefix}.delta`,
+          index: 0,
+          delta: { type: "arguments_delta", arguments: '{"path":' },
+        },
+        blocks,
+        calls,
+      );
+      expect(argumentsRecord).toEqual({ __jsonDelta: "literal", keep: true });
+      for (const chunk of ['"report.md"}', " \n"]) {
+        processStreamEvent(
+          {
+            event_type: `${prefix}.delta`,
+            index: 0,
+            delta: { type: "arguments_delta", arguments: chunk },
+          },
+          blocks,
+          calls,
+        );
+      }
+      const stop = { event_type: `${prefix}.stop`, index: 0 };
+      processStreamEvent(stop, blocks, calls);
+      mapGoogleEventToStreamParts(stop, blocks, calls);
+      expect(block.arguments).toBe(argumentsRecord);
+      expect(block.arguments).toEqual({ __jsonDelta: "literal", keep: true, path: "report.md" });
+    },
+  );
+});

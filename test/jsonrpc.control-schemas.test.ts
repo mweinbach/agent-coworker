@@ -8,12 +8,22 @@ import {
   jsonRpcAgentRequestSchemas,
   jsonRpcAgentResultSchemas,
 } from "../src/server/jsonrpc/schema.agents";
+import { sessionDefaultsApplyRequestSchema } from "../src/server/jsonrpc/schema.sessionRuntime";
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
 } from "../src/shared/jsonrpcControlSchemas";
 
 describe("shared JSON-RPC control schemas", () => {
+  test("memory writes accept explicit create or upsert mode without changing legacy requests", () => {
+    const schema = jsonRpcControlRequestSchemas["cowork/memory/upsert"];
+    const legacy = { scope: "workspace", id: "hot", content: "remember this" };
+    expect(schema.parse(legacy)).toEqual(legacy);
+    expect(schema.parse({ ...legacy, mode: "create" })).toEqual({ ...legacy, mode: "create" });
+    expect(schema.parse({ ...legacy, mode: "upsert" })).toEqual({ ...legacy, mode: "upsert" });
+    expect(schema.safeParse({ ...legacy, mode: "unknown" }).success).toBe(false);
+  });
+
   test("parses provider auth and status envelopes", () => {
     const authResult = jsonRpcControlResultSchemas["cowork/provider/auth/setApiKey"].parse({
       event: {
@@ -466,6 +476,25 @@ describe("shared JSON-RPC control schemas", () => {
     });
 
     expect(parsed.event.backups[0]?.checkpoints[0]?.index).toBe(1);
+  });
+
+  test.each([
+    ["server", sessionDefaultsApplyRequestSchema],
+    ["shared", jsonRpcControlRequestSchemas["cowork/session/defaults/apply"]],
+    ["mobile", mobileJsonRpcControlRequestSchemas["cowork/session/defaults/apply"]],
+  ] as const)("%s defaults schemas require provider and model together", (_surface, schema) => {
+    for (const selection of [{ provider: "openai" }, { model: "gpt-5.4" }]) {
+      expect(() => schema.parse({ cwd: "/tmp/project", ...selection })).toThrow(
+        "provider and model must be supplied together",
+      );
+    }
+    expect(schema.parse({ provider: "openai", model: "gpt-5.4" })).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    expect(schema.parse({ config: { backupsEnabled: true } })).toMatchObject({
+      config: { backupsEnabled: true },
+    });
   });
 
   test("parses session state and defaults apply envelopes", () => {

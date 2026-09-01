@@ -208,12 +208,15 @@ describe("runTurn – multi-step tool loops", () => {
     expect(result.text).toBe("I found file.txt.");
   });
 
-  test("responseMessages accumulates actual tool call and result history", async () => {
+  test("responseMessages preserves tool history and original provider provenance", async () => {
     toolThenText();
     const result = await runTurn(makeParams());
     expect(result.responseMessages).toEqual([
       {
         role: "assistant",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
         content: [
           { type: "tool-call", toolCallId: "tc-1", toolName: "bash", input: { command: "ls" } },
         ],
@@ -230,7 +233,13 @@ describe("runTurn – multi-step tool loops", () => {
           },
         ],
       },
-      { role: "assistant", content: [{ type: "text", text: "I found file.txt." }] },
+      {
+        role: "assistant",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        content: [{ type: "text", text: "I found file.txt." }],
+      },
     ]);
     expect(result.usage).toMatchObject({ promptTokens: 20, completionTokens: 2, totalTokens: 22 });
   });

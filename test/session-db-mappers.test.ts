@@ -172,7 +172,7 @@ describe("sessionDb mappers", () => {
     });
   });
 
-  test("mapPersistedSessionSubagentSummaryRow normalizes stale non-terminal child execution states when idle", () => {
+  test("mapPersistedSessionSubagentSummaryRow marks interrupted child execution states as errored", () => {
     for (const executionState of ["running", "pending_init"] as const) {
       const mapped = mapPersistedSessionSubagentSummaryRow({
         session_id: `child-${executionState}`,
@@ -188,7 +188,7 @@ describe("sessionDb mappers", () => {
         execution_state: executionState,
       });
 
-      expect(mapped.executionState).toBe("completed");
+      expect(mapped.executionState).toBe("errored");
       expect(mapped.busy).toBe(false);
     }
   });

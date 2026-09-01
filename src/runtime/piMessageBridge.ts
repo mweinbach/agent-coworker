@@ -123,14 +123,23 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
           `tool_${Date.now()}_${Math.random().toString(16).slice(2)}`,
         name: asNonEmptyString(record.toolName) ?? "tool",
         arguments: asRecord(record.input) ?? asRecord(record.arguments) ?? {},
+        ...(asString(record.thoughtSignature) !== undefined
+          ? { thoughtSignature: record.thoughtSignature }
+          : {}),
       });
       continue;
     }
 
     if (partType === "reasoning" || partType === "thinking") {
       const thinkingText = asString(record.text) ?? asString(record.thinking);
-      if (thinkingText?.trim()) {
-        out.push({ type: "thinking", thinking: thinkingText });
+      const thinkingSignature = asString(record.thinkingSignature);
+      if (thinkingText?.trim() || thinkingSignature) {
+        out.push({
+          type: "thinking",
+          thinking: thinkingText ?? "",
+          ...(thinkingSignature !== undefined ? { thinkingSignature } : {}),
+          ...(record.redacted === true ? { redacted: true } : {}),
+        });
       }
       continue;
     }
@@ -142,6 +151,9 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
       out.push({
         type: "text",
         text,
+        ...(asString(record.textSignature) !== undefined
+          ? { textSignature: record.textSignature }
+          : {}),
         ...(phase ? { phase } : {}),
         ...(asAnnotationArray(record.annotations)
           ? { annotations: asAnnotationArray(record.annotations) }
@@ -280,14 +292,16 @@ export function toolResultContentFromOutput(output: unknown): PiToolResultConten
 function toolResultContentToText(content: unknown): string {
   const richContent = richToolResultContentFromOutput(content);
   if (richContent) {
-    return richContent.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
+    return richContent
+      .map((part) => (part.type === "text" ? part.text : `[${part.type}]`))
+      .join("\n");
   }
   return safeJsonStringify(content);
 }
 
 function toolOutputFromPiToolResultContent(content: unknown): unknown {
   const richContent = richToolResultContentFromOutput(content);
-  if (richContent?.some((part) => part.type === "image")) {
+  if (richContent?.some((part) => part.type !== "text")) {
     return { type: "content", content: richContent };
   }
 
@@ -415,9 +429,9 @@ export function modelMessagesToPiMessages(
       out.push({
         role: "assistant",
         content: content as unknown as PiMessage["content"],
-        api: `${provider}-responses`,
-        provider: provider,
-        model: "unknown",
+        api: asString(message.api) ?? `${provider}-responses`,
+        provider: asString(message.provider) ?? provider,
+        model: asString(message.model) ?? "unknown",
         usage: {
           input: 0,
           output: 0,
@@ -441,6 +455,7 @@ export function modelMessagesToPiMessages(
 
 function modelContentFromAssistantPart(
   part: Record<string, unknown>,
+  preserveProviderState: boolean,
 ): Record<string, unknown> | null {
   const partType = asString(part.type);
   if (partType === "text") {
@@ -450,6 +465,9 @@ function modelContentFromAssistantPart(
     return {
       type: "text",
       text,
+      ...(preserveProviderState && asString(part.textSignature) !== undefined
+        ? { textSignature: part.textSignature }
+        : {}),
       ...(phase ? { phase } : {}),
       ...(asAnnotationArray(part.annotations)
         ? { annotations: asAnnotationArray(part.annotations) }
@@ -457,8 +475,17 @@ function modelContentFromAssistantPart(
     };
   }
   if (partType === "thinking") {
+    if (!preserveProviderState && part.redacted === true) return null;
     const text = asString(part.thinking);
-    return text === undefined ? null : { type: "reasoning", text };
+    if (text === undefined) return null;
+    return {
+      type: "reasoning",
+      text,
+      ...(preserveProviderState && asString(part.thinkingSignature) !== undefined
+        ? { thinkingSignature: part.thinkingSignature }
+        : {}),
+      ...(preserveProviderState && part.redacted === true ? { redacted: true } : {}),
+    };
   }
   if (partType === "toolCall") {
     return {
@@ -467,6 +494,9 @@ function modelContentFromAssistantPart(
         asNonEmptyString(part.id) ?? `tool_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       toolName: asNonEmptyString(part.name) ?? "tool",
       input: asRecord(part.arguments) ?? {},
+      ...(preserveProviderState && asString(part.thoughtSignature) !== undefined
+        ? { thoughtSignature: part.thoughtSignature }
+        : {}),
     };
   }
   return null;
@@ -481,6 +511,8 @@ export function piTurnMessagesToModelMessages(messages: readonly unknown[]): Mod
     if (!message) continue;
     const role = asString(message.role);
     if (role === "assistant") {
+      const preserveProviderState =
+        message.stopReason !== "error" && message.stopReason !== "aborted";
       const parts: Array<Record<string, unknown>> = [];
       const rawContent: readonly unknown[] | undefined = Array.isArray(message.content)
         ? message.content
@@ -489,7 +521,7 @@ export function piTurnMessagesToModelMessages(messages: readonly unknown[]): Mod
       for (const partRaw of rawContent ?? []) {
         const part = asRecord(partRaw);
         if (!part) continue;
-        const mapped = modelContentFromAssistantPart(part);
+        const mapped = modelContentFromAssistantPart(part, preserveProviderState);
         if (mapped) parts.push(mapped);
       }
       if (parts.length === 0 && !hasStructuredContent) {
@@ -498,7 +530,19 @@ export function piTurnMessagesToModelMessages(messages: readonly unknown[]): Mod
           parts.push({ type: "text", text: fallbackText });
         }
       }
-      out.push({ role: "assistant", content: parts } as ModelMessage);
+      out.push({
+        role: "assistant",
+        content: parts,
+        ...(preserveProviderState && asString(message.api) !== undefined
+          ? { api: message.api }
+          : {}),
+        ...(preserveProviderState && asString(message.provider) !== undefined
+          ? { provider: message.provider }
+          : {}),
+        ...(preserveProviderState && asString(message.model) !== undefined
+          ? { model: message.model }
+          : {}),
+      } as ModelMessage);
       continue;
     }
 

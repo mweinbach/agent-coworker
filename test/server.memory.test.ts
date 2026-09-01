@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { HistoryManager } from "../src/server/session/HistoryManager";
+import type { SessionContext } from "../src/server/session/SessionContext";
 import { SessionSnapshotProjector } from "../src/server/session/SessionSnapshotProjector";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
@@ -52,6 +53,51 @@ describe("Memory caps", () => {
       expect(ctx.state.messages[0].role).toBe("system");
       expect(ctx.state.messages.at(-1)?.content).toBe("msg 1499");
     });
+
+    test.each(["refresh", "append"] as const)(
+      "does not retain orphaned tool results when %s trims their assistant call",
+      (operation) => {
+        const history: ModelMessage[] = [
+          { role: "user", content: "Read both files" },
+          {
+            role: "assistant",
+            content: ["first", "second"].map((toolCallId) => ({
+              type: "tool-call",
+              toolCallId,
+              toolName: "read",
+              input: { path: toolCallId },
+            })),
+          },
+          ...["first", "second"].map((toolCallId) => ({
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId,
+                toolName: "read",
+                output: { type: "text", value: toolCallId },
+              },
+            ],
+          })),
+          ...Array.from({ length: 197 }, (_, index) => ({
+            role: index % 2 === 0 ? "assistant" : "user",
+            content: `Later message ${index}`,
+          })),
+        ];
+        const initial = operation === "refresh" ? history : history.slice(0, -1);
+        const ctx = createFakeSessionContext([...initial], [...initial]);
+        const manager = new HistoryManager(ctx as SessionContext);
+
+        if (operation === "refresh") {
+          manager.refreshRuntimeMessagesFromHistory();
+        } else {
+          manager.appendMessagesToHistory(history.slice(-1));
+        }
+
+        expect(ctx.state.allMessages).toEqual(history);
+        expect(ctx.state.messages).toEqual([history[0], ...history.slice(4)]);
+      },
+    );
   });
 
   describe("SessionCostTracker", () => {

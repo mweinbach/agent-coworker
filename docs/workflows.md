@@ -193,6 +193,12 @@ does not hold a slot. Workflows self-throttle to
 parent turn can call `spawnAgent` directly while a workflow runs and those spawns
 compete for the same slots.
 
+Each run may attempt at most **1,000 `agent()` calls**, including failed calls,
+cached calls, and dry-run stubs. The worker stops admitting calls and sending
+progress when the limit is exceeded; the host also enforces the cap and fails
+the run. This limit is fatal regardless of `onError: "null"`, `parallel`, or a
+script's `try`/`catch`, so a retry loop cannot grow an unbounded queue or history.
+
 Child agents receive no `agentControl`, so a workflow's children cannot themselves
 run workflows. `workflow(label, fn)` inside a script is a labelled scope for
 progress and journaling, not a nested run.

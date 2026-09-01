@@ -22,7 +22,14 @@ import {
 } from "../piMessageBridge";
 import { asRecord, asString, extractToolCallsFromAssistant } from "../piRuntimeOptions";
 import { createPiEventRawPartMapper } from "../piStreamParts";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult } from "../types";
+import {
+  type LlmRuntime,
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeRunTurnParams,
+  type RuntimeRunTurnResult,
+  type RuntimeUsage,
+} from "../types";
 import {
   preparePiModelForStream,
   resolvePiModel,
@@ -69,6 +76,14 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
       const turnMessages: PiMessage[] = [];
       let usage = undefined as RuntimeRunTurnResult["usage"];
+      const requestUsages: RuntimeUsage[] = [];
+      let requestUsagesComplete = true;
+      const recordRequestUsage = (rawUsage: unknown) => {
+        const normalized = normalizePiUsage(rawUsage);
+        if (!normalized) return;
+        requestUsages.push(normalized);
+        usage = mergePiUsage(usage, normalized);
+      };
 
       try {
         const resolved = await resolvePiModel(params);
@@ -131,6 +146,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             // emitted no assistant content or tool-call activity, so a retry
             // never duplicates visible output.
             for (let attempt = 1; ; attempt += 1) {
+              assistantRecord = {};
               let emittedAssistantContent = false;
               // Provider error chunks are buffered while a retry is still
               // possible so a transient rate limit does not surface a phantom
@@ -194,6 +210,28 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                   !isAbortLikeError(error, params.abortSignal) &&
                   isTransientProviderError(error);
                 if (!retryableProviderFailure) {
+                  // Preserve terminal partial output, but never replay tool calls
+                  // from a failed step: those calls have not been executed.
+                  const partialContent = Array.isArray(assistantRecord.content)
+                    ? assistantRecord.content.filter((part) => {
+                        const type = asRecord(part)?.type;
+                        return type === "text" || type === "thinking";
+                      })
+                    : [];
+                  if (partialContent.length > 0) {
+                    turnMessages.push(asPiMessage({ ...assistantRecord, content: partialContent }));
+                  }
+                  const errorRecord = asRecord(error);
+                  if (Array.isArray(errorRecord?.requestUsages)) {
+                    for (const requestUsage of errorRecord.requestUsages) {
+                      recordRequestUsage(requestUsage);
+                    }
+                  } else if (normalizePiUsage(errorRecord?.usage)) {
+                    usage = mergePiUsage(usage, errorRecord?.usage);
+                    requestUsagesComplete = false;
+                  } else {
+                    recordRequestUsage(assistantRecord.usage);
+                  }
                   for (const part of bufferedErrorParts) {
                     await emitPart(part);
                   }
@@ -210,16 +248,16 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               }
             }
           } catch (error) {
-            markModelCallSpanError(span, error);
+            markModelCallSpanError(span, error, telemetry);
             throw error;
           }
 
           turnMessages.push(asPiMessage(assistantRecord));
-          usage = mergePiUsage(usage, assistantRecord.usage);
-          stepMessages = [
-            ...stepMessages,
-            ...piTurnMessagesToModelMessages([asPiMessage(assistantRecord)]),
-          ];
+          recordRequestUsage(assistantRecord.usage);
+          const completedAssistantMessages = piTurnMessagesToModelMessages([
+            asPiMessage(assistantRecord),
+          ]);
+          stepMessages = [...stepMessages, ...completedAssistantMessages];
 
           await emitPart({
             type: "finish-step",
@@ -227,6 +265,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             response: { stopReason: assistantRecord.stopReason },
             usage: normalizePiUsage(assistantRecord.usage),
             finishReason: assistantRecord.stopReason ?? "unknown",
+            [RUNTIME_COMMITTED_PROGRESS]: { assistantMessages: completedAssistantMessages },
           });
 
           const toolCalls = extractToolCallsFromAssistant(assistantRecord);
@@ -263,11 +302,17 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           reasoningText: extractPiReasoningText(turnMessages),
           responseMessages: piTurnMessagesToModelMessages(turnMessages),
           usage,
+          ...(requestUsagesComplete && requestUsages.length > 0 ? { requestUsages } : {}),
         };
       } catch (error) {
         if (error && typeof error === "object") {
           try {
-            (error as { usage?: RuntimeRunTurnResult["usage"] }).usage = usage;
+            (error as PartialTurnError).usage = usage;
+            if (requestUsagesComplete && requestUsages.length > 0) {
+              (error as PartialTurnError).requestUsages = requestUsages;
+            } else {
+              delete (error as PartialTurnError).requestUsages;
+            }
             const responseMessages =
               typeof turnMessages !== "undefined" && Array.isArray(turnMessages)
                 ? piTurnMessagesToModelMessages(turnMessages)

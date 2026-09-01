@@ -376,6 +376,62 @@ describe("citationMetadata", () => {
     expect(citationMetadataInternal.__testGetSettledCacheSize()).toBe(3);
   });
 
+  test("caps active citation resolutions without caching skipped work", async () => {
+    citationMetadataInternal.__testSetCitationCacheLimits({ maxInflight: 2 });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fetchCalls = 0;
+    installFetchStub(async () => {
+      fetchCalls += 1;
+      await gate;
+      return makeHtmlResponse("https://example.com/article", "<title>Article</title>");
+    });
+    const references = Array.from({ length: 5 }, (_, index) => ({
+      type: "url_citation",
+      url: `https://example.com/article-${index}`,
+    }));
+    const pending = enrichCitationAnnotations(references);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fetchCalls).toBe(2);
+      expect(citationMetadataInternal.__testGetInflightCacheSize()).toBe(2);
+    } finally {
+      release();
+      await pending;
+    }
+
+    const retried = await enrichCitationAnnotations([references[2]]);
+    expect(fetchCalls).toBe(3);
+    expect(retried?.[0]?.title).toBe("Article");
+  });
+
+  test("cancels redirect and non-HTML response bodies", async () => {
+    const cancelled: string[] = [];
+    let fetchCalls = 0;
+    installFetchStub(async () => {
+      fetchCalls += 1;
+      const kind = fetchCalls === 1 ? "redirect" : "image";
+      const body = new ReadableStream({
+        cancel: () => {
+          cancelled.push(kind);
+        },
+      });
+      return kind === "redirect"
+        ? new Response(body, {
+            status: 302,
+            headers: { location: "https://example.com/image.png" },
+          })
+        : new Response(body, { headers: { "content-type": "image/png" } });
+    });
+
+    await enrichCitationAnnotations([{ type: "url_citation", url: googleRedirectUrl }]);
+
+    expect(cancelled).toEqual(["redirect", "image"]);
+  });
+
   test("does not fetch citations for blocked private-network targets", async () => {
     let fetchCalls = 0;
     installFetchStub(async () => {

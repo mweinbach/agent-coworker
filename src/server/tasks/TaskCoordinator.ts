@@ -501,11 +501,17 @@ function buildTaskQuestionContinuationPrompt(input: {
 }
 
 function buildTaskRetryPrompt(task: TaskRecord): string {
+  const answers = task.questions.flatMap((question) =>
+    question.status === "answered" && question.answer
+      ? [{ question: question.question, answer: question.answer }]
+      : [],
+  );
   return [
     `Retry the task "${task.title}" in its existing task thread.`,
     "The previous run failed before the task reached a review or completion state.",
     "Review the authoritative task brief, work graph, decisions, artifacts, and latest checkpoint before continuing.",
     "Preserve completed work and resume the first unblocked unfinished work item. Do not restart completed work unless validation shows it is invalid.",
+    ...(answers.length > 0 ? [buildTaskQuestionContinuationPrompt({ task, answers })] : []),
   ].join("\n\n");
 }
 
@@ -577,6 +583,7 @@ export class TaskCoordinator {
   private continuationDispatcher: TaskContinuationDispatcher | null = null;
   private readonly artifactStore: ArtifactVersionStore;
   private readonly taskMutationTails = new Map<string, Promise<void>>();
+  private readonly taskContinuationAttempts = new Map<string, symbol>();
   private readonly pendingArtifactSettlementRetryTasks = new Map<
     string,
     ArtifactSettlementRetryState
@@ -597,6 +604,51 @@ export class TaskCoordinator {
 
   setContinuationDispatcher(dispatcher: TaskContinuationDispatcher): void {
     this.continuationDispatcher = dispatcher;
+  }
+
+  private prepareTaskContinuationLocked(taskId: string): symbol {
+    const attempt = Symbol(taskId);
+    this.taskContinuationAttempts.set(taskId, attempt);
+    return attempt;
+  }
+
+  private async dispatchTaskContinuation(input: {
+    task: TaskRecord;
+    attempt: symbol;
+    prompt: string;
+    displayText: string;
+    onFailure: (error: unknown) => Promise<void>;
+  }): Promise<Exclude<TaskQuestionResumeStatus, "not_needed">> {
+    if (this.taskContinuationAttempts.get(input.task.id) !== input.attempt) return "failed";
+    let failure: Promise<void> | undefined;
+    const onFailure = (error: unknown): Promise<void> => {
+      failure ??= input.onFailure(error);
+      return failure;
+    };
+    const primaryThread = input.task.threads[0];
+    if (!primaryThread || !this.continuationDispatcher) {
+      await onFailure(new Error("Task continuation is unavailable"));
+      return "failed";
+    }
+
+    let status: Exclude<TaskQuestionResumeStatus, "not_needed">;
+    try {
+      status = await this.continuationDispatcher({
+        sessionId: primaryThread.sessionId,
+        prompt: input.prompt,
+        displayText: input.displayText,
+        onFailure,
+      });
+    } catch (error) {
+      await onFailure(error);
+      return "failed";
+    }
+    if (status === "failed") await onFailure(new Error("Task continuation failed"));
+    if (failure) {
+      await failure;
+      return "failed";
+    }
+    return status;
   }
 
   private allowsPendingTerminalMutation(taskId: string): boolean {
@@ -943,8 +995,18 @@ export class TaskCoordinator {
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsNewThreads(task);
     const workItemId = input.workItemId ?? null;
-    if (workItemId && !task.workItems.some((item) => item.id === workItemId)) {
+    const workItem = workItemId ? task.workItems.find((item) => item.id === workItemId) : null;
+    if (workItemId && !workItem) {
       throw new Error(`Unknown work item: ${workItemId}`);
+    }
+    const threadId = crypto.randomUUID();
+    if (workItem) {
+      assertNoConflictingWorkItemOwner(workItem, threadId);
+      assertWorkItemDependenciesComplete({
+        items: task.workItems,
+        item: workItem,
+        status: "in_progress",
+      });
     }
     if (!this.threadFactory) throw new Error("Task thread creation is unavailable");
     const created = await this.threadFactory({
@@ -956,7 +1018,7 @@ export class TaskCoordinator {
     });
     const createdAt = nowIso();
     const thread: TaskThread = {
-      id: crypto.randomUUID(),
+      id: threadId,
       taskId: task.id,
       sessionId: created.sessionId,
       title: input.title.trim(),
@@ -1550,10 +1612,30 @@ export class TaskCoordinator {
     expectedRevision: number;
     answers: TaskQuestionAnswerInput[];
   }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
-    return await this.runTaskMutation(
+    const prepared = await this.runTaskMutation(
       input.taskId,
       async () => await this.resolveQuestionsLocked(input),
     );
+    const { resume } = prepared;
+    if (!resume) {
+      return { task: prepared.task, resumeStatus: "not_needed" };
+    }
+
+    const resumeStatus = await this.dispatchTaskContinuation({
+      task: prepared.task,
+      attempt: resume.attempt,
+      prompt: buildTaskQuestionContinuationPrompt({
+        task: prepared.task,
+        answers: resume.answers,
+      }),
+      displayText: `Answered ${resume.answers.length} task question${resume.answers.length === 1 ? "" : "s"} in the work panel.`,
+      onFailure: async (error) =>
+        await this.recordInputResumeFailure(prepared.task, error, resume.attempt),
+    });
+    return {
+      task: this.requireTask(prepared.task.id, prepared.task.workspacePath),
+      resumeStatus,
+    };
   }
 
   private async resolveQuestionsLocked(input: {
@@ -1561,7 +1643,10 @@ export class TaskCoordinator {
     workspacePath: string;
     expectedRevision: number;
     answers: TaskQuestionAnswerInput[];
-  }): Promise<{ task: TaskRecord; resumeStatus: TaskQuestionResumeStatus }> {
+  }): Promise<{
+    task: TaskRecord;
+    resume: { answers: Array<{ question: string; answer: string }>; attempt: symbol } | null;
+  }> {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
@@ -1630,54 +1715,53 @@ export class TaskCoordinator {
 
     const resolvedBlocking = resolvedAnswers.some((answer) => answer.question.blocking);
     if (!resolvedBlocking || updated.status !== "working" || task.status !== "blocked") {
-      return { task: updated, resumeStatus: "not_needed" };
+      return { task: updated, resume: null };
     }
-    const primaryThread = updated.threads[0];
-    if (!primaryThread || !this.continuationDispatcher) {
-      await this.recordInputResumeFailure(updated, new Error("Task continuation is unavailable"));
-      return { task: this.requireTask(updated.id, updated.workspacePath), resumeStatus: "failed" };
-    }
-    const continuationAnswers = updated.questions
-      .filter(
-        (question) =>
-          question.blocking &&
-          question.status === "answered" &&
-          question.answer &&
-          question.resolvedAt === createdAt,
-      )
-      .map((question) => ({ question: question.question, answer: question.answer as string }));
-    const resumeStatus = await this.continuationDispatcher({
-      sessionId: primaryThread.sessionId,
-      prompt: buildTaskQuestionContinuationPrompt({ task: updated, answers: continuationAnswers }),
-      displayText: `Answered ${continuationAnswers.length} task question${continuationAnswers.length === 1 ? "" : "s"} in the work panel.`,
-      onFailure: async (error) => {
-        await this.recordInputResumeFailure(updated, error);
+    return {
+      task: updated,
+      resume: {
+        answers: resolvedAnswers
+          .filter((answer) => answer.question.blocking)
+          .map((answer) => ({ question: answer.question.question, answer: answer.answer })),
+        attempt: this.prepareTaskContinuationLocked(task.id),
       },
-    });
-    return { task: updated, resumeStatus };
+    };
   }
 
-  private async recordInputResumeFailure(task: TaskRecord, error: unknown): Promise<void> {
-    const current = this.options.sessionDb.getTask(task.id);
-    if (!current || isTerminalTask(current)) return;
-    let failed: TaskRecord;
-    try {
-      failed = await this.options.sessionDb.appendTaskActivity(
+  private async recordInputResumeFailure(
+    task: TaskRecord,
+    error: unknown,
+    attempt: symbol,
+  ): Promise<void> {
+    await this.runTaskMutation(task.id, async () => {
+      if (this.taskContinuationAttempts.get(task.id) !== attempt) return;
+      const current = this.options.sessionDb.getTask(task.id);
+      if (!current || (current.status !== "working" && current.status !== "planning")) return;
+      const message =
+        (error instanceof Error ? error.message : String(error)).trim() ||
+        "Task continuation failed";
+      const updated = await this.options.sessionDb.appendTaskActivity(
         activity({
           taskId: task.id,
-          threadId: task.threads[0]?.id ?? null,
+          threadId: current.threads[0]?.id ?? null,
           workItemId: null,
           kind: "input_resume_failed",
           summary: "Task answers were saved, but automatic resume failed",
-          detail: error instanceof Error ? error.message : String(error),
+          detail: message,
         }),
         { rejectTerminal: true },
       );
-    } catch (appendError) {
-      if (isTerminalTaskMutationError(task.id, appendError)) return;
-      throw appendError;
-    }
-    this.notifyActivity(failed);
+      this.notifyActivity(updated);
+      await this.transitionLocked({
+        taskId: current.id,
+        workspacePath: current.workspacePath,
+        expectedRevision: updated.revision,
+        status: "failed",
+        summary: "Task continuation failed",
+        detail: JSON.stringify({ kind: "input_resume_failed", message }),
+        sessionId: current.threads[0]?.sessionId,
+      });
+    });
   }
 
   async reportProgress(input: {
@@ -2126,17 +2210,12 @@ export class TaskCoordinator {
     const parent = detail.versions.at(-1);
     if (!parent) throw new Error("Artifact has no version to restore from");
     const resolvedPath = await this.resolveArtifactPath(task, detail.artifact.path);
-    const current = await this.artifactStore.fingerprintFile(resolvedPath);
+    const current = await this.artifactStore.captureFile(resolvedPath);
     this.assertExpectedFingerprint(
       detail.artifact.id,
       input.expectedSha256 ?? parent.sha256,
-      current?.sha256 ?? null,
+      current.sha256,
     );
-    await this.artifactStore.restoreFile({
-      blobSha256: target.sha256,
-      filePath: resolvedPath,
-      expectedFingerprint: input.expectedSha256 ?? parent.sha256,
-    });
     const createdAt = nowIso();
     const version = this.makeArtifactVersion({
       artifact: detail.artifact,
@@ -2151,8 +2230,14 @@ export class TaskCoordinator {
       provenance: { restoredFromVersionId: target.id },
       reviewStatus: "draft",
     });
+    await this.artifactStore.restoreFile({
+      blobSha256: target.sha256,
+      filePath: resolvedPath,
+      expectedFingerprint: current.sha256,
+    });
+    let updatedDetail: TaskArtifactDetail;
     try {
-      const updatedDetail = await this.options.sessionDb.captureTaskArtifactVersion({
+      updatedDetail = await this.options.sessionDb.captureTaskArtifactVersion({
         taskId: task.id,
         artifactId: detail.artifact.id,
         version,
@@ -2160,16 +2245,17 @@ export class TaskCoordinator {
         updatedAt: createdAt,
         activityKind: "artifact_version_restored",
       });
-      task = this.requireTask(task.id, task.workspacePath);
-      this.notifyUpdated(task);
-      return { task, detail: updatedDetail, version };
     } catch (error) {
       await this.artifactStore.restoreFile({
-        blobSha256: parent.sha256,
+        blobSha256: current.sha256,
         filePath: resolvedPath,
+        expectedFingerprint: target.sha256,
       });
       throw error;
     }
+    task = this.requireTask(task.id, task.workspacePath);
+    this.notifyUpdated(task);
+    return { task, detail: updatedDetail, version };
   }
 
   async acceptArtifactVersion(
@@ -3301,34 +3387,26 @@ export class TaskCoordinator {
         summary: "Task retry started",
         sessionId: primaryThread.sessionId,
       });
-      return { task, recovered, primaryThread };
+      const attempt =
+        recovered.status === "working" ? this.prepareTaskContinuationLocked(task.id) : null;
+      return { task, recovered, primaryThread, attempt };
     });
-    const { task, recovered, primaryThread } = prepared;
+    const { task, recovered, primaryThread, attempt } = prepared;
 
-    if (recovered.status !== "working") {
+    if (!attempt) {
       return {
         task: recovered,
         retryStatus: "failed",
       };
     }
 
-    if (!this.continuationDispatcher) {
-      await this.failPrimaryTaskRun(
-        primaryThread.sessionId,
-        new Error("Task continuation is unavailable"),
-      );
-      return {
-        task: this.requireTask(task.id, task.workspacePath),
-        retryStatus: "failed",
-      };
-    }
-
-    const retryStatus = await this.continuationDispatcher({
-      sessionId: primaryThread.sessionId,
+    const retryStatus = await this.dispatchTaskContinuation({
+      task: recovered,
+      attempt,
       prompt: buildTaskRetryPrompt(task),
       displayText: `Retry task: ${task.title}`,
       onFailure: async (error) => {
-        await this.failPrimaryTaskRun(primaryThread.sessionId, error);
+        await this.failPrimaryTaskRun(primaryThread.sessionId, error, attempt);
       },
     });
     return {
@@ -3392,34 +3470,45 @@ export class TaskCoordinator {
   private async failPrimaryTaskRun(
     sessionId: string,
     failure?: unknown,
+    continuationAttempt?: symbol,
   ): Promise<TaskRecord | null> {
-    const task = this.options.sessionDb.getTaskForThread(sessionId);
-    const primaryThread = task?.threads[0];
-    if (!task || primaryThread?.sessionId !== sessionId) return null;
-    if (task.status === "failed") return task;
-    if (task.status !== "working" && task.status !== "planning") return null;
+    const knownTask = this.options.sessionDb.getTaskForThread(sessionId);
+    if (!knownTask) return null;
+    return await this.runTaskMutation(knownTask.id, async () => {
+      if (
+        continuationAttempt !== undefined &&
+        this.taskContinuationAttempts.get(knownTask.id) !== continuationAttempt
+      ) {
+        return null;
+      }
+      const task = this.options.sessionDb.getTask(knownTask.id);
+      const primaryThread = task?.threads[0];
+      if (!task || primaryThread?.sessionId !== sessionId) return null;
+      if (task.status === "failed") return task;
+      if (task.status !== "working" && task.status !== "planning") return null;
 
-    const detail =
-      failure instanceof Error
-        ? failure.message
-        : failure === undefined
-          ? "The primary task run ended with an error"
-          : String(failure);
-    try {
-      return await this.transition({
-        taskId: task.id,
-        workspacePath: task.workspacePath,
-        expectedRevision: task.revision,
-        status: "failed",
-        summary: "Task run failed",
-        detail,
-        sessionId,
-      });
-    } catch (error) {
-      const current = this.options.sessionDb.getTask(task.id);
-      if (current?.status === "failed") return current;
-      throw error;
-    }
+      const detail =
+        failure instanceof Error
+          ? failure.message
+          : failure === undefined
+            ? "The primary task run ended with an error"
+            : String(failure);
+      try {
+        return await this.transitionLocked({
+          taskId: task.id,
+          workspacePath: task.workspacePath,
+          expectedRevision: task.revision,
+          status: "failed",
+          summary: "Task run failed",
+          detail,
+          sessionId,
+        });
+      } catch (error) {
+        const current = this.options.sessionDb.getTask(task.id);
+        if (current?.status === "failed") return current;
+        throw error;
+      }
+    });
   }
 
   async transition(input: {
@@ -3517,6 +3606,7 @@ export class TaskCoordinator {
     } finally {
       terminalRelease?.();
     }
+    if (isTerminalTaskStatus(updated.status)) this.taskContinuationAttempts.delete(task.id);
     this.notifyUpdated(updated);
     return updated;
   }
@@ -3554,6 +3644,7 @@ export class TaskCoordinator {
       updatedAt: nowIso(),
       threadId: thread?.id ?? null,
     });
+    this.taskContinuationAttempts.delete(task.id);
     this.notifyUpdated(updated);
     return updated;
   }

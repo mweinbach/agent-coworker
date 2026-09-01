@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 import {
   __internal,
@@ -36,9 +37,72 @@ describe("directoriesFromGitRootToWorkspace", () => {
     const ws = path.join("/other", "proj");
     expect(directoriesFromGitRootToWorkspace(ws, "/tmp/unrelated")).toEqual([path.resolve(ws)]);
   });
+
+  test("keeps ancestor instructions for directory names beginning with two dots", () => {
+    const git = path.resolve("/repo");
+    const ws = path.join(git, "..cache", "app");
+    expect(directoriesFromGitRootToWorkspace(ws, git)).toEqual([
+      git,
+      path.join(git, "..cache"),
+      ws,
+    ]);
+  });
 });
 
 describe("loadProjectAgentsFiles and section", () => {
+  test("bounds instruction file reads before rendering an oversized UTF-8 file", async () => {
+    const tmp = await fs.mkdtemp(path.join(scratchRoots()[0], "agents-read-cap-"));
+    let totalBytesRead = 0;
+    let openHandles = 0;
+    try {
+      await fs.mkdir(path.join(tmp, ".git"));
+      const workspace = path.join(tmp, "workspace");
+      await fs.mkdir(workspace);
+      await fs.writeFile(path.join(tmp, "AGENTS.md"), "ROOT MUST NOT DISPLACE THE LEAF");
+      await fs.writeFile(
+        path.join(workspace, "AGENTS.md"),
+        "界".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES),
+      );
+      const io = {
+        stat: fs.stat,
+        readFile: async (filePath: string) => {
+          const value = await fs.readFile(filePath, "utf8");
+          totalBytesRead += Buffer.byteLength(value, "utf8");
+          return value;
+        },
+        open: async (filePath: string, flags: string) => {
+          const handle = await fs.open(filePath, flags);
+          openHandles += 1;
+          const originalRead = handle.read.bind(handle);
+          const originalClose = handle.close.bind(handle);
+          spyOn(handle, "read").mockImplementation(async (...args: any[]) => {
+            const result = await (originalRead as (...args: any[]) => Promise<any>)(...args);
+            totalBytesRead += result.bytesRead;
+            return result;
+          });
+          spyOn(handle, "close").mockImplementation(async () => {
+            openHandles -= 1;
+            await originalClose();
+          });
+          return handle;
+        },
+      };
+
+      const section = await loadProjectInstructionsSection(workspace, io);
+      expect(section).toContain("界");
+      expect(section).toContain("truncated");
+      expect(section).not.toContain("\uFFFD");
+      expect(section).not.toContain("ROOT MUST NOT DISPLACE THE LEAF");
+      expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(
+        PROJECT_INSTRUCTIONS_MAX_BYTES,
+      );
+      expect(totalBytesRead).toBeLessThanOrEqual(PROJECT_INSTRUCTIONS_MAX_BYTES + 1);
+      expect(openHandles).toBe(0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("root and nested workspace both contribute in order; override wins in same dir", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agents-hier-"));
     await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
@@ -146,35 +210,30 @@ describe("loadProjectAgentsFiles and section", () => {
   });
 
   test("falls back to a readable AGENTS.md when AGENTS.override.md cannot be read", async () => {
-    const workspaceRoot = path.resolve(path.join("/repo", "apps", "web"));
-    const io = {
-      stat: async (abs: string) => {
-        if (
-          abs === path.join(workspaceRoot, "AGENTS.override.md") ||
-          abs === path.join(workspaceRoot, "AGENTS.md")
-        ) {
-          return { isFile: () => true, isDirectory: () => false } as any;
-        }
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      },
-      readFile: async (abs: string) => {
-        if (abs === path.join(workspaceRoot, "AGENTS.override.md")) {
-          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-        }
-        if (abs === path.join(workspaceRoot, "AGENTS.md")) {
-          return "READABLE FALLBACK\n";
-        }
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      },
-    };
+    const workspaceRoot = await fs.mkdtemp(path.join(scratchRoots()[0], "agents-read-fallback-"));
+    try {
+      await fs.writeFile(path.join(workspaceRoot, "AGENTS.override.md"), "UNREADABLE OVERRIDE\n");
+      await fs.writeFile(path.join(workspaceRoot, "AGENTS.md"), "READABLE FALLBACK\n");
+      const io = {
+        stat: fs.stat,
+        open: async (abs: string, flags: string) => {
+          if (abs === path.join(workspaceRoot, "AGENTS.override.md")) {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          }
+          return fs.open(abs, flags);
+        },
+      };
 
-    const files = await loadProjectAgentsFiles(workspaceRoot, io as any);
-    expect(files.map((f) => [f.displayPath, f.filename, f.content.trim()])).toEqual([
-      [".", "AGENTS.md", "READABLE FALLBACK"],
-    ]);
+      const files = await loadProjectAgentsFiles(workspaceRoot, io);
+      expect(files.map((f) => [f.displayPath, f.filename, f.content.trim()])).toEqual([
+        [".", "AGENTS.md", "READABLE FALLBACK"],
+      ]);
 
-    const section = await loadProjectInstructionsSection(workspaceRoot, io as any);
-    expect(section).toContain("READABLE FALLBACK");
+      const section = await loadProjectInstructionsSection(workspaceRoot, io);
+      expect(section).toContain("READABLE FALLBACK");
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 });
 

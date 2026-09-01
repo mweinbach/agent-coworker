@@ -83,6 +83,8 @@ export class SessionAdminManager {
     }
     this.context.state.messages = [];
     this.context.state.allMessages = [];
+    this.context.state.historyRevision += 1;
+    this.context.state.lastMemoryGeneratedIndex = 0;
     this.context.state.providerState = null;
     this.context.state.todos = [];
     this.context.emit({ type: "todos", sessionId: this.context.id, todos: [] });
@@ -768,14 +770,14 @@ export class SessionAdminManager {
       let counter = 1;
       while (true) {
         try {
-          await fs.access(filePath);
+          await fs.writeFile(filePath, decoded, { flag: "wx" });
+          break;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
           filePath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
           counter += 1;
-        } catch {
-          break;
         }
       }
-      await fs.writeFile(filePath, decoded);
       this.context.emit({
         type: "file_uploaded",
         sessionId: this.context.id,

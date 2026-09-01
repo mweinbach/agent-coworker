@@ -15,6 +15,7 @@ import { countVisibleMessages } from "./snapshot";
 import type {
   ConversationImportSource,
   ConversationPreviewItem,
+  ConversationPreviewOptions,
   ConversationSourceCandidate,
   ConversationSourceRequest,
   ConversationSourceSelectionOptions,
@@ -22,11 +23,7 @@ import type {
   ConversationWorkspaceMappingsValidateResult,
   ExternalConversation,
 } from "./types";
-import {
-  mapConversationWorkspace,
-  resolveWorkspaceMappingInput,
-  validateWorkspaceMappingInput,
-} from "./workspaceMapping";
+import { mapConversationWorkspace, validateWorkspaceMappingInput } from "./workspaceMapping";
 
 export type ConversationImportService = ReturnType<typeof createConversationImportService>;
 
@@ -128,9 +125,10 @@ async function ensureDesktopWorkspaceForPath(input: {
   workspacePath: string;
   name?: string;
 }): Promise<{ workspaceId: string | null; workspacePath: string; name: string; created: boolean }> {
-  const workspacePath = await fs
-    .realpath(input.workspacePath)
-    .catch(() => path.resolve(input.workspacePath));
+  const workspacePath = await fs.realpath(input.workspacePath);
+  if (!(await fs.stat(workspacePath)).isDirectory()) {
+    throw new Error("Workspace path must be an existing directory.");
+  }
   const { workspaces } = await listWorkspaceSummaries({
     workingDirectory: input.fallbackCwd,
     desktopService: input.desktopService,
@@ -248,10 +246,7 @@ export function createConversationImportService(opts: ServiceOptions) {
   }
 
   async function loadConversations(
-    input: ConversationSourceSelectionOptions & {
-      limit?: number;
-      includeArchived?: boolean;
-    },
+    input: ConversationSourceSelectionOptions & ConversationPreviewOptions,
   ): Promise<ExternalConversation[]> {
     const candidates = await discoverSources(input);
     const conversations: ExternalConversation[] = [];
@@ -262,6 +257,7 @@ export function createConversationImportService(opts: ServiceOptions) {
         limit: input.limit,
         includeArchived: input.includeArchived,
         currentCoworkDbPath: opts.sessionDb.dbPath,
+        preferConversation: input.preferConversation,
       });
       conversations.push(...parsed);
     }
@@ -283,13 +279,35 @@ export function createConversationImportService(opts: ServiceOptions) {
       desktopService: opts.desktopService,
       homedir: opts.homedir,
     });
-    const conversations = await loadConversations(input);
-    const previews = await Promise.all(
-      conversations.map(async (conversation): Promise<ConversationPreviewItem> => {
-        const existing = opts.sessionDb.getExternalConversationImport(
-          conversation.source,
-          conversation.fingerprint,
+    const limit = Math.max(1, Math.min(1000, Math.floor(input.limit ?? 250)));
+    const importedThreadIds = new Map<string, string | null>();
+    const importedThreadId = (conversation: ExternalConversation): string | null => {
+      const key = previewKey(conversation.source, conversation.fingerprint);
+      if (!importedThreadIds.has(key)) {
+        importedThreadIds.set(
+          key,
+          opts.sessionDb.getExternalConversationImport(
+            conversation.source,
+            conversation.fingerprint,
+          )?.importedSessionId ?? null,
         );
+      }
+      return importedThreadIds.get(key) ?? null;
+    };
+    const conversations = await loadConversations({
+      ...input,
+      limit,
+      preferConversation: (conversation) => importedThreadId(conversation) === null,
+    });
+    const selected = conversations
+      .sort(
+        (left, right) =>
+          Number(importedThreadId(left) !== null) - Number(importedThreadId(right) !== null) ||
+          right.updatedAt.localeCompare(left.updatedAt),
+      )
+      .slice(0, limit);
+    const previews = await Promise.all(
+      selected.map(async (conversation): Promise<ConversationPreviewItem> => {
         return {
           source: conversation.source,
           sourceId: conversation.sourceId,
@@ -305,12 +323,12 @@ export function createConversationImportService(opts: ServiceOptions) {
           toolCount: conversation.items.filter((item) => item.kind === "tool").length,
           warnings: conversation.warnings,
           mapping: await mapConversationWorkspace({ conversation, workspaces }),
-          alreadyImportedThreadId: existing?.importedSessionId ?? null,
+          alreadyImportedThreadId: importedThreadId(conversation),
         };
       }),
     );
     return {
-      conversations: previews.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      conversations: previews,
     };
   }
 
@@ -327,9 +345,14 @@ export function createConversationImportService(opts: ServiceOptions) {
     },
   ): Promise<ConversationImportImportResult> {
     const config = opts.getConfig();
+    const selectedKeys = new Set(
+      input.selected.map((selected) => previewKey(selected.source, selected.fingerprint)),
+    );
     const conversations = await loadConversations({
-      sources: input.sources,
-      includeArchived: input.includeArchived,
+      ...input,
+      limit: selectedKeys.size,
+      preferConversation: (conversation) =>
+        selectedKeys.has(previewKey(conversation.source, conversation.fingerprint)),
     });
     const byKey = new Map(
       conversations.map((conversation) => [
@@ -382,54 +405,37 @@ export function createConversationImportService(opts: ServiceOptions) {
       const mappingInput = input.mappings?.[conversation.fingerprint] ?? input.mappings?.[key];
       let workspacePath: string;
       let workspaceId: string | null = null;
-      if (mappingInput) {
-        const resolved = resolveWorkspaceMappingInput({ mapping: mappingInput, workspaces });
-        if ("error" in resolved) {
-          result.failed.push({ ...selected, message: resolved.error });
-          continue;
-        }
-        const ensured =
-          mappingInput.kind === "create"
-            ? await ensureDesktopWorkspaceForPath({
-                desktopService: opts.desktopService,
-                fallbackCwd: config.workingDirectory,
-                workspacePath: resolved.workspacePath,
-                name: resolved.name,
-              })
-            : {
-                workspaceId: resolved.workspaceId,
-                workspacePath: resolved.workspacePath,
-                name: resolved.name ?? path.basename(resolved.workspacePath),
-                created: false,
-              };
-        workspacePath = ensured.workspacePath;
-        workspaceId = ensured.workspaceId;
-        if (ensured.created && ensured.workspaceId) {
-          result.createdWorkspaces.push({
-            workspaceId: ensured.workspaceId,
-            path: ensured.workspacePath,
-            name: ensured.name,
+      try {
+        if (mappingInput) {
+          const resolved = await validateWorkspaceMappingInput({
+            mapping: mappingInput,
+            workspaces,
           });
-        }
-      } else {
-        const mapping = await mapConversationWorkspace({ conversation, workspaces });
-        if (mapping.status === "missing") {
-          result.failed.push({
-            ...selected,
-            message: "Conversation needs an explicit workspace mapping before import.",
-          });
-          continue;
-        }
-        if (mapping.status === "matched") {
-          workspacePath = mapping.workspacePath;
-          workspaceId = mapping.workspaceId;
-        } else {
-          const ensured = await ensureDesktopWorkspaceForPath({
-            desktopService: opts.desktopService,
-            fallbackCwd: config.workingDirectory,
-            workspacePath: mapping.workspacePath,
-            name: mapping.name,
-          });
+          if ("error" in resolved) {
+            result.failed.push({ ...selected, message: resolved.error });
+            continue;
+          }
+          if (resolved.status === "missing") {
+            result.failed.push({
+              ...selected,
+              message: "Workspace path must be an existing directory.",
+            });
+            continue;
+          }
+          const ensured =
+            resolved.status === "create"
+              ? await ensureDesktopWorkspaceForPath({
+                  desktopService: opts.desktopService,
+                  fallbackCwd: config.workingDirectory,
+                  workspacePath: resolved.workspacePath,
+                  name: resolved.name,
+                })
+              : {
+                  workspaceId: resolved.workspaceId,
+                  workspacePath: resolved.workspacePath,
+                  name: path.basename(resolved.workspacePath),
+                  created: false,
+                };
           workspacePath = ensured.workspacePath;
           workspaceId = ensured.workspaceId;
           if (ensured.created && ensured.workspaceId) {
@@ -439,10 +445,37 @@ export function createConversationImportService(opts: ServiceOptions) {
               name: ensured.name,
             });
           }
+        } else {
+          const mapping = await mapConversationWorkspace({ conversation, workspaces });
+          if (mapping.status === "missing") {
+            result.failed.push({
+              ...selected,
+              message: "Conversation needs an explicit workspace mapping before import.",
+            });
+            continue;
+          }
+          if (mapping.status === "matched") {
+            workspacePath = mapping.workspacePath;
+            workspaceId = mapping.workspaceId;
+          } else {
+            const ensured = await ensureDesktopWorkspaceForPath({
+              desktopService: opts.desktopService,
+              fallbackCwd: config.workingDirectory,
+              workspacePath: mapping.workspacePath,
+              name: mapping.name,
+            });
+            workspacePath = ensured.workspacePath;
+            workspaceId = ensured.workspaceId;
+            if (ensured.created && ensured.workspaceId) {
+              result.createdWorkspaces.push({
+                workspaceId: ensured.workspaceId,
+                path: ensured.workspacePath,
+                name: ensured.name,
+              });
+            }
+          }
         }
-      }
 
-      try {
         const persisted = await persistImportedConversation({
           sessionDb: opts.sessionDb,
           importInput: {
@@ -501,7 +534,10 @@ export function createConversationImportService(opts: ServiceOptions) {
       }
       if (validation.status === "missing") {
         result.valid = false;
-        result.errors.push({ fingerprint, message: "Workspace path does not exist." });
+        result.errors.push({
+          fingerprint,
+          message: "Workspace path must be an existing directory.",
+        });
       }
       result.mappings[fingerprint] = validation;
     }

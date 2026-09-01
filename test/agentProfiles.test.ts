@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -368,6 +368,101 @@ describe("agent profile catalog", () => {
     );
   });
 
+  for (const mutation of ["upsert", "copy", "availability"] as const) {
+    test(`${mutation} preserves the existing file when a replacement write fails`, async () => {
+      const config = await makeConfig();
+      await upsertAgentProfile(config, profile());
+      await upsertAgentProfile(config, profile({ scope: "workspace", displayName: "Original" }));
+      await setAgentProfileWorkspaceAvailability(config, "research", true);
+      const dir = getAgentProfileDir(config, "workspace");
+      const filePath = path.join(
+        dir,
+        mutation === "availability" ? "workspace-overrides.json" : "qa-reviewer.json",
+      );
+      const before = await fs.readFile(filePath, "utf-8");
+      const filesBefore = (await fs.readdir(dir)).sort();
+      const mutate = () => {
+        if (mutation === "availability") {
+          return setAgentProfileWorkspaceAvailability(config, "explorer", true);
+        }
+        if (mutation === "copy") {
+          return copyAgentProfile(config, {
+            sourceRef: "global:qa-reviewer",
+            targetScope: "workspace",
+          });
+        }
+        return upsertAgentProfile(config, profile({ scope: "workspace", displayName: "Updated" }));
+      };
+      const writeFile = fs.writeFile.bind(fs);
+      const write = spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+        if (typeof target === "string" && path.dirname(target) === dir) {
+          await writeFile(target, '{"partial":', options);
+          throw new Error("Injected profile write failure");
+        }
+        return await writeFile(target, data, options);
+      });
+      try {
+        await expect(mutate()).rejects.toThrow("Injected profile write failure");
+      } finally {
+        write.mockRestore();
+      }
+
+      expect(await fs.readFile(filePath, "utf-8")).toBe(before);
+      expect((await fs.readdir(dir)).sort()).toEqual(filesBefore);
+      expect((await mutate()).diagnostics).toEqual([]);
+    });
+  }
+
+  test("deleting a profile waits for its pending save instead of resurrecting it", async () => {
+    const config = await makeConfig();
+    await upsertAgentProfile(config, profile());
+    const dir = getAgentProfileDir(config, "global");
+    const filePath = path.join(dir, "qa-reviewer.json");
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let reportWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      reportWriteStarted = resolve;
+    });
+    const writeFile = fs.writeFile.bind(fs);
+    const write = spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      if (typeof target === "string" && path.dirname(target) === dir) {
+        reportWriteStarted();
+        await writeReleased;
+      }
+      return await writeFile(target, data, options);
+    });
+    const unlinkFile = fs.unlink.bind(fs);
+    const deletionAttempt: { promise?: Promise<void> } = {};
+    const unlink = spyOn(fs, "unlink").mockImplementation((target) => {
+      const promise = unlinkFile(target);
+      if (target === filePath) deletionAttempt.promise = promise;
+      return promise;
+    });
+    const saving = upsertAgentProfile(config, profile({ displayName: "Pending save" }));
+    let deleting: ReturnType<typeof deleteAgentProfile> | undefined;
+    try {
+      await writeStarted;
+      deleting = deleteAgentProfile(config, "global", "qa-reviewer");
+      // An unlocked delete reaches unlink immediately. Let it finish before the
+      // pending save so the resurrection regression has a deterministic order.
+      await deletionAttempt.promise;
+      releaseWrite();
+      await Promise.all([saving, deleting]);
+
+      await expect(fs.access(filePath)).rejects.toThrow();
+      const catalog = await readAgentProfilesCatalog(config);
+      expect(catalog.profiles.some((entry) => entry.profile.id === "qa-reviewer")).toBe(false);
+    } finally {
+      releaseWrite();
+      await Promise.allSettled([saving, deleting]);
+      write.mockRestore();
+      unlink.mockRestore();
+    }
+  });
+
   test("workspace availability overrides disable global profiles for one workspace", async () => {
     const config = await makeConfig();
     await upsertAgentProfile(config, profile());
@@ -452,6 +547,53 @@ describe("agent profile catalog", () => {
     await setAgentProfileWorkspaceAvailability(config, "research", false);
     await setAgentProfileWorkspaceAvailability(config, "explorer", false);
     await expect(fs.access(overridesPath)).rejects.toThrow();
+  });
+
+  test("concurrent availability changes preserve every disabled profile", async () => {
+    const config = await makeConfig();
+    const ids = ["explorer", "research", "reviewer", "worker"];
+
+    await Promise.all(ids.map((id) => setAgentProfileWorkspaceAvailability(config, id, true)));
+
+    const catalog = await readAgentProfilesCatalog(config);
+    expect(
+      catalog.profiles
+        .filter((entry) => entry.workspaceDisabled)
+        .map((entry) => entry.profile.id)
+        .sort(),
+    ).toEqual(ids);
+    expect(catalog.diagnostics).toEqual([]);
+  });
+
+  test("concurrent enable and disable changes do not clear unrelated availability", async () => {
+    const config = await makeConfig();
+    await setAgentProfileWorkspaceAvailability(config, "research", true);
+
+    await Promise.all([
+      setAgentProfileWorkspaceAvailability(config, "research", false),
+      setAgentProfileWorkspaceAvailability(config, "explorer", true),
+    ]);
+
+    const catalog = await readAgentProfilesCatalog(config);
+    expect(
+      catalog.profiles.filter((entry) => entry.workspaceDisabled).map((entry) => entry.profile.id),
+    ).toEqual(["explorer"]);
+    expect(catalog.diagnostics).toEqual([]);
+  });
+
+  test("availability changes preserve an invalid overrides file instead of resetting it", async () => {
+    const config = await makeConfig();
+    const dir = getAgentProfileDir(config, "workspace");
+    const filePath = path.join(dir, "workspace-overrides.json");
+    const malformed = '{"version":1,"disabledGlobalProfileIds":["research"';
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(filePath, malformed, "utf-8");
+
+    await expect(setAgentProfileWorkspaceAvailability(config, "explorer", true)).rejects.toThrow(
+      "Invalid workspace subagent overrides",
+    );
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe(malformed);
   });
 
   test("rejects the reserved workspace overrides profile id", async () => {

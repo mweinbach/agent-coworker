@@ -83,17 +83,22 @@ export async function captureWorkspaceControlOutcome<T extends SessionEvent>(
   predicate: (event: SessionEvent) => event is T,
   timeoutMs?: number,
 ): Promise<JsonRpcSessionOutcome<T>> {
-  return await context.workspaceControl.withSession(
-    cwd,
-    async (binding, session) =>
-      await captureBindingOutcome(
-        context,
-        binding,
-        async () => await action(session),
-        predicate,
-        timeoutMs,
-      ),
-  );
+  return await context.workspaceControl.withSession(cwd, async (binding, session) => {
+    // The workspace binding is disposed when this callback completes, so an
+    // intermediate event cannot stand in for completion of its owning action.
+    const events = await captureBindingMutationEvents(
+      context,
+      binding,
+      async () => await action(session),
+      predicate,
+      { timeoutMs },
+    );
+    const outcome = events.find(context.utils.isSessionError) ?? events.at(-1);
+    if (!outcome) {
+      throw new Error("Workspace control operation completed without an outcome event");
+    }
+    return outcome;
+  });
 }
 
 export async function captureWorkspaceControlMutationError(

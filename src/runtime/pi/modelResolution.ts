@@ -197,7 +197,7 @@ function getBasetenPiModel(modelId: string): PiModel | null {
 }
 
 async function getBedrockPiModel(modelId: string): Promise<PiModel> {
-  const model = await pickKnownPiModel("amazon-bedrock", modelId);
+  const model = await pickExactPiModel("amazon-bedrock", modelId);
   if (model) {
     return {
       ...model,
@@ -211,7 +211,7 @@ async function getBedrockPiModel(modelId: string): Promise<PiModel> {
     name: modelId,
     api: "bedrock-converse-stream",
     provider: "amazon-bedrock",
-    baseUrl: "https://bedrock-runtime",
+    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
     reasoning: modelId.toLowerCase().includes("claude"),
     input: ["text"],
     contextWindow: 131_072,

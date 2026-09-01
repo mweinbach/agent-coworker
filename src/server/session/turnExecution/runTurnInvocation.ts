@@ -1,16 +1,22 @@
-import { RAW_REPLAY_PART_TYPES } from "../../../shared/modelStreamReplay";
+import { RUNTIME_COMMITTED_PROGRESS, type RuntimeCommittedProgress } from "../../../runtime/types";
+import {
+  createModelStreamReplayRuntime,
+  shouldIgnoreNormalizedChunkForRawBackedTurn,
+} from "../../../shared/modelStreamReplay";
 import { isFailedToolOutcome, type ToolRetryIntent } from "../../../shared/toolRetry";
 import {
   createToolRetryAttemptTracker,
   type ToolCallMetadata,
 } from "../../../shared/toolRetryAttempts";
 import { createRawToolRetryEventTracker } from "../../../shared/toolRetryRawEvents";
-import type { ApproveCommandOptions, TodoItem } from "../../../types";
+import type { ApproveCommandOptions, ModelMessage, TodoItem } from "../../../types";
 import { getAgentRoleShellPolicy } from "../../agents/roles";
 import { MODEL_STREAM_NORMALIZER_VERSION, normalizeModelStreamPart } from "../../modelStream";
 import type { PersistedModelStreamChunk } from "../../sessionDb";
 import type { SessionContext } from "../SessionContext";
 import { getSessionTaskLock } from "../taskLocks";
+import { createCompletedTurnProgressTracker } from "./completedTurnProgress";
+import { getPartialTurnResponseMessages } from "./partialTurnError";
 import type { SteerCoordinator } from "./steerCoordinator";
 import { isStartStepPart } from "./userMessageTurnHelpers";
 
@@ -59,6 +65,7 @@ export type RunTurnInvocationDeps = {
   setAcceptingSteers: (accepting: boolean) => void;
   allowThreadManagementTools?: boolean;
   toolRetryIntent?: ToolRetryIntent;
+  onInvocationProgressSnapshot?: (messages: ModelMessage[]) => void;
 };
 
 export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
@@ -76,9 +83,11 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
     setAcceptingSteers,
     allowThreadManagementTools,
     toolRetryIntent,
+    onInvocationProgressSnapshot,
   } = deps;
   const toolRetryTracker = createToolRetryAttemptTracker(toolRetryIntent);
-  const rawToolRetryTracker = createRawToolRetryEventTracker(toolRetryTracker);
+  const replayRuntime = createModelStreamReplayRuntime();
+  const rawToolRetryTracker = createRawToolRetryEventTracker(toolRetryTracker, replayRuntime);
   const rawBackedToolKeys = new Set<string>();
   const pendingRawDiagnostics: PersistedModelStreamChunk[] = [];
 
@@ -110,6 +119,27 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
   return async (maxSteps: number, providerStateOverride = context.state.providerState) => {
     const abortSignal = context.state.abortController?.signal;
     const isTurnAborted = () => abortSignal?.aborted === true;
+    const completedProgress = createCompletedTurnProgressTracker({
+      allowProviderExecuted: context.state.config.provider === "codex-cli",
+    });
+    onInvocationProgressSnapshot?.([]);
+    const snapshotCompletedProgress = (source: unknown) => {
+      if (!onInvocationProgressSnapshot) return;
+      let progress = completedProgress;
+      const committed = (
+        source as { [RUNTIME_COMMITTED_PROGRESS]?: RuntimeCommittedProgress } | null
+      )?.[RUNTIME_COMMITTED_PROGRESS];
+      if (context.state.config.provider === "codex-cli" && Array.isArray(committed?.toolParts)) {
+        // Codex delivers UI callbacks asynchronously. Its captured terminal
+        // events, including an empty list, are authoritative for this invocation.
+        progress = createCompletedTurnProgressTracker({ allowProviderExecuted: true });
+        for (const part of committed.toolParts) progress.observe(part);
+      }
+      const messages = progress.retain(getPartialTurnResponseMessages(source), {
+        allowEventOnlyFallback: context.state.config.provider === "codex-cli",
+      });
+      onInvocationProgressSnapshot(messages);
+    };
     const assertCanMutate = (toolName: string) => {
       if (isTurnAborted()) {
         throw new Error(`Tool ${toolName} blocked because the turn was cancelled.`);
@@ -394,6 +424,7 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
       },
       onModelStreamPart: async (rawPart) => {
         if (isTurnAborted()) return;
+        completedProgress.observe(rawPart);
         if (isStartStepPart(rawPart)) {
           tracker.startedStepCount += 1;
           setAcceptingSteers(tracker.startedStepCount < context.state.maxSteps);
@@ -461,22 +492,34 @@ export function createRunTurnInvocation(deps: RunTurnInvocationDeps) {
             );
           }
         }
-        if (tracker.rawStreamEventIndex === 0 || !RAW_REPLAY_PART_TYPES.has(normalized.partType)) {
-          context.emit({
-            type: "model_stream_chunk",
-            sessionId: context.id,
-            turnId,
-            index: partIndex,
-            provider: context.state.config.provider,
-            model: context.state.config.model,
-            normalizerVersion: normalized.normalizerVersion,
-            partType: normalized.partType,
-            part: normalized.part,
-            ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-          });
+        const eventPayload = {
+          type: "model_stream_chunk" as const,
+          sessionId: context.id,
+          turnId,
+          index: partIndex,
+          provider: context.state.config.provider,
+          model: context.state.config.model,
+          normalizerVersion: normalized.normalizerVersion,
+          partType: normalized.partType,
+          part: normalized.part,
+          ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
+        };
+        if (!shouldIgnoreNormalizedChunkForRawBackedTurn(replayRuntime, eventPayload)) {
+          context.emit(eventPayload);
         }
       },
     });
-    return await invocation.finally(flushRawDiagnostics);
+    return await invocation
+      .then(
+        (result) => {
+          snapshotCompletedProgress(result);
+          return result;
+        },
+        (error) => {
+          snapshotCompletedProgress(error);
+          throw error;
+        },
+      )
+      .finally(flushRawDiagnostics);
   };
 }

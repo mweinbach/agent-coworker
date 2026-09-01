@@ -4,10 +4,19 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
-import { __internal as openAiNativeInternal } from "../src/runtime/openaiNativeResponses";
+import {
+  __internal as openAiNativeInternal,
+  runOpenAiNativeResponseStep,
+} from "../src/runtime/openaiNativeResponses";
 import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
 import type { PiModel } from "../src/runtime/piRuntimeOptions";
-import type { RuntimeRunTurnParams } from "../src/runtime/types";
+import {
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeCommittedProgress,
+  type RuntimeRunTurnParams,
+} from "../src/runtime/types";
+import { normalizeModelStreamPart } from "../src/server/modelStream";
 import {
   MODEL_SCRATCHPAD_DIRNAME,
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
@@ -50,6 +59,282 @@ function makeParams(
 }
 
 describe("openai responses runtime", () => {
+  test("finish-step carries signed assistant history internally before tool execution", async () => {
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async () => ({
+        assistant: {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Check the report first.",
+              thinkingSignature: "snapshot-reasoning-signature",
+            },
+            {
+              type: "text",
+              text: "I will check the report.",
+              textSignature: "snapshot-text-signature",
+            },
+            {
+              type: "toolCall",
+              id: "call_lookup|fc_lookup",
+              name: "lookup",
+              arguments: { path: "report.txt" },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+        responseId: "resp_completed_step",
+      }),
+    });
+    const timeline: string[] = [];
+    const completedSnapshots: unknown[] = [];
+    const finishParts: unknown[] = [];
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "completed-step")), {
+        tools: {
+          lookup: {
+            execute: () => {
+              timeline.push("tool");
+              return "report found";
+            },
+          },
+        },
+        onModelStreamPart: (part) => {
+          const record = part as Record<PropertyKey, unknown>;
+          if (record.type !== "finish-step") return;
+          timeline.push("finish-step");
+          const progress = record[RUNTIME_COMMITTED_PROGRESS] as
+            | RuntimeCommittedProgress
+            | undefined;
+          completedSnapshots.push(structuredClone(progress?.assistantMessages));
+          finishParts.push(part);
+        },
+      }),
+    );
+
+    expect(timeline).toEqual(["finish-step", "tool"]);
+    expect(completedSnapshots).toEqual([[result.responseMessages[0]]]);
+    expect(completedSnapshots[0]).toEqual([
+      {
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        content: [
+          {
+            type: "reasoning",
+            text: "Check the report first.",
+            thinkingSignature: "snapshot-reasoning-signature",
+          },
+          {
+            type: "text",
+            text: "I will check the report.",
+            textSignature: "snapshot-text-signature",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call_lookup|fc_lookup",
+            toolName: "lookup",
+            input: { path: "report.txt" },
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(finishParts)).not.toContain("snapshot-");
+    expect(
+      JSON.stringify(
+        normalizeModelStreamPart(finishParts[0], {
+          provider: "openai",
+          includeRawPart: true,
+          rawPartMode: "full",
+        }),
+      ),
+    ).not.toContain("snapshot-");
+  });
+
+  test.each(["response.incomplete", "unexpected EOF"] as const)(
+    "%s preserves partial text without executing unfinished tool calls",
+    async (terminal) => {
+      const events: Array<Record<string, unknown>> = [
+        { type: "response.created", response: { id: "resp_partial", status: "in_progress" } },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_partial", role: "assistant", content: [] },
+        },
+        {
+          type: "response.content_part.added",
+          part: { type: "output_text", text: "", annotations: [] },
+        },
+        { type: "response.output_text.delta", delta: "Partial answer" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_partial",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Partial answer", annotations: [] }],
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_partial",
+            call_id: "call_partial",
+            name: "write",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_partial",
+          delta: '{"path":"important.txt","content":"part',
+        },
+      ];
+      if (terminal === "response.incomplete") {
+        events.push({
+          type: terminal,
+          response: {
+            id: "resp_partial",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: { input_tokens: 12, output_tokens: 5, total_tokens: 17 },
+          },
+        });
+      }
+      const realFetch = globalThis.fetch;
+      const executedInputs: unknown[] = [];
+      const emittedParts: unknown[] = [];
+      let modelErrors = 0;
+      globalThis.fetch = (async () =>
+        new Response(events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""), {
+          headers: { "content-type": "text/event-stream" },
+        })) as typeof fetch;
+
+      try {
+        const runtime = createOpenAiResponsesRuntime({
+          runStepImpl: (opts) => runOpenAiNativeResponseStep({ ...opts, apiKey: "test-api-key" }),
+        });
+        let failure: PartialTurnError | undefined;
+        try {
+          await runtime.runTurn(
+            makeParams(makeConfig(path.join(import.meta.dir, "fixtures", "openai-stream")), {
+              tools: {
+                write: {
+                  execute: (input) => {
+                    executedInputs.push(input);
+                    return "written";
+                  },
+                },
+              },
+              onModelStreamPart: (part) => {
+                emittedParts.push(part);
+              },
+              onModelError: () => {
+                modelErrors += 1;
+              },
+            }),
+          );
+        } catch (error) {
+          failure = error as PartialTurnError;
+        }
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(executedInputs).toEqual([]);
+        expect(modelErrors).toBe(1);
+        expect(failure?.responseMessages).toEqual([
+          { role: "assistant", content: [{ type: "text", text: "Partial answer" }] },
+        ]);
+        expect(failure?.providerState).toBeNull();
+        expect(emittedParts).not.toContainEqual(expect.objectContaining({ type: "finish-step" }));
+        if (terminal === "response.incomplete") {
+          expect(failure?.message).toContain("max_output_tokens");
+          expect(failure?.usage).toMatchObject({
+            promptTokens: 12,
+            completionTokens: 5,
+            totalTokens: 17,
+          });
+          expect(failure?.requestUsages).toEqual([
+            expect.objectContaining({ promptTokens: 12, completionTokens: 5, totalTokens: 17 }),
+          ]);
+        } else {
+          expect(failure?.message).toContain("before completion");
+          expect(failure?.usage).toBeUndefined();
+          expect(failure?.requestUsages).toBeUndefined();
+        }
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    },
+  );
+
+  test("replays failed-turn input after partial output invalidates the saved continuation", async () => {
+    const config = makeConfig(path.join(import.meta.dir, "fixtures", "failed-continuation"));
+    const priorState = {
+      provider: "openai" as const,
+      model: config.model,
+      responseId: "resp_previous_turn",
+      updatedAt: "2026-03-18T12:00:00.000Z",
+    };
+    const history: ModelMessage[] = [
+      { role: "user", content: "Prior question" },
+      { role: "assistant", content: [{ type: "text", text: "Prior answer" }] },
+      { role: "user", content: "Remember this failed-turn instruction" },
+    ];
+    const requests: Array<Record<string, unknown>> = [];
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async (opts) => {
+        requests.push({ previousResponseId: opts.previousResponseId, messages: opts.piMessages });
+        if (requests.length === 1) {
+          const failure = new Error("Incomplete model response") as PartialTurnError;
+          failure.responseMessages = [
+            { role: "assistant", content: [{ type: "text", text: "Partial answer" }] },
+          ];
+          throw failure;
+        }
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "Recovered" }],
+            stopReason: "stop",
+          },
+          responseId: "resp_recovered",
+        };
+      },
+    });
+    let failure: PartialTurnError | undefined;
+    try {
+      await runtime.runTurn(
+        makeParams(config, { messages: history, allMessages: history, providerState: priorState }),
+      );
+    } catch (error) {
+      failure = error as PartialTurnError;
+    }
+    expect(failure).toBeDefined();
+    const resumedHistory: ModelMessage[] = [
+      ...history,
+      ...(failure?.responseMessages ?? []),
+      { role: "user", content: "Continue" },
+    ];
+    await runtime.runTurn(
+      makeParams(config, {
+        messages: resumedHistory,
+        allMessages: resumedHistory,
+        providerState:
+          failure && Object.hasOwn(failure, "providerState") ? failure.providerState : priorState,
+      }),
+    );
+    expect(requests[1]?.previousResponseId).toBeUndefined();
+    expect(JSON.stringify(requests[1]?.messages)).toContain(
+      "Remember this failed-turn instruction",
+    );
+    expect(JSON.stringify(requests[1]?.messages)).toContain("Partial answer");
+  });
+
   test("ignores commentary-phase assistant text in final runtime text and responseMessages", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-commentary-"));
     const runtime = createOpenAiResponsesRuntime({
@@ -207,6 +492,10 @@ describe("openai responses runtime", () => {
     expect(secondPiMessages).toHaveLength(1);
     expect(secondPiMessages[0]?.role).toBe("toolResult");
     expect(result.providerState?.responseId).toBe("resp_2");
+    expect(result.requestUsages).toEqual([
+      { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    ]);
   });
 
   test("stops after a tool step when a task input directive requests a pause", async () => {
@@ -667,53 +956,76 @@ describe("openai responses runtime", () => {
     expect(lightRequest.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
-  test("records and attaches usage to thrown error when turn fails mid-way", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-failure-usage-"));
-    let stepCount = 0;
-    const runtime = createOpenAiResponsesRuntime({
-      runStepImpl: async () => {
-        stepCount += 1;
-        if (stepCount === 1) {
-          return {
-            assistant: {
-              role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "some_tool", arguments: {} }],
-              usage: {
-                input: 50,
-                output: 10,
-                totalTokens: 60,
+  test.each(["none", "detailed", "opaque"] as const)(
+    "records and attaches usage to thrown error when turn fails mid-way: %s",
+    async (partialKind) => {
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-failure-usage-"));
+      let stepCount = 0;
+      const runtime = createOpenAiResponsesRuntime({
+        runStepImpl: async () => {
+          stepCount += 1;
+          if (stepCount === 1) {
+            return {
+              assistant: {
+                role: "assistant",
+                content: [{ type: "toolCall", id: "call_1", name: "some_tool", arguments: {} }],
+                usage: {
+                  input: 50,
+                  output: 10,
+                  totalTokens: 60,
+                },
+                stopReason: "toolUse",
               },
-              stopReason: "toolUse",
-            },
-            responseId: "resp_step_1",
-          };
-        }
-        throw new Error("API call failed on step 2");
-      },
-    });
+              responseId: "resp_step_1",
+            };
+          }
+          const failure = new Error("API call failed on step 2") as PartialTurnError;
+          if (partialKind !== "none") {
+            failure.usage = { promptTokens: 3, completionTokens: 2, totalTokens: 5 };
+            failure.responseMessages = [
+              { role: "assistant", content: [{ type: "text", text: "Partial second answer" }] },
+            ];
+            if (partialKind === "detailed") failure.requestUsages = [failure.usage];
+          }
+          throw failure;
+        },
+      });
 
-    let thrownError: any = null;
-    try {
-      await runtime.runTurn(
-        makeParams(makeConfig(homeDir), {
-          maxSteps: 2,
-          tools: {
-            some_tool: {
-              execute: async () => "success",
+      let thrownError: any = null;
+      try {
+        await runtime.runTurn(
+          makeParams(makeConfig(homeDir), {
+            maxSteps: 2,
+            tools: {
+              some_tool: {
+                execute: async () => "success",
+              },
             },
-          },
-        }),
+          }),
+        );
+      } catch (error) {
+        thrownError = error;
+      }
+
+      expect(thrownError).not.toBeNull();
+      expect(thrownError.message).toContain("API call failed on step 2");
+      expect(thrownError.usage).toEqual({
+        promptTokens: partialKind === "none" ? 50 : 53,
+        completionTokens: partialKind === "none" ? 10 : 12,
+        totalTokens: partialKind === "none" ? 60 : 65,
+      });
+      expect(thrownError.providerState).toBeNull();
+      expect(thrownError.responseMessages).toHaveLength(partialKind === "none" ? 2 : 3);
+      expect(thrownError.requestUsages).toEqual(
+        partialKind === "opaque"
+          ? undefined
+          : [
+              { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+              ...(partialKind === "detailed"
+                ? [{ promptTokens: 3, completionTokens: 2, totalTokens: 5 }]
+                : []),
+            ],
       );
-    } catch (error) {
-      thrownError = error;
-    }
-
-    expect(thrownError).not.toBeNull();
-    expect(thrownError.message).toContain("API call failed on step 2");
-    expect(thrownError.usage).toEqual({
-      promptTokens: 50,
-      completionTokens: 10,
-      totalTokens: 60,
-    });
-  });
+    },
+  );
 });

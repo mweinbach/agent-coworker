@@ -4,6 +4,7 @@ import {
   convertResponsesTools,
   processResponsesStream,
 } from "./openaiResponsesShared";
+import { normalizePiUsage, piTurnMessagesToModelMessages } from "./piMessageBridge";
 import {
   asFiniteNumber,
   asNonEmptyString,
@@ -11,6 +12,7 @@ import {
   buildOpenAiContinuationRequestOptions,
   type PiModel,
 } from "./piRuntimeOptions";
+import type { PartialTurnError } from "./types";
 
 type OpenAiCompatibleProvider = "openai";
 
@@ -21,16 +23,6 @@ type OpenAiNativeStreamOptions = {
   reasoningEffort?: string;
   reasoningSummary?: string;
   textVerbosity?: string;
-  webSearchBackend?: string;
-  webSearchMode?: string;
-  webSearchContextSize?: string;
-  webSearchAllowedDomains?: string[];
-  webSearchLocation?: {
-    country?: string;
-    region?: string;
-    city?: string;
-    timezone?: string;
-  };
 };
 
 type OpenAiNativeStepRequest = {
@@ -164,59 +156,6 @@ function convertPiToolsToResponsesTools(
     // `required`, so our current optional-parameter tool schemas must opt out.
     strict: false,
   });
-}
-
-function mergeUniqueStrings(...groups: Array<unknown>): string[] | undefined {
-  const merged: string[] = [];
-  for (const group of groups) {
-    if (!Array.isArray(group)) continue;
-    for (const entry of group) {
-      const value = asNonEmptyString(entry);
-      if (!value || merged.includes(value)) continue;
-      merged.push(value);
-    }
-  }
-  return merged.length > 0 ? merged : undefined;
-}
-
-function normalizeAllowedDomains(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of value) {
-    const raw = asNonEmptyString(entry);
-    if (!raw) continue;
-
-    let domain =
-      raw
-        .replace(/^[a-z]+:\/\//i, "")
-        .replace(/^\/+/, "")
-        .split(/[/?#]/, 1)[0] ?? "";
-    domain = domain.trim().replace(/\/+$/g, "").toLowerCase();
-    if (!domain || seen.has(domain)) continue;
-    seen.add(domain);
-    normalized.push(domain);
-  }
-
-  return normalized;
-}
-
-function normalizeWebSearchLocation(value: unknown): Record<string, string> | undefined {
-  const location = asRecord(value);
-  if (!location) return undefined;
-
-  const country = asNonEmptyString(location.country);
-  const region = asNonEmptyString(location.region);
-  const city = asNonEmptyString(location.city);
-  const timezone = asNonEmptyString(location.timezone);
-  const normalized = {
-    ...(country ? { country } : {}),
-    ...(region ? { region } : {}),
-    ...(city ? { city } : {}),
-    ...(timezone ? { timezone } : {}),
-  };
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string, unknown> {
@@ -372,6 +311,29 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
     });
     return { assistant, responseId };
   } catch (error) {
+    if (error && typeof error === "object") {
+      try {
+        const content = Array.isArray(assistant.content)
+          ? assistant.content.filter((part) => asRecord(part)?.type !== "toolCall")
+          : [];
+        Object.defineProperty(error, "responseMessages", {
+          // Calls from a failed model step were never dispatched. Keep partial
+          // prose, but do not replay incomplete or unexecuted calls as history.
+          value:
+            content.length > 0
+              ? piTurnMessagesToModelMessages([{ ...assistant, content, stopReason: "error" }])
+              : [],
+          configurable: true,
+          writable: true,
+        });
+        const partialError = error as PartialTurnError;
+        const usage = normalizePiUsage(assistant.usage);
+        partialError.usage = usage;
+        if (usage) partialError.requestUsages = [usage];
+      } catch {
+        // Preserve the original failure when its error object is not writable.
+      }
+    }
     await pendingEventDelivery;
     await emitOpenAiNativeEvent(opts, {
       type: "error",
@@ -385,9 +347,6 @@ export const __internal = {
   buildOpenAiNativeRequest,
   convertPiMessagesToResponsesInput,
   convertPiToolsToResponsesTools,
-  mergeUniqueStrings,
   normalizeOpenAiReasoningEffort,
   openAiModelSupportsXhighReasoning,
-  normalizeAllowedDomains,
-  normalizeWebSearchLocation,
 } as const;

@@ -1,3 +1,4 @@
+import { resolveRestoredAgentExecutionState } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { SessionEvent } from "../protocol";
 import type { HydratedSessionState, SessionInfoState, SessionRuntimeState } from "./SessionContext";
@@ -58,18 +59,7 @@ function normalizeHydratedExecutionState(
   if ((sessionKind ?? "root") !== "agent") {
     return executionState ?? (status === "closed" ? "closed" : "completed");
   }
-  if (status === "closed") {
-    return "closed";
-  }
-  if (
-    !executionState ||
-    executionState === "completed" ||
-    executionState === "errored" ||
-    executionState === "closed"
-  ) {
-    return executionState;
-  }
-  return "completed";
+  return resolveRestoredAgentExecutionState(executionState, status);
 }
 
 export function normalizeHydratedSessionInfo(

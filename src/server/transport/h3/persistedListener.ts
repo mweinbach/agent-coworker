@@ -15,6 +15,7 @@ const TLS_CERT_FILE_NAME = "tls-cert.pem";
 const TLS_KEY_FILE_NAME = "tls-key.pem";
 const LISTENER_CONFIG_FILE_NAME = "listener.json";
 const CERT_RENEWAL_BUFFER_MS = 5 * 60 * 1000;
+const PERSISTED_CERT_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 
 type H3ListenerConfig = {
   version: 1;
@@ -105,7 +106,7 @@ export async function loadOrCreatePersistedQuicCertificate(
     }
   }
 
-  const certificate = await createEphemeralQuicCertificate();
+  const certificate = await createEphemeralQuicCertificate(new Date(), PERSISTED_CERT_LIFETIME_MS);
   await writePersistedCertificate(storeRootPath, certificate);
   return certificate;
 }

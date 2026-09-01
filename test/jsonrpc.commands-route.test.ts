@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { createCommandRouteHandlers } from "../src/server/jsonrpc/routes/commands";
 import type { JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import { jsonRpcCommandResultSchemas } from "../src/server/jsonrpc/schema.commands";
+import { createSessionEventCapture } from "../src/server/jsonrpc/sessionEventCapture";
 import type { SessionEvent } from "../src/server/protocol";
 
 function makeHarness(events: SessionEvent[]) {
@@ -42,6 +43,39 @@ function makeHarness(events: SessionEvent[]) {
 }
 
 describe("command JSON-RPC routes", () => {
+  test("returns emitted command-list errors instead of waiting for an event timeout", async () => {
+    const harness = makeHarness([]);
+    const failure: SessionEvent = {
+      type: "error",
+      code: "internal_error",
+      source: "session",
+      message: "Failed to list commands: skill directory is unreadable",
+    };
+    let sink: ((event: SessionEvent) => void) | undefined;
+    const events = createSessionEventCapture({
+      addBindingSink: (_binding, _sinkId, next) => {
+        sink = next;
+      },
+      removeBindingSink: () => {
+        sink = undefined;
+      },
+    });
+    harness.context.events.capture = (binding, action, predicate) =>
+      events.capture(binding, action, predicate, 50);
+    harness.listCommands.mockImplementation(async () => {
+      sink?.(failure);
+    });
+
+    await createCommandRouteHandlers(harness.context)["command/list"]?.({} as never, {
+      id: 1,
+      method: "command/list",
+      params: { threadId: "chat-1" },
+    });
+
+    expect(harness.results).toEqual([]);
+    expect(harness.errors).toEqual([{ code: -32600, message: failure.message }]);
+  });
+
   test("lists server-resolved slash commands", async () => {
     const harness = makeHarness([
       {

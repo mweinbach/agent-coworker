@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getAiCoworkerPaths } from "../store/connections";
 import type { AgentConfig } from "../types";
+import { writeTextFileAtomic } from "../utils/atomicFile";
+import { withFileLock } from "../utils/fileLock";
 import { isPathInsideOneOffChatsRoot } from "../utils/oneOffChats";
 import { canonicalWorkspacePath } from "../utils/workspacePath";
 
@@ -18,6 +20,7 @@ import { canonicalWorkspacePath } from "../utils/workspacePath";
 export const CHATS_FOLDER = "(chats)";
 export const MEMORY_INDEX_FILE = "MEMORY.md";
 export const MEMORY_INDEX_HEADING = "# Memory Index";
+const MEMORY_INDEX_SLUG = MEMORY_INDEX_FILE.slice(0, -3).toLowerCase();
 export const MAX_ADVANCED_MEMORY_NAME_LENGTH = 200;
 export const MAX_ADVANCED_MEMORY_DESCRIPTION_LENGTH = 500;
 export const MAX_ADVANCED_MEMORY_BODY_LENGTH = 50_000;
@@ -64,6 +67,14 @@ function slugify(raw: string): string {
 
 export function slugifyMemoryName(raw: string): string {
   return slugify(raw);
+}
+
+function assertWritableMemoryName(raw: string): void {
+  if (slugify(raw) === MEMORY_INDEX_SLUG) {
+    throw new Error(
+      `${MEMORY_INDEX_FILE} is reserved for the generated index. Choose a different name or slug.`,
+    );
+  }
 }
 
 export function normalizeMemoryFolderName(raw: string): string {
@@ -296,7 +307,7 @@ export class AdvancedMemoryStore {
     const entries: AdvancedMemoryEntry[] = [];
     for (const name of names) {
       if (!name.toLowerCase().endsWith(".md")) continue;
-      if (name === MEMORY_INDEX_FILE) continue;
+      if (name.toLowerCase() === MEMORY_INDEX_FILE.toLowerCase()) continue;
       const full = path.join(dir, name);
       let raw: string;
       let updatedAt: string;
@@ -314,6 +325,7 @@ export class AdvancedMemoryStore {
 
   async readMemory(folder: string, slug: string): Promise<AdvancedMemoryEntry | null> {
     const full = this.memoryFilePath(folder, slug);
+    if (slugify(slug) === MEMORY_INDEX_SLUG) return null;
     try {
       const raw = await fs.readFile(full, "utf-8");
       const stat = await fs.stat(full);
@@ -324,6 +336,15 @@ export class AdvancedMemoryStore {
   }
 
   async writeMemory(folder: string, input: AdvancedMemoryWriteInput): Promise<AdvancedMemoryEntry> {
+    const folderPath = this.folderPath(folder);
+    assertWritableMemoryName(input.slug?.trim() || input.name);
+    return withFileLock(folderPath, () => this.writeMemoryUnlocked(folder, input));
+  }
+
+  private async writeMemoryUnlocked(
+    folder: string,
+    input: AdvancedMemoryWriteInput,
+  ): Promise<AdvancedMemoryEntry> {
     const normalized = normalizeAdvancedMemoryWriteInput(input);
     const slug = slugify(normalized.slug || normalized.name);
     const dir = this.folderPath(folder);
@@ -335,9 +356,12 @@ export class AdvancedMemoryStore {
       originSessionId: normalized.originSessionId,
       body: normalized.body,
     });
-    await fs.writeFile(path.join(dir, `${slug}.md`), content, "utf-8");
-    await this.regenerateIndex(folder);
-    return (await this.readMemory(folder, slug)) as AdvancedMemoryEntry;
+    await writeTextFileAtomic(path.join(dir, `${slug}.md`), content, { mode: 0o600 });
+    await this.regenerateIndexUnlocked(folder);
+    return (await this.readMemory(
+      folder,
+      normalized.slug || normalized.name,
+    )) as AdvancedMemoryEntry;
   }
 
   async editMemory(
@@ -345,30 +369,42 @@ export class AdvancedMemoryStore {
     slug: string,
     patch: Partial<AdvancedMemoryWriteInput>,
   ): Promise<AdvancedMemoryEntry | null> {
-    const existing = await this.readMemory(folder, slug);
-    if (!existing) return null;
-    return this.writeMemory(folder, {
-      slug,
-      name: patch.name ?? existing.name,
-      description: patch.description ?? existing.description,
-      type: patch.type ?? existing.type,
-      originSessionId: patch.originSessionId ?? existing.originSessionId,
-      body: patch.body ?? existing.body,
+    const folderPath = this.folderPath(folder);
+    assertWritableMemoryName(slug);
+    return withFileLock(folderPath, async () => {
+      const existing = await this.readMemory(folder, slug);
+      if (!existing) return null;
+      return this.writeMemoryUnlocked(folder, {
+        slug,
+        name: patch.name ?? existing.name,
+        description: patch.description ?? existing.description,
+        type: patch.type ?? existing.type,
+        originSessionId: patch.originSessionId ?? existing.originSessionId,
+        body: patch.body ?? existing.body,
+      });
     });
   }
 
   async deleteMemory(folder: string, slug: string): Promise<boolean> {
-    const full = this.memoryFilePath(folder, slug);
-    try {
-      await fs.unlink(full);
-    } catch {
-      return false;
-    }
-    await this.regenerateIndex(folder);
-    return true;
+    const folderPath = this.folderPath(folder);
+    assertWritableMemoryName(slug);
+    return withFileLock(folderPath, async () => {
+      const full = this.memoryFilePath(folder, slug);
+      try {
+        await fs.unlink(full);
+      } catch {
+        return false;
+      }
+      await this.regenerateIndexUnlocked(folder);
+      return true;
+    });
   }
 
   async regenerateIndex(folder: string): Promise<void> {
+    await withFileLock(this.folderPath(folder), () => this.regenerateIndexUnlocked(folder));
+  }
+
+  private async regenerateIndexUnlocked(folder: string): Promise<void> {
     const entries = await this.listMemories(folder);
     const lines = [MEMORY_INDEX_HEADING, ""];
     for (const entry of entries) {
@@ -377,7 +413,7 @@ export class AdvancedMemoryStore {
     lines.push("");
     const dir = this.folderPath(folder);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, MEMORY_INDEX_FILE), lines.join("\n"), "utf-8");
+    await writeTextFileAtomic(path.join(dir, MEMORY_INDEX_FILE), lines.join("\n"), { mode: 0o600 });
   }
 
   /** Raw `MEMORY.md` text for a folder (regenerated view), or "" if empty. */

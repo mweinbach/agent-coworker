@@ -1,7 +1,20 @@
 # Platform Abstraction Plan (Windows / macOS / Linux)
 
+> **Historical plan, not a current API reference.** The implementation status and migration proposals below describe the original July 2026 work. See the retirement note before adopting any proposed API.
+
 > Produced 2026-07-06 by a 40-agent audit of HEAD `b2a4453f`: 583 unique platform-conditional findings → 253 adversarially verified hazards (1 critical, 30 high, 113 medium, 109 low) → 83 divergence clusters → the design below, revised per a staff-level critique (verdict: revise → revisions folded in as "Critique amendments").
 > Status: **Phases 0-5 substantially implemented** (branch feat/platform-abstraction, 2026-07-07): Phase 0 (.gitattributes LF pin, platform-boundary ratchet), Phase 1 (host/pathString/text/paths/env/exec + barrel), Phase 2 (pwsh -EncodedCommand transport, per-dialect approval, prompt single-sourcing, sandbox env allowlist, exec.which bash lanes), Phase 3 (read/edit CRLF contract, glob/grep/ripgrep normalization, portable execFileCompat fixtures), Phase 4 (proc.ts tree-kill + graceful-shutdown primitives, fs.ts atomic primitives; bash timeout now tree-kills), Phase 5 (case-fold metadata/credential security, home()/MCP childEnv, sandbox scratch parity + probe memoization + denial tables). Deferred to follow-ups: the server/shutdown JSON-RPC route + desktop graceful-kill migration (rows 26-27, needs live Electron verification), fs/proc adoption at the P1 long-tail call sites (rows 19-35 remainder), and Phase 6 (CI matrix flip — the execFileCompat fixture blocker is now cleared; the native Windows-sandbox enforcement lane still needs a UAC-install run before merge). Full raw findings live in the session audit output; the actionable subset is this document.
+
+## Reliability-overhaul retirement note
+
+Repository-wide reference checks found no production consumers of these platform APIs. Their implementations and dedicated tests were removed rather than retaining unused abstractions:
+
+- `fs.moveWithFallback`, `FileLockedError`, and `fs.acquireLockDir`, including the platform-only `LockDirOwner`, `LockHandle`, and internal `LockDeps` types.
+- `proc.terminateGracefully` (including the `ChildHandle` method), `registerShutdownSignals`, and `onShutdownRequest`, including `TerminateGracefullyOptions`, `TerminableHandle`, and `ShutdownSignalOptions`.
+
+Their signatures, migration rows, and review commentary below are retained as historical proposals, not supported APIs or outstanding adoption work. This retirement does **not** remove application locking: [withFileLock](../src/utils/fileLock.ts), [withCoworkRuntimeBootstrapLock](../src/coworkRuntime/bootstrapLock.ts), and [SessionDbWriteCoordinator](../src/server/sessionDb/writeCoordinator.ts) remain live. The coordinator's private `LockHandle` is unrelated to the retired platform type.
+
+The retained [filesystem helpers](../src/platform/fs.ts) provide atomic writes/replacements and bounded removal retries. The retained [process helpers](../src/platform/proc.ts) provide `run`, `spawnStreaming`, `killTree`, and `isAlive`; product-specific shutdown orchestration remains with its consumers.
 
 ## Why the ping-pong happens (root-cause summary)
 
@@ -355,6 +368,8 @@ export function binaryName(base: string, platform?): string;   // "rg" → "rg.e
 
 ### 1.7 `proc.ts` — process lifecycle
 
+> **Historical signatures:** the graceful-termination and shutdown-registration members below were retired as described above; the other process primitives remain implemented in `src/platform/proc.ts`.
+
 ```ts
 export type RunResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
 export type CloseInfo = { reason: "exited" | "terminated"; code: number | null };
@@ -401,6 +416,8 @@ export function onShutdownRequest(handler: () => Promise<void> | void): () => vo
 **WebSocket-first note:** the Windows-functional shutdown requires a `server/shutdown` JSON-RPC method (route under `src/server/jsonrpc/routes/`, registered in `routes/index.ts`, documented in `docs/websocket-protocol.md`). `docs/bundling-guide.md`'s "send SIGTERM to flush snapshots" contract becomes "call `server/shutdown` (or close stdin); SIGTERM also works on POSIX."
 
 ### 1.8 `shell.ts` — extended (existing exports preserved)
+
+> **Retirement update:** the duplicate `quotePowerShellSingleQuotedValue` helper shown in the original sketch was removed. Runtime PATH preludes now reuse `quoteShellValue(value, "powershell")` so ASCII and smart apostrophes receive the same escaping.
 
 ```ts
 // EXISTING (kept): PlatformShellExecutionStep, quotePosixShellValue,
@@ -458,6 +475,8 @@ export function commands(platform?: NodeJS.Platform): PlatformCommands;
 `packages/harness/src/platformCommands.ts` becomes `export { commands as createHarnessPlatformCommands } ...` (it already imports from `../../../src/platform/shell`, so no packaging change).
 
 ### 1.9 `fs.ts`
+
+> **Historical signatures:** `moveWithFallback`/`FileLockedError` and `acquireLockDir`/platform `LockHandle` were retired. The speculative lock-migration claim below does not describe the current application locking implementations.
 
 ```ts
 export function writeFileAtomic(filePath: string, data: string | Uint8Array,

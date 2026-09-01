@@ -6,6 +6,28 @@ import {
   type SessionUsageSnapshot,
 } from "../src/session/costTracker";
 
+function createLegacyTieredSnapshot(): SessionUsageSnapshot {
+  const tracker = new SessionCostTracker("session-1");
+  for (let index = 0; index < 2; index += 1) {
+    tracker.recordTurn({
+      turnId: `turn-${index + 1}`,
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        promptTokens: 150_000,
+        completionTokens: 1_000,
+        totalTokens: 151_000,
+      },
+    });
+  }
+
+  const snapshot = tracker.getSnapshot();
+  delete snapshot.costBreakdown;
+  for (const summary of snapshot.byModel) delete summary.costBreakdown;
+  for (const entry of snapshot.turns) delete entry.costBreakdown;
+  return snapshot;
+}
+
 describe("SessionCostTracker", () => {
   test("records unattributed workflow spend and emits a usage update", () => {
     const tracker = new SessionCostTracker("session-1", { stopAtUsd: 1 });
@@ -86,25 +108,6 @@ describe("SessionCostTracker", () => {
     });
   });
 
-  test("formats recent turn times deterministically in UTC", () => {
-    const tracker = new SessionCostTracker("session-1");
-
-    tracker.recordTurn({
-      turnId: "turn-1",
-      provider: "openai",
-      model: "gpt-5.2",
-      usage: {
-        promptTokens: 1_000_000,
-        completionTokens: 1_000_000,
-        totalTokens: 2_000_000,
-      },
-    });
-
-    (tracker as any).turns[0].timestamp = "2026-03-09T01:02:03.000Z";
-
-    expect(tracker.formatRecentTurns(1)).toContain("[01:02:03Z]");
-  });
-
   test("restores tracker state from a persisted snapshot", () => {
     const original = new SessionCostTracker("session-1");
     original.recordTurn({
@@ -122,6 +125,61 @@ describe("SessionCostTracker", () => {
     const restored = SessionCostTracker.fromSnapshot(original.getSnapshot());
 
     expect(restored.getSnapshot()).toEqual(original.getSnapshot());
+  });
+
+  test("keeps lifetime cost unavailable after unpriced turns leave retained history", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const usage = { promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 };
+    tracker.recordTurn({
+      turnId: "unpriced",
+      provider: "nvidia",
+      model: "uncatalogued-model",
+      usage,
+    });
+    for (let index = 0; index < 512; index += 1) {
+      tracker.recordTurn({
+        turnId: `priced-${index}`,
+        provider: "openai",
+        model: "gpt-5.2",
+        usage,
+      });
+    }
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.turns).toHaveLength(512);
+    expect(snapshot.turns.every((entry) => entry.estimatedCostUsd !== null)).toBe(true);
+
+    const restored = SessionCostTracker.fromSnapshot(snapshot);
+    restored.recordTurn({
+      turnId: "after-restore",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage,
+    });
+
+    expect(restored.getSnapshot()).toMatchObject({
+      totalTurns: 514,
+      estimatedTotalCostUsd: null,
+      costTrackingAvailable: false,
+      budgetStatus: { currentCostUsd: null },
+    });
+    expect(restored.getSnapshot().costBreakdown).toBeUndefined();
+  });
+
+  test("starts cost tracking normally after restoring an empty session", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const restored = SessionCostTracker.fromSnapshot(tracker.getSnapshot());
+    restored.recordTurn({
+      turnId: "first-turn",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 },
+    });
+
+    expect(restored.getSnapshot()).toMatchObject({
+      estimatedTotalCostUsd: 0.00315,
+      costTrackingAvailable: true,
+    });
   });
 
   test("uses cached prompt token pricing discounts when available", () => {
@@ -160,6 +218,189 @@ describe("SessionCostTracker", () => {
     expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(6.6, 6);
   });
 
+  test("prices known requests before aggregating tiered turn usage", () => {
+    const tracker = new SessionCostTracker("session-1", { stopAtUsd: 1 });
+    const requestUsage = {
+      promptTokens: 150_000,
+      completionTokens: 1_000,
+      totalTokens: 151_000,
+    };
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      usage: { promptTokens: 300_000, completionTokens: 2_000, totalTokens: 302_000 },
+      requestUsages: [requestUsage, requestUsage],
+    });
+
+    const snapshot = tracker.getSnapshot();
+    expect(snapshot.estimatedTotalCostUsd).toBeCloseTo(0.624, 6);
+    expect(snapshot.costBreakdown?.inputCostUsd).toBeCloseTo(0.6, 6);
+    expect(snapshot.costBreakdown?.outputCostUsd).toBeCloseTo(0.024, 6);
+    expect(snapshot).toMatchObject({ totalTurns: 1, totalTokens: 302_000 });
+    expect(tracker.isBudgetExceeded()).toBe(false);
+  });
+
+  test("applies long-context pricing only to known requests above the threshold", () => {
+    const tracker = new SessionCostTracker("session-1");
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      usage: { promptTokens: 400_000, completionTokens: 2_000, totalTokens: 402_000 },
+      requestUsages: [
+        { promptTokens: 150_000, completionTokens: 1_000, totalTokens: 151_000 },
+        { promptTokens: 250_000, completionTokens: 1_000, totalTokens: 251_000 },
+      ],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(1.33, 6);
+  });
+
+  test("treats incomplete request token totals as opaque usage", () => {
+    const tracker = new SessionCostTracker("session-1");
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      usage: { promptTokens: 300_000, completionTokens: 2_000, totalTokens: 302_000 },
+      requestUsages: [{ promptTokens: 150_000, completionTokens: 1_000, totalTokens: 151_000 }],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeNull();
+  });
+
+  test("treats mismatched request cache totals as opaque usage", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const requestUsage = {
+      promptTokens: 150_000,
+      completionTokens: 1_000,
+      totalTokens: 151_000,
+      cachedPromptTokens: 50_000,
+    };
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      usage: {
+        promptTokens: 300_000,
+        completionTokens: 2_000,
+        totalTokens: 302_000,
+        cachedPromptTokens: 200_000,
+      },
+      requestUsages: [requestUsage, requestUsage],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeNull();
+  });
+
+  test("prices the full opaque aggregate when incomplete request metadata has linear pricing", () => {
+    const tracker = new SessionCostTracker("session-1");
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { promptTokens: 2_000, completionTokens: 200, totalTokens: 2_200 },
+      requestUsages: [{ promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 }],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.0063, 6);
+  });
+
+  for (const [label, requestUsages] of [
+    ["unknown", null],
+    ["empty", []],
+  ] as const) {
+    test(`keeps opaque tiered cost unavailable with ${label} request boundaries`, () => {
+      const tracker = new SessionCostTracker("session-1");
+      tracker.recordTurn({
+        turnId: "turn-1",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        usage: {
+          promptTokens: 300_000,
+          completionTokens: 2_000,
+          totalTokens: 302_000,
+          estimatedCostUsd: 0.624,
+        },
+        requestUsages,
+      });
+
+      expect(tracker.getSnapshot()).toMatchObject({
+        estimatedTotalCostUsd: null,
+        costTrackingAvailable: false,
+        totalTokens: 302_000,
+      });
+      expect(tracker.getSnapshot().costBreakdown).toBeUndefined();
+    });
+  }
+
+  test("prices opaque usage when its total cannot cross a context tier", () => {
+    const tracker = new SessionCostTracker("session-1");
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      usage: { promptTokens: 200_000, completionTokens: 1_000, totalTokens: 201_000 },
+      requestUsages: null,
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.412, 6);
+  });
+
+  test("prices opaque usage additively for models without context tiers", () => {
+    const tracker = new SessionCostTracker("session-1");
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { promptTokens: 300_000, completionTokens: 2_000, totalTokens: 302_000 },
+      requestUsages: [],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.553, 6);
+  });
+
+  test("sums runtime estimates across known uncatalogued requests", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const usage = { promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 };
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "nvidia",
+      model: "uncatalogued-model",
+      usage: { promptTokens: 2_000, completionTokens: 200, totalTokens: 2_200 },
+      requestUsages: [
+        { ...usage, estimatedCostUsd: 0.1 },
+        { ...usage, estimatedCostUsd: 0.2 },
+      ],
+    });
+
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.3, 6);
+    expect(tracker.getSnapshot().costBreakdown?.otherCostUsd).toBeCloseTo(0.3, 6);
+  });
+
+  test("keeps cost unavailable when any known request is unpriced", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const usage = { promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 };
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "nvidia",
+      model: "uncatalogued-model",
+      usage: {
+        promptTokens: 2_000,
+        completionTokens: 200,
+        totalTokens: 2_200,
+        estimatedCostUsd: 0.1,
+      },
+      requestUsages: [{ ...usage, estimatedCostUsd: 0.1 }, usage],
+    });
+
+    expect(tracker.getSnapshot()).toMatchObject({
+      estimatedTotalCostUsd: null,
+      costTrackingAvailable: false,
+    });
+  });
+
   test("stores cached and reasoning token breakdowns without double-charging output", () => {
     const tracker = new SessionCostTracker("session-1");
 
@@ -192,9 +433,6 @@ describe("SessionCostTracker", () => {
     expect(snapshot.costBreakdown?.outputCostUsd).toBeCloseTo(7.5, 6);
     expect(snapshot.byModel[0]?.costBreakdown?.cachedInputCostUsd).toBeCloseTo(0.12, 6);
     expect(snapshot.turns[0]?.costBreakdown?.cacheWriteInputCostUsd).toBeCloseTo(0.375, 6);
-    expect(tracker.formatSummary()).toContain("100.0k cache write");
-    expect(tracker.formatSummary()).toContain("125.0k reasoning output");
-    expect(tracker.formatSummary()).toContain("$0.38 cache write");
   });
 
   test("derives missing spend buckets from legacy persisted usage snapshots", () => {
@@ -246,6 +484,64 @@ describe("SessionCostTracker", () => {
     expect(restored.costBreakdown?.outputCostUsd).toBeCloseTo(0.409617, 6);
     expect(restored.costBreakdown?.otherCostUsd).toBeCloseTo(0, 6);
   });
+
+  test("derives legacy tiered spend from individual turns rather than model totals", () => {
+    const snapshot = createLegacyTieredSnapshot();
+    const restored = SessionCostTracker.fromSnapshot(snapshot).getSnapshot();
+
+    expect(restored.estimatedTotalCostUsd).toBeCloseTo(1.56, 6);
+    expect(restored.costBreakdown).toEqual({
+      inputCostUsd: 1.5,
+      cachedInputCostUsd: 0,
+      cacheWriteInputCostUsd: 0,
+      outputCostUsd: 0.06,
+      otherCostUsd: 0,
+    });
+  });
+
+  test("restores legacy spend buckets after compacting zero-token turns", () => {
+    const tracker = new SessionCostTracker("legacy-compacted-session");
+    for (let index = 0; index < 3; index += 1) {
+      tracker.recordTurn({
+        turnId: `turn-${index + 1}`,
+        provider: "openai",
+        model: "gpt-5.5",
+        usage:
+          index < 2
+            ? { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+            : { promptTokens: 150_000, completionTokens: 1_000, totalTokens: 151_000 },
+      });
+    }
+
+    const snapshot = tracker.getCompactSnapshot(1);
+    const expectedBreakdown = snapshot.costBreakdown;
+    delete snapshot.costBreakdown;
+    for (const summary of snapshot.byModel) delete summary.costBreakdown;
+    for (const entry of snapshot.turns) delete entry.costBreakdown;
+
+    expect(deriveUsageCostBreakdown(snapshot, { resolveMissingPricing: false })).toEqual(
+      expectedBreakdown,
+    );
+    expect(SessionCostTracker.fromSnapshot(snapshot).getSnapshot().costBreakdown).toEqual(
+      expectedBreakdown,
+    );
+  });
+
+  test.each([0, 1])(
+    "preserves legacy tiered spend as unattributed with only %i retained turns",
+    (retainedTurns) => {
+      const snapshot = createLegacyTieredSnapshot();
+      snapshot.turns = snapshot.turns.slice(0, retainedTurns);
+
+      expect(deriveUsageCostBreakdown(snapshot)).toEqual({
+        inputCostUsd: 0,
+        cachedInputCostUsd: 0,
+        cacheWriteInputCostUsd: 0,
+        outputCostUsd: 0,
+        otherCostUsd: snapshot.estimatedTotalCostUsd,
+      });
+    },
+  );
 
   test("derives browser-safe spend buckets from stored turn pricing", () => {
     const legacySnapshot: SessionUsageSnapshot = {
@@ -517,25 +813,18 @@ describe("SessionCostTracker", () => {
     expect(compact.turns.at(-1)?.turnId).toBe("turn-10");
   });
 
-  test("formatSummary avoids Infinity or NaN for zero-dollar thresholds", () => {
+  test.each([0, -1, 0.5])("getCompactSnapshot omits turn history for a limit of %d", (limit) => {
     const tracker = new SessionCostTracker("session-1");
-
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
       model: "gpt-5.2",
-      usage: {
-        promptTokens: 1000,
-        completionTokens: 100,
-        totalTokens: 1100,
-      },
+      usage: { promptTokens: 1_000, completionTokens: 100, totalTokens: 1_100 },
     });
-    tracker.setBudget({ stopAtUsd: 0 });
 
-    const summary = tracker.formatSummary();
-
-    expect(summary).toContain("Hard cap:  $0.00");
-    expect(summary).not.toContain("Infinity%");
-    expect(summary).not.toContain("NaN%");
+    const snapshot = tracker.getCompactSnapshot(limit);
+    expect(snapshot.turns).toEqual([]);
+    expect(snapshot.totalTurns).toBe(1);
+    expect(snapshot.totalTokens).toBe(1_100);
   });
 });

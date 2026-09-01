@@ -5,25 +5,37 @@ import type { SessionContext } from "./SessionContext";
 const AUTO_CHECKPOINT_MIN_INTERVAL_MS = 30_000;
 
 export class SessionBackupController {
+  private activeRestore: Promise<void> | null = null;
+
   constructor(private readonly context: SessionContext) {}
 
   async getSessionBackupState() {
-    await this.ensureSessionBackupInitialized();
+    await this.runInBackupQueue(async () => {
+      await this.ensureSessionBackupInitialized();
+    });
     this.emitSessionBackupState("requested");
     this.context.emitTelemetry("session.backup.state_requested", "ok", {
       sessionId: this.context.id,
     });
   }
 
+  async prepareForTurn(): Promise<void> {
+    if (this.activeRestore) await this.activeRestore.catch(() => {});
+    // Existing checkpoints only read the workspace and must not block another turn.
+    if (!this.getBackupsEnabled() || this.context.state.sessionBackup) return;
+    await this.runInBackupQueue(async () => {
+      if (this.getBackupsEnabled()) await this.ensureSessionBackupInitialized();
+    });
+  }
+
   async createManualSessionCheckpoint() {
-    if (this.context.state.running) {
-      this.context.emitError("busy", "session", "Agent is busy");
-      return;
-    }
+    if (this.rejectIfBusy()) return;
     const startedAt = Date.now();
     try {
       const didCheckpoint = await this.runInBackupQueue(async () => {
+        if (this.rejectIfBusy()) return false;
         await this.ensureSessionBackupInitialized();
+        if (this.rejectIfBusy()) return false;
         if (!this.context.state.sessionBackup) {
           const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
@@ -53,24 +65,26 @@ export class SessionBackupController {
   }
 
   async restoreSessionBackup(checkpointId?: string) {
-    if (this.context.state.running) {
-      this.context.emitError("busy", "session", "Agent is busy");
-      return;
-    }
+    if (this.rejectIfBusy()) return;
 
     const startedAt = Date.now();
     try {
       const didRestore = await this.runInBackupQueue(async () => {
+        if (this.rejectIfBusy()) return false;
         await this.ensureSessionBackupInitialized();
+        if (this.rejectIfBusy()) return false;
         if (!this.context.state.sessionBackup) {
           const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
           return false;
         }
-        if (checkpointId) {
-          await this.context.state.sessionBackup.restoreCheckpoint(checkpointId);
-        } else {
-          await this.context.state.sessionBackup.restoreOriginal();
+        this.activeRestore = checkpointId
+          ? this.context.state.sessionBackup.restoreCheckpoint(checkpointId)
+          : this.context.state.sessionBackup.restoreOriginal();
+        try {
+          await this.activeRestore;
+        } finally {
+          this.activeRestore = null;
         }
         this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
         this.emitSessionBackupState("restore");
@@ -95,15 +109,14 @@ export class SessionBackupController {
   }
 
   async deleteSessionCheckpoint(checkpointId: string) {
-    if (this.context.state.running) {
-      this.context.emitError("busy", "session", "Agent is busy");
-      return;
-    }
+    if (this.rejectIfBusy()) return;
 
     const startedAt = Date.now();
     try {
       const didDelete = await this.runInBackupQueue(async () => {
+        if (this.rejectIfBusy()) return false;
         await this.ensureSessionBackupInitialized();
+        if (this.rejectIfBusy()) return false;
         if (!this.context.state.sessionBackup) {
           const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
@@ -177,15 +190,18 @@ export class SessionBackupController {
   }
 
   async closeSessionBackup() {
-    if (!this.context.state.sessionBackupInit) return;
     try {
-      await this.runInBackupQueue(async () => {
+      const didClose = await this.runInBackupQueue(async () => {
+        if (!this.context.state.sessionBackupInit) return false;
         await this.ensureSessionBackupInitialized();
-        if (!this.context.state.sessionBackup) return;
+        if (!this.context.state.sessionBackup) return false;
         await this.context.state.sessionBackup.close();
         this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
+        return true;
       });
-      this.context.emitTelemetry("session.backup.close", "ok", { sessionId: this.context.id });
+      if (didClose) {
+        this.context.emitTelemetry("session.backup.close", "ok", { sessionId: this.context.id });
+      }
     } catch {
       this.context.emitTelemetry("session.backup.close", "error", { sessionId: this.context.id });
     }
@@ -194,7 +210,7 @@ export class SessionBackupController {
   async syncSessionBackupAvailability() {
     await this.runInBackupQueue(async () => {
       if (!this.getBackupsEnabled()) {
-        this.clearSessionBackupState("disabled");
+        await this.clearSessionBackupState("disabled");
         return;
       }
 
@@ -245,6 +261,12 @@ export class SessionBackupController {
     );
   }
 
+  private rejectIfBusy(): boolean {
+    if (!this.context.state.running) return false;
+    this.context.emitError("busy", "session", "Agent is busy");
+    return true;
+  }
+
   private buildPlaceholderState(status: "initializing" | "disabled") {
     return {
       status,
@@ -264,11 +286,8 @@ export class SessionBackupController {
     return this.context.state.sessionBackupState.failureReason ?? "Session backup is unavailable";
   }
 
-  private clearSessionBackupState(mode: "disabled" | "initializing") {
+  private async clearSessionBackupState(mode: "disabled" | "initializing") {
     const backup = this.context.state.sessionBackup;
-    if (backup) {
-      backup.close().catch(() => {});
-    }
     this.context.state.sessionBackup = null;
     this.context.state.sessionBackupInit = null;
     this.context.state.lastAutoCheckpointAt = 0;
@@ -276,6 +295,16 @@ export class SessionBackupController {
       mode === "disabled"
         ? this.buildPlaceholderState("disabled")
         : this.buildPlaceholderState("initializing");
+    if (backup) {
+      try {
+        await backup.close();
+      } catch (err) {
+        this.context.emitTelemetry("session.backup.close", "error", {
+          sessionId: this.context.id,
+          error: this.context.formatError(err),
+        });
+      }
+    }
   }
 
   private async initializeSessionBackup() {
@@ -296,6 +325,10 @@ export class SessionBackupController {
         workingDirectory: this.context.state.config.workingDirectory,
         homedir: userHome,
       });
+      if (!this.getBackupsEnabled()) {
+        await this.clearSessionBackupState("disabled");
+        return;
+      }
       this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
       this.context.emitTelemetry(
         "session.backup.initialize",
@@ -304,6 +337,10 @@ export class SessionBackupController {
         Date.now() - startedAt,
       );
     } catch (err) {
+      if (!this.getBackupsEnabled()) {
+        await this.clearSessionBackupState("disabled");
+        return;
+      }
       const reason = `session backup initialization failed: ${String(err)}`;
       this.context.state.sessionBackup = null;
       this.context.state.sessionBackupState = {
@@ -327,7 +364,7 @@ export class SessionBackupController {
         this.context.state.sessionBackupState.status !== "disabled" ||
         this.context.state.sessionBackup
       ) {
-        this.clearSessionBackupState("disabled");
+        await this.clearSessionBackupState("disabled");
       }
       return;
     }

@@ -635,57 +635,57 @@ describe("JSON-RPC thread read projector", () => {
     ]);
   });
 
-  test("drops cumulative assistant duplicates that only differ by leading boundary whitespace", () => {
-    const turns = projectThreadTurnsFromJournal([
-      {
-        threadId: "thread-1",
-        seq: 1,
-        ts: "2026-03-22T15:39:39.127Z",
-        eventType: "turn/started",
-        turnId: "turn-1",
-        itemId: null,
-        requestId: null,
-        payload: {
-          threadId: "thread-1",
-          turn: { id: "turn-1", status: "inProgress", items: [] },
+  test.each(["legacy reused raw", "modern distinct"] as const)(
+    "handles leading-whitespace duplicates using %s assistant IDs",
+    (identity) => {
+      const firstId = "agentMessage:turn-1";
+      const messages = [
+        { id: firstId, type: "agentMessage", text: "\n\nFinal answer." },
+        {
+          id: identity === "legacy reused raw" ? firstId : `${firstId}:2`,
+          type: "agentMessage",
+          text: "Final answer.",
         },
-      },
-      {
-        threadId: "thread-1",
-        seq: 2,
-        ts: "2026-03-22T15:39:41.772Z",
-        eventType: "item/completed",
-        turnId: "turn-1",
-        itemId: "assistant-1",
-        requestId: null,
-        payload: {
+      ];
+      const turns = projectThreadTurnsFromJournal([
+        {
           threadId: "thread-1",
+          seq: 1,
+          ts: "2026-03-22T15:39:39.127Z",
+          eventType: "turn/started",
           turnId: "turn-1",
-          item: { id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." },
+          itemId: null,
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress", items: [] },
+          },
         },
-      },
-      {
-        threadId: "thread-1",
-        seq: 3,
-        ts: "2026-03-22T15:39:41.773Z",
-        eventType: "item/completed",
-        turnId: "turn-1",
-        itemId: "assistant-2",
-        requestId: null,
-        payload: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: { id: "assistant-2", type: "agentMessage", text: "Final answer." },
-        },
-      },
-    ] as any);
+        ...messages.flatMap((item, messageIndex) =>
+          ["item/started", "item/completed"].map((eventType, phaseIndex) => ({
+            threadId: "thread-1",
+            seq: 2 + messageIndex * 2 + phaseIndex,
+            ts: "2026-03-22T15:39:41.772Z",
+            eventType,
+            turnId: "turn-1",
+            itemId: item.id,
+            requestId: null,
+            payload: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { ...item, text: eventType === "item/started" ? "" : item.text },
+            },
+          })),
+        ),
+      ]);
 
-    expect(turns).toEqual([
-      {
-        id: "turn-1",
-        status: "inProgress",
-        items: [{ id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." }],
-      },
-    ]);
-  });
+      expect(turns).toEqual([
+        {
+          id: "turn-1",
+          status: "inProgress",
+          items: identity === "legacy reused raw" ? messages.slice(0, 1) : messages,
+        },
+      ]);
+    },
+  );
 });

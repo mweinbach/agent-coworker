@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { canonicalizeSync } from "../platform/paths";
+import { canonicalizeSync, canonicalKey } from "../platform/paths";
 import type { WorkspaceFileChangeEvent } from "../shared/fileVersion";
 import { TRANSCRIPT_REQUEST_BODY_MAX_BYTES } from "../shared/transcriptBatchProtocol";
 import { readCappedFilePreview, readFileChangeVersion } from "../utils/filePreviewRead";
@@ -41,6 +41,11 @@ function normalizeBoundaryPath(targetPath: string): string {
   return canonicalizeSync(path.resolve(targetPath));
 }
 
+function pathIsWithinRoot(root: string, targetPath: string): boolean {
+  const relative = path.relative(root, targetPath);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 function assertPathWithinRoots(roots: string[], targetPath: string, label: string): string {
   const requested = targetPath.trim();
   if (!requested) {
@@ -50,15 +55,65 @@ function assertPathWithinRoots(roots: string[], targetPath: string, label: strin
   const normalizedTarget = normalizeBoundaryPath(requested);
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (
-      normalizedTarget === normalizedRoot ||
-      normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-    ) {
+    if (pathIsWithinRoot(normalizedRoot, normalizedTarget)) {
       return normalizedTarget;
     }
   }
 
   throw new Error(`${label} is outside allowed workspace roots`);
+}
+
+function assertMutationPathWithinRoots(roots: string[], targetPath: string): string {
+  const requested = targetPath.trim();
+  if (!requested) throw new Error("path must not be empty");
+  const resolved = path.resolve(requested);
+  // A rename/remove owns the directory entry, not a final symlink's target.
+  const parent = assertPathWithinRoots(roots, path.dirname(resolved), "path");
+  const entryPath = path.join(parent, path.basename(resolved));
+  if (roots.some((root) => normalizeBoundaryPath(root) === entryPath)) {
+    throw new Error("Cannot rename or trash a workspace root");
+  }
+  return entryPath;
+}
+
+const pendingRenames = new Map<string, Promise<void>>();
+
+async function renameWithoutReplacing(sourcePath: string, destinationPath: string): Promise<void> {
+  if (sourcePath === destinationPath) {
+    await fsp.lstat(sourcePath);
+    return;
+  }
+  const key =
+    canonicalKey(path.dirname(destinationPath)) +
+    path.sep +
+    path.basename(destinationPath).toLowerCase();
+  const previous = pendingRenames.get(key) ?? Promise.resolve();
+  const operation = previous.then(async () => {
+    try {
+      await fsp.lstat(destinationPath);
+      const sourceName = path.basename(sourcePath);
+      const destinationName = path.basename(destinationPath);
+      const caseOnlyRename =
+        sourceName.toLowerCase() === destinationName.toLowerCase() &&
+        !(await fsp.readdir(path.dirname(destinationPath))).includes(destinationName);
+      if (!caseOnlyRename) {
+        throw Object.assign(new Error("An entry with that name already exists"), { status: 409 });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await fsp.rename(sourcePath, destinationPath);
+  });
+  const settled = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingRenames.set(key, settled);
+  try {
+    await operation;
+  } finally {
+    if (pendingRenames.get(key) === settled) pendingRenames.delete(key);
+  }
 }
 
 function assertValidFileName(name: string, label: string): void {
@@ -144,14 +199,10 @@ async function readWorkspaceFileText(
 }
 
 function resolveContainingRoot(roots: string[], safePath: string): string {
-  const normalizedTarget = normalizeBoundaryPath(safePath);
   let bestMatch: string | null = null;
   for (const root of roots) {
     const normalizedRoot = normalizeBoundaryPath(root);
-    if (
-      normalizedTarget !== normalizedRoot &&
-      !normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-    ) {
+    if (!pathIsWithinRoot(normalizedRoot, safePath)) {
       continue;
     }
     if (!bestMatch || normalizedRoot.length > bestMatch.length) {
@@ -164,35 +215,33 @@ function resolveContainingRoot(roots: string[], safePath: string): string {
   return bestMatch;
 }
 
-function uniqueTrashDestination(trashDir: string, baseName: string): Promise<string> {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const candidate = path.join(trashDir, `${stamp}-${baseName}`);
-  return Promise.resolve(candidate);
-}
-
 async function movePathToWorkspaceTrash(
   workspaceRoots: string[],
   requestedPath: string,
 ): Promise<void> {
-  const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+  const safePath = assertMutationPathWithinRoots(workspaceRoots, requestedPath);
   const containingRoot = resolveContainingRoot(workspaceRoots, safePath);
   const trashDir = path.join(containingRoot, ".cowork-trash");
+  if (safePath === trashDir || pathIsWithinRoot(trashDir, safePath)) {
+    throw new Error("Path is already in the workspace trash");
+  }
+  assertPathWithinRoots([containingRoot], trashDir, "trash directory");
   await fsp.mkdir(trashDir, { recursive: true });
-
-  const destinationBase = await uniqueTrashDestination(trashDir, path.basename(safePath));
-  let destination = destinationBase;
-  let suffix = 0;
-  while (true) {
+  if ((await fsp.lstat(trashDir)).isSymbolicLink()) {
+    throw new Error("The workspace trash directory must not be a symlink");
+  }
+  assertPathWithinRoots([containingRoot], trashDir, "trash directory");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const destinationBase = path.join(trashDir, `${stamp}-${path.basename(safePath)}`);
+  for (let suffix = 0; ; suffix += 1) {
+    const destination = suffix === 0 ? destinationBase : `${destinationBase}-${suffix}`;
     try {
-      await fsp.access(destination);
-      suffix += 1;
-      destination = `${destinationBase}-${suffix}`;
-    } catch {
-      break;
+      await renameWithoutReplacing(safePath, destination);
+      return;
+    } catch (error) {
+      if ((error as { status?: number }).status !== 409) throw error;
     }
   }
-
-  await fsp.rename(safePath, destination);
 }
 
 function escapeHtml(value: string): string {
@@ -616,10 +665,10 @@ export async function handleWebDesktopRoute(
       const maxBytes = Number.isFinite(maxBytesRaw)
         ? Math.max(1, Math.min(DEFAULT_PREVIEW_MAX_BYTES, Math.floor(maxBytesRaw)))
         : DEFAULT_PREVIEW_MAX_BYTES;
-      const preview = await readCappedFilePreview(
-        assertPathWithinRoots(workspaceRoots, requestedPath, "path"),
-        maxBytes,
-      );
+      const authorizedPath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+      const preview = await readCappedFilePreview(authorizedPath, maxBytes, {
+        expectedCanonicalPath: authorizedPath,
+      });
       const previewBuffer = preview.bytes.buffer.slice(
         preview.bytes.byteOffset,
         preview.bytes.byteOffset + preview.bytes.byteLength,
@@ -682,10 +731,9 @@ export async function handleWebDesktopRoute(
       const requestedPath = readRequiredStringField(body, "path");
       const newName = readRequiredStringField(body, "newName");
       assertValidFileName(newName, "newName");
-      const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+      const safePath = assertMutationPathWithinRoots(workspaceRoots, requestedPath);
       const targetPath = path.join(path.dirname(safePath), newName);
-      assertPathWithinRoots(workspaceRoots, targetPath, "path");
-      await fsp.rename(safePath, targetPath);
+      await renameWithoutReplacing(safePath, targetPath);
       notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
         kind: "deleted",
         path: safePath,
@@ -695,7 +743,9 @@ export async function handleWebDesktopRoute(
         notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
           kind: "changed",
           path: targetPath,
-          version: await readFileChangeVersion(targetPath),
+          version: await readFileChangeVersion(
+            assertPathWithinRoots(workspaceRoots, targetPath, "path"),
+          ),
         });
       } catch {
         // The watcher provides a second invalidation path if metadata cannot be read here.
@@ -706,7 +756,7 @@ export async function handleWebDesktopRoute(
     if (url.pathname === "/cowork/fs/trash" && req.method === "POST") {
       const body = await readJsonBody(req);
       const requestedPath = readRequiredStringField(body, "path");
-      const safePath = assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+      const safePath = assertMutationPathWithinRoots(workspaceRoots, requestedPath);
       await movePathToWorkspaceTrash(workspaceRoots, safePath);
       notifyWorkspaceFileChanged(opts.onWorkspaceFileChanged, {
         kind: "deleted",

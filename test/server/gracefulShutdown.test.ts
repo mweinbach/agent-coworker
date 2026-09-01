@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import { once } from "node:events";
+import { PassThrough } from "node:stream";
 
-import { createGracefulShutdown } from "../../src/server/runtime/gracefulShutdown";
+import {
+  createGracefulShutdown,
+  registerParentManagedShutdown,
+} from "../../src/server/runtime/gracefulShutdown";
 
 describe("graceful server shutdown", () => {
   test("does not exit before server persistence and analytics have drained", async () => {
@@ -100,5 +105,155 @@ describe("graceful server shutdown", () => {
     releaseServer();
     await pending;
     expect(exits).toEqual([0]);
+  });
+});
+
+describe("parent-managed server shutdown", () => {
+  test.each([undefined, "0", "true"])(
+    "does not consume stdin without an exact opt-in flag (%s)",
+    (flag) => {
+      const stdin = new PassThrough();
+      const onParentExit = mock(() => {});
+      const dispose = registerParentManagedShutdown({
+        env: { COWORK_DESKTOP_PARENT_MANAGED: flag },
+        stdin,
+        onParentExit,
+      });
+
+      expect(stdin.readableFlowing).toBeNull();
+      expect(stdin.listenerCount("end")).toBe(0);
+      expect(stdin.listenerCount("close")).toBe(0);
+      expect(stdin.listenerCount("error")).toBe(0);
+      stdin.write("standalone input");
+      expect(stdin.read()?.toString()).toBe("standalone input");
+      dispose();
+      stdin.destroy();
+      expect(onParentExit).not.toHaveBeenCalled();
+    },
+  );
+
+  test("EOF joins the existing graceful shutdown once and waits for its drain", async () => {
+    const stdin = new PassThrough();
+    const env = { COWORK_DESKTOP_PARENT_MANAGED: "1" };
+    const stopStarted = Promise.withResolvers<void>();
+    const drain = Promise.withResolvers<void>();
+    const stopServer = mock(async () => {
+      stopStarted.resolve();
+      await drain.promise;
+    });
+    const shutdownAnalytics = mock(async () => {});
+    const exit = mock((_code: number) => {});
+    const shutdown = createGracefulShutdown({ stopServer, shutdownAnalytics, exit });
+    const onParentExit = mock(() => {
+      void shutdown();
+    });
+    const dispose = registerParentManagedShutdown({ env, stdin, onParentExit });
+
+    try {
+      expect(env.COWORK_DESKTOP_PARENT_MANAGED).toBeUndefined();
+      stdin.end();
+      await stopStarted.promise;
+      stdin.emit("close");
+      stdin.emit("end");
+      const signalShutdown = shutdown();
+
+      expect(onParentExit).toHaveBeenCalledTimes(1);
+      expect(stopServer).toHaveBeenCalledTimes(1);
+      expect(shutdownAnalytics).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+      expect(stdin.listenerCount("end")).toBe(0);
+      expect(stdin.listenerCount("close")).toBe(0);
+      expect(stdin.listenerCount("error")).toBe(0);
+
+      drain.resolve();
+      await signalShutdown;
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    } finally {
+      drain.resolve();
+      await shutdown();
+      dispose();
+      stdin.destroy();
+    }
+  });
+
+  test("captures parent EOF before the server finishes starting", async () => {
+    const stdin = new PassThrough();
+    const parent = new AbortController();
+    const dispose = registerParentManagedShutdown({
+      env: { COWORK_DESKTOP_PARENT_MANAGED: "1" },
+      stdin,
+      onParentExit: () => parent.abort(),
+    });
+    const ended = once(stdin, "end");
+    stdin.end();
+    await ended;
+
+    expect(parent.signal.aborted).toBe(true);
+    dispose();
+  });
+
+  test.each(["ended", "destroyed"] as const)(
+    "detects a channel already %s before registration",
+    async (state) => {
+      const stdin = new PassThrough();
+      if (state === "ended") {
+        const ended = once(stdin, "end");
+        stdin.resume();
+        stdin.end();
+        await ended;
+      } else {
+        stdin.destroy();
+      }
+      const onParentExit = mock(() => {});
+      const dispose = registerParentManagedShutdown({
+        env: { COWORK_DESKTOP_PARENT_MANAGED: "1" },
+        stdin,
+        onParentExit,
+      });
+
+      expect(onParentExit).toHaveBeenCalledTimes(1);
+      expect(stdin.listenerCount("end")).toBe(0);
+      expect(stdin.listenerCount("close")).toBe(0);
+      expect(stdin.listenerCount("error")).toBe(0);
+      dispose();
+      stdin.destroy();
+    },
+  );
+
+  test.each(["close", "error"] as const)("channel %s requests shutdown once", (event) => {
+    const stdin = new PassThrough();
+    const onParentExit = mock(() => {});
+    const dispose = registerParentManagedShutdown({
+      env: { COWORK_DESKTOP_PARENT_MANAGED: "1" },
+      stdin,
+      onParentExit,
+    });
+
+    stdin.emit(event, new Error("parent channel closed"));
+    stdin.emit("end");
+    expect(onParentExit).toHaveBeenCalledTimes(1);
+    dispose();
+    stdin.destroy();
+  });
+
+  test("disposal removes listeners and relinquishes stdin without shutting down", () => {
+    const stdin = new PassThrough();
+    const onParentExit = mock(() => {});
+    const dispose = registerParentManagedShutdown({
+      env: { COWORK_DESKTOP_PARENT_MANAGED: "1" },
+      stdin,
+      onParentExit,
+    });
+
+    dispose();
+    dispose();
+    expect(stdin.readableFlowing).toBe(false);
+    expect(stdin.listenerCount("end")).toBe(0);
+    expect(stdin.listenerCount("close")).toBe(0);
+    expect(stdin.listenerCount("error")).toBe(0);
+    stdin.emit("end");
+    stdin.destroy();
+    expect(onParentExit).not.toHaveBeenCalled();
   });
 });

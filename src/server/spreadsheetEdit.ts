@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -16,6 +17,7 @@ import {
 } from "./spreadsheetPreview";
 
 const MAX_BATCH_PATCH_OPERATIONS = 50_000;
+const FILE_CHANGED_MESSAGE = "Spreadsheet file changed on disk; reload before saving.";
 
 /**
  * Apply an ordered batch of cell/format operations as a single atomic
@@ -90,21 +92,24 @@ function executeOps(
 ): Promise<OpsOutcome> {
   return withFileLock(resolvedPath, async () => {
     try {
+      const sourceStat = await fs.stat(resolvedPath);
       if (expectedFileVersion) {
-        const currentVersion = spreadsheetFileVersionFromStat(await fs.stat(resolvedPath));
+        const currentVersion = spreadsheetFileVersionFromStat(sourceStat);
         if (currentVersion.fingerprint !== expectedFileVersion.fingerprint) {
           return {
             ok: false,
             index: null,
             error: {
               kind: "write_error",
-              message: "Spreadsheet file changed on disk; reload before saving.",
+              message: FILE_CHANGED_MESSAGE,
             },
           };
         }
       }
-      if (ext === ".csv") return await runCsvOps(resolvedPath, operations, writeFileAtomic);
-      if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, writeFileAtomic);
+      const persist = (filePath: string, data: Buffer | string) =>
+        writeFileAtomic(filePath, data, sourceStat);
+      if (ext === ".csv") return await runCsvOps(resolvedPath, operations, persist);
+      if (ext === ".xlsx") return await runXlsxOps(resolvedPath, operations, persist);
       const firstType = operations[0]?.type;
       const message =
         firstType === "format"
@@ -126,11 +131,29 @@ function executeOps(
   });
 }
 
-async function writeFileAtomic(filePath: string, data: Buffer | string): Promise<void> {
+async function writeFileAtomic(
+  filePath: string,
+  data: Buffer | string,
+  sourceStat: Stats,
+): Promise<void> {
   const dir = path.dirname(filePath);
   const tmp = path.join(dir, `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   try {
     await fs.writeFile(tmp, data);
+    // Other editors do not share our per-path lock. Check the source snapshot
+    // after serialization and temp-file I/O, immediately before replacing it.
+    // Keep timestamp precision here: client fingerprints round milliseconds.
+    const currentStat = await fs.lstat(filePath);
+    if (
+      !currentStat.isFile() ||
+      currentStat.dev !== sourceStat.dev ||
+      currentStat.ino !== sourceStat.ino ||
+      currentStat.size !== sourceStat.size ||
+      currentStat.mtimeMs !== sourceStat.mtimeMs ||
+      currentStat.ctimeMs !== sourceStat.ctimeMs
+    ) {
+      throw new Error(FILE_CHANGED_MESSAGE);
+    }
     await fs.rename(tmp, filePath);
   } catch (error) {
     await fs.rm(tmp, { force: true }).catch(() => {});

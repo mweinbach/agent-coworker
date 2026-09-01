@@ -560,24 +560,27 @@ describe("JSON-RPC request router", () => {
     expect(harness.subscribed).toEqual(["thread-1", "thread-2"]);
   });
 
-  test("unknown methods return methodNotFound from the router", async () => {
-    const harness = createRouterHarness();
+  test.each(["cowork/unknown", "toString", "constructor", "__proto__", "hasOwnProperty"])(
+    "unknown method %s returns methodNotFound from the router",
+    async (method) => {
+      const harness = createRouterHarness();
 
-    await harness.router({} as any, {
-      id: 7,
-      method: "cowork/unknown",
-    });
-
-    expect(harness.sent).toEqual([
-      {
+      await harness.router({} as any, {
         id: 7,
-        error: {
-          code: JSONRPC_ERROR_CODES.methodNotFound,
-          message: "Unknown method: cowork/unknown",
+        method,
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 7,
+          error: {
+            code: JSONRPC_ERROR_CODES.methodNotFound,
+            message: `Unknown method: ${method}`,
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   test("task routes are unregistered (methodNotFound) when the tasks feature flag is off", async () => {
     const harness = createRouterHarness();

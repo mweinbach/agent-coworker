@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { UserMessageAdmission } from "../../src/server/session/TurnExecutionManager";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -57,12 +58,24 @@ describe("AgentSession", () => {
       expect(() => session.reset()).not.toThrow();
     });
 
-    test("dispose then sendUserMessage works (running is false after dispose)", async () => {
+    test("rejects turn admission after permanent disposal", async () => {
       const { session } = makeSession();
+      const onAdmission = mock((_outcome: UserMessageAdmission) => {});
       session.dispose("test");
 
-      await session.sendUserMessage("after dispose");
-      expect(mockRunTurn).toHaveBeenCalledTimes(1);
+      await session.sendUserMessage(
+        "after dispose",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { onAdmission },
+      );
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(onAdmission).toHaveBeenCalledTimes(1);
+      expect(onAdmission.mock.calls[0]?.[0]).toMatchObject({ status: "rejected" });
+      expect(session.messageCount).toBe(0);
     });
   });
 

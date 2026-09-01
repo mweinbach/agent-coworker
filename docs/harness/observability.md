@@ -20,14 +20,17 @@ orphaned, corrupt, abandoned-active, and leaked staging directories).
 
 ## Config Resolution
 
-The harness resolves observability from the same layered config path as the rest of `AgentConfig`:
+Observability uses trusted configuration for destinations, credentials, and permission to collect data:
 
 1. Environment variables
-2. Project `.cowork/config.json`
-3. User `~/.cowork/config/config.json`
-4. Built-in `config/defaults.json`
+2. User `~/.cowork/config/config.json`
+3. Built-in `config/defaults.json`
 
-`AGENT_OBSERVABILITY_ENABLED` overrides the top-level `observabilityEnabled` boolean. Langfuse connection fields can come from environment variables or the `observability` config object.
+Project `.cowork/config.json` cannot enable observability or payload recording, or override the Langfuse destination or credentials. It can set `observabilityEnabled`, `observability.recordInputs`, or `observability.recordOutputs` to `false` to restrict inherited user settings. Explicit environment values still take precedence. Project `observability.tracingEnvironment` and `observability.release` labels retain normal project-over-user precedence.
+
+`AGENT_OBSERVABILITY_ENABLED` overrides the top-level user `observabilityEnabled` boolean. Langfuse connection fields can come from environment variables or the user `observability` config object. Move any previous project-only opt-in, endpoint, or credentials into the user config or environment; opening a workspace must not grant telemetry access.
+
+An explicit observability toggle through session settings persists the user's choice in user config and removes a previous project-level toggle, so the authorized change survives restart.
 
 Public/default packaged builds keep `observabilityEnabled` off unless the desktop Privacy & Telemetry setting explicitly enables AI trace diagnostics. Source/dev harness runs can opt in with `AGENT_OBSERVABILITY_ENABLED=true` plus Langfuse credentials.
 
@@ -38,8 +41,9 @@ Public/default packaged builds keep `observabilityEnabled` off unless the deskto
   - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
 - `otelEndpoint` is derived from the resolved base URL; it is not configured independently.
 - Runtime model calls are metadata-only by default: spans include model/provider/usage/timing metadata, but `recordInputs=false` and `recordOutputs=false`.
-- Full LLM I/O capture is only enabled when `recordInputs` and/or `recordOutputs` are explicitly true through env/config. In the desktop app, this only happens when the user enables both AI trace diagnostics and the full-payload toggle.
+- Full LLM I/O capture is only enabled when `recordInputs` and/or `recordOutputs` are explicitly true through environment variables or user config. In the desktop app, this only happens when the user enables both AI trace diagnostics and the full-payload toggle.
 - Metadata-only spans redact payload-like attributes such as prompts, responses, commands, stdout/stderr, transcripts, file paths, and uploaded file names. Secret-like attributes are always redacted.
+- Failed model calls retain bounded error type/code metadata, but omit free-form exception messages and stacks unless both input and output recording are enabled. Even then, exception details pass through credential and local-path redaction; raw exception objects are never exported.
 - When telemetry is enabled but credentials are missing/misconfigured, the runtime degrades observability health, emits warnings, and continues without failing turns/runs.
 - Runtime/export failures are non-fatal and surfaced via observability health status.
 
@@ -86,5 +90,7 @@ Set `AGENT_OBSERVABILITY_RECORD_PAYLOADS=true` only for runs where prompt/respon
 - `harness.run.failed`
 
 Run metadata (`run_meta.json`) includes `observabilityEnabled` plus an `observability` summary with `startHealth` and `endHealth` snapshots.
+
+Raw-loop trace files intentionally contain the scenario's model inputs and outputs. Their configuration snapshots redact credential fields and credential-bearing text regardless of payload-recording settings, without changing the configuration used to run the model.
 
 The WebSocket-facing runtime status is documented separately in [`docs/websocket-protocol.md`](../websocket-protocol.md) under `observability_status`.

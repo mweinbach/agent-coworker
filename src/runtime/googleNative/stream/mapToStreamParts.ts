@@ -1,6 +1,7 @@
 import { asNonEmptyString, asRecord, safeJsonStringify } from "../messageToInput";
 import {
   buildNativeGoogleToolResultOutput,
+  finalizeGoogleToolArguments,
   isNativeGoogleToolCallContentType,
 } from "../nativeTools";
 import type { AssistantContentBlock, ProviderToolCallState } from "./types";
@@ -135,6 +136,9 @@ export function mapGoogleEventToStreamParts(
   }
 
   const block = contentBlocks.get(index);
+  if (block?.type === "toolCall" || block?.type === "providerToolCall") {
+    finalizeGoogleToolArguments(block);
+  }
   if (block?.type === "text") {
     return [
       {

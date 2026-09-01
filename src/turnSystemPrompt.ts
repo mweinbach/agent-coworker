@@ -5,15 +5,6 @@ import type { TaskContextSnapshot } from "./shared/tasks";
 import type { AgentConfig, HarnessContextState, ReferencedPluginContext } from "./types";
 import { renderActiveWorkspaceContextSection } from "./workspace/context";
 
-const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
-
-function stripStaticMcpNamespacingGuidance(system: string): string {
-  return system
-    .split("\n")
-    .filter((line) => !line.includes(MCP_NAMESPACING_TOKEN))
-    .join("\n");
-}
-
 export function buildTurnSystemPrompt(
   system: string,
   config: AgentConfig | null | undefined,
@@ -22,7 +13,7 @@ export function buildTurnSystemPrompt(
   referencedPlugins?: ReferencedPluginContext[] | null,
   taskContext?: TaskContextSnapshot | null,
 ): string {
-  const sections = [stripStaticMcpNamespacingGuidance(system)];
+  const sections = [system];
 
   const workspaceSection = renderActiveWorkspaceContextSection(config);
   if (workspaceSection) {

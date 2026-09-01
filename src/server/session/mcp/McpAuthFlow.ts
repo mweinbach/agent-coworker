@@ -81,23 +81,23 @@ export class McpAuthFlow {
   async authorize(nameRaw: string, lookup?: McpServerLookup | MCPServerSource) {
     if (!this.context.guardBusy()) return;
 
-    const server = await this.resolver.resolveByName(nameRaw, lookup);
-    if (!server) return;
-
-    if (server.auth?.type !== "oauth") {
-      this.context.emit({
-        type: "mcp_server_auth_result",
-        sessionId: this.context.id,
-        name: server.name,
-        ok: false,
-        mode: "missing",
-        message: `MCP server "${server.name}" does not support OAuth authorization.`,
-      });
-      return;
-    }
-
     this.context.state.connecting = true;
     try {
+      const server = await this.resolver.resolveByName(nameRaw, lookup);
+      if (!server) return;
+
+      if (server.auth?.type !== "oauth") {
+        this.context.emit({
+          type: "mcp_server_auth_result",
+          sessionId: this.context.id,
+          name: server.name,
+          ok: false,
+          mode: "missing",
+          message: `MCP server "${server.name}" does not support OAuth authorization.`,
+        });
+        return;
+      }
+
       const storedClientState = await readMCPServerOAuthClientInformation({
         config: this.context.state.config,
         server,
@@ -132,7 +132,7 @@ export class McpAuthFlow {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,
-        name: server.name,
+        name: nameRaw.trim(),
         ok: false,
         mode: "error",
         message: `MCP OAuth authorization failed: ${String(err)}`,
@@ -149,23 +149,23 @@ export class McpAuthFlow {
   ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw, lookup);
-    if (!server) return null;
-
-    if (server.auth?.type !== "oauth") {
-      this.context.emit({
-        type: "mcp_server_auth_result",
-        sessionId: this.context.id,
-        name: server.name,
-        ok: false,
-        mode: "missing",
-        message: `MCP server "${server.name}" does not support OAuth authorization.`,
-      });
-      return null;
-    }
-
     this.context.state.connecting = true;
     try {
+      const server = await this.resolver.resolveByName(nameRaw, lookup);
+      if (!server) return null;
+
+      if (server.auth?.type !== "oauth") {
+        this.context.emit({
+          type: "mcp_server_auth_result",
+          sessionId: this.context.id,
+          name: server.name,
+          ok: false,
+          mode: "missing",
+          message: `MCP server "${server.name}" does not support OAuth authorization.`,
+        });
+        return null;
+      }
+
       const providedCode = codeRaw?.trim() || undefined;
       if (providedCode) {
         this.cancelAutoOAuthCompletion(server);
@@ -209,7 +209,7 @@ export class McpAuthFlow {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,
-        name: server.name,
+        name: nameRaw.trim(),
         ok: false,
         mode: "error",
         message: `MCP OAuth callback failed: ${String(err)}`,
@@ -332,6 +332,7 @@ export class McpAuthFlow {
       server,
       tokens: exchange.tokens,
       clearPending: true,
+      expectedChallengeId: pending.challengeId,
     });
     this.cancelAutoOAuthCompletion(server);
     this.context.emit({
@@ -353,23 +354,23 @@ export class McpAuthFlow {
   ): Promise<McpServerRef | null> {
     if (!this.context.guardBusy()) return null;
 
-    const server = await this.resolver.resolveByName(nameRaw, lookup);
-    if (!server) return null;
-
-    if (server.auth?.type !== "api_key") {
-      this.context.emit({
-        type: "mcp_server_auth_result",
-        sessionId: this.context.id,
-        name: server.name,
-        ok: false,
-        mode: "missing",
-        message: `MCP server "${server.name}" is not configured for API key auth.`,
-      });
-      return null;
-    }
-
     this.context.state.connecting = true;
     try {
+      const server = await this.resolver.resolveByName(nameRaw, lookup);
+      if (!server) return null;
+
+      if (server.auth?.type !== "api_key") {
+        this.context.emit({
+          type: "mcp_server_auth_result",
+          sessionId: this.context.id,
+          name: server.name,
+          ok: false,
+          mode: "missing",
+          message: `MCP server "${server.name}" is not configured for API key auth.`,
+        });
+        return null;
+      }
+
       const result = await setMCPServerApiKeyCredential({
         config: this.context.state.config,
         server,
@@ -390,7 +391,7 @@ export class McpAuthFlow {
       this.context.emit({
         type: "mcp_server_auth_result",
         sessionId: this.context.id,
-        name: server.name,
+        name: nameRaw.trim(),
         ok: false,
         mode: "error",
         message: `Setting MCP API key failed: ${String(err)}`,

@@ -126,6 +126,8 @@ export function createThreadJournalNotificationProjector(
   });
 
   return {
+    captureSeed: projection.captureSeed,
+    flush: projection.flush,
     handle(event: SessionEvent) {
       if (event.sessionId !== opts.threadId) return;
       if (event.type === "interaction_resolved") {

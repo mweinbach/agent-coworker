@@ -50,8 +50,6 @@ type JsonRpcPendingPromptEvent =
   | Extract<SessionEvent, { type: "approval" }>;
 
 type JsonRpcThreadSubscriptionOptions = {
-  initialActiveTurnId?: string | null;
-  initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
   pendingPromptEvents?: ReadonlyArray<JsonRpcPendingPromptEvent>;
   skipPendingPromptRequestIds?: ReadonlySet<string>;
@@ -130,6 +128,7 @@ export interface JsonRpcRouteContext {
   };
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;
+    flushProjection?(threadId: string): void;
     waitForIdle(threadId: string): Promise<void>;
     list(
       threadId: string,

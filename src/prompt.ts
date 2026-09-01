@@ -14,9 +14,10 @@ import { promptGuidance as shellPromptGuidance } from "./platform/shell";
 import { loadProjectInstructionsSection } from "./projectInstructions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import {
-  getProviderCatalog,
   type ProviderCatalogModelEntry,
   type ProviderCatalogPayload,
+  type ProviderCatalogSnapshot,
+  readProviderCatalogSnapshot,
 } from "./providers/connectionCatalog";
 import {
   formatAgentProfilePromptSummaries,
@@ -94,16 +95,10 @@ async function appendWorkspaceContextBlocks(
   return blocks.join("\n\n");
 }
 
-async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
-    allowPlaceholder: true,
-    providerOptions: config.providerOptions,
-    source: "model",
-    // Resolve against the session's auth home so a configured custom
-    // cross-registry id is accepted during prompt loading instead of aborting.
-    home: resolveAuthHomeDir(config),
-    log: (line) => console.warn(line),
-  });
+async function resolveSystemTemplatePath(
+  config: AgentConfig,
+  modelMetadata: ResolvedModelMetadata,
+): Promise<string> {
   const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
   try {
     await fs.access(modelSystemPath);
@@ -223,8 +218,8 @@ function renderLocalWebToolProviderPrompt(prompt: string, config: AgentConfig): 
   const apiKeyEnv = localProvider === "parallel" ? "PARALLEL_API_KEY" : "EXA_API_KEY";
   const credentialGuidance = `- For local webSearch, this workspace uses ${providerName}. If credentials are missing, ask the user to save a ${providerName} API key in Providers > Tool Providers or set \`${apiKeyEnv}\`.`;
   const exaCredentialGuidancePatterns = [
-    /^- For the Google provider in this app, webSearch is Exa-backed\. If credentials are missing, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
-    /^- For the Google provider in this app, webSearch uses Exa\. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+    /^(?:- )?For the Google provider in this app, webSearch is Exa-backed\. If credentials are missing, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
+    /^(?:- )?For the Google provider in this app, webSearch uses Exa\. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings \(Google -> Exa API key\) or set `EXA_API_KEY`\.$/gm,
   ];
   let out = prompt;
   for (const pattern of exaCredentialGuidancePatterns) {
@@ -282,10 +277,12 @@ const SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER = "{{spawnAgentToolSection}}";
 const SPAWN_AGENT_XML_SECTION_PLACEHOLDER = "{{spawnAgentXmlSection}}";
 const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER = "{{spawnAgentPromptBody}}";
 
+type PromptProviderCatalog = ProviderCatalogPayload | ProviderCatalogSnapshot;
+
 export function buildSpawnAgentPromptBody(
   config: AgentConfig,
   profileLines: readonly string[] = [],
-  providerCatalog?: ProviderCatalogPayload,
+  providerCatalog?: PromptProviderCatalog,
 ): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   // Resolve custom cross-registry ids against the session's auth home so the
@@ -394,6 +391,12 @@ export function buildSpawnAgentPromptBody(
     providerSupportsUserFacingModels
       ? `- If you omit \`model\`, the child stays on **${currentModel.displayName}** (\`${currentModel.id}\`).`
       : "- If you omit `model`, the child stays on the session's current provider/model.",
+    ...(providerCatalog && "configured" in providerCatalog
+      ? [
+          "",
+          "Model candidates above come from saved settings and cached discovery. Availability is checked when spawning; configuration is not proof of a live connection.",
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -422,20 +425,22 @@ function formatPromptModelLine(
 
 function buildAllowedCrossProviderModelLines(
   config: AgentConfig,
-  providerCatalog: ProviderCatalogPayload | undefined,
+  providerCatalog: PromptProviderCatalog | undefined,
   fallbackLines: readonly string[],
 ): string[] {
   if (config.childModelRoutingMode !== "cross-provider-allowlist") return [];
   if (!providerCatalog) return [...fallbackLines];
 
-  const connected = new Set(providerCatalog.connected);
+  const available = new Set(
+    "configured" in providerCatalog ? providerCatalog.configured : providerCatalog.connected,
+  );
   const lines: string[] = [];
   for (const ref of config.allowedChildModelRefs ?? []) {
     try {
       const parsed = parseChildModelRef(ref, config.provider, "child target", {
         home: resolveAuthHomeDir(config),
       });
-      if (parsed.provider === config.provider || !connected.has(parsed.provider)) continue;
+      if (parsed.provider === config.provider || !available.has(parsed.provider)) continue;
       const entry = providerCatalog.all.find((candidate) => candidate.id === parsed.provider);
       const model = entry?.models.find(
         (candidate) => candidate.id === parsed.modelId && candidate.enabled !== false,
@@ -458,7 +463,7 @@ function buildAllowedCrossProviderModelLines(
 function buildSpawnAgentPromptSections(
   config: AgentConfig,
   profileLines: readonly string[] = [],
-  providerCatalog?: ProviderCatalogPayload,
+  providerCatalog?: PromptProviderCatalog,
 ): {
   body: string;
   markdownSection: string;
@@ -478,7 +483,7 @@ function renderSpawnAgentSpecificPrompt(
   prompt: string,
   config: AgentConfig,
   profileLines: readonly string[] = [],
-  providerCatalog?: ProviderCatalogPayload,
+  providerCatalog?: PromptProviderCatalog,
 ): string {
   const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(
     config,
@@ -650,22 +655,6 @@ function buildShellExecutionPolicySection(): string {
   return ["## Shell Execution Policy", "", shellPromptGuidance()].join("\n");
 }
 
-async function _loadHotCache(config: AgentConfig): Promise<string> {
-  const candidates = [
-    path.join(config.projectCoworkDir, "AGENT.md"),
-    path.join(config.userCoworkDir, "AGENT.md"),
-  ];
-
-  for (const p of candidates) {
-    try {
-      return await Bun.file(p).text();
-    } catch {
-      // ignore
-    }
-  }
-  return "";
-}
-
 /** Result of loading a system prompt, including discovered skill metadata for tool descriptions. */
 export interface SystemPromptResult {
   prompt: string;
@@ -686,18 +675,19 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     home: resolveAuthHomeDir(config),
     log: (line) => console.warn(line),
   });
-  const systemPath = await resolveSystemTemplatePath(config);
-  let prompt = await loadPromptTemplate(systemPath);
-
-  const discoveredSkills = await discoverSkillsForConfig(config);
-  const agentProfilePromptLines = await readAgentProfilePromptLines(config);
-  const providerCatalog = await getProviderCatalog({
-    homedir: resolveAuthHomeDir(config),
-    providerOptions: config.providerOptions,
-  }).catch((error) => {
-    console.warn(`[prompt] Failed to load provider catalog: ${String(error)}`);
-    return undefined;
-  });
+  const [template, discoveredSkills, agentProfilePromptLines, providerCatalog] = await Promise.all([
+    resolveSystemTemplatePath(config, supportedModel).then(loadPromptTemplate),
+    discoverSkillsForConfig(config),
+    readAgentProfilePromptLines(config),
+    readProviderCatalogSnapshot({
+      homedir: resolveAuthHomeDir(config),
+      providerOptions: config.providerOptions,
+    }).catch((error) => {
+      console.warn(`[prompt] Failed to load provider catalog: ${String(error)}`);
+      return undefined;
+    }),
+  ]);
+  let prompt = template;
   const skills = discoveredSkills;
 
   // Build dynamic skill-related template variables from discovered skills.

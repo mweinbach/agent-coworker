@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
-import type { PersistedExternalConversationImport } from "../../import/conversations/types";
+import type {
+  ConversationImportPersistResult,
+  PersistedExternalConversationImport,
+} from "../../import/conversations/types";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import { type SessionSnapshot, sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import {
@@ -12,6 +15,7 @@ import type { ModelMessage } from "../../types";
 import { isProviderName } from "../../types";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import type {
+  PersistedExternalConversationImportMutation,
   PersistedModelStreamChunk,
   PersistedSessionMutation,
   PersistedSessionRecord,
@@ -201,9 +205,43 @@ export class SessionDbRepository {
     );
   }
 
+  listSessionTreeIds(sessionId: string): string[] {
+    const rows = this.db
+      .query<{ session_id: string }, [string]>(
+        sql([
+          "WITH RECURSIVE session_tree(session_id) AS (",
+          "  SELECT ?",
+          "  UNION",
+          "  SELECT sessions.session_id FROM sessions",
+          "  JOIN session_tree ON sessions.parent_session_id = session_tree.session_id",
+          ")",
+          "SELECT session_id FROM session_tree",
+        ]),
+      )
+      .all(sessionId);
+    return rows.map((row) => row.session_id);
+  }
+
   deleteSession(sessionId: string): void {
-    this.db.query("DELETE FROM sessions WHERE parent_session_id = ?").run(sessionId);
-    this.db.query("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+    this.db.transaction(() => {
+      const sessionIds = this.listSessionTreeIds(sessionId);
+      const deleteJournal = this.db.query("DELETE FROM thread_journal_events WHERE thread_id = ?");
+      const deleteJournalFailure = this.db.query(
+        "DELETE FROM thread_journal_failures WHERE thread_id = ?",
+      );
+      const deleteMetadata = this.db.query("DELETE FROM thread_metadata WHERE thread_id = ?");
+      const deleteCreationKeys = this.db.query(
+        "DELETE FROM thread_creation_keys WHERE thread_id = ?",
+      );
+      const deleteSession = this.db.query("DELETE FROM sessions WHERE session_id = ?");
+      for (const id of sessionIds) {
+        deleteJournal.run(id);
+        deleteJournalFailure.run(id);
+        deleteMetadata.run(id);
+        deleteCreationKeys.run(id);
+        deleteSession.run(id);
+      }
+    })();
   }
 
   getMessages(
@@ -1118,6 +1156,44 @@ export class SessionDbRepository {
           )
           .all(limit) as Record<string, unknown>[]);
     return rows.map((row) => this.mapExternalConversationImportRow(row));
+  }
+
+  persistExternalConversationImport(
+    input: PersistedExternalConversationImportMutation,
+  ): ConversationImportPersistResult {
+    return this.db.transaction(() => {
+      const { mutation, record } = input;
+      const existing = this.getExternalConversationImport(record.source, record.fingerprint);
+      if (existing) {
+        return {
+          threadId: existing.importedSessionId,
+          snapshotFeed: this.getSessionSnapshot(existing.importedSessionId)?.feed ?? [],
+          modelMessages: this.getSessionRecord(existing.importedSessionId)?.messages ?? [],
+        };
+      }
+
+      const sessionId = mutation.sessionId;
+      if (record.importedSessionId !== sessionId || input.snapshot.sessionId !== sessionId) {
+        throw new Error("Imported conversation session IDs must match.");
+      }
+      if (this.db.query("SELECT 1 FROM sessions WHERE session_id = ?").get(sessionId)) {
+        // Older interrupted imports may have a session but no dedupe ledger.
+        // Do not overwrite work that continued from that partial import.
+        throw new Error(
+          `Cannot import into ${sessionId}: the existing conversation has been preserved.`,
+        );
+      }
+
+      const lastEventSeq = this.persistSessionMutation(mutation);
+      const snapshot = { ...input.snapshot, lastEventSeq };
+      this.persistSessionSnapshot(sessionId, snapshot);
+      this.recordExternalConversationImport(record);
+      return {
+        threadId: sessionId,
+        snapshotFeed: snapshot.feed,
+        modelMessages: mutation.snapshot.messages,
+      };
+    })();
   }
 
   recordExternalConversationImport(record: PersistedExternalConversationImport): void {

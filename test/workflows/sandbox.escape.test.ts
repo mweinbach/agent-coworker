@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { inspectWorkflowSource } from "../../src/workflows/inspect";
 import { runWorkflow } from "../../src/workflows/WorkflowRunner";
 import { makeFakeControl, makeWorkflowCtx, metaHeader, workflowTmpDir } from "./harness";
 
@@ -207,5 +208,65 @@ describe("workflow sandbox: module loading", () => {
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
     expect(message.toLowerCase()).toContain("import");
+  });
+
+  test("a rejected dynamic import exposes only realm-native errors", async () => {
+    const dir = await workflowTmpDir();
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl(),
+      dryRun: true,
+      script:
+        `${metaHeader()}export default async function run() {\n` +
+        `  const specifier = ["node", "fs"].join(":");\n` +
+        `  try { await import(specifier); } catch (error) {\n` +
+        `    return error.constructor.constructor("return [typeof process, typeof Bun]")();\n` +
+        `  }\n}`,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.summary.result).toEqual(["undefined", "undefined"]);
+  });
+
+  test("metadata inspection does not expose host constructors through rejected imports", async () => {
+    const inspected = await inspectWorkflowSource(
+      `let description = "missing rejection";\n` +
+        `const specifier = ["node", "fs"].join(":");\n` +
+        `try { await import(specifier); } catch (error) {\n` +
+        `  description = error.constructor.constructor("return typeof process")();\n` +
+        `}\n` +
+        `export const meta = { name: "inspect-error", description, phases: ["main"] };\n` +
+        `export default async function run() { return null; }`,
+    );
+
+    expect(inspected.ok).toBe(true);
+    if (!inspected.ok) return;
+    expect(inspected.meta.description).toBe("undefined");
+  });
+
+  test.each([
+    { name: "agent", intrinsic: "JSON.stringify", call: 'await agent("test")' },
+    { name: "phase", intrinsic: "globalThis.String", call: 'phase("main")' },
+    { name: "log", intrinsic: "globalThis.String", call: 'log("test")' },
+  ])("$name transport failures expose only realm-native errors", async ({ intrinsic, call }) => {
+    const dir = await workflowTmpDir();
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl(),
+      dryRun: true,
+      script:
+        `${metaHeader()}export default async function run({ agent, phase, log }) {\n` +
+        `  const original = ${intrinsic};\n` +
+        `  ${intrinsic} = () => () => {};\n` +
+        `  try { ${call}; } catch (error) {\n` +
+        `    return error.constructor.constructor("return [typeof process, typeof Bun]")();\n` +
+        `  } finally { ${intrinsic} = original; }\n` +
+        `  return "missing rejection";\n}`,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.summary.result).toEqual(["undefined", "undefined"]);
   });
 });

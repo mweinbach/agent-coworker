@@ -3,20 +3,15 @@ import { isTerminalProjectedToolState } from "../../shared/projectionPolicy";
 import type { ConversationProjectionState } from "./conversationProjectionState";
 import {
   incompleteToolStreamError,
-  shouldReuseLatestToolItemByName,
   toolArgsFromApproval,
+  toolKeyFromApproval,
   toolNameFromApproval,
   toolSyntheticApprovalKey,
-  toolTurnNameKey,
 } from "./conversationProjectionToolKeys";
 import type { BufferedToolState } from "./conversationProjectionTypes";
 import { makeItemId, normalizeToolArgsFromInput, occurrenceItemId } from "./shared";
 
 export function createToolProjection(state: ConversationProjectionState) {
-  const rememberLatestToolKey = (turnId: string, name: string, fullKey: string) => {
-    state.latestToolKeyByTurnAndName.set(toolTurnNameKey(turnId, name), fullKey);
-  };
-
   const createToolState = (turnId: string, key: string, name: string) => {
     const fullKey = `${turnId}:${key}`;
     const nextOccurrence = (state.toolOccurrenceByKey.get(fullKey) ?? 0) + 1;
@@ -30,7 +25,6 @@ export function createToolProjection(state: ConversationProjectionState) {
     };
     state.toolByKey.set(fullKey, next);
     state.toolInputByKey.delete(fullKey);
-    rememberLatestToolKey(turnId, name, fullKey);
     return { fullKey, state: next };
   };
 
@@ -44,7 +38,6 @@ export function createToolProjection(state: ConversationProjectionState) {
     const directState = state.toolByKey.get(fullKey);
     if (directState && !resolveOpts.startNewOccurrence) {
       directState.name = name;
-      rememberLatestToolKey(turnId, name, fullKey);
       return { fullKey, state: directState };
     }
 
@@ -53,25 +46,6 @@ export function createToolProjection(state: ConversationProjectionState) {
       state.toolInputByKey.delete(fullKey);
     }
 
-    if (!resolveOpts.startNewOccurrence && shouldReuseLatestToolItemByName(name)) {
-      const latestKey = state.latestToolKeyByTurnAndName.get(toolTurnNameKey(turnId, name));
-      if (latestKey) {
-        const latestState = state.toolByKey.get(latestKey);
-        if (latestState && !isTerminalProjectedToolState(latestState.state)) {
-          state.toolByKey.delete(latestKey);
-          state.toolByKey.set(fullKey, latestState);
-          const latestInput = state.toolInputByKey.get(latestKey);
-          if (latestInput !== undefined) {
-            state.toolInputByKey.delete(latestKey);
-            state.toolInputByKey.set(fullKey, latestInput);
-            latestState.inputText = latestInput;
-          }
-          latestState.name = name;
-          rememberLatestToolKey(turnId, name, fullKey);
-          return { fullKey, state: latestState };
-        }
-      }
-    }
     return createToolState(turnId, key, name);
   };
 
@@ -125,6 +99,7 @@ export function createToolProjection(state: ConversationProjectionState) {
     publishToolStartedOrCompleted,
     publishToolCompleted,
     failActiveToolStreamsForTurn,
+    toolKeyFromApproval,
     toolNameFromApproval,
     toolSyntheticApprovalKey,
     toolArgsFromApproval,

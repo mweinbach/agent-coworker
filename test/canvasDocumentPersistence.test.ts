@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +20,24 @@ function deferred<T>(): Deferred<T> {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+type ReadChunk = (
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+) => Promise<{ bytesRead: number; buffer: Buffer }>;
+
+function interceptFileReads(filePath: string, intercept: (read: ReadChunk) => ReadChunk) {
+  const open = fs.open;
+  return spyOn(fs, "open").mockImplementation(async (targetPath, flags, mode) => {
+    const handle = await open(targetPath, flags, mode);
+    if (String(targetPath) === filePath) {
+      Object.defineProperty(handle, "read", { value: intercept(handle.read.bind(handle)) });
+    }
+    return handle;
+  });
 }
 
 const temporaryDirectories: string[] = [];
@@ -54,6 +72,62 @@ afterEach(async () => {
 });
 
 describe("CanvasDocumentPersistenceService", () => {
+  test("retries an open when same-size content changes between snapshot reads", async () => {
+    const cwd = await makeWorkspace();
+    const filePath = path.join(cwd, "notes.md");
+    await fs.writeFile(filePath, "original");
+    const originalStat = await fs.stat(filePath);
+    let changed = false;
+    const reads = interceptFileReads(await fs.realpath(filePath), (read) => async (...args) => {
+      const result = await read(...args);
+      if (!changed) {
+        changed = true;
+        await fs.writeFile(filePath, "external");
+        await fs.utimes(filePath, originalStat.atimeMs / 1000, (originalStat.mtimeMs + 100) / 1000);
+      }
+      return result;
+    });
+
+    try {
+      const opened = await new CanvasDocumentPersistenceService().open(cwd, {
+        path: filePath,
+        documentId: "canvas-consistent-read",
+        generation: 1,
+      });
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+      expect(opened.document.content).toBe("external");
+      expect(opened.document.revision.fingerprint).toBe(
+        `sha256:${createHash("sha256").update(opened.document.content).digest("hex")}`,
+      );
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  test("assembles a complete snapshot when file descriptor reads return short chunks", async () => {
+    const cwd = await makeWorkspace();
+    const filePath = path.join(cwd, "notes.md");
+    await fs.writeFile(filePath, "complete document");
+    const reads = interceptFileReads(
+      await fs.realpath(filePath),
+      (read) => (buffer, offset, length, position) =>
+        read(buffer, offset, Math.min(length, 2), position),
+    );
+
+    try {
+      const opened = await new CanvasDocumentPersistenceService().open(cwd, {
+        path: filePath,
+        documentId: "canvas-short-reads",
+        generation: 1,
+      });
+      expect(opened.ok).toBe(true);
+      if (opened.ok) expect(opened.document.content).toBe("complete document");
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   test("stores cross-process locks under the configured Cowork home", async () => {
     const cwd = await makeWorkspace();
     const filePath = path.join(cwd, "notes.md");
@@ -320,6 +394,40 @@ describe("CanvasDocumentPersistenceService", () => {
       );
     }
     expect(await fs.readFile(filePath, "utf8")).toBe("external edit after commit");
+  });
+
+  test("rejects a workspace root swap before creating the temporary file", async () => {
+    const cwd = await makeWorkspace();
+    const outside = await makeWorkspace();
+    const movedWorkspace = `${cwd}-original`;
+    temporaryDirectories.push(movedWorkspace);
+    const filePath = path.join(cwd, "notes.md");
+    const outsideFilePath = path.join(outside, "notes.md");
+    await fs.writeFile(filePath, "original");
+    await fs.writeFile(outsideFilePath, "original");
+    const service = new CanvasDocumentPersistenceService({
+      beforeTempCreate: async () => {
+        await fs.rename(cwd, movedWorkspace);
+        await symlinkOrJunction(outside, cwd, { type: "dir" });
+      },
+    });
+    await service.open(cwd, {
+      path: filePath,
+      documentId: "canvas-root-swap",
+      generation: 1,
+    });
+
+    const result = await service.save(cwd, {
+      documentId: "canvas-root-swap",
+      generation: 1,
+      editRevision: 1,
+      content: "must stay inside",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("outside_workspace");
+    expect(await fs.readFile(outsideFilePath, "utf8")).toBe("original");
+    expect(await fs.readFile(path.join(movedWorkspace, "notes.md"), "utf8")).toBe("original");
   });
 
   test("rejects a parent symlink swap before creating the temporary file", async () => {

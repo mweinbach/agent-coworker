@@ -62,7 +62,7 @@ export async function runStartupMaintenance(
     try {
       const stat = await fs.stat(backupsRootDir).catch(() => null);
       if (!stat?.isDirectory()) continue;
-      await SessionBackupManager.pruneBackupsRoot(backupsRootDir);
+      await SessionBackupManager.pruneBackupsRoot(backupsRootDir, { homedir: opts.homedir });
     } catch (error) {
       log(`[maintenance] backup pruning failed for ${backupsRootDir}: ${String(error)}`);
     }

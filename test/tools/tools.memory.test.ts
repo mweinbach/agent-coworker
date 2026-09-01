@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import { MemoryStore } from "../../src/memoryStore";
 import {
   afterEach,
@@ -37,6 +38,52 @@ import {
 } from "./tools.harness";
 
 describe("memory tool", () => {
+  test("create-only writes reject normalized name collisions while intentional edits remain valid", async () => {
+    const dir = await tmpDir();
+    const store = new MemoryStore(
+      path.join(dir, "workspace.sqlite"),
+      path.join(dir, "user.sqlite"),
+    );
+    const original = await store.upsert("workspace", {
+      id: "Project Guidance",
+      content: "keep the original",
+      mode: "create",
+    });
+    await expect(
+      store.upsert("workspace", {
+        id: "project-guidance.md",
+        content: "accidental replacement",
+        mode: "create",
+      }),
+    ).rejects.toThrow("already exists");
+    expect(await store.getById(original.id, "workspace")).toEqual(original);
+    const edited = await store.upsert("workspace", {
+      id: original.id,
+      content: "intentional edit",
+      mode: "upsert",
+    });
+    expect(edited.content).toBe("intentional edit");
+    expect(edited.createdAt).toBe(original.createdAt);
+  });
+
+  test("concurrent create-only writes can create a memory only once", async () => {
+    const dir = await tmpDir();
+    const store = new MemoryStore(
+      path.join(dir, "workspace.sqlite"),
+      path.join(dir, "user.sqlite"),
+    );
+    await store.list("workspace");
+    const results = await Promise.allSettled(
+      ["first", "second"].map((content) =>
+        store.upsert("workspace", { id: "same-title", content, mode: "create" }),
+      ),
+    );
+    const saved = results.filter((result) => result.status === "fulfilled");
+    expect(saved).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await store.getById("same-title", "workspace"))?.content).toBe(saved[0]?.value.content);
+  });
+
   test("imports AGENT.md into sqlite memory on read", async () => {
     const dir = await tmpDir();
     const agentDir = path.join(dir, ".cowork");
@@ -328,6 +375,73 @@ describe("memory tool", () => {
     // Should not throw SQLITE_CONSTRAINT_PRIMARYKEY
     const res: string = await t.execute({ action: "read", key: "foo-bar" });
     expect(["First content", "Second content"]).toContain(res);
+  });
+
+  test("a legacy hot-cache read failure leaves the migration retryable", async () => {
+    const dir = await tmpDir();
+    const hotPath = path.join(dir, "AGENT.md");
+    await fs.mkdir(hotPath);
+    const store = new MemoryStore(
+      path.join(dir, "workspace.sqlite"),
+      path.join(dir, "user.sqlite"),
+    );
+
+    await expect(store.list("workspace")).rejects.toMatchObject({ code: "EISDIR" });
+    await fs.rmdir(hotPath);
+    await fs.writeFile(hotPath, "recovered hot cache");
+    expect(await store.list("workspace")).toEqual([
+      expect.objectContaining({ id: "hot", content: "recovered hot cache" }),
+    ]);
+  });
+
+  test("legacy directory and stat errors do not permanently skip deep memory", async () => {
+    const dir = await tmpDir();
+    const memoryDir = path.join(dir, "memory");
+    await fs.writeFile(memoryDir, "temporarily not a directory");
+    const store = new MemoryStore(
+      path.join(dir, "workspace.sqlite"),
+      path.join(dir, "user.sqlite"),
+    );
+    await expect(store.list("workspace")).rejects.toMatchObject({ code: "ENOTDIR" });
+
+    await fs.rm(memoryDir);
+    await fs.mkdir(memoryDir);
+    const memoryPath = path.join(memoryDir, "notes.md");
+    await fs.writeFile(memoryPath, "recover this memory");
+    const originalStat = fs.stat;
+    const failure = Object.assign(new Error("simulated legacy storage read error"), {
+      code: "EIO",
+    });
+    const stat = spyOn(fs, "stat").mockImplementation(
+      async (...args: Parameters<typeof fs.stat>) => {
+        if (String(args[0]) === memoryPath) throw failure;
+        return originalStat(...args);
+      },
+    );
+    try {
+      await expect(store.list("workspace")).rejects.toBe(failure);
+    } finally {
+      stat.mockRestore();
+    }
+    expect(await store.list("workspace")).toEqual([
+      expect.objectContaining({ id: "notes", content: "recover this memory" }),
+    ]);
+  });
+
+  test("legacy traversal imports each directory once when symlinks form a cycle", async () => {
+    const dir = await tmpDir();
+    const memoryDir = path.join(dir, "memory");
+    await fs.mkdir(path.join(memoryDir, "nested"), { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "notes.md"), "one memory");
+    await fs.symlink(memoryDir, path.join(memoryDir, "nested", "cycle"), "dir");
+    const store = new MemoryStore(
+      path.join(dir, "workspace.sqlite"),
+      path.join(dir, "user.sqlite"),
+    );
+
+    expect(await store.list("workspace")).toEqual([
+      expect.objectContaining({ id: "notes", content: "one memory" }),
+    ]);
   });
 });
 

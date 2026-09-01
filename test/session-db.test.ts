@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { SessionDb } from "../src/server/sessionDb";
+import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
 import type { AgentProfileSnapshot } from "../src/shared/agentProfiles";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 
@@ -84,6 +84,72 @@ function makeAgentProfileSnapshot(): AgentProfileSnapshot {
     defaultContextMode: "brief",
     resolvedAt: "2026-06-02T12:00:00.000Z",
   };
+}
+
+function makeSessionMutation(
+  sessionId: string,
+  parentSessionId: string | null = null,
+): PersistedSessionMutation {
+  const now = "2026-09-01T12:00:00.000Z";
+  return {
+    sessionId,
+    eventType: "session.created",
+    snapshot: {
+      sessionKind: parentSessionId ? "agent" : "root",
+      parentSessionId,
+      role: parentSessionId ? "worker" : null,
+      title: sessionId,
+      titleSource: "default",
+      titleModel: null,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      workingDirectory: "/tmp/project",
+      enableMcp: false,
+      backupsEnabledOverride: null,
+      createdAt: now,
+      updatedAt: now,
+      status: "active",
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      systemPrompt: "system",
+      messages: [{ role: "user", content: `Hello from ${sessionId}` }],
+      providerState: null,
+      todos: [],
+      harnessContext: null,
+      costTracker: null,
+    },
+  };
+}
+
+async function persistDeletionFixture(db: SessionDb): Promise<void> {
+  for (const [sessionId, parentSessionId] of [
+    ["root", null],
+    ["child", "root"],
+    ["grandchild", "child"],
+    ["unrelated", null],
+  ] as const) {
+    const mutation = makeSessionMutation(sessionId, parentSessionId);
+    await db.persistSessionMutation(mutation);
+    await db.persistSessionSnapshot(sessionId, makeSnapshot({ sessionId }));
+    await db.appendThreadJournalEvent({
+      threadId: sessionId,
+      ts: mutation.snapshot.updatedAt,
+      eventType: "item.completed",
+      turnId: null,
+      itemId: null,
+      requestId: null,
+      payload: { text: `Conversation content for ${sessionId}` },
+    });
+    await db.recordThreadJournalFailure({
+      threadId: sessionId,
+      failedWriteCount: 1,
+      droppedEventCount: 1,
+      lastFailureAt: mutation.snapshot.updatedAt,
+      lastFailureMessage: "previous failure",
+    });
+    await db.setThreadMetadata({ threadId: sessionId, pinned: true });
+    await db.rememberThreadCreationKey(`creation-${sessionId}`, sessionId);
+  }
 }
 
 describe("sessionDb", () => {
@@ -445,6 +511,28 @@ describe("sessionDb", () => {
       expect(reopened.getSessionRecord("recovered-session")?.title).toBe("Recovered Session");
     } finally {
       reopened.close();
+    }
+  });
+
+  test("preserves the original database when corruption quarantine fails", async () => {
+    const paths = await makeTmpCoworkHome();
+    const dbPath = path.join(paths.rootDir, "sessions.db");
+    const originalContents = "damaged database bytes that must remain recoverable";
+    await fs.writeFile(dbPath, originalContents);
+    const rename = spyOn(fs, "rename").mockRejectedValueOnce(new Error("quarantine unavailable"));
+    let recovered: SessionDb | undefined;
+    try {
+      await expect(
+        SessionDb.create({ paths }).then((db) => {
+          recovered = db;
+          return db;
+        }),
+      ).rejects.toThrow("quarantine unavailable");
+      expect(await fs.readFile(dbPath, "utf-8")).toBe(originalContents);
+    } finally {
+      recovered?.close();
+      rename.mockRestore();
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
     }
   });
 
@@ -1497,6 +1585,59 @@ describe("sessionDb", () => {
       expect(db.listAgentSessions("root-1")).toEqual([]);
     } finally {
       db.close();
+    }
+  });
+
+  test("deletes the complete session tree and its owned journal and metadata rows", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      await persistDeletionFixture(db);
+      await db.deleteSession("root");
+
+      for (const sessionId of ["root", "child", "grandchild"]) {
+        expect(db.getSessionRecord(sessionId)).toBeNull();
+        expect(db.getSessionSnapshot(sessionId)).toBeNull();
+        expect(db.listThreadJournalEvents(sessionId)).toEqual([]);
+        expect(db.getThreadJournalFailure(sessionId)).toBeNull();
+        expect(db.getThreadMetadata(sessionId)).toBeNull();
+        expect(db.getThreadIdByCreationKey(`creation-${sessionId}`)).toBeNull();
+      }
+      expect(db.getSessionRecord("unrelated")).not.toBeNull();
+      expect(db.listThreadJournalEvents("unrelated")).toHaveLength(1);
+      expect(db.getThreadJournalFailure("unrelated")).not.toBeNull();
+      expect(db.getThreadMetadata("unrelated")).not.toBeNull();
+      expect(db.getThreadIdByCreationKey("creation-unrelated")).toBe("unrelated");
+    } finally {
+      db.close();
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back the entire deletion when removing the parent fails", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    const inspectDb = new Database(db.dbPath, { create: false, strict: false });
+    try {
+      await persistDeletionFixture(db);
+      inspectDb.exec(
+        "CREATE TRIGGER reject_root_delete BEFORE DELETE ON sessions WHEN old.session_id = 'root' BEGIN SELECT RAISE(FAIL, 'parent deletion failed'); END",
+      );
+
+      await expect(db.deleteSession("root")).rejects.toThrow("parent deletion failed");
+
+      for (const sessionId of ["root", "child", "grandchild"]) {
+        expect(db.getSessionRecord(sessionId)).not.toBeNull();
+        expect(db.getSessionSnapshot(sessionId)).not.toBeNull();
+        expect(db.listThreadJournalEvents(sessionId)).toHaveLength(1);
+        expect(db.getThreadJournalFailure(sessionId)).not.toBeNull();
+        expect(db.getThreadMetadata(sessionId)).not.toBeNull();
+        expect(db.getThreadIdByCreationKey(`creation-${sessionId}`)).toBe(sessionId);
+      }
+    } finally {
+      inspectDb.close();
+      db.close();
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
     }
   });
 

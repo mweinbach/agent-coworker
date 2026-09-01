@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { getAiCoworkerPaths, readConnectionStore } from "../src/connect";
 import { createAgentServerRuntime } from "../src/server/runtime/ServerRuntime";
 import { runStartupMaintenance } from "../src/server/runtime/startupMaintenance";
 import { ServerFileLog, shouldEnableServerFileLog } from "../src/server/serverFileLog";
@@ -10,6 +11,10 @@ import { createLegacySessionSnapshot } from "../src/server/session/SessionSnapsh
 import { type PersistedSessionMutation, SessionDb } from "../src/server/sessionDb";
 import { sweepStaleSessionTmpFiles } from "../src/server/sessionStore";
 import { TaskCoordinator } from "../src/server/tasks/TaskCoordinator";
+import {
+  createHttpJsonRpcConnection,
+  type HttpJsonRpcConnection,
+} from "../src/server/transport/httpJsonRpcConnection";
 import type { AgentExecutionState } from "../src/shared/agents";
 
 async function makeTmpCoworkHome(prefix = "startup-maintenance-test-"): Promise<{
@@ -65,6 +70,89 @@ function makeMutation(opts: {
     },
   };
 }
+
+describe("runtime home directory", () => {
+  test.each(["explicit", "environment"] as const)(
+    "uses the %s home for config, persistence, setup, and provider authentication",
+    async (homeSource) => {
+      const { home: testRoot } = await makeTmpCoworkHome();
+      const workspace = path.join(testRoot, "workspace");
+      const overrideHome = path.join(testRoot, "override-home");
+      const explicitHome = path.join(testRoot, "explicit-home");
+      const expectedHome = homeSource === "explicit" ? explicitHome : overrideHome;
+      const paths = getAiCoworkerPaths({ homedir: expectedHome });
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.mkdir(paths.configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(paths.configDir, "config.json"),
+        JSON.stringify({ provider: "anthropic" }),
+      );
+      const setupRuntime = mock(async (_options: unknown) => null);
+      const setupSkills = mock(async (_options: unknown) => null);
+      let runtime: Awaited<ReturnType<typeof createAgentServerRuntime>> | undefined;
+      let connection: HttpJsonRpcConnection | undefined;
+      try {
+        runtime = await createAgentServerRuntime({
+          cwd: workspace,
+          homedir: homeSource === "explicit" ? explicitHome : undefined,
+          env: {
+            COWORK_HOME_OVERRIDE: overrideHome,
+            HOME: path.join(testRoot, "other-home"),
+            AGENT_OBSERVABILITY_ENABLED: "false",
+            COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          },
+          preloadSystemPrompt: false,
+          loadSystemPromptWithSkillsImpl: async () => ({ prompt: "test", discoveredSkills: [] }),
+          ensureCoworkRuntimeReadyImpl: setupRuntime,
+          ensureDefaultGlobalSkillsReadyImpl: setupSkills,
+          getAiCoworkerPathsImpl: (options) => {
+            // Fail before opening the DB or auth store if a consumer loses the override.
+            expect(options?.homedir).toBe(expectedHome);
+            return paths;
+          },
+        });
+        await runtime.waitForStartupReady();
+        expect(runtime.config.userCoworkDir).toBe(paths.rootDir);
+        expect(runtime.config.provider).toBe("anthropic");
+        expect(setupRuntime).toHaveBeenCalledWith(
+          expect.objectContaining({ homedir: expectedHome }),
+        );
+        expect(setupSkills).toHaveBeenCalledWith(
+          expect.objectContaining({ homedir: expectedHome }),
+        );
+
+        connection = createHttpJsonRpcConnection(runtime, {
+          protocolMode: "jsonrpc",
+          transportType: "http",
+        });
+        await connection.dispatch({
+          id: "initialize-home-test",
+          method: "initialize",
+          params: { clientInfo: { name: "home-test", version: "1" } },
+        });
+        await connection.dispatch({ method: "initialized" });
+        const response = await connection.dispatch({
+          id: "save-home-scoped-key",
+          method: "cowork/provider/auth/setApiKey",
+          params: {
+            cwd: workspace,
+            provider: "google",
+            methodId: "api_key",
+            apiKey: "isolated-home-test-key",
+          },
+        });
+        expect(response).toMatchObject({ result: { event: { ok: true } } });
+        expect((await readConnectionStore(paths)).services.google?.apiKey).toBe(
+          "isolated-home-test-key",
+        );
+      } finally {
+        connection?.close();
+        await runtime?.stop();
+        await fs.rm(testRoot, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 describe("startup maintenance", () => {
   test("reconcileStaleExecutionStates flips running and pending_init to errored", async () => {

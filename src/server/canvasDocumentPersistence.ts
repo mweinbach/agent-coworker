@@ -3,7 +3,7 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
-import { canonicalKey, coworkPaths, isInside, samePath } from "../platform/paths";
+import { canonicalKey, canonicalPathsEqual, coworkPaths, isInside } from "../platform/paths";
 import {
   CANVAS_DOCUMENT_DEFAULT_MAX_BYTES,
   CANVAS_DOCUMENT_MAX_BYTES,
@@ -146,18 +146,34 @@ async function readStableFile(filePath: string, maxBytes: number): Promise<Stabl
       }
       const prefixLength = Math.min(before.size, maxBytes);
       const prefix = Buffer.alloc(prefixLength);
-      if (prefixLength > 0) {
-        await handle.read(prefix, 0, prefixLength, 0);
+      const hash = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (position < before.size) {
+        const length = Math.min(buffer.length, before.size - position);
+        const { bytesRead } = await handle.read(buffer, 0, length, position);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+        if (position < prefixLength) {
+          buffer.copy(prefix, position, 0, Math.min(bytesRead, prefixLength - position));
+        }
+        position += bytesRead;
       }
-      const digest = await digestFileHandle(handle);
       const after = await handle.stat();
-      if (!revisionMetadataMatches(before, after)) {
+      // The visible content and its fingerprint must describe the same read.
+      // Staging-time timestamp tolerance cannot detect rapid same-size edits.
+      if (
+        position !== after.size ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ctimeMs !== after.ctimeMs
+      ) {
         continue;
       }
       return {
         content: prefix.toString("utf8"),
         truncated: before.size > maxBytes,
-        revision: revisionFromStatAndDigest(after, digest),
+        revision: revisionFromStatAndDigest(after, hash.digest("hex")),
       };
     } finally {
       await handle.close();
@@ -172,10 +188,6 @@ async function readFileRevision(filePath: string): Promise<CanvasDocumentRevisio
 
 async function resolveWorkspaceRoot(cwd: string): Promise<string> {
   return await fs.realpath(cwd);
-}
-
-function sameCanonicalPath(left: string, right: string): boolean {
-  return samePath(left, right);
 }
 
 function assertInsideWorkspace(workspaceRoot: string, candidate: string): void {
@@ -224,7 +236,7 @@ async function revalidateCanonicalWorkspaceRoot(workspaceRoot: string): Promise<
   } catch {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
-  if (!sameCanonicalPath(currentRoot, workspaceRoot)) {
+  if (!canonicalPathsEqual(currentRoot, workspaceRoot)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
 }
@@ -239,7 +251,7 @@ async function revalidateCanonicalParent(workspaceRoot: string, filePath: string
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   assertInsideWorkspace(workspaceRoot, currentParent);
-  if (!sameCanonicalPath(currentParent, expectedParent)) {
+  if (!canonicalPathsEqual(currentParent, expectedParent)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   return currentParent;
@@ -260,7 +272,7 @@ async function revalidateExistingWorkspaceFile(
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   assertInsideWorkspace(workspaceRoot, currentPath);
-  if (!sameCanonicalPath(currentPath, filePath)) {
+  if (!canonicalPathsEqual(currentPath, filePath)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
 }
@@ -272,8 +284,8 @@ async function revalidateNewWorkspaceFile(
 ): Promise<void> {
   const current = await resolveNewWorkspaceFile(workspaceRoot, requestedPath);
   if (
-    !sameCanonicalPath(current.workspaceRoot, workspaceRoot) ||
-    !sameCanonicalPath(current.path, expectedPath)
+    !canonicalPathsEqual(current.workspaceRoot, workspaceRoot) ||
+    !canonicalPathsEqual(current.path, expectedPath)
   ) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
@@ -293,7 +305,7 @@ async function openValidatedTemporaryWorkspaceFile(
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   assertInsideWorkspace(workspaceRoot, currentPath);
-  if (!sameCanonicalPath(currentPath, tempPath)) {
+  if (!canonicalPathsEqual(currentPath, tempPath)) {
     throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
   }
   const stat = await fs.lstat(tempPath);
@@ -704,7 +716,7 @@ export class CanvasDocumentPersistenceService {
     session: CanvasDocumentSession,
   ): Promise<void> {
     const workspaceRoot = await resolveWorkspaceRoot(serverWorkspaceRoot);
-    if (!sameCanonicalPath(workspaceRoot, session.workspaceRoot)) {
+    if (!canonicalPathsEqual(workspaceRoot, session.workspaceRoot)) {
       throw new Error(OUTSIDE_WORKSPACE_MESSAGE);
     }
   }

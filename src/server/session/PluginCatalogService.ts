@@ -87,6 +87,12 @@ export class PluginCatalogService {
     this.remoteCatalogRefresh = refresh;
   }
 
+  async waitForRemoteCatalogRefresh(): Promise<void> {
+    while (this.remoteCatalogRefresh) {
+      await this.remoteCatalogRefresh;
+    }
+  }
+
   resolveInstalledPluginSelection(
     catalog: PluginCatalogSnapshot,
     pluginId: string,

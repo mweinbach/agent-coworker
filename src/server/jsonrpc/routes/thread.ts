@@ -170,12 +170,12 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
         });
         return;
       }
+      context.journal.flushProjection?.(threadId);
+      await context.journal.waitForIdle(threadId);
       const thread = context.utils.buildThreadFromSession(binding.runtime);
       let replayedRequestIds: ReadonlySet<string> | undefined;
-      let replayHealth = buildReplayHealth(context, threadId, afterSeq);
+      const replayHealth = buildReplayHealth(context, threadId, afterSeq);
       if (afterSeq > 0) {
-        await context.journal.waitForIdle(threadId);
-        replayHealth = buildReplayHealth(context, threadId, afterSeq);
         binding.runtime.replay.beginDisconnectedReplayBuffer();
         if (!replayHealth || replayHealth.trusted) {
           replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
@@ -183,12 +183,6 @@ export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       }
       const pendingPromptEvents = binding.runtime.replay.getPendingPromptEventsForReplay();
       context.threads.subscribe(ws, threadId, {
-        ...(binding.runtime.turns.activeTurnId
-          ? {
-              initialActiveTurnId: binding.runtime.turns.activeTurnId,
-              initialAgentText: binding.runtime.read.getLatestAssistantText() ?? "",
-            }
-          : {}),
         ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
         pendingPromptEvents,
         ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { ConversationProjectionSeed } from "../projection/conversationProjection";
 import type { SessionEvent } from "../protocol";
 import type { PersistedThreadJournalEvent } from "../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
@@ -40,8 +41,6 @@ const askResponseResultSchema = z.union([
 ]);
 
 export type JsonRpcThreadSubscriptionOptions = {
-  initialActiveTurnId?: string | null;
-  initialAgentText?: string | null;
   drainDisconnectedReplayBuffer?: boolean;
   pendingPromptEvents?: ReadonlyArray<
     Extract<SessionEvent, { type: "ask" }> | Extract<SessionEvent, { type: "approval" }>
@@ -61,6 +60,10 @@ type CreateJsonRpcTransportAdapterDeps = {
   ) => void;
   removeBindingSink: (binding: SessionBinding, sinkId: string) => void;
   countLiveConnectionSinks: (binding: SessionBinding) => number;
+  getThreadProjectionSeed: (
+    binding: SessionBinding,
+    threadId: string,
+  ) => ConversationProjectionSeed | undefined;
   listThreadJournalEvents: (
     threadId: string,
     opts: { afterSeq?: number; limit?: number },
@@ -80,6 +83,7 @@ export function createJsonRpcTransportAdapter({
   addBindingSink,
   removeBindingSink,
   countLiveConnectionSinks,
+  getThreadProjectionSeed,
   listThreadJournalEvents,
   getThreadJournalTailSeq,
   enqueueThreadJournalEvent,
@@ -89,6 +93,7 @@ export function createJsonRpcTransportAdapter({
 }: CreateJsonRpcTransportAdapterDeps) {
   const subscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
   const resolvedServerRequests = new ServerRequestReceiptLedger();
+  const disconnectedProjectionSeeds = new WeakMap<SessionBinding, ConversationProjectionSeed>();
 
   const ensureConnectionSubscriptions = (connectionId: string) => {
     const existing = subscriptionsByConnectionId.get(connectionId);
@@ -102,6 +107,8 @@ export function createJsonRpcTransportAdapter({
     if (!binding?.runtime || binding.socket || countLiveConnectionSinks(binding) !== 0) {
       return;
     }
+    const seed = getThreadProjectionSeed(binding, binding.runtime.id);
+    if (seed) disconnectedProjectionSeeds.set(binding, seed);
     binding.runtime.replay.beginDisconnectedReplayBuffer();
   };
 
@@ -302,29 +309,27 @@ export function createJsonRpcTransportAdapter({
       opts?.drainDisconnectedReplayBuffer ||
       (!binding.socket && countLiveConnectionSinks(binding) === 0);
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
-    const projector = createJsonRpcNotificationProjector({
-      threadId,
-      send: (message) => sendJsonRpc(ws, message),
-      shouldSendNotification: (method) => shouldSendNotification(ws, method),
-      ...(opts?.initialActiveTurnId
-        ? {
-            initialActiveTurnId: opts.initialActiveTurnId,
-            initialAgentText: opts.initialAgentText ?? "",
-          }
-        : {}),
-      onServerRequest: (request) => {
-        ws.data.rpc?.pendingServerRequests.set(request.id, {
-          threadId: request.threadId,
-          type: request.type,
-          requestId: request.id,
-        });
-        sendJsonRpc(ws, {
-          id: request.id,
-          method: request.method,
-          params: request.params,
-        });
-      },
-    });
+    const createProjector = (projectionSeed?: ConversationProjectionSeed) =>
+      createJsonRpcNotificationProjector({
+        threadId,
+        projectionSeed,
+        send: (message) => sendJsonRpc(ws, message),
+        shouldSendNotification: (method) => shouldSendNotification(ws, method),
+        onServerRequest: (request) => {
+          ws.data.rpc?.pendingServerRequests.set(request.id, {
+            threadId: request.threadId,
+            type: request.type,
+            requestId: request.id,
+          });
+          sendJsonRpc(ws, {
+            id: request.id,
+            method: request.method,
+            params: request.params,
+          });
+        },
+      });
+    const projectionSeed = getThreadProjectionSeed(binding, threadId);
+    const projector = createProjector(projectionSeed);
 
     addBindingSink(binding, sinkId, (event) => {
       if (event.type === "interaction_resolved") {
@@ -344,12 +349,19 @@ export function createJsonRpcTransportAdapter({
 
     const replayedPromptRequestIds = new Set(opts?.skipPendingPromptRequestIds ?? []);
     if (shouldReplayBufferedEvents) {
+      // Live state already contains these events. Replaying into that state
+      // would append their text again and reset occurrence-stable item IDs.
+      const replayProjector = projectionSeed
+        ? createProjector(disconnectedProjectionSeeds.get(binding))
+        : projector;
       for (const event of binding.runtime.replay.drainDisconnectedReplayEvents()) {
         if (event.type === "ask" || event.type === "approval") {
           replayedPromptRequestIds.add(event.requestId);
         }
-        projector.handle(event);
+        replayProjector.handle(event);
       }
+      replayProjector.flush();
+      disconnectedProjectionSeeds.delete(binding);
     }
     for (const event of opts?.pendingPromptEvents ?? []) {
       if (replayedPromptRequestIds.has(event.requestId)) {

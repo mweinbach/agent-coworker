@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type {
   JsonRpcLiteClientResponse,
   JsonRpcLiteNotification,
@@ -99,6 +99,116 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
 
     expect(handled).toEqual([{ id: "server-request-1", result: { approved: true } }]);
     connection.close();
+  });
+
+  test("keeps server requests separate from HTTP responses with the same id", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const events: string[] = [];
+    const decoder = new TextDecoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        connection.addEventSink(controller);
+      },
+    });
+    const reader = stream.getReader();
+    await reader.read();
+    const response = connection.dispatch({ id: "shared-id", method: "thread/resume" });
+    const received = reader.read().then(({ value }) => {
+      if (value) events.push(decoder.decode(value));
+    });
+
+    try {
+      connection.send(
+        JSON.stringify({
+          id: "shared-id",
+          method: "item/commandExecution/requestApproval",
+          params: { command: "echo hello" },
+        }),
+      );
+      connection.send(JSON.stringify({ id: "shared-id", result: { threadId: "thread-1" } }));
+
+      await expect(response).resolves.toEqual({
+        id: "shared-id",
+        result: { threadId: "thread-1" },
+      });
+      await received;
+      expect(events[0]).toContain("item/commandExecution/requestApproval");
+    } finally {
+      connection.close();
+      await received;
+    }
+  });
+
+  test("rejects duplicate in-flight HTTP request ids without dispatching or replacing the first", async () => {
+    const handled: JsonRpcLiteRequest[] = [];
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage(_connection: unknown, message: JsonRpcLiteRequest) {
+        handled.push(message);
+      },
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const schedule = spyOn(globalThis, "setTimeout");
+    const first = connection.dispatch({ id: 7, method: "thread/read", params: { threadId: "A" } });
+    const duplicate = connection.dispatch({
+      id: 7,
+      method: "thread/read",
+      params: { threadId: "B" },
+    });
+    const outcomes = Promise.allSettled([first, duplicate]);
+
+    try {
+      expect(handled).toEqual([{ id: 7, method: "thread/read", params: { threadId: "A" } }]);
+      connection.send(JSON.stringify({ id: 7, result: { threadId: "A" } }));
+
+      await expect(first).resolves.toEqual({ id: 7, result: { threadId: "A" } });
+      await expect(duplicate).rejects.toThrow("already pending");
+    } finally {
+      connection.close();
+      // Drive a leaked deadline if this regression fails before the waiter is cleaned up.
+      for (const [callback, delay] of schedule.mock.calls) {
+        if (delay === 30_000 && typeof callback === "function") callback();
+      }
+      await outcomes;
+      schedule.mockRestore();
+    }
+  });
+
+  test("does not remove a reused request id while finishing the previous HTTP response", async () => {
+    const runtime = {
+      openHttpConnection() {},
+      handleDecodedMessage() {},
+      closeConnection() {},
+    };
+    const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+    const schedule = spyOn(globalThis, "setTimeout");
+    const first = connection.dispatch({ id: "reused", method: "thread/read" });
+    connection.send(JSON.stringify({ id: "reused", result: "first" }));
+    const next = connection.dispatch({ id: "reused", method: "thread/read" });
+    const outcomes = Promise.allSettled([first, next]);
+
+    try {
+      await first;
+      connection.send(JSON.stringify({ id: "reused", result: "next" }));
+      connection.close();
+      for (const [callback, delay] of schedule.mock.calls) {
+        if (delay === 30_000 && typeof callback === "function") callback();
+      }
+      await expect(next).resolves.toEqual({ id: "reused", result: "next" });
+    } finally {
+      connection.close();
+      for (const [callback, delay] of schedule.mock.calls) {
+        if (delay === 30_000 && typeof callback === "function") callback();
+      }
+      await outcomes;
+      schedule.mockRestore();
+    }
   });
 
   test("returns an empty transport ack for notifications", async () => {
@@ -342,6 +452,62 @@ describe("H3 mobile HTTP JSON-RPC connection", () => {
     expect(dispatchedMethods).toContain("cowork/mcp/server/validate");
     connection.close();
   });
+
+  test.each(["cowork/mcp/server/auth/setApiKey", "cowork/mcp/server/auth/callback"])(
+    "requires auth and workspace permissions before %s can dispatch implicit validation",
+    async (method) => {
+      const dispatchedMethods: string[] = [];
+      const runtime = {
+        openHttpConnection() {},
+        handleDecodedMessage(
+          connection: { send(message: string): number },
+          request: JsonRpcLiteRequest,
+        ) {
+          dispatchedMethods.push(request.method);
+          connection.send(JSON.stringify({ id: request.id, result: { ok: true } }));
+        },
+        closeConnection() {},
+      };
+      const connection = __internal.createHttpJsonRpcConnection(runtime as never);
+      const request = {
+        id: 1,
+        method,
+        params: {
+          name: "configured-command",
+          ...(method.endsWith("setApiKey") ? { apiKey: "test-key" } : { code: "test-code" }),
+        },
+      };
+      try {
+        const authOnly = await __internal.dispatchHttpRpcPayload(
+          request,
+          connection,
+          trustedDevice({ mcpAuth: true }),
+        );
+        expect(authOnly.status).toBe(403);
+        await expect(authOnly.json()).resolves.toMatchObject({ permission: "workspaceSettings" });
+        expect(dispatchedMethods).toEqual([]);
+
+        const settingsOnly = await __internal.dispatchHttpRpcPayload(
+          request,
+          connection,
+          trustedDevice({ workspaceSettings: true }),
+        );
+        expect(settingsOnly.status).toBe(403);
+        await expect(settingsOnly.json()).resolves.toMatchObject({ permission: "mcpAuth" });
+        expect(dispatchedMethods).toEqual([]);
+
+        const allowed = await __internal.dispatchHttpRpcPayload(
+          request,
+          connection,
+          trustedDevice({ mcpAuth: true, workspaceSettings: true }),
+        );
+        expect(allowed.status).toBe(200);
+        expect(dispatchedMethods).toEqual([method]);
+      } finally {
+        connection.close();
+      }
+    },
+  );
 
   test("blocks memory reads for default-permission devices before dispatch", async () => {
     const runtime = {

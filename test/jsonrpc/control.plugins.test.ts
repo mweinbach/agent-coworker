@@ -12,6 +12,63 @@ import { makeTmpProject, serverOpts, stopTestServer } from "../helpers/wsHarness
 import { connectJsonRpc, enableProjectBackups } from "./control.harness";
 
 describe("server JSON-RPC control methods", () => {
+  test("plugin catalog control reads await the authoritative remote catalog", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const originalFetch = globalThis.fetch;
+    const marketplaceRequested = Promise.withResolvers<void>();
+    const releaseMarketplace = Promise.withResolvers<void>();
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (
+        requestUrl.startsWith("https://api.github.com/") &&
+        requestUrl.includes("/contents/.agents/plugins/marketplace.json")
+      ) {
+        marketplaceRequested.resolve();
+        await releaseMarketplace.promise;
+        return new Response(
+          JSON.stringify({
+            type: "file",
+            name: "marketplace.json",
+            path: ".agents/plugins/marketplace.json",
+            download_url: "https://download.test/marketplace.json",
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      if (requestUrl === "https://download.test/marketplace.json") {
+        return new Response(JSON.stringify({ name: "cowork-test", plugins: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    let rpc: Awaited<ReturnType<typeof connectJsonRpc>> | undefined;
+    let request: Promise<any> | undefined;
+    try {
+      rpc = await connectJsonRpc(url);
+      let settled = false;
+      request = rpc.request("cowork/plugins/catalog/read", { cwd: tmpDir }).then((response) => {
+        settled = true;
+        return response;
+      });
+      await marketplaceRequested.promise;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(settled).toBe(false);
+      releaseMarketplace.resolve();
+      const response = await request;
+      expect(response.error).toBeUndefined();
+      expect(response.result.event.type).toBe("plugins_catalog");
+      expect(response.result.event.availablePluginsPartial).toBeUndefined();
+    } finally {
+      releaseMarketplace.resolve();
+      await request?.catch(() => {});
+      rpc?.close();
+      await stopTestServer(server);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("plugin control methods return catalog and detail events for discovered Codex plugins", async () => {
     const tmpDir = await makeTmpProject();
     const pluginRoot = `${tmpDir}/.cowork/plugins/figma-toolkit`;

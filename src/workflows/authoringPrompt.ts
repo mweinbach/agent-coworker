@@ -85,6 +85,9 @@ A workflow script is a TypeScript module with exactly two exports and ZERO impor
 - \`meta\` must be a pure literal — no variables, calls, or template interpolation.
 - \`Date.now()\`, \`new Date()\` and \`Math.random()\` throw: they would break run resume.
   \`new Date(0)\` and the rest of Math work fine.
+- A run may attempt at most 1,000 \`agent()\` calls, including failed calls, cached calls,
+  and dry-run stubs. Exceeding the limit aborts the whole run and stops progress messages;
+  \`onError: "null"\`, \`parallel\`, and catching errors cannot override it.
 - Prefer \`pipeline\` over \`parallel\`. Only use a barrier when a stage genuinely needs
   every prior result at once (dedup across the whole set, an early exit on zero results).
 - Full upstream outputs may be passed to a downstream \`agent()\`. Inputs above 20,000 characters

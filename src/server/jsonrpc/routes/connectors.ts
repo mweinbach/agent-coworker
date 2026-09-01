@@ -54,8 +54,7 @@ export function createConnectorsRouteHandlers(
       try {
         const event = await context.workspaceControl.withSession(
           cwd,
-          async (_binding, runtime) =>
-            await emitConnectorList(cwd, runtime.read.id, { forceRefetch: true }),
+          async (_binding, runtime) => await emitConnectorList(cwd, runtime.read.id),
         );
         context.jsonrpc.sendResult(ws, message.id, { event });
       } catch (error) {
@@ -72,7 +71,8 @@ export function createConnectorsRouteHandlers(
       try {
         const event = await context.workspaceControl.withSession(
           cwd,
-          async (_binding, runtime) => await emitConnectorList(cwd, runtime.read.id),
+          async (_binding, runtime) =>
+            await emitConnectorList(cwd, runtime.read.id, { forceRefetch: true }),
         );
         context.jsonrpc.sendResult(ws, message.id, { event });
       } catch (error) {

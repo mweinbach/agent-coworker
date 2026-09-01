@@ -8,6 +8,7 @@ import {
 } from "../../shared/openaiCompatibleOptions";
 import { type AgentConfig, defaultRuntimeNameForProvider } from "../../types";
 import { writeTextFileAtomic } from "../../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../../utils/fileLock";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z
@@ -119,6 +120,7 @@ async function persistConfigPatchFile(
   configDir: string,
   patch: ProjectConfigPatch,
   runtimeProviderOptions?: AgentConfig["providerOptions"],
+  options: { clearObservabilityEnabled?: boolean; lockRoot?: string } = {},
 ): Promise<void> {
   const entries = Object.entries(patch).filter(
     ([key, value]) =>
@@ -134,70 +136,81 @@ async function persistConfigPatchFile(
     entries.length === 0 &&
     !shouldClearMemoryGenerationModel &&
     !shouldClearSkillImprovementModel &&
-    !shouldClearToolOutputOverflowChars
+    !shouldClearToolOutputOverflowChars &&
+    !options.clearObservabilityEnabled
   )
     return;
   const configPath = path.join(configDir, "config.json");
-  const current = await loadJsonObjectSafe(configPath);
-  const next: Record<string, unknown> = { ...current };
-  for (const [key, value] of entries) {
-    if (key === "providerOptions") {
-      const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
-      for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
-        const sectionPatch = patch.providerOptions?.[provider];
-        if (!sectionPatch) continue;
+  await withFileLock(
+    configPath,
+    async () => {
+      const current = await loadJsonObjectSafe(configPath);
+      const next: Record<string, unknown> = { ...current };
+      for (const [key, value] of entries) {
+        if (key === "providerOptions") {
+          const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
+          for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
+            const sectionPatch = patch.providerOptions?.[provider];
+            if (!sectionPatch) continue;
 
-        const runtimeSection =
-          isPlainObject(runtimeProviderOptions) && isPlainObject(runtimeProviderOptions[provider])
-            ? { ...runtimeProviderOptions[provider] }
+            const runtimeSection =
+              isPlainObject(runtimeProviderOptions) &&
+              isPlainObject(runtimeProviderOptions[provider])
+                ? { ...runtimeProviderOptions[provider] }
+                : {};
+            const currentSection = isPlainObject(currentProviderOptions[provider])
+              ? { ...currentProviderOptions[provider] }
+              : {};
+
+            // Merge order (lowest -> highest priority): runtime, persisted config, incoming patch.
+            currentProviderOptions[provider] = {
+              ...runtimeSection,
+              ...currentSection,
+              ...sectionPatch,
+            };
+          }
+          next[key] =
+            Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
+          continue;
+        }
+        if (key === "userProfile" && isPlainObject(value)) {
+          const currentUserProfile = isPlainObject(current.userProfile) ? current.userProfile : {};
+          next[key] = {
+            ...currentUserProfile,
+            ...value,
+          };
+          continue;
+        }
+        if (key === "featureFlags" && isPlainObject(value)) {
+          const currentFeatureFlags = isPlainObject(current.featureFlags)
+            ? (current.featureFlags as Record<string, unknown>)
             : {};
-        const currentSection = isPlainObject(currentProviderOptions[provider])
-          ? { ...currentProviderOptions[provider] }
-          : {};
-
-        // Merge order (lowest -> highest priority): runtime, persisted config, incoming patch.
-        currentProviderOptions[provider] = {
-          ...runtimeSection,
-          ...currentSection,
-          ...sectionPatch,
-        };
+          next[key] = {
+            ...currentFeatureFlags,
+            ...value,
+          };
+          continue;
+        }
+        next[key] = value;
       }
-      next[key] =
-        Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
-      continue;
-    }
-    if (key === "userProfile" && isPlainObject(value)) {
-      const currentUserProfile = isPlainObject(current.userProfile) ? current.userProfile : {};
-      next[key] = {
-        ...currentUserProfile,
-        ...value,
-      };
-      continue;
-    }
-    if (key === "featureFlags" && isPlainObject(value)) {
-      const currentFeatureFlags = isPlainObject(current.featureFlags)
-        ? (current.featureFlags as Record<string, unknown>)
-        : {};
-      next[key] = {
-        ...currentFeatureFlags,
-        ...value,
-      };
-      continue;
-    }
-    next[key] = value;
-  }
-  if (shouldClearToolOutputOverflowChars) {
-    delete next.toolOutputOverflowChars;
-  }
-  if (shouldClearMemoryGenerationModel) {
-    delete next.memoryGenerationModel;
-  }
-  if (shouldClearSkillImprovementModel) {
-    delete next.skillImprovementModel;
-  }
-  await fs.mkdir(configDir, { recursive: true });
-  const payload = `${JSON.stringify(next, null, 2)}\n`;
-  await writeTextFileAtomic(configPath, payload);
+      if (shouldClearToolOutputOverflowChars) {
+        delete next.toolOutputOverflowChars;
+      }
+      if (shouldClearMemoryGenerationModel) {
+        delete next.memoryGenerationModel;
+      }
+      if (shouldClearSkillImprovementModel) {
+        delete next.skillImprovementModel;
+      }
+      if (options.clearObservabilityEnabled) {
+        delete next.observabilityEnabled;
+      }
+      await fs.mkdir(configDir, { recursive: true });
+      const payload = `${JSON.stringify(next, null, 2)}\n`;
+      await writeTextFileAtomic(configPath, payload);
+    },
+    { lockRoot: options.lockRoot },
+  );
 }
 
 export async function persistProjectConfigPatch(
@@ -209,8 +222,19 @@ export async function persistProjectConfigPatch(
   const projectPatch: ProjectConfigPatch = { ...patch };
   const globalPatch: ProjectConfigPatch = {};
   const globalConfigDir = opts.globalConfigDir?.trim();
+  const hasObservabilityConsent = patch.observabilityEnabled !== undefined;
+  if (hasObservabilityConsent && !globalConfigDir) {
+    throw new Error("Changing observability requires a trusted user config directory.");
+  }
+  const lockRoot = globalConfigDir
+    ? fileLockRootForCoworkHome(path.dirname(globalConfigDir))
+    : undefined;
 
   if (globalConfigDir) {
+    if (hasObservabilityConsent) {
+      globalPatch.observabilityEnabled = patch.observabilityEnabled;
+      delete projectPatch.observabilityEnabled;
+    }
     if (patch.advancedMemory !== undefined) {
       globalPatch.advancedMemory = patch.advancedMemory;
       delete projectPatch.advancedMemory;
@@ -245,9 +269,20 @@ export async function persistProjectConfigPatch(
     }
   }
 
-  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions);
-  if (globalConfigDir) {
-    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions);
+  if (globalConfigDir && hasObservabilityConsent) {
+    // Store consent in the trusted user home before clearing a workspace restriction.
+    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions, {
+      lockRoot,
+    });
+  }
+  await persistConfigPatchFile(projectCoworkDir, projectPatch, runtimeProviderOptions, {
+    lockRoot,
+    clearObservabilityEnabled: hasObservabilityConsent,
+  });
+  if (globalConfigDir && !hasObservabilityConsent) {
+    await persistConfigPatchFile(globalConfigDir, globalPatch, runtimeProviderOptions, {
+      lockRoot,
+    });
   }
 }
 

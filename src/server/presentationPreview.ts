@@ -1,29 +1,31 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { prepareCoworkRuntimeToolEnv } from "../coworkRuntime";
-import { buildPluginCatalogSnapshot } from "../plugins";
+
+import {
+  prepareCoworkRuntimeToolEnv,
+  readRuntimeManifest,
+  verifyRuntimeIntegrityForUse,
+} from "../coworkRuntime";
+import { TRUSTED_COWORK_RUNTIME_KEYS } from "../coworkRuntime/trustedKeys";
+import { home } from "../platform/paths";
+import { run } from "../platform/proc";
+import { scratchRoots } from "../platform/sandbox";
 import type { FileChangeVersion } from "../shared/fileVersion";
 import type { AgentConfig } from "../types";
-import {
-  fileChangeVersionFromStat,
-  readCappedFilePreview,
-  readFileChangeVersion,
-} from "../utils/filePreviewRead";
+import { raceWithAbort } from "../utils/abortSignal";
+import { readCappedFilePreview } from "../utils/filePreviewRead";
 import { extractPptxSnapshot } from "./artifacts/pptx";
 import type { PptxSlide } from "./artifacts/types";
-import { runCommand } from "./sessionBackup/command";
 import { resolveWorkspaceFilePath } from "./spreadsheetPreview";
 
-function isSlideModule(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".mjs") {
-    const filename = path.basename(filePath);
-    return /^slide[-_]?\d+\.mjs$/i.test(filename);
-  }
-  return false;
-}
+const MAX_PRESENTATION_BYTES = 100 * 1024 * 1024;
+const MAX_PRESENTATION_SLIDES = 200;
+const MAX_SLIDE_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024;
+const PREVIEW_TIMEOUT_MS = 25_000;
+const TEXT_PREVIEW_WARNING =
+  "Text-only preview: images, charts, layout, and original styling are not shown. Long slide text may be shortened.";
 
 export type PresentationPreviewRequest = {
   cwd: string;
@@ -31,15 +33,14 @@ export type PresentationPreviewRequest = {
   builtInDir: string;
   config?: AgentConfig;
   env?: Record<string, string | undefined>;
+  signal?: AbortSignal;
 };
-
 type PresentationSlide = {
   slideIndex: number;
   slideId?: string;
   title?: string;
   pngBase64: string;
 };
-
 export type PresentationPreviewResult =
   | {
       ok: true;
@@ -47,191 +48,58 @@ export type PresentationPreviewResult =
       path: string;
       slides: PresentationSlide[];
       version: FileChangeVersion;
+      renderingMode?: "rendered" | "text";
+      warnings?: string[];
     }
   | {
       ok: false;
-      error: {
-        kind: "unsupported_format" | "compile_error" | "no_slides";
-        message: string;
-      };
+      error: { kind: "unsupported_format" | "compile_error" | "no_slides"; message: string };
     };
 
-async function resolvePresentationRuntimeEnv(
+type NativePresentationRuntime = {
+  soffice: string;
+  pdftoppm: string;
+  env: Record<string, string | undefined>;
+};
+type PresentationPreviewDeps = {
+  resolveRuntime: (
+    env: Record<string, string | undefined> | undefined,
+  ) => Promise<NativePresentationRuntime | null>;
+  runProcess: typeof run;
+  timeoutMs: number;
+};
+
+async function resolveNativeRuntime(
   requestEnv: Record<string, string | undefined> | undefined,
-): Promise<{ nodeBin: string; env: NodeJS.ProcessEnv }> {
-  const baseEnv: NodeJS.ProcessEnv = { ...process.env, ...requestEnv };
-  const home = baseEnv.HOME || baseEnv.USERPROFILE || os.homedir();
-  const env = await prepareCoworkRuntimeToolEnv({ homedir: home, env: baseEnv });
-  return {
-    nodeBin: env.COWORK_RUNTIME_NODE || "node",
-    env,
-  };
-}
-
-async function resolveMarketplacePresentationScript(
-  config: AgentConfig | undefined,
-): Promise<string | null> {
-  if (!config) return null;
-  const catalog = await buildPluginCatalogSnapshot(config);
-  for (const plugin of catalog.plugins) {
-    if (!plugin.enabled) continue;
-    const skill = plugin.skills.find(
-      (candidate) => candidate.rawName === "presentations" && candidate.enabled,
-    );
-    if (!skill) continue;
-    const candidate = path.join(skill.rootDir, "scripts", "render_artifact_slide.mjs");
-    if (await fs.stat(candidate).catch(() => null)) return candidate;
-  }
-  return null;
-}
-
-async function resolvePresentationScript(
-  builtInDir: string,
-  config: AgentConfig | undefined,
-): Promise<{ scriptPath: string | null; expectedPath: string }> {
-  const builtInScript = path.join(
-    builtInDir,
-    "skills",
-    "presentations",
-    "scripts",
-    "render_artifact_slide.mjs",
-  );
-  const marketplaceScript = await resolveMarketplacePresentationScript(config);
-  const scriptCandidates = [...(marketplaceScript ? [marketplaceScript] : []), builtInScript];
-
-  for (const candidate of scriptCandidates) {
-    if (await fs.stat(candidate).catch(() => null)) {
-      return { scriptPath: candidate, expectedPath: candidate };
-    }
-  }
-
-  return {
-    scriptPath: null,
-    expectedPath: marketplaceScript ?? builtInScript,
-  };
-}
-
-async function loadCachedPresentationSlides(
-  resolvedPath: string,
-  cwd: string,
-): Promise<{ dependencies: string[]; slides: PresentationSlide[] } | null> {
-  const pptxDir = path.dirname(resolvedPath);
-  const candidateDirs = [
-    path.join(pptxDir, "preview"),
-    path.join(pptxDir, "../preview"),
-    path.join(cwd, "preview"),
-  ];
-
-  for (const candidateDir of candidateDirs) {
-    try {
-      const previewDir = await resolveWorkspaceFilePath(cwd, candidateDir);
-      const files = await fs.readdir(previewDir);
-      const pngFiles = files
-        .filter((filename) => /^slide[-_]?\d+\.png$/i.test(filename))
-        .sort((a, b) => {
-          const numA = Number.parseInt(a.match(/\d+/)?.[0] || "0", 10);
-          const numB = Number.parseInt(b.match(/\d+/)?.[0] || "0", 10);
-          return numA - numB;
-        });
-
-      if (pngFiles.length === 0) continue;
-
-      const dependencies = [previewDir];
-      const slides: PresentationSlide[] = [];
-      for (const filename of pngFiles) {
-        let pngPath: string;
-        try {
-          pngPath = await resolveWorkspaceFilePath(cwd, path.join(previewDir, filename));
-        } catch {
-          continue;
-        }
-        const preview = await readCappedFilePreview(pngPath, Number.MAX_SAFE_INTEGER);
-        const slideName = path.basename(filename, ".png");
-        dependencies.push(pngPath);
-        slides.push({
-          slideIndex: slides.length,
-          slideId: slideName,
-          title: slideName,
-          pngBase64: `data:image/png;base64,${Buffer.from(preview.bytes).toString("base64")}`,
-        });
-      }
-      if (slides.length > 0) {
-        return { dependencies, slides };
-      }
-    } catch {}
-  }
-
-  return null;
-}
-
-async function findPresentationSlideModules(
-  cwd: string,
-): Promise<{ directory: string; modules: string[] }> {
-  let slidesDir: string;
-  let files: string[];
-  try {
-    slidesDir = await resolveWorkspaceFilePath(cwd, path.join(cwd, "slides"));
-    files = await fs.readdir(slidesDir);
-  } catch {
-    try {
-      slidesDir = await resolveWorkspaceFilePath(cwd, cwd);
-      files = await fs.readdir(slidesDir);
-    } catch {
-      return { directory: cwd, modules: [] };
-    }
-  }
-
-  const slideModules = (
-    await Promise.all(
-      files
-        .filter((filename) => /^slide[-_]?\d+\.mjs$/i.test(filename))
-        .map(async (filename) => {
-          try {
-            const modulePath = await resolveWorkspaceFilePath(cwd, path.join(slidesDir, filename));
-            return (await fs.stat(modulePath)).isFile() ? modulePath : null;
-          } catch {
-            return null;
-          }
-        }),
-    )
-  ).filter((modulePath): modulePath is string => modulePath !== null);
-  slideModules.sort((a, b) => {
-    const numA = Number.parseInt(path.basename(a).match(/\d+/)?.[0] || "0", 10);
-    const numB = Number.parseInt(path.basename(b).match(/\d+/)?.[0] || "0", 10);
-    return numA - numB;
+): Promise<NativePresentationRuntime | null> {
+  const baseEnv = { ...process.env, ...requestEnv };
+  const env = await prepareCoworkRuntimeToolEnv({ homedir: home(baseEnv), env: baseEnv });
+  const runtimeDir = env.COWORK_RUNTIME_DIR;
+  if (!runtimeDir) return null;
+  const manifest = await readRuntimeManifest(runtimeDir);
+  if (!manifest.paths.soffice || !manifest.paths.pdftoppm) return null;
+  // Select only signed entrypoints, never inherited markers or workspace PATH executables.
+  await verifyRuntimeIntegrityForUse({
+    root: runtimeDir,
+    manifest,
+    trustedKeys: TRUSTED_COWORK_RUNTIME_KEYS,
+    entrypoints: ["soffice", "pdftoppm"],
   });
-  return { directory: slidesDir, modules: slideModules };
+  const soffice = path.join(runtimeDir, ...manifest.paths.soffice.split("/"));
+  const pdftoppm = path.join(runtimeDir, ...manifest.paths.pdftoppm.split("/"));
+  const stats = await Promise.all([fs.stat(soffice), fs.stat(pdftoppm)]);
+  if (!stats.every((stat) => stat.isFile()) || env.COWORK_RUNTIME_SOFFICE !== soffice) return null;
+  return { soffice, pdftoppm, env };
 }
 
-async function buildPresentationVersion(
-  dependencies: readonly string[],
-): Promise<FileChangeVersion> {
-  const uniquePaths = [...new Set(dependencies)].sort();
-  const versionedPaths = await Promise.all(
-    uniquePaths.map(async (dependencyPath) => ({
-      path: dependencyPath,
-      version: await readFileChangeVersion(dependencyPath, { allowDirectory: true }),
-    })),
-  );
-  const hash = createHash("sha256");
-  let modifiedAtMs = 0;
-  let changeTimeMs = 0;
-  let size = 0;
-  for (const dependency of versionedPaths) {
-    modifiedAtMs = Math.max(modifiedAtMs, dependency.version.modifiedAtMs);
-    changeTimeMs = Math.max(changeTimeMs, dependency.version.changeTimeMs);
-    size += dependency.version.size;
-    hash.update(dependency.path);
-    hash.update("\0");
-    hash.update(dependency.version.fingerprint);
-    hash.update("\0");
-  }
-  return {
-    modifiedAtMs,
-    changeTimeMs,
-    size,
-    fingerprint: hash.digest("hex"),
-  };
+function assertActive(signal: AbortSignal, deadline: number): void {
+  if (signal.aborted)
+    throw new Error(
+      signal.reason instanceof Error
+        ? signal.reason.message
+        : "Presentation preview was cancelled.",
+    );
+  if (Date.now() >= deadline) throw new Error("Presentation preview timed out.");
 }
 
 function escapeSlideSvg(value: string): string {
@@ -243,296 +111,265 @@ function escapeSlideSvg(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-function renderPackagedSlide(slide: PptxSlide): PresentationSlide {
-  const slideWidth = 1600;
-  const slideHeight = 900;
-  const emuWidth = 12_192_000;
-  const emuHeight = 6_858_000;
-  const textShapes = slide.shapes.filter((shape) => shape.text.trim().length > 0);
-  const textElements = textShapes
-    .map((shape, index) => {
-      const hasPosition =
-        shape.x !== null &&
-        shape.y !== null &&
-        shape.width !== null &&
-        shape.height !== null &&
-        shape.width > 10_000 &&
-        shape.height > 10_000;
-      const x = hasPosition ? Math.max(40, ((shape.x ?? 0) / emuWidth) * slideWidth) : 112;
-      const y = hasPosition
-        ? Math.max(72, ((shape.y ?? 0) / emuHeight) * slideHeight + 42)
-        : 154 + index * 112;
-      const fontSize = index === 0 ? 48 : 29;
-      const weight = index === 0 ? 700 : 400;
-      const availableWidth = hasPosition
-        ? Math.max(120, ((shape.width ?? 0) / emuWidth) * slideWidth)
-        : slideWidth - 224;
-      const maxCharacters = Math.max(12, Math.floor(availableWidth / (fontSize * 0.54)));
-      const words = shape.text.trim().split(/\s+/);
-      const lines: string[] = [];
-      for (const word of words) {
-        const previous = lines.at(-1);
-        if (!previous || previous.length + word.length + 1 > maxCharacters) {
-          lines.push(word);
-        } else {
-          lines[lines.length - 1] = `${previous} ${word}`;
-        }
-      }
-      const tspans = lines
-        .slice(0, 12)
-        .map(
-          (line, lineIndex) =>
-            `<tspan x="${x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : fontSize * 1.35}">${escapeSlideSvg(line)}</tspan>`,
-        )
-        .join("");
-      return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="#202124" font-family="Aptos, Calibri, Arial, sans-serif" font-size="${fontSize}" font-weight="${weight}">${tspans}</text>`;
-    })
+function renderTextSlide(slide: PptxSlide): PresentationSlide {
+  const lines: string[] = [];
+  for (const word of slide.text.slice(0, 10_000).split(/\s+/)) {
+    const previous = lines.at(-1);
+    if (!previous || previous.length + word.length + 1 > 88) lines.push(word);
+    else lines[lines.length - 1] = `${previous} ${word}`;
+    if (lines.length > 18) break;
+  }
+  const truncated = lines.length > 18 || slide.text.length > 10_000;
+  const visibleLines = lines.slice(0, 18);
+  if (truncated) visibleLines[17] = "… More slide text omitted";
+  const text = visibleLines
+    .map(
+      (line, index) => `<tspan x="80" dy="${index === 0 ? 0 : 38}">${escapeSlideSvg(line)}</tspan>`,
+    )
     .join("");
-  const emptyLabel =
-    textElements.length === 0
-      ? `<text x="800" y="450" text-anchor="middle" fill="#777" font-family="Arial, sans-serif" font-size="30">Slide ${slide.index + 1}</text>`
-      : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${slideWidth} ${slideHeight}"><rect width="${slideWidth}" height="${slideHeight}" fill="#ffffff"/>${textElements}${emptyLabel}</svg>`;
-  const title = textShapes[0]?.text.trim() || `Slide ${slide.index + 1}`;
-
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="white"/><text x="80" y="70" font-family="Arial,sans-serif" font-size="24" fill="#666">Slide ${slide.index + 1} · Text-only preview</text><text x="80" y="132" font-family="Arial,sans-serif" font-size="30" fill="#202124">${text}</text></svg>`;
   return {
     slideIndex: slide.index,
     slideId: slide.id,
-    title,
+    title:
+      slide.shapes.find((shape) => shape.text.trim())?.text.slice(0, 200) ||
+      `Slide ${slide.index + 1}`,
     pngBase64: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
   };
 }
 
-async function loadPackagedPresentationSlides(
-  resolvedPath: string,
-): Promise<PresentationSlide[] | null> {
+async function renderNativeSlides(opts: {
+  bytes: Uint8Array;
+  extension: string;
+  packagedSlides: PptxSlide[] | null;
+  runtime: NativePresentationRuntime;
+  signal: AbortSignal;
+  deadline: number;
+  runProcess: typeof run;
+}): Promise<PresentationSlide[]> {
+  const stage = await fs.realpath(
+    await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-presentation-")),
+  );
   try {
-    const bytes = await fs.readFile(resolvedPath);
-    const snapshot = await extractPptxSnapshot(bytes);
-    return snapshot.slides.map(renderPackagedSlide);
-  } catch {
-    return null;
+    assertActive(opts.signal, opts.deadline);
+    const sourcePath = path.join(stage, `source${opts.extension}`);
+    const pdfPath = path.join(stage, "source.pdf");
+    await fs.writeFile(sourcePath, opts.bytes, { mode: 0o600 });
+    const execute = async (command: string, args: string[]) => {
+      assertActive(opts.signal, opts.deadline);
+      const result = await opts.runProcess(command, args, {
+        cwd: stage,
+        // The managed launcher creates and removes its own isolated LO profile.
+        // Keep that profile under this job's stage, including on abrupt exit.
+        env: { ...opts.runtime.env, TMPDIR: stage, TMP: stage, TEMP: stage },
+        signal: opts.signal,
+        timeoutMs: Math.max(1, opts.deadline - Date.now()),
+        maxBuffer: 256 * 1024,
+        killSignal: "SIGKILL",
+        resolve: true,
+      });
+      assertActive(opts.signal, opts.deadline);
+      if (result.exitCode !== 0)
+        throw new Error(
+          result.errorCode ||
+            (result.stderr || result.stdout).trim().slice(0, 2_000) ||
+            "Native renderer failed.",
+        );
+    };
+    await execute(opts.runtime.soffice, [
+      "--headless",
+      "--convert-to",
+      "pdf",
+      "--outdir",
+      stage,
+      sourcePath,
+    ]);
+    const pdf = await fs.lstat(pdfPath);
+    if (!pdf.isFile() || pdf.size === 0 || pdf.size > MAX_PRESENTATION_BYTES)
+      throw new Error("Native renderer did not produce a bounded PDF.");
+    await execute(opts.runtime.pdftoppm, [
+      "-png",
+      "-scale-to",
+      "1600",
+      "-f",
+      "1",
+      "-l",
+      String(MAX_PRESENTATION_SLIDES + 1),
+      pdfPath,
+      path.join(stage, "slide"),
+    ]);
+    const images = (await fs.readdir(stage))
+      .flatMap((name) => {
+        const match = /^slide-(\d+)\.png$/.exec(name);
+        return match ? [{ name, number: Number(match[1]) }] : [];
+      })
+      .sort((left, right) => left.number - right.number);
+    if (
+      images.length === 0 ||
+      images.length > MAX_PRESENTATION_SLIDES ||
+      images.some((image, index) => image.number !== index + 1) ||
+      (opts.packagedSlides && images.length !== opts.packagedSlides.length)
+    )
+      throw new Error("Native renderer did not produce every slide. No partial render was used.");
+    let totalBytes = 0;
+    const slides: PresentationSlide[] = [];
+    for (const [index, image] of images.entries()) {
+      assertActive(opts.signal, opts.deadline);
+      const imagePath = path.join(stage, image.name);
+      const preview = await readCappedFilePreview(imagePath, MAX_SLIDE_IMAGE_BYTES, {
+        expectedCanonicalPath: imagePath,
+      });
+      assertActive(opts.signal, opts.deadline);
+      const bytes = Buffer.from(preview.bytes);
+      totalBytes += bytes.byteLength;
+      if (
+        preview.truncated ||
+        totalBytes > MAX_TOTAL_IMAGE_BYTES ||
+        !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      )
+        throw new Error("Rendered slide images exceed preview limits or are invalid.");
+      const packaged = opts.packagedSlides?.[index];
+      slides.push({
+        slideIndex: index,
+        slideId: packaged?.id ?? String(index + 1),
+        title:
+          packaged?.shapes.find((shape) => shape.text.trim())?.text.slice(0, 200) ||
+          `Slide ${index + 1}`,
+        pngBase64: `data:image/png;base64,${bytes.toString("base64")}`,
+      });
+    }
+    return slides;
+  } finally {
+    await fs.rm(stage, { recursive: true, force: true });
   }
 }
 
-export async function previewPresentationFile(
-  request: PresentationPreviewRequest,
-): Promise<PresentationPreviewResult> {
-  let resolvedPath: string;
-  try {
-    resolvedPath = await resolveWorkspaceFilePath(request.cwd, request.filePath);
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        kind: "no_slides",
-        message: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
-
-  const ext = path.extname(resolvedPath).toLowerCase();
-  const isPptx = ext === ".pptx" || ext === ".ppt";
-  const isSlide = isSlideModule(resolvedPath);
-
-  if (!isPptx && !isSlide) {
-    return {
-      ok: false,
-      error: {
-        kind: "unsupported_format",
-        message: "Presentation preview supports slide modules (.mjs) and compiled decks (.pptx).",
-      },
-    };
-  }
-  const sourceVersion = fileChangeVersionFromStat(await fs.stat(resolvedPath));
-
-  if (isPptx) {
-    const cachedSlides = await loadCachedPresentationSlides(resolvedPath, request.cwd);
-    if (cachedSlides) {
-      const dependencies = [resolvedPath, ...cachedSlides.dependencies];
-      return {
-        ok: true,
-        dependencies,
-        path: resolvedPath,
-        slides: cachedSlides.slides,
-        version: await buildPresentationVersion(dependencies),
-      };
-    }
-  }
-
-  const slideModuleResult = isPptx
-    ? await findPresentationSlideModules(request.cwd)
-    : { directory: request.cwd, modules: [] };
-
-  if (isPptx && slideModuleResult.modules.length === 0) {
-    const packagedSlides = await loadPackagedPresentationSlides(resolvedPath);
-    if (packagedSlides && packagedSlides.length > 0) {
-      return {
-        ok: true,
-        dependencies: [resolvedPath],
-        path: resolvedPath,
-        slides: packagedSlides,
-        version: sourceVersion,
-      };
-    }
-  }
-
-  const { scriptPath, expectedPath } = await resolvePresentationScript(
-    request.builtInDir,
-    request.config,
-  );
-  if (!scriptPath) {
-    return {
-      ok: false,
-      error: {
-        kind: "compile_error",
-        message: `Slide rendering script not found at expected path: ${expectedPath}`,
-      },
-    };
-  }
-
-  const slideModules = slideModuleResult.modules;
-  if (isPptx && slideModules.length === 0) {
-    return {
-      ok: false,
-      error: {
-        kind: "no_slides",
-        message: "No slide source modules or pre-rendered previews found for this deck.",
-      },
-    };
-  }
-
-  const { nodeBin, env } = await resolvePresentationRuntimeEnv(request.env);
-
-  if (isSlide) {
-    // Single slide preview
-    const tempPngPath = path.join(os.tmpdir(), `cowork-slide-${crypto.randomUUID()}.png`);
+export function createPresentationPreviewer(overrides: Partial<PresentationPreviewDeps> = {}) {
+  const deps: PresentationPreviewDeps = {
+    resolveRuntime: resolveNativeRuntime,
+    runProcess: run,
+    timeoutMs: PREVIEW_TIMEOUT_MS,
+    ...overrides,
+  };
+  return async (request: PresentationPreviewRequest): Promise<PresentationPreviewResult> => {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error("Presentation preview timed out.")),
+      deps.timeoutMs,
+    );
+    timer.unref?.();
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, controller.signal])
+      : controller.signal;
+    const deadline = Date.now() + deps.timeoutMs;
     try {
-      const runResult = await runCommand(
-        nodeBin,
-        [
-          scriptPath,
-          "--slide-module",
-          resolvedPath,
-          "--output",
-          tempPngPath,
-          "--workspace",
-          request.cwd,
-        ],
-        { cwd: request.cwd, env },
+      assertActive(signal, deadline);
+      const resolvedPath = await raceWithAbort(
+        resolveWorkspaceFilePath(request.cwd, request.filePath),
+        signal,
+        "Presentation preview timed out or was cancelled.",
       );
-
-      if (runResult.exitCode !== 0) {
+      assertActive(signal, deadline);
+      const extension = path.extname(resolvedPath).toLowerCase();
+      if (extension !== ".pptx" && extension !== ".ppt")
         return {
           ok: false,
           error: {
-            kind: "compile_error",
-            message: `Slide render failed:\n${runResult.stderr || runResult.stdout}`,
+            kind: "unsupported_format",
+            message:
+              "Presentation preview supports exported PowerPoint decks (.pptx or .ppt). Export JavaScript slide sources first; opening a preview does not execute workspace code.",
           },
         };
+      const stat = await raceWithAbort(
+        fs.stat(resolvedPath),
+        signal,
+        "Presentation preview timed out or was cancelled.",
+      );
+      assertActive(signal, deadline);
+      if (!stat.isFile() || stat.size > MAX_PRESENTATION_BYTES)
+        throw new Error("Presentation exceeds the 100 MiB preview limit or is not a file.");
+      const source = await raceWithAbort(
+        readCappedFilePreview(resolvedPath, MAX_PRESENTATION_BYTES, {
+          expectedCanonicalPath: resolvedPath,
+        }),
+        signal,
+        "Presentation preview timed out or was cancelled.",
+      );
+      if (source.truncated) throw new Error("Presentation could not be read completely.");
+      const packagedSlides =
+        extension === ".pptx"
+          ? (
+              await raceWithAbort(
+                extractPptxSnapshot(source.bytes, {
+                  maxSlides: MAX_PRESENTATION_SLIDES,
+                  includeMedia: false,
+                  signal,
+                }),
+                signal,
+                "Presentation preview timed out or was cancelled.",
+              )
+            ).slides
+          : null;
+      assertActive(signal, deadline);
+      const version: FileChangeVersion = {
+        ...source.version,
+        fingerprint: `sha256:${createHash("sha256").update(source.bytes).digest("hex")}`,
+      };
+      const base = { dependencies: [resolvedPath], path: resolvedPath, version };
+      let warning = "The verified native presentation renderer is unavailable.";
+      try {
+        const runtime = await raceWithAbort(
+          deps.resolveRuntime(request.env),
+          signal,
+          "Presentation preview timed out or was cancelled.",
+        );
+        assertActive(signal, deadline);
+        if (runtime) {
+          const slides = await renderNativeSlides({
+            bytes: source.bytes,
+            extension,
+            packagedSlides,
+            runtime,
+            signal,
+            deadline,
+            runProcess: deps.runProcess,
+          });
+          assertActive(signal, deadline);
+          return { ok: true, ...base, slides, renderingMode: "rendered", warnings: [] };
+        }
+      } catch (error) {
+        assertActive(signal, deadline);
+        warning = `Native rendering failed: ${error instanceof Error ? error.message : String(error)}`;
       }
-
-      const pngBuffer = await fs.readFile(tempPngPath);
-      const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-
-      // Clean up
-      await fs.unlink(tempPngPath).catch(() => {});
-
-      const slideName = path.basename(resolvedPath, ext);
+      if (!packagedSlides)
+        return {
+          ok: false,
+          error: {
+            kind: "unsupported_format",
+            message: `${warning} Export this legacy .ppt deck to .pptx for a text-only preview.`,
+          },
+        };
+      const slides = packagedSlides.map(renderTextSlide);
+      assertActive(signal, deadline);
       return {
         ok: true,
-        dependencies: [resolvedPath],
-        path: resolvedPath,
-        slides: [
-          {
-            slideIndex: 0,
-            slideId: slideName,
-            title: slideName,
-            pngBase64,
-          },
-        ],
-        version: sourceVersion,
+        ...base,
+        slides,
+        renderingMode: "text",
+        warnings: [warning, TEXT_PREVIEW_WARNING],
       };
-    } catch (err) {
-      await fs.unlink(tempPngPath).catch(() => {});
+    } catch (error) {
       return {
         ok: false,
         error: {
           kind: "compile_error",
-          message: err instanceof Error ? err.message : String(err),
+          message: error instanceof Error ? error.message : String(error),
         },
       };
+    } finally {
+      clearTimeout(timer);
     }
-  }
-
-  // PPTX Preview: render the slide source modules discovered before runtime startup.
-  try {
-    const slides: PresentationSlide[] = [];
-    for (let i = 0; i < slideModules.length; i++) {
-      const modulePath = slideModules[i];
-      if (!modulePath) continue;
-      const tempPngPath = path.join(
-        os.tmpdir(),
-        `cowork-slide-pptx-${i}-${crypto.randomUUID()}.png`,
-      );
-
-      try {
-        const runResult = await runCommand(
-          nodeBin,
-          [
-            scriptPath,
-            "--slide-module",
-            modulePath,
-            "--output",
-            tempPngPath,
-            "--workspace",
-            request.cwd,
-          ],
-          { cwd: request.cwd, env },
-        );
-
-        if (runResult.exitCode === 0) {
-          const pngBuffer = await fs.readFile(tempPngPath);
-          const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-          const slideName = path.basename(modulePath, ".mjs");
-          slides.push({
-            slideIndex: i,
-            slideId: slideName,
-            title: slideName,
-            pngBase64,
-          });
-        }
-      } catch {
-      } finally {
-        await fs.unlink(tempPngPath).catch(() => {});
-      }
-    }
-
-    if (slides.length === 0) {
-      return {
-        ok: false,
-        error: {
-          kind: "compile_error",
-          message: "Failed to render any of the slide modules.",
-        },
-      };
-    }
-
-    const dependencies = [resolvedPath, slideModuleResult.directory, ...slideModules];
-    return {
-      ok: true,
-      dependencies,
-      path: resolvedPath,
-      slides,
-      version: await buildPresentationVersion(dependencies),
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        kind: "compile_error",
-        message: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
+  };
 }
+
+export const previewPresentationFile = createPresentationPreviewer();

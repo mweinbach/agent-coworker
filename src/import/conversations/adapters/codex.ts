@@ -20,6 +20,7 @@ import {
   asNumber,
   asRecord,
   asString,
+  collectConversationPreviews,
   listFilesRecursive,
   pathExists,
   readJsonlRecords,
@@ -85,7 +86,7 @@ function buildCodexThreadsQuery(db: Database, includeArchived: boolean): string 
     : columns.has("updated_at")
       ? "updated_at"
       : "rowid";
-  return `SELECT * FROM threads ${where} ORDER BY ${orderExpr} DESC LIMIT ?`;
+  return `SELECT * FROM threads ${where} ORDER BY ${orderExpr} DESC`;
 }
 
 async function resolveRolloutPath(
@@ -183,7 +184,6 @@ export async function parseCodexRollout(input: {
   const records = await readJsonlRecords(input.rolloutPath, warnings);
   const items: ExternalConversationItem[] = [];
   const pendingToolIndexByCallId = new Map<string, number>();
-  const seenUserMessages = new Set<string>();
 
   for (const record of records) {
     const ts = normalizeIsoTimestamp(record.timestamp, input.fallbackUpdatedAt);
@@ -193,8 +193,7 @@ export async function parseCodexRollout(input: {
 
     if (type === "event_msg" && payload.type === "user_message") {
       const text = extractTextFromContent(payload.message);
-      if (!text || seenUserMessages.has(text)) continue;
-      seenUserMessages.add(text);
+      if (!text) continue;
       items.push({
         kind: "user",
         id: makeExternalItemId({
@@ -419,7 +418,6 @@ export const codexConversationAdapter: ConversationSourceAdapter = {
     opts: ConversationPreviewOptions,
   ): Promise<ExternalConversation[]> {
     if (!candidate.available) return [];
-    const limit = Math.max(1, Math.min(1000, Math.floor(opts.limit ?? 250)));
     if (!isSqlitePath(candidate.path)) {
       const stat = await statSafe(candidate.path);
       const files = stat?.isFile()
@@ -432,8 +430,10 @@ export const codexConversationAdapter: ConversationSourceAdapter = {
         })),
       );
       sorted.sort((left, right) => (right.stat?.mtimeMs ?? 0) - (left.stat?.mtimeMs ?? 0));
-      return await Promise.all(
-        sorted.slice(0, limit).map((entry) => codexRolloutFileToConversation(entry.filePath)),
+      return await collectConversationPreviews(
+        sorted,
+        (entry) => codexRolloutFileToConversation(entry.filePath),
+        opts,
       );
     }
 
@@ -443,12 +443,11 @@ export const codexConversationAdapter: ConversationSourceAdapter = {
       const includeArchived = opts.includeArchived === true;
       const rows = db
         .query(buildCodexThreadsQuery(db, includeArchived))
-        .all(limit) as CodexThreadRow[];
-      const conversations = await Promise.all(
-        rows.map((row) => threadRowToConversation(row, candidate.path)),
-      );
-      return conversations.filter(
-        (conversation): conversation is ExternalConversation => conversation !== null,
+        .iterate() as Iterable<CodexThreadRow>;
+      return await collectConversationPreviews(
+        rows,
+        (row) => threadRowToConversation(row, candidate.path),
+        opts,
       );
     } catch {
       return [];

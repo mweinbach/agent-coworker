@@ -164,4 +164,130 @@ describe("AgentSession.warmSessionResources", () => {
     const runTurnParams = mockRunTurn.mock.calls[0]?.[0] as { system?: string } | undefined;
     expect(runTurnParams?.system).toBe("Refreshed prompt");
   });
+
+  test("rejects an initial turn whose prompt load was invalidated by history reset", async () => {
+    const loadStarted = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const admissions: string[] = [];
+    let loads = 0;
+    const { session } = makeSession({
+      system: "",
+      discoveredSkills: undefined,
+      loadSystemPromptWithSkillsImpl: async () => {
+        if (++loads === 1) {
+          loadStarted.resolve();
+          await releaseLoad.promise;
+          return { prompt: "Pre-reset prompt", discoveredSkills: [] };
+        }
+        return { prompt: "Fresh prompt", discoveredSkills: [] };
+      },
+    });
+    const firstTurn = session.sendUserMessage(
+      "first message",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { onAdmission: (outcome) => admissions.push(outcome.status) },
+    );
+    try {
+      await loadStarted.promise;
+      session.reset();
+      releaseLoad.resolve();
+      await firstTurn;
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(admissions).toEqual(["rejected"]);
+
+      await session.sendUserMessage("retry after reset");
+      expect(mockRunTurn).toHaveBeenCalledTimes(1);
+      const runTurnParams = mockRunTurn.mock.calls[0]?.[0] as { system?: string } | undefined;
+      expect(runTurnParams?.system).toBe("Fresh prompt");
+    } finally {
+      releaseLoad.resolve();
+      await firstTurn;
+      session.dispose("test complete");
+    }
+  });
+
+  test.each(["warm", "refresh"] as const)(
+    "detects skill catalog changes made during a %s prompt load",
+    async (mode) => {
+      let revision = 1;
+      const loadStarted = Promise.withResolvers<void>();
+      const releaseLoad = Promise.withResolvers<void>();
+      let loads = 0;
+      const loadSystemPromptWithSkills = mock(async () => {
+        const loadedRevision = revision;
+        if (++loads === 1) {
+          loadStarted.resolve();
+          await releaseLoad.promise;
+        }
+        return {
+          prompt: `Prompt revision ${loadedRevision}`,
+          discoveredSkills: [{ name: `skill-${loadedRevision}`, description: "Versioned skill" }],
+        };
+      });
+      const { session } = makeSession({
+        system: mode === "warm" ? "" : "Original prompt",
+        discoveredSkills: mode === "warm" ? undefined : [],
+        initialSkillCatalogMtimeSnapshot: "0",
+        readSkillCatalogMtimeSnapshotImpl: async () => String(revision),
+        loadSystemPromptWithSkillsImpl: loadSystemPromptWithSkills,
+      });
+
+      const refresh = mode === "refresh" ? session.refreshSystemPromptWithSkills() : null;
+      if (mode === "warm") session.warmSessionResources();
+      await loadStarted.promise;
+      revision = 2;
+      releaseLoad.resolve();
+      if (refresh) await refresh;
+
+      // The first send may already be awaiting the warm load. The following
+      // turn must still notice that the completed prompt predates the catalog.
+      await session.sendUserMessage("first message");
+      await session.sendUserMessage("next message");
+
+      const runTurnParams = mockRunTurn.mock.calls.at(-1)?.[0] as
+        | { system?: string; discoveredSkills?: Array<{ name: string }> }
+        | undefined;
+      expect(runTurnParams?.system).toBe("Prompt revision 2");
+      expect(runTurnParams?.discoveredSkills).toEqual([
+        { name: "skill-2", description: "Versioned skill" },
+      ]);
+      expect(loadSystemPromptWithSkills).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test("an older explicit refresh cannot replace a newer completed prompt", async () => {
+    const firstLoadStarted = Promise.withResolvers<void>();
+    const releaseFirstLoad = Promise.withResolvers<void>();
+    let loads = 0;
+    const loadSystemPromptWithSkills = mock(async () => {
+      if (++loads === 1) {
+        firstLoadStarted.resolve();
+        await releaseFirstLoad.promise;
+        return { prompt: "Older prompt", discoveredSkills: [] };
+      }
+      return {
+        prompt: "Newer prompt",
+        discoveredSkills: [{ name: "newer", description: "Newer" }],
+      };
+    });
+    const { session } = makeSession({ loadSystemPromptWithSkillsImpl: loadSystemPromptWithSkills });
+
+    const olderRefresh = session.refreshSystemPromptWithSkills();
+    await firstLoadStarted.promise;
+    await session.refreshSystemPromptWithSkills();
+    releaseFirstLoad.resolve();
+    await olderRefresh;
+    await session.sendUserMessage("use the current prompt");
+
+    const runTurnParams = mockRunTurn.mock.calls.at(-1)?.[0] as
+      | { system?: string; discoveredSkills?: Array<{ name: string }> }
+      | undefined;
+    expect(runTurnParams?.system).toBe("Newer prompt");
+    expect(runTurnParams?.discoveredSkills).toEqual([{ name: "newer", description: "Newer" }]);
+  });
 });

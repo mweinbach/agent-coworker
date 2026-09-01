@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Interactions } from "@google/genai";
 import { createGoogleInteractionsRuntime } from "../../../src/runtime/googleInteractionsRuntime";
+import type { GoogleNativeStepRequest } from "../../../src/runtime/googleNative/types";
 import {
   __internal as googleNativeInternal,
   runGoogleNativeInteractionStep,
 } from "../../../src/runtime/googleNativeInteractions";
+import type { PartialTurnError } from "../../../src/runtime/types";
 import { __internal as citationMetadataInternal } from "../../../src/server/citationMetadata";
 import type { ModelMessage } from "../../../src/types";
 import {
@@ -17,6 +19,36 @@ import {
   makeConfig,
   makeParams,
 } from "./fixtures";
+
+async function runGoogleEventFixture(
+  events: Array<Record<string, unknown>>,
+  overrides: Partial<GoogleNativeStepRequest> = {},
+) {
+  const realFetch = globalThis.fetch;
+  googleNativeInternal.__testResetGoogleInteractionsClientCache();
+  globalThis.fetch = (async () => googleSseResponse(events)) as typeof fetch;
+  try {
+    return await runGoogleNativeInteractionStep({
+      model: {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+      apiKey: "test-google-api-key",
+      systemPrompt: "You are helpful.",
+      messages: [{ role: "user", content: "Hello" }],
+      tools: [],
+      streamOptions: {},
+      ...overrides,
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+    googleNativeInternal.__testResetGoogleInteractionsClientCache();
+  }
+}
 
 describe("google native interactions request building", () => {
   test("SDK Interactions contract stays aligned with request and stream shapes", () => {
@@ -183,6 +215,227 @@ describe("google native interactions request building", () => {
       globalThis.fetch = realFetch;
       googleNativeInternal.__testResetGoogleInteractionsClientCache();
     }
+  });
+
+  test.each(["content", "step"] as const)(
+    "rejects %s stream EOF without completion and retains partial text",
+    async (prefix) => {
+      const error = await runGoogleEventFixture([
+        {
+          event_type: "interaction.created",
+          interaction: { id: "partial", status: "in_progress" },
+        },
+        { event_type: `${prefix}.start`, index: 0, [prefix]: { type: "text", text: "Partial" } },
+        { event_type: `${prefix}.delta`, index: 0, delta: { type: "text", text: " answer" } },
+        { event_type: `${prefix}.stop`, index: 0 },
+      ]).then(
+        () => undefined,
+        (failure: PartialTurnError) => failure,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toContain("before interaction completion");
+      expect(error?.responseMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "Partial answer" }] },
+      ]);
+      expect(error?.providerState).toBeUndefined();
+    },
+  );
+
+  test.each([
+    "failed",
+    "cancelled",
+    "incomplete",
+    "budget_exceeded",
+    "queued",
+    "in_progress",
+    "future_terminal",
+    undefined,
+  ])("rejects terminal status %s and retains usage without unexecuted calls", async (status) => {
+    const error = await runGoogleEventFixture([
+      { event_type: "step.start", index: 0, step: { type: "text", text: "Partial answer" } },
+      { event_type: "step.stop", index: 0 },
+      {
+        event_type: "step.start",
+        index: 1,
+        step: {
+          type: "function_call",
+          id: "unexecuted",
+          name: "bash",
+          arguments: { command: "pwd" },
+        },
+      },
+      { event_type: "step.stop", index: 1 },
+      {
+        event_type: "interaction.completed",
+        interaction: {
+          id: "failed-interaction",
+          status,
+          usage: { total_input_tokens: 7, total_output_tokens: 3, total_tokens: 10 },
+        },
+      },
+    ]).then(
+      () => undefined,
+      (failure: PartialTurnError) => failure,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain(status ?? "unknown");
+    expect(error?.responseMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Partial answer" }] },
+    ]);
+    expect(error?.usage).toMatchObject({ promptTokens: 7, completionTokens: 3, totalTokens: 10 });
+    expect(error?.requestUsages).toEqual([error?.usage]);
+    if (status === "cancelled") expect(error?.name).toBe("AbortError");
+  });
+
+  test("rejects a failed status update even without a completion event", async () => {
+    await expect(
+      runGoogleEventFixture([
+        { event_type: "interaction.status_update", interaction_id: "failed", status: "failed" },
+      ]),
+    ).rejects.toThrow("failed");
+  });
+
+  test("accepts requires_action only after the tool block finishes", async () => {
+    const events: Array<Record<string, unknown>> = [
+      {
+        event_type: "step.start",
+        index: 0,
+        step: { type: "function_call", id: "call", name: "read" },
+      },
+      {
+        event_type: "step.delta",
+        index: 0,
+        delta: { type: "arguments_delta", arguments: '{"path":' },
+      },
+      {
+        event_type: "step.delta",
+        index: 0,
+        delta: { type: "arguments_delta", arguments: '"report.md"}' },
+      },
+      { event_type: "step.stop", index: 0 },
+      {
+        event_type: "interaction.completed",
+        interaction: { id: "pending-tool", status: "requires_action" },
+      },
+    ];
+
+    const result = await runGoogleEventFixture(events);
+    expect(result.assistant.stopReason).toBe("tool_calls");
+    expect(result.assistant.content).toEqual([
+      { type: "toolCall", id: "call", name: "read", arguments: { path: "report.md" } },
+    ]);
+    await expect(
+      runGoogleEventFixture(events.filter((event) => event.event_type !== "step.stop")),
+    ).rejects.toThrow("unfinished content");
+  });
+
+  test.each(['{"path":', "{invalid}", "[]", "null", "42", '{"path":"report.md"}garbage'])(
+    "rejects malformed tool arguments %s before emitting a tool call",
+    async (argumentsJson) => {
+      const parts: Array<Record<string, unknown>> = [];
+      await expect(
+        runGoogleEventFixture(
+          [
+            {
+              event_type: "step.start",
+              index: 0,
+              step: { type: "function_call", id: "invalid", name: "read" },
+            },
+            {
+              event_type: "step.delta",
+              index: 0,
+              delta: { type: "arguments_delta", arguments: argumentsJson },
+            },
+            { event_type: "step.stop", index: 0 },
+            {
+              event_type: "interaction.completed",
+              interaction: { id: "invalid", status: "requires_action" },
+            },
+          ],
+          {
+            onEvent: (part) => {
+              parts.push(part);
+            },
+          },
+        ),
+      ).rejects.toThrow("JSON arguments");
+      expect(parts.some((part) => part.type === "tool-call")).toBe(false);
+    },
+  );
+
+  test("stream failures retain partial reasoning and media without an unfinished local call", async () => {
+    const error = await runGoogleEventFixture([
+      {
+        event_type: "step.start",
+        index: 0,
+        step: {
+          type: "thought",
+          signature: "thought-sig",
+          summary: [{ type: "text", text: "Partial reasoning" }],
+        },
+      },
+      { event_type: "step.stop", index: 0 },
+      {
+        event_type: "step.start",
+        index: 1,
+        step: { type: "image", data: "aW1hZ2U=", mime_type: "image/png" },
+      },
+      { event_type: "step.stop", index: 1 },
+      {
+        event_type: "step.start",
+        index: 2,
+        step: { type: "function_call", id: "unfinished", name: "read" },
+      },
+      { event_type: "error", error: { message: "Provider stream failed" } },
+    ]).then(
+      () => undefined,
+      (failure: PartialTurnError) => failure,
+    );
+
+    expect(error?.message).toBe("Provider stream failed");
+    expect(error?.responseMessages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Partial reasoning",
+            thinkingSignature: "thought-sig",
+            providerOptions: { google: { thoughtSignature: "thought-sig" } },
+          },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+      },
+    ]);
+  });
+
+  test("preserves abort errors while attaching partial text", async () => {
+    const abortError = new DOMException("Request aborted", "AbortError");
+    const error = await runGoogleEventFixture(
+      [
+        { event_type: "step.start", index: 0, step: { type: "text", text: "Partial answer" } },
+        { event_type: "step.stop", index: 0 },
+        {
+          event_type: "interaction.completed",
+          interaction: { id: "aborted", status: "completed" },
+        },
+      ],
+      {
+        onEvent: (part) => {
+          if (part.type === "text-delta") throw abortError;
+        },
+      },
+    ).then(
+      () => undefined,
+      (failure: PartialTurnError) => failure,
+    );
+
+    expect(error).toBe(abortError);
+    expect(error?.responseMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Partial answer" }] },
+    ]);
   });
 
   liveGoogleTest(

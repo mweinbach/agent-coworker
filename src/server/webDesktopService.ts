@@ -168,6 +168,7 @@ const serverListeningSchema = z
   .object({
     type: z.literal("server_listening"),
     url: z.string().trim().min(1),
+    browserAccessToken: z.string().trim().min(1).nullable().optional(),
   })
   .passthrough();
 
@@ -246,6 +247,19 @@ async function resolveWorkspacePath(
     return await fs.realpath(resolved);
   } catch {
     return null;
+  }
+}
+
+async function normalizeSavedProjectPath(value: unknown): Promise<string | null> {
+  const candidate = asNonEmptyString(value);
+  if (!candidate || candidate.includes("\0")) return null;
+  const resolved = path.resolve(candidate);
+  try {
+    return await fs.realpath(resolved);
+  } catch {
+    // Unmounted drives and temporary permission failures must not delete history.
+    // Validate availability when a workspace is opened, not when state is saved.
+    return resolved;
   }
 }
 
@@ -339,9 +353,10 @@ async function normalizeState(
       rawWorkspacePath,
       opts.homedir,
     );
-    const workspacePath = await resolveWorkspacePath(item.path, workspaceKind, {
-      homedir: opts.homedir,
-    });
+    const workspacePath =
+      workspaceKind === "project"
+        ? await normalizeSavedProjectPath(item.path)
+        : await resolveWorkspacePath(item.path, workspaceKind, { homedir: opts.homedir });
     if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
       continue;
     }
@@ -628,9 +643,15 @@ function createWorkspaceServerMonitor(
       try {
         const parsed = serverListeningSchema.safeParse(JSON.parse(trimmed));
         if (parsed.success) {
+          let url = parsed.data.url;
+          if (parsed.data.browserAccessToken) {
+            const authenticatedUrl = new URL(url);
+            authenticatedUrl.searchParams.set("coworkBrowserToken", parsed.data.browserAccessToken);
+            url = authenticatedUrl.toString();
+          }
           readySeen = true;
           clearTimeout(timeout);
-          settleReadyResolve({ url: parsed.data.url });
+          settleReadyResolve({ url });
           return;
         }
       } catch {
@@ -687,6 +708,9 @@ class SourceWorkspaceServerManager {
   private readonly repoRoot: string;
   private readonly sourceEntry: string;
   private readonly servers = new Map<string, WorkspaceServerHandle>();
+  private readonly pendingOperations = new Map<string, Promise<void>>();
+  private stopped = false;
+  private stopPromise: Promise<void> | null = null;
   private readonly launchWorkspaceServerImpl: NonNullable<
     SourceWorkspaceServerManagerDeps["launchWorkspaceServer"]
   >;
@@ -708,7 +732,22 @@ class SourceWorkspaceServerManager {
     if (!workspaceId) {
       throw new Error("workspaceId contains invalid characters");
     }
+    if (this.stopped) throw new Error("Workspace server manager is stopped");
+    return await this.runWorkspaceOperation(workspaceId, async () => {
+      if (this.stopped) throw new Error("Workspace server manager is stopped");
+      return await this.startWorkspaceServerLocked(workspaceId, opts);
+    });
+  }
+
+  private async startWorkspaceServerLocked(
+    workspaceId: string,
+    opts: {
+      workspacePath: string;
+      yolo: boolean;
+    },
+  ): Promise<{ url: string }> {
     const workspacePath = await assertWorkspaceDirectory(opts.workspacePath);
+    if (this.stopped) throw new Error("Workspace server manager is stopped");
 
     const existing = this.servers.get(workspaceId);
     if (existing && existing.child.exitCode === null && existing.child.signalCode === null) {
@@ -741,6 +780,8 @@ class SourceWorkspaceServerManager {
         this.servers.delete(workspaceId);
       }
     });
+    // stopAll waits for this operation before draining the owned handles.
+    if (this.stopped) throw new Error("Workspace server manager is stopped");
     return { url: handle.url };
   }
 
@@ -749,18 +790,44 @@ class SourceWorkspaceServerManager {
     if (!safeWorkspaceId) {
       throw new Error("workspaceId contains invalid characters");
     }
-    const handle = this.servers.get(safeWorkspaceId);
-    if (!handle) {
-      return;
-    }
-    this.servers.delete(safeWorkspaceId);
-    await this.gracefulKillImpl(handle.child);
+    if (this.stopPromise) return await this.stopPromise;
+    await this.runWorkspaceOperation(safeWorkspaceId, async () => {
+      const handle = this.servers.get(safeWorkspaceId);
+      if (!handle) return;
+      this.servers.delete(safeWorkspaceId);
+      await this.gracefulKillImpl(handle.child);
+    });
   }
 
   async stopAll(): Promise<void> {
-    const handles = [...this.servers.values()];
-    this.servers.clear();
-    await Promise.all(handles.map((handle) => this.gracefulKillImpl(handle.child)));
+    if (this.stopPromise) return await this.stopPromise;
+    this.stopped = true;
+    this.stopPromise = (async () => {
+      await Promise.all(this.pendingOperations.values());
+      const handles = [...this.servers.values()];
+      this.servers.clear();
+      await Promise.all(handles.map((handle) => this.gracefulKillImpl(handle.child)));
+    })();
+    return await this.stopPromise;
+  }
+
+  private async runWorkspaceOperation<T>(
+    workspaceId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.pendingOperations.get(workspaceId) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pendingOperations.set(workspaceId, settled);
+    try {
+      return await result;
+    } finally {
+      if (this.pendingOperations.get(workspaceId) === settled)
+        this.pendingOperations.delete(workspaceId);
+    }
   }
 }
 

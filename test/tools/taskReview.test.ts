@@ -1,9 +1,107 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import type { AgentExecutionState, PersistentAgentSummary } from "../../src/shared/agents";
 import { createTools } from "../../src/tools";
+import { createTaskReviewTool } from "../../src/tools/taskReview";
 import { makeConfig, makeCtx, tmpDir } from "./tools.harness";
 
 describe("task review tool", () => {
+  test.each([
+    { executionState: "errored", feedback: "VERDICT: PASS", error: "did not complete" },
+    { executionState: "closed", feedback: "VERDICT: PASS", error: "did not complete" },
+    { executionState: "running", feedback: "VERDICT: PASS", error: "did not complete" },
+    { executionState: "pending_init", feedback: "VERDICT: PASS", error: "did not complete" },
+    { executionState: null, feedback: "VERDICT: PASS", error: "did not complete" },
+    {
+      executionState: "completed",
+      feedback: "I finished the review, but the deliverable still needs corrections.",
+      error: "valid PASS, PARTIAL, or FAIL verdict",
+    },
+  ] satisfies Array<{
+    executionState: AgentExecutionState | null;
+    feedback: string;
+    error: string;
+  }>)("rejects unverified reviewer result: $executionState / $feedback", async (scenario) => {
+    const dir = await tmpDir();
+    const reviewer: PersistentAgentSummary = {
+      agentId: "reviewer-1",
+      parentSessionId: "session-1",
+      role: "reviewer",
+      mode: "delegate",
+      depth: 1,
+      effectiveModel: "gpt-5.4",
+      provider: "openai",
+      title: "Task review",
+      createdAt: "2026-06-19T12:00:00.000Z",
+      updatedAt: "2026-06-19T12:01:00.000Z",
+      lifecycleState: "active",
+      executionState: "running",
+      busy: true,
+    };
+    const applyTaskDirective = mock(async () => {
+      throw new Error("An unverified review must not be recorded");
+    });
+    const close = mock(async () => ({
+      ...reviewer,
+      lifecycleState: "closed" as const,
+      executionState: "closed" as const,
+      busy: false,
+    }));
+    const ctx = makeCtx(dir, {
+      taskContext: {
+        id: "task-1",
+        title: "Verify deliverable",
+        objective: "Only accept complete independent reviews.",
+        status: "working",
+        revision: 2,
+        reviewRequired: true,
+        reviewRounds: 1,
+        requirements: [],
+        workItems: [],
+        decisions: [],
+        questions: [],
+        blockers: [],
+        artifacts: [],
+        activity: [],
+        activeThreadId: "task-thread-1",
+      },
+      getTaskReviewMaterial: async () => ({ fingerprint: "material" }),
+      applyTaskDirective,
+      agentControl: {
+        spawn: async () => reviewer,
+        wait: async () => ({
+          timedOut: false,
+          mode: "all",
+          agents: scenario.executionState
+            ? [{ ...reviewer, executionState: scenario.executionState, busy: false }]
+            : [],
+          readyAgentIds: [reviewer.agentId],
+          erroredAgentIds: scenario.executionState === "errored" ? [reviewer.agentId] : [],
+          inspections: [
+            {
+              agentId: reviewer.agentId,
+              latestAssistantText: scenario.feedback,
+              parsedReport: { status: "completed", summary: "The review ran." },
+            },
+          ],
+        }),
+        close,
+        list: async () => [],
+        sendInput: async () => {},
+        inspect: async () => {
+          throw new Error("not used");
+        },
+        resume: async () => reviewer,
+      },
+    });
+    const tool = createTaskReviewTool(ctx);
+    if (!tool) throw new Error("Expected reviewTask tool");
+
+    await expect(tool.execute({ expectedRevision: 2 })).rejects.toThrow(scenario.error);
+    expect(applyTaskDirective).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledWith({ agentId: reviewer.agentId });
+  });
+
   test("runs a separate read-only reviewer and records its feedback", async () => {
     const dir = await tmpDir();
     const feedback = [
@@ -18,7 +116,7 @@ describe("task review tool", () => {
       "VERDICT: FAIL",
       '<agent_report>{"status":"failed","summary":"Missing downside case"}</agent_report>',
     ].join("\n");
-    const spawn = mock(async () => ({
+    const reviewer = {
       agentId: "reviewer-1",
       parentSessionId: "session-1",
       role: "reviewer" as const,
@@ -32,12 +130,14 @@ describe("task review tool", () => {
       lifecycleState: "active" as const,
       executionState: "running" as const,
       busy: true,
-    }));
+    };
+    const spawn = mock(async () => reviewer);
     const wait = mock(async () => ({
       timedOut: false,
       mode: "all" as const,
-      agents: [],
+      agents: [{ ...reviewer, executionState: "completed" as const, busy: false }],
       readyAgentIds: ["reviewer-1"],
+      erroredAgentIds: [],
       inspections: [
         {
           agentId: "reviewer-1",
@@ -286,7 +386,7 @@ describe("task review tool", () => {
         latestCheckpoint: null,
       },
     }));
-    const spawn = mock(async () => ({
+    const reviewer = {
       agentId: "reviewer-4",
       parentSessionId: "session-1",
       role: "reviewer" as const,
@@ -300,7 +400,8 @@ describe("task review tool", () => {
       lifecycleState: "active" as const,
       executionState: "running" as const,
       busy: true,
-    }));
+    };
+    const spawn = mock(async () => reviewer);
     const ctx = makeCtx(dir, {
       sessionId: "session-1",
       getTaskReviewMaterial: async () => ({ fingerprint: "review-start-fingerprint-4" }),
@@ -327,8 +428,9 @@ describe("task review tool", () => {
         wait: mock(async () => ({
           timedOut: false,
           mode: "all" as const,
-          agents: [],
+          agents: [{ ...reviewer, executionState: "completed" as const, busy: false }],
           readyAgentIds: ["reviewer-4"],
+          erroredAgentIds: [],
           inspections: [{ agentId: "reviewer-4", latestAssistantText: fourthFeedback }],
         })),
         close: mock(async () => ({

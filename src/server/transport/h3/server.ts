@@ -267,6 +267,13 @@ function getRequiredH3Permission(
   if (method.startsWith("cowork/provider/auth/")) {
     return "providerAuth";
   }
+  if (
+    method === "cowork/mcp/server/auth/setApiKey" ||
+    method === "cowork/mcp/server/auth/callback"
+  ) {
+    // Saving credentials also validates the server, which can execute its stdio command.
+    return ["mcpAuth", "workspaceSettings"];
+  }
   if (method.startsWith("cowork/mcp/server/auth/")) {
     return "mcpAuth";
   }
@@ -491,6 +498,7 @@ export async function startH3MobileServer(
         displayName,
         sessionToken,
       });
+      closeDeviceConnection(deviceId);
       latestTrustedDevice = trustedDevice;
       return jsonResponse({
         sessionToken,

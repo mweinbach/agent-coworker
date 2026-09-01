@@ -186,10 +186,11 @@ export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpc
       const scope = params.scope === "user" ? "user" : "workspace";
       const id = typeof params.id === "string" && params.id.trim() ? params.id.trim() : undefined;
       const content = typeof params.content === "string" ? params.content : "";
+      const mode = params.mode === "create" ? "create" : "upsert";
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.memory.upsert(scope, id, content),
+        async (runtime) => await runtime.memory.upsert(scope, id, content, mode),
         (event): event is Extract<SessionEvent, { type: "memory_list" }> =>
           event.type === "memory_list",
       );

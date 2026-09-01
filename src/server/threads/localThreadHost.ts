@@ -547,6 +547,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
         provider: selection.provider,
         model: selection.model,
         thinking,
+        home: resolveAuthHomeDir(this.deps.getConfig(), this.deps.homedir),
       });
     }
     const target = await this.resolveForkTarget(source, environment, forkTitle);
@@ -843,6 +844,7 @@ export class LocalThreadHost implements ThreadHostAdapter {
       model: config.model,
       thinking,
       current: runtime.settings.configEvent.config.providerOptions,
+      home: resolveAuthHomeDir(this.deps.getConfig(), this.deps.homedir),
     });
     if (patch) {
       await runtime.settings.setConfig({ providerOptions: patch });
@@ -1022,14 +1024,14 @@ export class LocalThreadHost implements ThreadHostAdapter {
       metadata.set(threadId, {
         pinned: desktopPinned ?? existing?.pinned ?? false,
         pinnedAt:
-          desktopPinned === undefined
+          desktopPinned === null
             ? (existing?.pinnedAt ?? null)
             : desktopPinned
               ? asTimestamp(item.pinnedAt)
               : null,
         archived: desktopArchived ?? existing?.archived ?? false,
         archivedAt:
-          desktopArchived === undefined
+          desktopArchived === null
             ? (existing?.archivedAt ?? null)
             : desktopArchived
               ? asTimestamp(item.archivedAt)

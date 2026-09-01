@@ -4,9 +4,71 @@ import {
   createResponsesStreamProjector,
   projectResponsesStreamEvent,
 } from "../src/runtime/openaiResponsesProjector";
+import { processResponsesStream } from "../src/runtime/openaiResponsesShared";
 import type { PiModel } from "../src/runtime/piRuntimeOptions";
 
 describe("openai responses projector", () => {
+  test("response.incomplete rejects the step while preserving token usage", () => {
+    const output: Record<string, any> = { content: [{ type: "text", text: "Partial answer" }] };
+    const projector = createResponsesStreamProjector(output);
+
+    expect(() =>
+      projectResponsesStreamEvent(
+        projector,
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {
+              input_tokens: 12,
+              output_tokens: 5,
+              total_tokens: 17,
+              input_tokens_details: { cached_tokens: 2 },
+            },
+          },
+        },
+        { push: () => {} },
+      ),
+    ).toThrow("max_output_tokens");
+    expect(output.content).toEqual([{ type: "text", text: "Partial answer" }]);
+    expect(output.usage).toEqual({
+      input: 10,
+      output: 5,
+      cacheRead: 2,
+      cacheWrite: 0,
+      totalTokens: 17,
+    });
+    expect(output.stopReason).not.toBe("stop");
+  });
+
+  test("rejects unexpected EOF instead of treating partial tool JSON as a completed call", async () => {
+    const output: Record<string, any> = { content: [] };
+    async function* events() {
+      yield {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: "fc_incomplete",
+          call_id: "call_incomplete",
+          name: "write",
+          arguments: "",
+        },
+      };
+      yield {
+        type: "response.function_call_arguments.delta",
+        item_id: "fc_incomplete",
+        delta: '{"path":"important.txt","content":"part',
+      };
+    }
+
+    await expect(
+      processResponsesStream(events(), output, { push: () => {} }, {} as PiModel),
+    ).rejects.toThrow("before completion");
+    expect(output.stopReason).toBe("error");
+  });
+
   test("response.completed tolerates models without local cost metadata", () => {
     const output: Record<string, any> = {};
     const projector = createResponsesStreamProjector(output, {

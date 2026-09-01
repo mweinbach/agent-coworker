@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { getAiCoworkerPaths } from "../src/connect";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 import { resolveListeningHintsFromInterfaces } from "../src/server/index";
 import { ASK_SKIP_TOKEN } from "../src/server/protocol";
+import * as serverRuntime from "../src/server/runtime/ServerRuntime";
 import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
@@ -16,6 +17,8 @@ import {
   loadH3PairingStoreState,
   rememberH3TrustedDevice,
 } from "../src/server/transport/h3/pairing";
+import * as h3Server from "../src/server/transport/h3/server";
+import { getOneOffChatsRoot } from "../src/utils/oneOffChats";
 import { stopTestServer } from "./helpers/wsHarness";
 
 function repoRoot(): string {
@@ -99,11 +102,144 @@ async function waitForAbort(signal: AbortSignal, onAbort?: () => void): Promise<
   throw makeAbortError();
 }
 
+function mockServerLifecycle(stop = mock(async () => {})) {
+  const nativeStop = mock(async (_closeActiveConnections?: boolean) => {});
+  const runtime = {
+    config: {},
+    env: {},
+    system: "",
+    stop,
+    isAddrInUse: (error: unknown) =>
+      Boolean(error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE"),
+    startIdleEviction: () => {
+      const timer = setInterval(() => {}, 60_000);
+      timer.unref();
+      return timer;
+    },
+    waitForStartupReady: async () => {},
+  } as serverRuntime.AgentServerRuntime;
+  const createRuntime = spyOn(serverRuntime, "createAgentServerRuntime").mockResolvedValue(runtime);
+  const serve = spyOn(Bun, "serve").mockReturnValue({ port: 7337, stop: nativeStop } as never);
+  return {
+    stop,
+    nativeStop,
+    serve,
+    createRuntime,
+    restore() {
+      serve.mockRestore();
+      createRuntime.mockRestore();
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("Server Startup", () => {
+  test.each(["explicit", "environment"] as const)(
+    "shares the %s home with the runtime, web desktop, and mobile listener",
+    async (homeSource) => {
+      const project = await makeTmpProject();
+      const overrideHome = path.join(project, "override-home");
+      const explicitHome = path.join(project, "explicit-home");
+      const expectedHome = homeSource === "explicit" ? explicitHome : overrideHome;
+      const lifecycle = mockServerLifecycle();
+      const startMobile = spyOn(h3Server, "startH3MobileServer").mockResolvedValue({
+        stop: mock(async () => {}),
+      } as never);
+      let started: Awaited<ReturnType<typeof startAgentServer>> | undefined;
+      try {
+        started = await startAgentServer(
+          serverOpts(project, {
+            homedir: homeSource === "explicit" ? explicitHome : undefined,
+            mobileH3: { port: 0 },
+            env: {
+              COWORK_HOME_OVERRIDE: overrideHome,
+              HOME: path.join(project, "other-home"),
+              COWORK_WEB_DESKTOP_SERVICE: "1",
+              COWORK_DESKTOP_USER_DATA_DIR: path.join(project, "desktop-data"),
+            },
+          }),
+        );
+
+        const runtimeOptions = lifecycle.createRuntime.mock.calls[0]?.[0];
+        expect(runtimeOptions?.homedir).toBe(expectedHome);
+        expect(await runtimeOptions?.desktopService?.getWorkspaceRoots(project)).toContain(
+          getOneOffChatsRoot(expectedHome),
+        );
+        expect(startMobile).toHaveBeenCalledWith(
+          expect.objectContaining({ storeRootPath: expectedHome }),
+        );
+      } finally {
+        await started?.server.stop(true);
+        startMobile.mockRestore();
+        lifecycle.restore();
+        await fs.rm(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("releases the runtime when the primary listener cannot bind", async () => {
+    const lifecycle = mockServerLifecycle();
+    const failure = Object.assign(new Error("Primary port is occupied"), { code: "EADDRINUSE" });
+    lifecycle.serve.mockImplementation(() => {
+      throw failure;
+    });
+    try {
+      await expect(startAgentServer(serverOpts("/test/project", { port: 7337 }))).rejects.toBe(
+        failure,
+      );
+      expect(lifecycle.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      lifecycle.restore();
+    }
+  });
+
+  test("closes the listener even if runtime cleanup fails and retains the failure for later callers", async () => {
+    const failure = new Error("Runtime cleanup failed");
+    const lifecycle = mockServerLifecycle(
+      mock(async () => {
+        throw failure;
+      }),
+    );
+    try {
+      const { server } = await startAgentServer(serverOpts("/test/project"));
+      await expect(server.stop(true)).rejects.toBe(failure);
+      expect(lifecycle.nativeStop).toHaveBeenCalledWith(true);
+      await expect(server.stop(true)).rejects.toBe(failure);
+      expect(lifecycle.stop).toHaveBeenCalledTimes(1);
+      expect(lifecycle.nativeStop).toHaveBeenCalledTimes(1);
+    } finally {
+      lifecycle.restore();
+    }
+  });
+
+  test("concurrent stop callers wait for the same cleanup to finish", async () => {
+    const cleanup = Promise.withResolvers<void>();
+    const lifecycle = mockServerLifecycle(mock(async () => await cleanup.promise));
+    let firstStop: Promise<void> | undefined;
+    try {
+      const { server } = await startAgentServer(serverOpts("/test/project"));
+      firstStop = server.stop(true);
+      let secondFinished = false;
+      const secondStop = server.stop(true).then(() => {
+        secondFinished = true;
+      });
+      await Promise.resolve();
+      expect(secondFinished).toBe(false);
+
+      cleanup.resolve();
+      await Promise.all([firstStop, secondStop]);
+      expect(lifecycle.stop).toHaveBeenCalledTimes(1);
+      expect(lifecycle.nativeStop).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup.resolve();
+      await firstStop;
+      lifecycle.restore();
+    }
+  });
+
   test("mobile H3 host hints prefer stable LAN addresses over link-local interfaces", () => {
     const hints = resolveListeningHintsFromInterfaces("0.0.0.0", {
       en5: [
@@ -496,6 +632,47 @@ describe("HTTP Handler", () => {
       expect(res.status).toBe(204);
       expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
       expect(res.headers.get("access-control-allow-methods")).toContain("DELETE");
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("exposes file preview metadata to authenticated cross-origin desktop clients", async () => {
+    const tmpDir = await makeTmpProject();
+    const filePath = path.join(tmpDir, "preview.txt");
+    await fs.writeFile(filePath, "preview contents", "utf8");
+    const token = "preview-test-browser-token";
+    const { server } = await startAgentServer(
+      serverOpts(tmpDir, { env: { COWORK_BROWSER_ACCESS_TOKEN: token } }),
+    );
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${server.port}/cowork/fs/preview?path=${encodeURIComponent(filePath)}`,
+        {
+          headers: {
+            Origin: "http://127.0.0.1:5173",
+            "X-Cowork-Browser-Token": token,
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("preview contents");
+      const exposedHeaders = (response.headers.get("access-control-expose-headers") ?? "")
+        .split(",")
+        .map((header) => header.trim().toLowerCase());
+      for (const header of [
+        "x-cowork-file-path",
+        "x-cowork-byte-length",
+        "x-cowork-truncated",
+        "x-cowork-file-modified-at",
+        "x-cowork-file-change-time",
+        "x-cowork-file-size",
+        "x-cowork-file-fingerprint",
+      ]) {
+        expect(response.headers.get(header)).not.toBeNull();
+        expect(exposedHeaders).toContain(header);
+      }
+      expect(exposedHeaders).not.toContain("*");
     } finally {
       await stopTestServer(server);
     }

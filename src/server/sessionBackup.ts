@@ -4,20 +4,22 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
+import { canonicalizePathForBoundaryCheckSync } from "../utils/paths";
 import {
-  copyDirectoryContents,
-  emptyDirectory,
   ensureSecureDirectory,
   ensureWorkingDirectory,
   isPathWithin,
+  replaceDirectoryContents,
 } from "./sessionBackup/fileSystem";
 import { workspaceFingerprint } from "./sessionBackup/fingerprint";
+import { withBackupPathLock } from "./sessionBackup/locking";
 import {
   readMetadata,
   type SessionBackupMetadata,
   type SessionBackupMetadataCheckpoint,
   writeJson,
 } from "./sessionBackup/metadata";
+import { workspaceRecoveryFailureReason } from "./sessionBackup/recovery";
 import {
   createSnapshotWithTarFallback,
   resolveSnapshotPath,
@@ -149,6 +151,17 @@ function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
 }
 
+function assertBackupOutsideWorkspace(sessionDir: string, workingDirectory: string): void {
+  if (
+    isPathWithin(
+      canonicalizePathForBoundaryCheckSync(workingDirectory),
+      canonicalizePathForBoundaryCheckSync(sessionDir),
+    )
+  ) {
+    throw new Error("Refusing to use a backup directory inside the working directory");
+  }
+}
+
 function buildInitialCheckpoint(opts: {
   createdAt: string;
   fingerprint: string;
@@ -235,6 +248,7 @@ async function normalizeMetadataOnLoad(
 // ---------------------------------------------------------------------------
 
 export type PruneBackupsRootOptions = {
+  homedir?: string;
   maxClosedSessions?: number;
   maxClosedAgeDays?: number;
   maxOrphanAgeDays?: number;
@@ -318,8 +332,33 @@ export class SessionBackupManager implements SessionBackupHandle {
       }
     };
 
+    const removeIfUnchanged = async (sessionDir: string, expected: SessionBackupMetadata | null) =>
+      await withBackupPathLock(
+        sessionDir,
+        async () => {
+          const current = await readMetadata(path.join(sessionDir, METADATA_FILE)).catch(
+            () => null,
+          );
+          if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
+          if (!current) {
+            const updatedAt = await mtimeMs(sessionDir);
+            if (updatedAt === null || now - updatedAt <= maxOrphanAgeMs) return false;
+          } else if (await workspaceRecoveryFailureReason(current.workingDirectory)) {
+            return false;
+          }
+          await fs.rm(sessionDir, { recursive: true, force: true });
+          return true;
+        },
+        opts?.homedir,
+      );
+
     const entries = await fs.readdir(backupsRootDir, { withFileTypes: true });
-    const closedSessions: Array<{ sessionId: string; sessionDir: string; closedAtMs: number }> = [];
+    const closedSessions: Array<{
+      sessionId: string;
+      sessionDir: string;
+      closedAtMs: number;
+      metadata: SessionBackupMetadata;
+    }> = [];
     const survivingSessionDirs: string[] = [];
 
     for (const entry of entries) {
@@ -341,8 +380,7 @@ export class SessionBackupManager implements SessionBackupHandle {
         // flight keeps updating the dir while it writes snapshots.
         const dirMtimeMs = await mtimeMs(sessionDir);
         if (dirMtimeMs !== null && now - dirMtimeMs > maxOrphanAgeMs) {
-          await fs.rm(sessionDir, { recursive: true, force: true });
-          continue;
+          if (await removeIfUnchanged(sessionDir, null)) continue;
         }
         survivingSessionDirs.push(sessionDir);
         continue;
@@ -354,6 +392,7 @@ export class SessionBackupManager implements SessionBackupHandle {
           sessionId: metadata.sessionId,
           sessionDir,
           closedAtMs: Number.isFinite(closedAtMs) ? closedAtMs : 0,
+          metadata,
         });
         continue;
       }
@@ -371,8 +410,7 @@ export class SessionBackupManager implements SessionBackupHandle {
         Number.isFinite(lastCheckpointAtMs) ? lastCheckpointAtMs : 0,
       );
       if (freshestMs > 0 && now - freshestMs > maxInactiveAgeMs) {
-        await fs.rm(sessionDir, { recursive: true, force: true });
-        continue;
+        if (await removeIfUnchanged(sessionDir, metadata)) continue;
       }
       survivingSessionDirs.push(sessionDir);
     }
@@ -387,7 +425,9 @@ export class SessionBackupManager implements SessionBackupHandle {
         survivingSessionDirs.push(session.sessionDir);
         continue;
       }
-      await fs.rm(session.sessionDir, { recursive: true, force: true });
+      if (!(await removeIfUnchanged(session.sessionDir, session.metadata))) {
+        survivingSessionDirs.push(session.sessionDir);
+      }
     }
 
     // Sweep leaked mkdtemp staging dirs (fingerprint/restore stages, legacy
@@ -406,7 +446,16 @@ export class SessionBackupManager implements SessionBackupHandle {
         const stageDir = path.join(sessionDir, child.name);
         const stageMtimeMs = await mtimeMs(stageDir);
         if (stageMtimeMs === null || now - stageMtimeMs <= maxStageAgeMs) continue;
-        await fs.rm(stageDir, { recursive: true, force: true });
+        await withBackupPathLock(
+          sessionDir,
+          async () => {
+            const updatedAt = await mtimeMs(stageDir);
+            if (updatedAt !== null && now - updatedAt > maxStageAgeMs) {
+              await fs.rm(stageDir, { recursive: true, force: true });
+            }
+          },
+          opts?.homedir,
+        );
       }
     }
   }
@@ -428,64 +477,105 @@ export class SessionBackupManager implements SessionBackupHandle {
         `Refusing to create session backup inside working directory: ${workingDirectory}`,
       );
     }
+    assertBackupOutsideWorkspace(sessionDir, workingDirectory);
 
     await ensureSecureDirectory(backupsRootDir);
     await ensureSecureDirectory(sessionDir);
-    await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
-    // Backups accumulate whenever sessions end without a clean close(); sweep
-    // on create so long-lived installs reclaim space even if close never runs.
-    void SessionBackupManager.pruneBackupsRoot(backupsRootDir, {
-      skipSessionId: opts.sessionId,
-    }).catch(() => {
-      // best-effort cleanup
-    });
-    const existing = await readMetadata(metadataPath);
-    if (existing) {
-      if (existing.sessionId !== opts.sessionId) {
-        throw new Error(`Refusing to reuse backup with mismatched session id at ${metadataPath}`);
-      }
-      if (path.resolve(existing.workingDirectory) !== workingDirectory) {
-        throw new Error(
-          `Refusing to reuse backup with mismatched working directory at ${metadataPath}`,
-        );
-      }
-      return await SessionBackupManager.openExisting({ sessionDir, reopen: true });
-    }
-    await ensureWorkingDirectory(workingDirectory);
-    const originalFingerprint = await workspaceFingerprint(workingDirectory);
-
-    const originalSnapshot = await createSnapshotWithTarFallback({
-      sourceDir: workingDirectory,
+    await ensureSecureDirectory(resolveSnapshotPath(sessionDir, CHECKPOINTS_DIR));
+    return await withBackupPathLock(
       sessionDir,
-      tarPath: ORIGINAL_ARCHIVE,
-      directoryPath: ORIGINAL_DIR,
-    });
+      async () => {
+        // Backups accumulate whenever sessions end without a clean close(); sweep
+        // on create so long-lived installs reclaim space even if close never runs.
+        void SessionBackupManager.pruneBackupsRoot(backupsRootDir, {
+          skipSessionId: opts.sessionId,
+          homedir: opts.homedir,
+        }).catch(() => {
+          // best-effort cleanup
+        });
+        const existing = await readMetadata(metadataPath);
+        if (existing) {
+          if (existing.sessionId !== opts.sessionId) {
+            throw new Error(
+              `Refusing to reuse backup with mismatched session id at ${metadataPath}`,
+            );
+          }
+          if (path.resolve(existing.workingDirectory) !== workingDirectory) {
+            throw new Error(
+              `Refusing to reuse backup with mismatched working directory at ${metadataPath}`,
+            );
+          }
+          return await SessionBackupManager.loadExisting({
+            sessionDir,
+            reopen: true,
+            homedir: opts.homedir,
+          });
+        }
+        await ensureWorkingDirectory(workingDirectory);
+        return await withBackupPathLock(
+          workingDirectory,
+          async () => {
+            const recoveryFailure = await workspaceRecoveryFailureReason(workingDirectory);
+            if (recoveryFailure) throw new Error(recoveryFailure);
+            const originalFingerprint = await workspaceFingerprint(workingDirectory);
 
-    const createdAt = new Date().toISOString();
-    const metadata: SessionBackupMetadata = {
-      version: 1,
-      sessionId: opts.sessionId,
-      workingDirectory,
-      createdAt,
-      state: "active",
-      originalFingerprint,
-      originalSnapshot,
-      checkpoints: [
-        buildInitialCheckpoint({
-          createdAt,
-          fingerprint: originalFingerprint,
-          snapshot: originalSnapshot,
-        }),
-      ],
-    };
-    await writeJson(metadataPath, metadata);
+            const originalSnapshot = await createSnapshotWithTarFallback({
+              sourceDir: workingDirectory,
+              sessionDir,
+              tarPath: ORIGINAL_ARCHIVE,
+              directoryPath: ORIGINAL_DIR,
+            });
 
-    return new SessionBackupManager({ metadata, originalFingerprint, sessionDir, metadataPath });
+            const createdAt = new Date().toISOString();
+            const metadata: SessionBackupMetadata = {
+              version: 1,
+              sessionId: opts.sessionId,
+              workingDirectory,
+              createdAt,
+              state: "active",
+              originalFingerprint,
+              originalSnapshot,
+              checkpoints: [
+                buildInitialCheckpoint({
+                  createdAt,
+                  fingerprint: originalFingerprint,
+                  snapshot: originalSnapshot,
+                }),
+              ],
+            };
+            await writeJson(metadataPath, metadata);
+
+            return new SessionBackupManager({
+              metadata,
+              originalFingerprint,
+              sessionDir,
+              metadataPath,
+              homedir: opts.homedir,
+            });
+          },
+          opts.homedir,
+        );
+      },
+      opts.homedir,
+    );
   }
 
   static async openExisting(opts: {
     sessionDir: string;
     reopen?: boolean;
+    homedir?: string;
+  }): Promise<SessionBackupManager> {
+    return await withBackupPathLock(
+      opts.sessionDir,
+      () => SessionBackupManager.loadExisting(opts),
+      opts.homedir,
+    );
+  }
+
+  private static async loadExisting(opts: {
+    sessionDir: string;
+    reopen?: boolean;
+    homedir?: string;
   }): Promise<SessionBackupManager> {
     const sessionDir = path.resolve(opts.sessionDir);
     const metadataPath = path.join(sessionDir, METADATA_FILE);
@@ -493,6 +583,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     if (!metadata) {
       throw new Error(`Missing backup metadata at ${metadataPath}`);
     }
+    assertBackupOutsideWorkspace(sessionDir, metadata.workingDirectory);
     const normalized = await normalizeMetadataOnLoad(metadata, sessionDir, metadataPath);
     let resolvedMetadata = normalized.metadata;
     if (
@@ -506,11 +597,18 @@ export class SessionBackupManager implements SessionBackupHandle {
       };
       await writeJson(metadataPath, resolvedMetadata);
     }
+    const recoveryFailure = await withBackupPathLock(
+      resolvedMetadata.workingDirectory,
+      () => workspaceRecoveryFailureReason(resolvedMetadata.workingDirectory),
+      opts.homedir,
+    );
     return new SessionBackupManager({
       metadata: resolvedMetadata,
       originalFingerprint: normalized.originalFingerprint,
       sessionDir,
       metadataPath,
+      homedir: opts.homedir,
+      recoveryFailure,
     });
   }
 
@@ -518,22 +616,29 @@ export class SessionBackupManager implements SessionBackupHandle {
   private originalFingerprint: string;
   private readonly sessionDir: string;
   private readonly metadataPath: string;
+  private readonly homedir?: string;
+  private recoveryFailure?: string;
 
   private constructor(opts: {
     metadata: SessionBackupMetadata;
     originalFingerprint: string;
     sessionDir: string;
     metadataPath: string;
+    homedir?: string;
+    recoveryFailure?: string;
   }) {
     this.metadata = opts.metadata;
     this.originalFingerprint = opts.originalFingerprint;
     this.sessionDir = opts.sessionDir;
     this.metadataPath = opts.metadataPath;
+    this.homedir = opts.homedir;
+    this.recoveryFailure = opts.recoveryFailure;
   }
 
   getPublicState(): SessionBackupPublicState {
     return {
-      status: "ready",
+      status: this.recoveryFailure ? "failed" : "ready",
+      ...(this.recoveryFailure ? { failureReason: this.recoveryFailure } : {}),
       sessionId: this.metadata.sessionId,
       workingDirectory: this.metadata.workingDirectory,
       backupDirectory: this.sessionDir,
@@ -553,6 +658,13 @@ export class SessionBackupManager implements SessionBackupHandle {
   async createCheckpoint(
     trigger: SessionBackupCheckpointTrigger,
   ): Promise<SessionBackupPublicCheckpoint> {
+    return await this.withLatestMetadata(() => this.createCheckpointUnlocked(trigger));
+  }
+
+  private async createCheckpointUnlocked(
+    trigger: SessionBackupCheckpointTrigger,
+  ): Promise<SessionBackupPublicCheckpoint> {
+    if (this.recoveryFailure) throw new Error(this.recoveryFailure);
     await ensureWorkingDirectory(this.metadata.workingDirectory);
     const index =
       this.metadata.checkpoints.reduce((max, checkpoint) => Math.max(max, checkpoint.index), 0) + 1;
@@ -591,84 +703,129 @@ export class SessionBackupManager implements SessionBackupHandle {
       snapshot,
     };
 
-    this.metadata.checkpoints.push(checkpoint);
-    await this.persistMetadata();
+    await this.persistMetadata({
+      ...this.metadata,
+      checkpoints: [...this.metadata.checkpoints, checkpoint],
+    });
 
     return { id, index, createdAt, trigger, changed, patchBytes };
   }
 
   async restoreOriginal(): Promise<void> {
-    if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
-      throw new Error("Refusing to restore: backup directory is inside the working directory");
-    }
-    await this.restoreSnapshotSafely(this.metadata.originalSnapshot);
+    await this.withLatestMetadata(async () => {
+      if (this.recoveryFailure) throw new Error(this.recoveryFailure);
+      if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
+        throw new Error("Refusing to restore: backup directory is inside the working directory");
+      }
+      await this.restoreSnapshotSafely(this.metadata.originalSnapshot);
+    });
   }
 
   async restoreCheckpoint(checkpointId: string): Promise<void> {
-    const checkpoint = this.metadata.checkpoints.find((cp) => cp.id === checkpointId);
-    if (!checkpoint) throw new Error(`Unknown checkpoint: ${checkpointId}`);
+    await this.withLatestMetadata(async () => {
+      if (this.recoveryFailure) throw new Error(this.recoveryFailure);
+      const checkpoint = this.metadata.checkpoints.find((cp) => cp.id === checkpointId);
+      if (!checkpoint) throw new Error(`Unknown checkpoint: ${checkpointId}`);
 
-    if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
-      throw new Error("Refusing to restore: backup directory is inside the working directory");
-    }
-    await this.restoreSnapshotSafely(checkpoint.snapshot);
+      if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
+        throw new Error("Refusing to restore: backup directory is inside the working directory");
+      }
+      await this.restoreSnapshotSafely(checkpoint.snapshot);
+    });
   }
 
   async deleteCheckpoint(checkpointId: string): Promise<boolean> {
-    const idx = this.metadata.checkpoints.findIndex((cp) => cp.id === checkpointId);
-    if (idx < 0) return false;
+    return await this.withLatestMetadata(async () => {
+      if (this.recoveryFailure) throw new Error(this.recoveryFailure);
+      const idx = this.metadata.checkpoints.findIndex((cp) => cp.id === checkpointId);
+      if (idx < 0) return false;
 
-    const checkpoint = this.metadata.checkpoints[idx];
-    if (checkpoint.trigger === "initial") {
-      throw new Error("Cannot delete the initial checkpoint");
-    }
+      const checkpoint = this.metadata.checkpoints[idx];
+      if (checkpoint.trigger === "initial") {
+        throw new Error("Cannot delete the initial checkpoint");
+      }
 
-    this.metadata.checkpoints.splice(idx, 1);
-    const snapshotStillReferenced =
-      this.metadata.checkpoints.some(
-        (cp) =>
-          cp.snapshot.kind === checkpoint.snapshot.kind &&
-          cp.snapshot.path === checkpoint.snapshot.path,
-      ) ||
-      (this.metadata.originalSnapshot.kind === checkpoint.snapshot.kind &&
-        this.metadata.originalSnapshot.path === checkpoint.snapshot.path);
-    if (!snapshotStillReferenced) {
-      await fs.rm(resolveSnapshotPath(this.sessionDir, checkpoint.snapshot.path), {
-        recursive: true,
-        force: true,
-      });
-    }
-    await this.persistMetadata();
-    return true;
+      const snapshotPath = resolveSnapshotPath(this.sessionDir, checkpoint.snapshot.path);
+      const checkpoints = this.metadata.checkpoints.filter((_, index) => index !== idx);
+      const snapshotStillReferenced =
+        checkpoints.some(
+          (cp) => resolveSnapshotPath(this.sessionDir, cp.snapshot.path) === snapshotPath,
+        ) ||
+        resolveSnapshotPath(this.sessionDir, this.metadata.originalSnapshot.path) === snapshotPath;
+      await this.persistMetadata({ ...this.metadata, checkpoints });
+      if (!snapshotStillReferenced) {
+        await fs.rm(snapshotPath, {
+          recursive: true,
+          force: true,
+        });
+      }
+      return true;
+    });
   }
 
   async reloadFromDisk(): Promise<SessionBackupPublicState> {
-    const metadata = await readMetadata(this.metadataPath);
-    if (!metadata) {
-      throw new Error(`Missing backup metadata at ${this.metadataPath}`);
-    }
-    const normalized = await normalizeMetadataOnLoad(metadata, this.sessionDir, this.metadataPath);
-    this.metadata = normalized.metadata;
-    this.originalFingerprint = normalized.originalFingerprint;
-    return this.getPublicState();
+    return await this.withLatestMetadata(async () => this.getPublicState());
+  }
+
+  private async withLatestMetadata<T>(operation: () => Promise<T>): Promise<T> {
+    return await withBackupPathLock(
+      this.sessionDir,
+      async () => {
+        const metadata = await readMetadata(this.metadataPath);
+        if (!metadata) {
+          throw new Error(`Missing backup metadata at ${this.metadataPath}`);
+        }
+        assertBackupOutsideWorkspace(this.sessionDir, metadata.workingDirectory);
+        if (
+          metadata.sessionId !== this.metadata.sessionId ||
+          path.resolve(metadata.workingDirectory) !== path.resolve(this.metadata.workingDirectory)
+        ) {
+          throw new Error(`Backup identity changed at ${this.metadataPath}`);
+        }
+        const normalized = await normalizeMetadataOnLoad(
+          metadata,
+          this.sessionDir,
+          this.metadataPath,
+        );
+        this.metadata = normalized.metadata;
+        this.originalFingerprint = normalized.originalFingerprint;
+        return await withBackupPathLock(
+          this.metadata.workingDirectory,
+          async () => {
+            this.recoveryFailure = await workspaceRecoveryFailureReason(
+              this.metadata.workingDirectory,
+            );
+            return await operation();
+          },
+          this.homedir,
+        );
+      },
+      this.homedir,
+    );
   }
 
   async close(): Promise<void> {
-    if (this.metadata.state === "closed") return;
-    this.metadata.state = "closed";
-    this.metadata.closedAt = new Date().toISOString();
-    await this.persistMetadata();
+    await this.withLatestMetadata(async () => {
+      if (this.metadata.state === "closed") return;
+      await this.persistMetadata({
+        ...this.metadata,
+        state: "closed",
+        closedAt: new Date().toISOString(),
+      });
+    });
     try {
       await SessionBackupManager.pruneBackupsRoot(path.dirname(this.sessionDir), {
         skipSessionId: this.metadata.sessionId,
+        homedir: this.homedir,
       });
     } catch {
       // best-effort cleanup
     }
   }
 
-  private async persistMetadata(): Promise<void> {
-    await writeJson(this.metadataPath, this.metadata);
+  private async persistMetadata(metadata: SessionBackupMetadata): Promise<void> {
+    await writeJson(this.metadataPath, metadata);
+    this.metadata = metadata;
   }
 
   private async restoreSnapshotSafely(snapshot: {
@@ -683,8 +840,7 @@ export class SessionBackupManager implements SessionBackupHandle {
         targetDir: restoreStageDir,
         snapshot,
       });
-      await emptyDirectory(this.metadata.workingDirectory);
-      await copyDirectoryContents(restoreStageDir, this.metadata.workingDirectory);
+      await replaceDirectoryContents(restoreStageDir, this.metadata.workingDirectory);
     } finally {
       await fs.rm(restoreStageDir, { recursive: true, force: true });
     }

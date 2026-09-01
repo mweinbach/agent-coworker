@@ -298,6 +298,56 @@ describe("SessionDbWriteCoordinator", () => {
     );
   });
 
+  test("does not steal a live writer's lock when its heartbeat becomes stale", async () => {
+    const paths = await makeTmpCoworkHome();
+    let nowMs = Date.now();
+    let releaseWriter: () => void = () => undefined;
+    const holdWriter = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    let markWriterEntered: () => void = () => undefined;
+    const writerEntered = new Promise<void>((resolve) => {
+      markWriterEntered = resolve;
+    });
+    const first = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      now: () => nowMs,
+      heartbeatMs: 60_000,
+    });
+    const second = new SessionDbWriteCoordinator({
+      rootDir: paths.rootDir,
+      now: () => nowMs,
+      acquireTimeoutMs: 20,
+      staleLockMs: 1_000,
+      retryDelayMs: 5,
+      processAlive: () => true,
+      sleep: async (ms) => {
+        nowMs += ms;
+      },
+    });
+    const activeWriter = first.runExclusive("active_writer", async () => {
+      markWriterEntered();
+      await holdWriter;
+    });
+    await writerEntered;
+    nowMs += 2_000;
+
+    let secondEntered = false;
+    try {
+      await expect(
+        second.runExclusive("competing_writer", () => {
+          secondEntered = true;
+        }),
+      ).rejects.toThrow("Timed out acquiring session DB write lock");
+      expect(secondEntered).toBe(false);
+      expect(second.getDiagnostics().staleRecoveryCount).toBe(0);
+    } finally {
+      releaseWriter();
+      await activeWriter;
+      await fs.rm(path.dirname(paths.rootDir), { recursive: true, force: true });
+    }
+  });
+
   test("does not remove a replacement lock owned by another coordinator in the same process", async () => {
     const paths = await makeTmpCoworkHome();
     const coordinator = new SessionDbWriteCoordinator({

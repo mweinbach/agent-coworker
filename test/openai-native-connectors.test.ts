@@ -8,7 +8,11 @@ import {
   listOpenAiNativeConnectors,
   setOpenAiNativeConnectorEnabled,
 } from "../src/server/connectors/openaiNativeConnectors";
+import { createConnectorsRouteHandlers } from "../src/server/jsonrpc/routes/connectors";
+import type { JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import type { AgentConfig } from "../src/types";
+import { pinHome } from "./helpers/platform";
+import { makeTmpProject } from "./helpers/wsHarness";
 
 function makeConfig(workspaceRoot: string, home: string): AgentConfig {
   return {
@@ -162,4 +166,89 @@ describe("OpenAI native connectors", () => {
       codexAppServerAuthInternal.resetAuthOverridesForTests();
     }
   });
+
+  test.each([
+    ["list", false],
+    ["refresh", true],
+  ] as const)(
+    "RPC %s uses the intended app-server cache policy",
+    async (operation, forceRefetch) => {
+      const workspaceRoot = await makeTmpProject("connectors-route-");
+      const restoreHome = pinHome(workspaceRoot);
+      const previousFeatureFlag = process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+      process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS = "1";
+      const requests: Array<boolean | undefined> = [];
+      const results: unknown[] = [];
+      const errors: unknown[] = [];
+      codexAppServerAuthInternal.setAuthOverridesForTests({
+        readAccount: async () => ({
+          account: { type: "chatgpt", email: "tester@example.com" },
+          requiresOpenaiAuth: true,
+        }),
+        listApps: async (opts) => {
+          requests.push(opts.forceRefetch);
+          return [
+            {
+              id: "connector_one",
+              name: opts.forceRefetch ? "Fresh app" : "Cached app",
+              isAccessible: true,
+              isEnabled: true,
+            },
+          ];
+        },
+      });
+      const context = {
+        utils: { resolveWorkspacePath: () => workspaceRoot },
+        workspaceControl: {
+          withSession: async (
+            _cwd: string,
+            run: (binding: unknown, runtime: unknown) => Promise<unknown>,
+          ) => await run({}, { read: { id: "control-1" } }),
+        },
+        jsonrpc: {
+          sendResult: (_ws: unknown, _id: unknown, result: unknown) => results.push(result),
+          sendError: (_ws: unknown, _id: unknown, error: unknown) => errors.push(error),
+        },
+      } as unknown as JsonRpcRouteContext;
+
+      try {
+        const method = `cowork/connectors/openai-native/${operation}`;
+        await createConnectorsRouteHandlers(context)[method]!({} as never, {
+          id: 1,
+          method,
+          params: { cwd: workspaceRoot },
+        });
+
+        expect(errors).toEqual([]);
+        expect(requests).toEqual([forceRefetch]);
+        expect(results).toEqual([
+          {
+            event: {
+              type: "openai_native_connectors",
+              sessionId: "control-1",
+              authenticated: true,
+              connectors: [
+                {
+                  id: "connector_one",
+                  name: forceRefetch ? "Fresh app" : "Cached app",
+                  isAccessible: true,
+                  isEnabled: true,
+                },
+              ],
+              enabledConnectorIds: ["connector_one"],
+            },
+          },
+        ]);
+      } finally {
+        codexAppServerAuthInternal.resetAuthOverridesForTests();
+        restoreHome();
+        if (previousFeatureFlag === undefined) {
+          delete process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS;
+        } else {
+          process.env.COWORK_EXPERIMENTAL_OPENAI_NATIVE_CONNECTORS = previousFeatureFlag;
+        }
+        await fs.rm(workspaceRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

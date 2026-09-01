@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { scratchRoots } from "../src/platform/sandbox";
 import { getManagedWorktreesRoot, WorktreeService } from "../src/server/git/WorktreeService";
+import { fnv1a32 } from "../src/shared/fnv1a";
 import type { ExecFileCompatResult } from "../src/utils/execFileCompat";
 
 function ok(stdout = ""): ExecFileCompatResult {
@@ -11,6 +12,45 @@ function ok(stdout = ""): ExecFileCompatResult {
 }
 
 describe("WorktreeService", () => {
+  test("rejects an escaped repository bucket before creating a worktree or branch", async () => {
+    const homedir = await fs.mkdtemp(
+      path.join(scratchRoots()[0] ?? "/tmp", "cowork-worktree-escape-"),
+    );
+    try {
+      const repoRoot = path.join(homedir, "repo");
+      const external = path.join(homedir, "external");
+      const managedRoot = getManagedWorktreesRoot(homedir);
+      await fs.mkdir(repoRoot);
+      await fs.mkdir(external);
+      await fs.mkdir(managedRoot, { recursive: true });
+      await fs.symlink(
+        external,
+        path.join(managedRoot, `repo-${fnv1a32(await fs.realpath(repoRoot))}`),
+        "junction",
+      );
+      let created = false;
+      const execFile = async (_file: string, args: string[]): Promise<ExecFileCompatResult> => {
+        if (args.join(" ") === "rev-parse --show-toplevel") return ok(`${repoRoot}\n`);
+        if (args[0] === "rev-parse") return ok("abc123\n");
+        if (args[0] === "worktree") {
+          created = true;
+          await fs.mkdir(args[4] as string, { recursive: true });
+        }
+        return ok();
+      };
+      await expect(
+        new WorktreeService({ homedir, execFile }).createWorktree({
+          sourceCwd: repoRoot,
+          branchName: "cowork/fork/example",
+        }),
+      ).rejects.toThrow(/outside root|escaped/);
+      expect(created).toBe(false);
+      expect(await fs.readdir(external)).toEqual([]);
+    } finally {
+      await fs.rm(homedir, { recursive: true, force: true });
+    }
+  });
+
   test("creates managed worktrees under ~/.cowork/worktrees with a validated branch", async () => {
     const homedir = await fs.mkdtemp(
       path.join(scratchRoots()[0] ?? "/tmp", "cowork-worktree-home-"),

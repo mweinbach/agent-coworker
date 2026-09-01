@@ -3,7 +3,7 @@ import path from "node:path";
 import { home } from "../../platform/paths";
 import { fnv1a32 } from "../../shared/fnv1a";
 import { type ExecFileCompatRunner, execFileCompat } from "../../utils/execFileCompat";
-import { isPathInside } from "../../utils/paths";
+import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../utils/paths";
 
 const PRIVATE_DIR_MODE = 0o700;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -101,8 +101,9 @@ export class WorktreeService {
     );
     assertManagedPath(realRoot, worktreePath);
     await fs.mkdir(path.dirname(worktreePath), { recursive: true, mode: PRIVATE_DIR_MODE });
-    await this.runGit(repoRoot, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
-    const realPath = await fs.realpath(worktreePath);
+    const canonicalPath = await resolvePathInsideRootForBoundaryCheck(realRoot, worktreePath);
+    await this.runGit(repoRoot, ["worktree", "add", "-b", branchName, canonicalPath, baseCommit]);
+    const realPath = await fs.realpath(canonicalPath);
     assertManagedPath(realRoot, realPath);
     return { path: realPath, repoRoot, branchName, baseRef, baseCommit };
   }

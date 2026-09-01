@@ -16,7 +16,9 @@ afterEach(() => {
 });
 
 function createNotificationHarness(
-  options: Pick<RuntimeRunTurnParams, "abortSignal" | "onModelStreamPart"> = {},
+  options: Pick<RuntimeRunTurnParams, "abortSignal" | "onModelStreamPart"> & {
+    deferTurnAck?: boolean;
+  } = {},
 ) {
   const listeners = new Set<(notification: CodexAppServerJsonRpcNotification) => void>();
   const client = createMockClient();
@@ -27,6 +29,7 @@ function createNotificationHarness(
   const parts: unknown[] = [];
   const todos: unknown[] = [];
   const usages: unknown[] = [];
+  const turnId = options.deferTurnAck ? undefined : "turn_1";
   const router = createCodexTurnNotificationRouter(
     client,
     {
@@ -44,10 +47,10 @@ function createNotificationHarness(
         todos.push(nextTodos);
       },
     },
-    { threadId: () => "thread_1", turnId: () => "turn_1" },
+    { threadId: () => "thread_1", turnId: () => turnId },
     {
       threadId: "thread_1",
-      turnId: "turn_1",
+      turnId: () => turnId,
       abortSignal: options.abortSignal,
       onUsage: (usage) => {
         usages.push(usage);
@@ -76,6 +79,123 @@ function createNotificationHarness(
 }
 
 describe("Codex notification projection", () => {
+  test.each([
+    {
+      method: "item/commandExecution/outputDelta",
+      toolName: "commandExecution",
+      payload: { delta: "working" },
+      output: "working",
+    },
+    {
+      method: "item/fileChange/delta",
+      toolName: "fileChange",
+      payload: { delta: "+draft" },
+      output: "+draft",
+    },
+    {
+      method: "item/fileChange/diffDelta",
+      toolName: "fileChange",
+      payload: { diff: "+diff" },
+      output: "+diff",
+    },
+    {
+      method: "item/fileChange/patchUpdated",
+      toolName: "fileChange",
+      payload: { changes: [{ path: "note.txt", kind: "update" }] },
+      output: [{ path: "note.txt", kind: "update" }],
+    },
+  ])(
+    "distinguishes $method progress from terminal results",
+    async ({ method, toolName, payload, output }) => {
+      const { emit, finish, parts } = createNotificationHarness();
+      emit(method, { itemId: "tool_1", ...payload });
+      emit("item/completed", {
+        item: {
+          id: "tool_1",
+          type: toolName,
+          status: "completed",
+          aggregatedOutput: "finished",
+          patch: "finished",
+        },
+      });
+      await finish();
+      expect(parts).toEqual([
+        {
+          type: "tool-result",
+          toolCallId: "tool_1",
+          toolName,
+          output,
+          providerExecuted: true,
+          preliminary: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "tool_1",
+          toolName,
+          output: "finished",
+          error: undefined,
+          providerExecuted: true,
+        },
+      ]);
+    },
+  );
+
+  test("correlates threadless completions before acknowledging concurrent pooled turns", async () => {
+    const listeners = new Set<(notification: CodexAppServerJsonRpcNotification) => void>();
+    const client = createMockClient();
+    client.onNotification = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    const targets = [
+      { threadId: "thread_a", turnId: undefined as string | undefined },
+      { threadId: "thread_b", turnId: "turn_b" as string | undefined },
+    ];
+    const settled: string[] = [];
+    const concurrentRouters = targets.map((target) =>
+      createCodexTurnNotificationRouter(
+        client,
+        {
+          config: makeConfig(process.cwd()),
+          system: "You are Codex.",
+          messages: [],
+          tools: {},
+          maxSteps: 1,
+        },
+        { threadId: () => target.threadId, turnId: () => target.turnId },
+        {
+          threadId: target.threadId,
+          turnId: () => target.turnId,
+          onUsage: () => {},
+        },
+      ),
+    );
+    routers.push(...concurrentRouters);
+    const completions = concurrentRouters.map((router, index) =>
+      router.waitForCompletion().then((turn) => {
+        settled.push(targets[index]!.threadId);
+        return turn;
+      }),
+    );
+    const turnB = { id: "turn_b", status: "completed", items: [] };
+    for (const listener of listeners)
+      listener({ method: "turn/completed", params: { turn: turnB } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(settled).toEqual(["thread_b"]);
+
+    const turnA = { id: "turn_a", status: "completed", items: [] };
+    for (const listener of listeners)
+      listener({ method: "turn/completed", params: { turn: turnA } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toEqual(["thread_b"]);
+
+    targets[0]!.turnId = "turn_a";
+    concurrentRouters[0]!.setTurnId("turn_a");
+    await expect(Promise.all(completions)).resolves.toEqual([turnA, turnB]);
+    expect(settled).toEqual(["thread_b", "thread_a"]);
+  });
+
   test.each([false, true])(
     "handles disconnect while draining with provider completion=%s",
     async (providerCompleted) => {
@@ -194,6 +314,26 @@ describe("Codex notification projection", () => {
       emit("item/agentMessage/delta", { itemId: "a", delta: "first" });
       emit("item/agentMessage/delta", { itemId: "a", delta: "queued" });
       await entered.promise;
+      emit("item/started", {
+        item: {
+          type: "mcpToolCall",
+          id: "failed",
+          server: "files",
+          tool: "write",
+          arguments: { path: "note.txt" },
+        },
+      });
+      emit("item/completed", {
+        item: {
+          type: "mcpToolCall",
+          id: "failed",
+          server: "files",
+          tool: "write",
+          status: "failed",
+          result: { path: "note.txt" },
+          error: { code: "EACCES" },
+        },
+      });
       if (stop === "abort") controller.abort();
       else router.dispose();
       emit("item/agentMessage/delta", { itemId: "a", delta: "late" });
@@ -202,6 +342,27 @@ describe("Codex notification projection", () => {
       else await new Promise<void>((resolve) => setImmediate(resolve));
       expect(invoked).toEqual([{ type: "text-delta", id: "a", text: "first" }]);
       expect(delivered).toEqual(invoked);
+      const expectedProof = [
+        {
+          type: "tool-call",
+          toolCallId: "failed",
+          toolName: "files.write",
+          input: { path: "note.txt" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-error",
+          toolCallId: "failed",
+          toolName: "files.write",
+          output: { path: "note.txt" },
+          error: { code: "EACCES" },
+          providerExecuted: true,
+        },
+      ];
+      const proof = router.committedToolParts();
+      expect(proof).toEqual(expectedProof);
+      (proof[1] as { output: { path: string } }).output.path = "mutated snapshot";
+      expect(router.committedToolParts()).toEqual(expectedProof);
     } finally {
       release.resolve();
     }
@@ -311,43 +472,51 @@ describe("Codex notification projection", () => {
     }
   }
 
-  test.each(["completed", "failed", "cancelled", "interrupted"])(
-    "ignores later notifications once a turn is %s",
-    async (status) => {
-      const { emit, router, parts, todos, usages } = createNotificationHarness();
-      const completion = router.waitForCompletion().then(
-        (turn) => ({ turn }),
-        (error: unknown) => ({ error }),
-      );
-      emit("item/agentMessage/delta", { itemId: "a", delta: "accepted" });
-      emit("todoList/updated", { todos: [{ content: "accepted", status: "completed" }] });
-      emit("thread/tokenUsage/updated", {
-        tokenUsage: { total: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } },
+  test.each(
+    ["completed", "failed", "cancelled", "interrupted"].flatMap((status) =>
+      ["acknowledged", "buffered"].map((phase) => [status, phase] as const),
+    ),
+  )("ignores later notifications once a turn is %s (%s)", async (status, phase) => {
+    const deferTurnAck = phase === "buffered";
+    const { emit, router, parts, todos, usages } = createNotificationHarness({ deferTurnAck });
+    const completion = router.waitForCompletion().then(
+      (turn) => ({ turn }),
+      (error: unknown) => ({ error }),
+    );
+    if (deferTurnAck) {
+      emit("turn/completed", {
+        threadId: undefined,
+        turnId: "turn_other",
+        turn: { id: "turn_other", status: "completed", items: [] },
       });
-      const turn = { id: "turn_1", status, items: [], error: { message: "terminal detail" } };
-      emit("turn/completed", { turn });
+    }
+    emit("item/agentMessage/delta", { itemId: "a", delta: "accepted" });
+    emit("todoList/updated", { todos: [{ content: "accepted", status: "completed" }] });
+    emit("thread/tokenUsage/updated", {
+      tokenUsage: { total: { inputTokens: 2, outputTokens: 3, totalTokens: 5 } },
+    });
+    const turn = { id: "turn_1", status, items: [], error: { message: "terminal detail" } };
+    emit("turn/completed", { turn, threadId: deferTurnAck ? undefined : "thread_1" });
 
-      emit("item/agentMessage/delta", { itemId: "a", delta: " stale" });
-      emit("todoList/updated", { todos: [{ content: "stale", status: "in_progress" }] });
-      emit("thread/tokenUsage/updated", {
-        tokenUsage: { total: { inputTokens: 200, outputTokens: 300, totalTokens: 500 } },
-      });
-      emit("rawResponseItem/completed", {
-        item: { type: "function_call", call_id: "late-wait", name: "wait", arguments: {} },
-      });
-      emit("turn/completed", { turn: { ...turn, status: "completed" } });
+    emit("item/agentMessage/delta", { itemId: "a", delta: " stale" });
+    emit("todoList/updated", { todos: [{ content: "stale", status: "in_progress" }] });
+    emit("thread/tokenUsage/updated", {
+      tokenUsage: { total: { inputTokens: 200, outputTokens: 300, totalTokens: 500 } },
+    });
+    emit("rawResponseItem/completed", {
+      item: { type: "function_call", call_id: "late-wait", name: "wait", arguments: {} },
+    });
+    emit("turn/completed", { turn: { ...turn, status: "completed" } });
+    if (deferTurnAck) router.setTurnId("turn_1");
 
-      const outcome = await completion;
-      if (status === "completed") expect(outcome).toEqual({ turn });
-      else expect(outcome).toEqual({ error: expect.any(Error) });
-      expect(router.assistantText()).toBe("accepted");
-      expect(parts).toEqual([{ type: "text-delta", id: "a", text: "accepted" }]);
-      expect(todos).toEqual([
-        [{ content: "accepted", status: "completed", activeForm: "accepted" }],
-      ]);
-      expect(usages).toEqual([{ promptTokens: 2, completionTokens: 3, totalTokens: 5 }]);
-    },
-  );
+    const outcome = await completion;
+    if (status === "completed") expect(outcome).toEqual({ turn });
+    else expect(outcome).toEqual({ error: expect.any(Error) });
+    expect(router.assistantText()).toBe("accepted");
+    expect(parts).toEqual([{ type: "text-delta", id: "a", text: "accepted" }]);
+    expect(todos).toEqual([[{ content: "accepted", status: "completed", activeForm: "accepted" }]]);
+    expect(usages).toEqual([{ promptTokens: 2, completionTokens: 3, totalTokens: 5 }]);
+  });
 
   test("preserves first-seen assistant order across repeated and out-of-order item events", async () => {
     const { emit, finish, router, parts } = createNotificationHarness();
@@ -421,6 +590,7 @@ describe("Codex notification projection", () => {
         toolName: "fileChange",
         output,
         providerExecuted: true,
+        preliminary: true,
       },
     ]);
   });

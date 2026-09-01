@@ -34,7 +34,7 @@ const cwdRequestSchema = z
   })
   .passthrough();
 
-const agentProfilesCatalogEventSchema = z
+export const agentProfilesCatalogEventSchema = z
   .object({
     type: z.literal("agent_profiles_catalog"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -1806,6 +1806,7 @@ const memoryUpsertRequestSchema = z
     scope: workspaceMemoryScopeSchema,
     id: z.string().optional(),
     content: z.string(),
+    mode: z.enum(["create", "upsert"]).optional(),
   })
   .strict();
 
@@ -1981,7 +1982,10 @@ const sessionDefaultsApplyRequestSchema = z
       .passthrough()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => (request.provider === undefined) === (request.model === undefined), {
+    message: "provider and model must be supplied together",
+  });
 
 export const jsonRpcControlRequestSchemas = {
   "cowork/provider/catalog/read": providerCatalogReadRequestSchema,

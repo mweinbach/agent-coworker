@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   MemoryGenerator,
+  type MemoryGeneratorRunResult,
   serializeTurnDelta,
   splitMessagesForMemoryBackfill,
 } from "../../advancedMemory/MemoryGenerator";
@@ -17,7 +18,7 @@ import type {
   MCPRegistryServer,
   MCPServerSource,
 } from "../../mcp/configRegistry";
-import { type MemoryScope, MemoryStore } from "../../memoryStore";
+import { type MemoryScope, MemoryStore, type MemoryWriteMode } from "../../memoryStore";
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { logoutProviderAuth } from "../../providers/authRegistry";
@@ -132,7 +133,7 @@ import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
-import type { SkillManager } from "./SkillManager";
+import type { PluginCatalogReadOptions, SkillManager } from "./SkillManager";
 import type {
   SendUserMessageOptions,
   SteerIdempotencyClaim,
@@ -177,6 +178,7 @@ export class AgentSession {
   private persistedLastEventSeq: number;
   private costTrackerUnsubscribe?: () => void;
   private unregisterReadPastConversationHistoryReader?: () => void;
+  private disposed = false;
 
   constructor(opts: {
     config: AgentConfig;
@@ -342,10 +344,10 @@ export class AgentSession {
       sessionBackupInit: null,
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
+      historyRevision: 0,
       lastMemoryGeneratedIndex: hydratedMemoryGeneratedIndex,
       memoryGenerationsSinceConsolidation: 0,
       costTracker: null,
-      turnReferenceInjectionCounter: 0,
     };
 
     this.memoryStore = new MemoryStore(
@@ -579,6 +581,7 @@ export class AgentSession {
       sessionSnapshotProjector: this.sessionSnapshotProjector,
       sendUserMessage: (text, clientMessageId, displayText) =>
         this.sendUserMessage(text, clientMessageId, displayText),
+      prepareUserMessageTurn: () => this.prepareUserMessageTurn(),
       flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
       triggerMemoryGeneration: () => this.triggerMemoryGeneration(),
       triggerSkillImprovementUsage: () => this.triggerSkillImprovementUsage(),
@@ -890,8 +893,8 @@ export class AgentSession {
     await this.refreshSystemPromptWithSkills("agent_profiles.workspace_availability");
   }
 
-  async getPluginsCatalog() {
-    await this.getSkillManager().getPluginsCatalog();
+  async getPluginsCatalog(opts: PluginCatalogReadOptions = {}) {
+    await this.getSkillManager().getPluginsCatalog(opts);
   }
 
   async listMarketplaces() {
@@ -1071,9 +1074,14 @@ export class AgentSession {
     }
   }
 
-  async upsertMemory(scope: MemoryScope, id: string | undefined, content: string) {
+  async upsertMemory(
+    scope: MemoryScope,
+    id: string | undefined,
+    content: string,
+    mode: MemoryWriteMode = "upsert",
+  ) {
     try {
-      await this.memoryStore.upsert(scope, { id, content });
+      await this.memoryStore.upsert(scope, { id, content, mode });
     } catch (err) {
       this.context.emitError(
         "internal_error",
@@ -1192,20 +1200,41 @@ export class AgentSession {
   async generateAdvancedMemoryForHistory(folder?: string) {
     const resolvedFolder = this.resolveAdvancedMemoryFolder(folder);
     const messages = [...this.state.allMessages];
+    const historyRevision = this.state.historyRevision;
     const shouldCheckpointAutomaticGeneration =
       resolvedFolder === resolveMemoryFolderName(this.state.config);
     this.memoryGenerationQueue = this.memoryGenerationQueue
       .then(async () => {
-        const backfilled = await this.runMemoryBackfill(resolvedFolder, messages);
-        if (backfilled && shouldCheckpointAutomaticGeneration) {
-          const nextIndex = Math.max(this.state.lastMemoryGeneratedIndex, messages.length);
+        if (historyRevision !== this.state.historyRevision) return;
+        const result = await this.runMemoryBackfill(resolvedFolder, messages, historyRevision);
+        if (historyRevision !== this.state.historyRevision) return;
+        if (result.processedMessageCount > 0 && shouldCheckpointAutomaticGeneration) {
+          const nextIndex = Math.max(
+            this.state.lastMemoryGeneratedIndex,
+            result.processedMessageCount,
+          );
           if (nextIndex !== this.state.lastMemoryGeneratedIndex) {
             this.state.lastMemoryGeneratedIndex = nextIndex;
             this.queuePersistSessionSnapshot("session.advanced_memory_backfill_checkpoint");
           }
         }
+        // Generation has committed its prefix even if later consolidation or refresh fails.
+        if (result.ran) {
+          const consolidation = result.ok
+            ? await this.runMemoryConsolidation(resolvedFolder, historyRevision)
+            : { ran: false };
+          if (historyRevision !== this.state.historyRevision) return;
+          await this.refreshSystemPromptWithSkills(
+            consolidation.ran
+              ? "session.advanced_memory_backfill_consolidated"
+              : "session.advanced_memory_backfill",
+          );
+        }
+        if (historyRevision !== this.state.historyRevision) return;
+        await this.emitAdvancedMemories(resolvedFolder);
       })
       .catch((err) => {
+        if (historyRevision !== this.state.historyRevision) return;
         // Manual generation failures are emitted as session errors and must not
         // poison the per-session generation queue.
         this.context.emitError(
@@ -1221,14 +1250,15 @@ export class AgentSession {
    * Fire-and-forget advanced memory generation for the just-completed turn.
    * Runs are serialized on a per-session queue so overlapping turns never
    * interleave reads/writes against the same memory folder. The delta marker is
-   * advanced only after a run completes successfully, so a failed run leaves its
-   * messages to be reprocessed by the next turn. No-op unless advanced memory is on.
+   * advanced only over complete messages acknowledged by the generator, so a
+   * failed batch leaves its suffix for the next turn. No-op unless advanced memory is on.
    */
   triggerMemoryGeneration(): void {
     if (!this.state.config.advancedMemory) return;
     const targetMessageIndex = this.state.allMessages.length;
+    const historyRevision = this.state.historyRevision;
     this.memoryGenerationQueue = this.memoryGenerationQueue
-      .then(() => this.runMemoryGenerationOnce(targetMessageIndex))
+      .then(() => this.runMemoryGenerationOnce(targetMessageIndex, historyRevision))
       .catch(() => {
         // Generation failures must never affect the user-facing turn or the queue.
       });
@@ -1265,8 +1295,11 @@ export class AgentSession {
     });
   }
 
-  private async runMemoryGenerationOnce(targetMessageIndex: number): Promise<void> {
-    if (!this.state.config.advancedMemory) return;
+  private async runMemoryGenerationOnce(
+    targetMessageIndex: number,
+    historyRevision: number,
+  ): Promise<void> {
+    if (!this.state.config.advancedMemory || historyRevision !== this.state.historyRevision) return;
     const start = this.state.lastMemoryGeneratedIndex;
     const end = Math.min(targetMessageIndex, this.state.allMessages.length);
     if (end <= start) return;
@@ -1280,44 +1313,61 @@ export class AgentSession {
       log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
       abortSignal: undefined,
     });
-    // Advance only when the generator completed its pass (including an
-    // intentional no-op). On runtime failure (`ok: false`) the marker stays so
-    // the delta is retried on the next turn.
-    if (result.ok) {
-      this.state.lastMemoryGeneratedIndex = end;
+    if (historyRevision !== this.state.historyRevision) return;
+    const processedMessageCount = Math.max(
+      0,
+      Math.min(deltaMessages.length, result.processedMessageCount),
+    );
+    // A later batch may fail after an earlier prefix committed. Never skip the
+    // failed suffix, or a message whose oversized transcript is only partly processed.
+    if (processedMessageCount > 0) {
+      this.state.lastMemoryGeneratedIndex = start + processedMessageCount;
       this.queuePersistSessionSnapshot("session.advanced_memory_checkpoint");
-      if (result.ran) {
+    }
+    if (result.ran) {
+      if (result.ok) {
         this.state.memoryGenerationsSinceConsolidation += 1;
-        const consolidation = await this.maybeRunMemoryConsolidation(folder);
-        await this.refreshSystemPromptWithSkills(
-          consolidation.ran
-            ? "session.advanced_memory_consolidated"
-            : "session.advanced_memory_generated",
-        );
-        await this.emitAdvancedMemories(folder);
       }
+      const consolidation = result.ok
+        ? await this.maybeRunMemoryConsolidation(folder, historyRevision)
+        : { ran: false };
+      if (historyRevision !== this.state.historyRevision) return;
+      await this.refreshSystemPromptWithSkills(
+        consolidation.ran
+          ? "session.advanced_memory_consolidated"
+          : "session.advanced_memory_generated",
+      );
+      if (historyRevision !== this.state.historyRevision) return;
+      await this.emitAdvancedMemories(folder);
     }
   }
 
   private async maybeRunMemoryConsolidation(
-    folder = resolveMemoryFolderName(this.state.config),
+    folder: string,
+    historyRevision: number,
   ): Promise<{ ran: boolean; ok: boolean }> {
     if (
       !this.state.config.advancedMemory ||
+      historyRevision !== this.state.historyRevision ||
       this.state.memoryGenerationsSinceConsolidation < MEMORY_GENERATIONS_PER_CONSOLIDATION
     ) {
       return { ran: false, ok: true };
     }
 
-    const result = await this.runMemoryConsolidation(folder);
-    if (result.ok) {
+    const result = await this.runMemoryConsolidation(folder, historyRevision);
+    if (result.ok && historyRevision === this.state.historyRevision) {
       this.state.memoryGenerationsSinceConsolidation = 0;
     }
     return result;
   }
 
-  private async runMemoryConsolidation(folder: string): Promise<{ ran: boolean; ok: boolean }> {
-    if (!this.state.config.advancedMemory) return { ran: false, ok: true };
+  private async runMemoryConsolidation(
+    folder: string,
+    historyRevision: number,
+  ): Promise<{ ran: boolean; ok: boolean }> {
+    if (!this.state.config.advancedMemory || historyRevision !== this.state.historyRevision) {
+      return { ran: false, ok: true };
+    }
     return await this.memoryGenerator.consolidate({
       config: this.state.config,
       sessionId: this.id,
@@ -1327,19 +1377,21 @@ export class AgentSession {
     });
   }
 
-  private async runMemoryBackfill(folder: string, messages: ModelMessage[]): Promise<boolean> {
-    if (!this.state.config.advancedMemory) {
-      await this.emitAdvancedMemories(folder);
-      return false;
+  private async runMemoryBackfill(
+    folder: string,
+    messages: ModelMessage[],
+    historyRevision: number,
+  ): Promise<MemoryGeneratorRunResult> {
+    const progress: MemoryGeneratorRunResult = {
+      ran: false,
+      ok: true,
+      processedMessageCount: 0,
+    };
+    if (!this.state.config.advancedMemory || historyRevision !== this.state.historyRevision) {
+      return progress;
     }
 
     const chunks = splitMessagesForMemoryBackfill(messages);
-    if (chunks.length === 0) {
-      await this.emitAdvancedMemories(folder);
-      return true;
-    }
-
-    let ranAny = false;
     for (const deltaMessages of chunks) {
       const result = await this.memoryGenerator.run({
         config: this.state.config,
@@ -1349,27 +1401,24 @@ export class AgentSession {
         log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
         abortSignal: undefined,
       });
-      if (!result.ok) {
+      if (historyRevision !== this.state.historyRevision) return progress;
+      const processedChunkMessages = Math.max(
+        0,
+        Math.min(deltaMessages.length, result.processedMessageCount),
+      );
+      progress.processedMessageCount += processedChunkMessages;
+      progress.ran = progress.ran || result.ran;
+      if (!result.ok || processedChunkMessages < deltaMessages.length) {
         this.context.emitError(
           "internal_error",
           "session",
           "Failed to generate advanced memories from this conversation.",
         );
-        return false;
+        progress.ok = false;
+        break;
       }
-      ranAny = ranAny || result.ran;
     }
-
-    if (ranAny) {
-      const consolidation = await this.runMemoryConsolidation(folder);
-      await this.refreshSystemPromptWithSkills(
-        consolidation.ran
-          ? "session.advanced_memory_backfill_consolidated"
-          : "session.advanced_memory_backfill",
-      );
-    }
-    await this.emitAdvancedMemories(folder);
-    return true;
+    return progress;
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {
@@ -1524,12 +1573,16 @@ export class AgentSession {
         combinedPersistPatch.enableMcp = preparedEnableMcp.enableMcp;
       }
 
-      let persistError: unknown = null;
       if (Object.keys(combinedPersistPatch).length > 0 && this.deps.persistProjectConfigPatchImpl) {
         try {
           await this.deps.persistProjectConfigPatchImpl(combinedPersistPatch);
         } catch (error) {
-          persistError = error;
+          this.context.emitError(
+            "internal_error",
+            "session",
+            `Failed to persist session defaults: ${String(error)}`,
+          );
+          return;
         }
       }
 
@@ -1537,6 +1590,7 @@ export class AgentSession {
         await this.getProviderAuthManager().applyPreparedModelSelection(preparedModel, {
           persistSelection: false,
           queuePersistSessionSnapshot: false,
+          emitProviderCatalog: false,
         });
       }
       if (preparedConfig?.changed) {
@@ -1552,6 +1606,10 @@ export class AgentSession {
         });
       }
 
+      if (preparedModel?.changed) {
+        await this.emitProviderCatalog();
+      }
+
       this.queuePersistSessionSnapshot("session.defaults_applied");
       this.emitTelemetry("session.defaults.apply", "ok", {
         sessionId: this.id,
@@ -1559,14 +1617,6 @@ export class AgentSession {
         configChanged: preparedConfig?.changed ?? false,
         enableMcpChanged: preparedEnableMcp?.changed ?? false,
       });
-
-      if (persistError) {
-        this.context.emitError(
-          "internal_error",
-          "session",
-          `Session defaults updated for this session, but failed to persist defaults: ${String(persistError)}`,
-        );
-      }
     });
   }
 
@@ -1737,13 +1787,10 @@ export class AgentSession {
     this.queuePersistSessionSnapshot("session.reopened");
   }
 
-  dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}) {
-    this.state.abortController?.abort();
-    this.unregisterReadPastConversationHistoryReader?.();
-    this.unregisterReadPastConversationHistoryReader = undefined;
-    this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
-    unsubscribeAgentSessionCostTracker(this.createCostTrackingHost());
-    this.managers.disposeManagers();
+  releaseTurnResources(opts: { closeSharedCodexClient?: boolean } = {}): void {
+    // Failed task quiescence may release transports while leaving the task
+    // retryable. Keep its turn settlement and session state alive until it stops.
+    this.cancel();
     if (this.state.config.provider === "codex-cli" && opts.closeSharedCodexClient !== false) {
       void closePooledCodexAppServerClient(
         this.state.config.workingDirectory,
@@ -1751,6 +1798,16 @@ export class AgentSession {
       ).catch(() => {});
     }
     void closeMcpServersForSession(this.id);
+  }
+
+  dispose(reason: string, opts: { closeSharedCodexClient?: boolean } = {}) {
+    this.disposed = true;
+    this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
+    this.releaseTurnResources(opts);
+    this.unregisterReadPastConversationHistoryReader?.();
+    this.unregisterReadPastConversationHistoryReader = undefined;
+    unsubscribeAgentSessionCostTracker(this.createCostTrackingHost());
+    this.managers.disposeManagers();
 
     void this.waitForPersistenceIdle().finally(() => {
       this.deps.harnessContextStore.clear(this.id);
@@ -1928,10 +1985,6 @@ export class AgentSession {
     references?: import("../../types").TurnReference[],
     opts?: SendUserMessageOptions,
   ) {
-    await this.pendingConfigMutation.catch(() => {});
-    if (!(await this.ensureSystemPromptReady())) {
-      return;
-    }
     await this.getTurnExecutionManager().sendUserMessage(
       text,
       clientMessageId,
@@ -2007,6 +2060,20 @@ export class AgentSession {
     const mutation = this.pendingConfigMutation.catch(() => {}).then(task);
     this.pendingConfigMutation = mutation;
     return mutation;
+  }
+
+  private prepareUserMessageTurn(): Promise<boolean> {
+    const preparation = this.pendingConfigMutation
+      .catch(() => {})
+      .then(() => {
+        if (this.disposed) return false;
+        return this.ensureSystemPromptReady();
+      });
+    this.pendingConfigMutation = preparation.then(
+      () => {},
+      () => {},
+    );
+    return preparation;
   }
 
   private getCoworkPaths() {

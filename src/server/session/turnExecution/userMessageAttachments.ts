@@ -16,7 +16,11 @@ import {
   type ServerErrorSource,
 } from "../../../types";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../utils/paths";
-import type { FileAttachment, OrderedInputPart } from "../../jsonrpc/routes/shared";
+import {
+  extractJsonRpcTextInput,
+  type FileAttachment,
+  type OrderedInputPart,
+} from "../../jsonrpc/routes/shared";
 import type { SessionContext } from "../SessionContext";
 import {
   getAttachmentContentPartType,
@@ -214,11 +218,15 @@ export type UserMessageAttachmentHelpers = {
 };
 
 export type UserContentMaterializationTransaction = {
-  trackCreatedFile: (filePath: string) => void;
-  trackCreatedDirectory: (dirPath: string) => void;
+  trackCreatedFile: (filePath: string, stat: MaterializedPathIdentity) => void;
+  trackCreatedDirectory: (dirPath: string, stat: MaterializedPathIdentity) => void;
   commit: () => void;
   rollback: () => Promise<void>;
 };
+
+type MaterializedPathIdentity = Pick<UploadedAttachmentStat, "dev" | "ino">;
+
+type MaterializedPath = MaterializedPathIdentity & { path: string };
 
 export type UserMessageContentBuildOptions = {
   assertCanMaterialize?: () => void;
@@ -254,26 +262,49 @@ async function runUserContentMaterializationCheckpoint(
 }
 
 export function createUserContentMaterializationTransaction(): UserContentMaterializationTransaction {
-  const createdFiles: string[] = [];
-  const createdDirectories = new Set<string>();
+  const createdFiles: MaterializedPath[] = [];
+  const createdDirectories: MaterializedPath[] = [];
   let committed = false;
+
+  const stillOwnsPath = async (created: MaterializedPath): Promise<boolean> => {
+    try {
+      const stat = await fs.lstat(created.path);
+      return (
+        stat.dev === created.dev &&
+        stat.ino === created.ino &&
+        (await fs.realpath(created.path)) === created.path
+      );
+    } catch {
+      return false;
+    }
+  };
+
   return {
-    trackCreatedFile: (filePath) => {
-      if (!committed) createdFiles.push(filePath);
+    trackCreatedFile: (filePath, stat) => {
+      if (!committed)
+        createdFiles.push({ path: path.resolve(filePath), dev: stat.dev, ino: stat.ino });
     },
-    trackCreatedDirectory: (dirPath) => {
-      if (!committed) createdDirectories.add(path.resolve(dirPath));
+    trackCreatedDirectory: (dirPath, stat) => {
+      if (!committed) {
+        createdDirectories.push({ path: path.resolve(dirPath), dev: stat.dev, ino: stat.ino });
+      }
     },
     commit: () => {
       committed = true;
     },
     rollback: async () => {
       if (committed) return;
-      for (const filePath of [...createdFiles].reverse()) {
-        await fs.rm(filePath, { force: true }).catch(() => undefined);
+      // A canceled send owns the entries it created, not whatever now occupies
+      // their old paths after a rename or symlink replacement.
+      for (const created of [...createdFiles].reverse()) {
+        if (await stillOwnsPath(created)) {
+          await fs.rm(created.path, { force: true }).catch(() => undefined);
+        }
       }
-      for (const dirPath of [...createdDirectories].sort((a, b) => b.length - a.length)) {
-        await fs.rmdir(dirPath).catch(() => undefined);
+      for (const created of [...createdDirectories].reverse()) {
+        if (await stillOwnsPath(created)) {
+          await fs.rmdir(created.path).catch(() => undefined);
+        }
       }
     },
   };
@@ -310,7 +341,9 @@ async function ensureMaterializedDirectory(
   for (const missingDir of await getMissingDirectoryChain(dirPath)) {
     try {
       await fs.mkdir(missingDir);
-      materialization?.trackCreatedDirectory(missingDir);
+      if (materialization) {
+        materialization.trackCreatedDirectory(missingDir, await fs.lstat(missingDir));
+      }
     } catch (error) {
       if ((error as { code?: unknown }).code !== "EEXIST") {
         throw error;
@@ -406,6 +439,22 @@ export function createUserMessageAttachmentHelpers(
       path: resolvedUploadsDir,
     });
     resolvedUploadsDir = await resolveUploadsDirectory();
+    const uploadsDirectoryStat = await fs.stat(resolvedUploadsDir);
+
+    const assertUploadsDirectoryUnchanged = async () => {
+      const currentUploadsDir = await resolveUploadsDirectory();
+      const stat = await fs.stat(currentUploadsDir);
+      if (
+        currentUploadsDir !== resolvedUploadsDir ||
+        stat.dev !== uploadsDirectoryStat.dev ||
+        stat.ino !== uploadsDirectoryStat.ino
+      ) {
+        throw makeStructuredSessionError(
+          "validation_failed",
+          "Uploads directory changed while processing attachments.",
+        );
+      }
+    };
 
     const provider = config.provider;
     const modelSupportsImages = modelSupportsImageInputSync(config);
@@ -484,6 +533,8 @@ export function createUserMessageAttachmentHelpers(
         let counter = usedNames.has(finalName) ? 1 : 0;
         let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
         while (true) {
+          assertCanMaterialize();
+          await assertUploadsDirectoryUnchanged();
           const candidateName = counter === 0 ? finalName : `${base}_${counter}${ext}`;
           filePath = path.resolve(resolvedUploadsDir, candidateName);
           if (!isPathInside(resolvedUploadsDir, filePath)) {
@@ -506,9 +557,11 @@ export function createUserMessageAttachmentHelpers(
         if (!openedFile) {
           throw new Error("Failed to create attachment file");
         }
-        materialization?.trackCreatedFile(diskPath);
         usedNames.add(finalName);
         try {
+          materialization?.trackCreatedFile(diskPath, await openedFile.stat());
+          await assertUploadsDirectoryUnchanged();
+          assertCanMaterialize();
           await openedFile.writeFile(decoded);
         } finally {
           await openedFile.close();
@@ -574,13 +627,8 @@ export function createUserMessageAttachmentHelpers(
     };
 
     if (inputParts && inputParts.length > 0) {
-      const orderedText = inputParts
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n")
-        .trim();
-      const modelFacingSuffix =
-        orderedText && text.startsWith(orderedText) ? text.slice(orderedText.length) : "";
+      const orderedText = extractJsonRpcTextInput(inputParts);
+      const modelFacingSuffix = text.startsWith(orderedText) ? text.slice(orderedText.length) : "";
       const lastTextPartIndex = inputParts.findLastIndex((part) => part.type === "text");
 
       for (const [index, part] of inputParts.entries()) {
@@ -630,9 +678,16 @@ export function createUserMessageAttachmentHelpers(
     }
 
     const config = context.state.config;
-    const multimodalUploadedByteLengths: number[] = [];
     const modelSupportsImages = modelSupportsImageInputSync(config);
     const isGoogleProvider = config.provider === "google";
+    const multimodalByteLengths = getInlineAttachments(allAttachments)
+      .filter((attachment) =>
+        getAttachmentContentPartType(attachment.mimeType, {
+          modelSupportsImages,
+          isGoogleProvider,
+        }),
+      )
+      .map((attachment) => Buffer.byteLength(attachment.contentBase64, "base64"));
     for (const attachment of uploadedAttachments) {
       const uploadedFile = await resolveUploadedAttachmentPath(attachment.path);
       const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
@@ -643,13 +698,12 @@ export function createUserMessageAttachmentHelpers(
         if (isOversizedUploadedAudioAttachment(attachment.mimeType, uploadedFile.stat)) {
           continue;
         }
-        multimodalUploadedByteLengths.push(Number(uploadedFile.stat.size));
+        multimodalByteLengths.push(Number(uploadedFile.stat.size));
       }
     }
 
-    const validationMessage = getUploadedMultimodalAttachmentValidationMessage(
-      multimodalUploadedByteLengths,
-    );
+    const validationMessage =
+      getUploadedMultimodalAttachmentValidationMessage(multimodalByteLengths);
     if (validationMessage) {
       throw makeStructuredSessionError("validation_failed", validationMessage);
     }

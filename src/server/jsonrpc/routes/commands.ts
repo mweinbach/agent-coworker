@@ -32,12 +32,17 @@ export function createCommandRouteHandlers(context: JsonRpcRouteContext): JsonRp
         });
         return;
       }
-      const event = await context.events.capture(
+      const event = await captureBindingOutcome(
+        context,
         binding,
         () => binding.runtime?.skills.listCommands(),
         (candidate): candidate is Extract<SessionEvent, { type: "commands" }> =>
           candidate.type === "commands" && candidate.sessionId === binding.runtime?.id,
       );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
       context.jsonrpc.sendResult(ws, message.id, { commands: event.commands });
     },
 

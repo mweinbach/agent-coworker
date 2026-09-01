@@ -19,6 +19,7 @@ type ProjectedTurnState = {
   itemOrder: string[];
   currentProjectedIdByRawId: Map<string, string>;
   seenOccurrencesByRawId: Map<string, number>;
+  legacyAssistantOccurrenceIds: Set<string>;
   reasoningClosedByBoundaryRawIds: Set<string>;
   reasoningRestartedByBoundaryRawIds: Set<string>;
 };
@@ -57,6 +58,7 @@ function dedupeReplayReasoningItems(
 
 function dedupeReplayAssistantItems(
   items: Array<Record<string, unknown>>,
+  legacyOccurrenceIds: ReadonlySet<string>,
 ): Array<Record<string, unknown>> {
   let assistantHistory = "";
   const out: Array<Record<string, unknown>> = [];
@@ -72,33 +74,20 @@ function dedupeReplayAssistantItems(
       continue;
     }
 
-    const aggregate = normalizeTranscriptReplayText(assistantHistory);
-    if (aggregate && normalized === aggregate) {
-      continue;
-    }
-
-    // Normalized containment — catches duplicates where the normalized
-    // forms are exact prefixes of each other.
-    if (aggregate) {
-      if (aggregate.startsWith(normalized) || normalized.startsWith(aggregate)) {
-        assistantHistory = `${assistantHistory}${item.text}`;
+    // Modern IDs already distinguish occurrences, even when their text is identical.
+    // Cumulative-text cleanup is only valid for demonstrated legacy raw-ID reuse.
+    if (typeof item.id === "string" && legacyOccurrenceIds.has(item.id)) {
+      const aggregate = normalizeTranscriptReplayText(assistantHistory);
+      if (aggregate && normalized === aggregate) {
         continue;
       }
-    }
 
-    // Whitespace-stripped comparison — catches duplicates where streaming
-    // segments were concatenated into history without paragraph separators
-    // (e.g. "Hello worldMore text") and a later item has the full formatted
-    // text (e.g. "Hello world\n\nMore text"), or vice versa.
-    const strippedAggregate = stripWhitespaceForTranscriptDedupe(assistantHistory);
-    const strippedNormalized = stripWhitespaceForTranscriptDedupe(item.text);
-    if (strippedAggregate && strippedNormalized) {
-      if (
-        strippedAggregate === strippedNormalized ||
-        strippedAggregate.startsWith(strippedNormalized) ||
-        strippedNormalized.startsWith(strippedAggregate)
-      ) {
-        assistantHistory = `${assistantHistory}${item.text}`;
+      // Whitespace-stripped comparison catches a legacy aggregate whose original
+      // segments lacked paragraph separators. A shared prefix is not a duplicate:
+      // a later segment can repeat earlier text and add a correction or conclusion.
+      const strippedAggregate = stripWhitespaceForTranscriptDedupe(assistantHistory);
+      const strippedNormalized = stripWhitespaceForTranscriptDedupe(item.text);
+      if (strippedAggregate && strippedAggregate === strippedNormalized) {
         continue;
       }
     }
@@ -124,6 +113,7 @@ export function createThreadTurnProjector() {
       itemOrder: [],
       currentProjectedIdByRawId: new Map(),
       seenOccurrencesByRawId: new Map(),
+      legacyAssistantOccurrenceIds: new Set(),
       reasoningClosedByBoundaryRawIds: new Set(),
       reasoningRestartedByBoundaryRawIds: new Set(),
     };
@@ -206,6 +196,9 @@ export function createThreadTurnProjector() {
           event.eventType === "item/started"
             ? projectStartedItemId(turn, rawId)
             : currentProjectedItemId(turn, rawId);
+        if (item.type === "agentMessage" && projectedId !== rawId) {
+          turn.legacyAssistantOccurrenceIds.add(projectedId);
+        }
         if (event.eventType === "item/completed" && !turn.items.has(projectedId)) {
           turn.itemOrder.push(projectedId);
         }
@@ -288,6 +281,7 @@ export function createThreadTurnProjector() {
               .map((itemId) => turn.items.get(itemId))
               .filter((item): item is NonNullable<typeof item> => Boolean(item)),
           ),
+          turn.legacyAssistantOccurrenceIds,
         ),
       };
     });

@@ -858,6 +858,34 @@ describe("runWorkflow: budget admission", () => {
     expect(secondControl.spawnCount()).toBe(0);
   });
 
+  test("honors concurrent session spend before admitting the next child", async () => {
+    const dir = await workflowTmpDir();
+    const tracker = new SessionCostTracker("shared-budget-session", { stopAtUsd: 1 });
+    const control = makeFakeControl({
+      costUsd: 0.2,
+      reply: (nth) => {
+        if (nth === 1) tracker.recordUnattributedCost(0.9);
+        return `reply ${nth}`;
+      },
+    });
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir, { costTracker: tracker }),
+      control,
+      script:
+        `${metaHeader("live-session-budget", ["main"])}` +
+        `export default async function run({ agent }) {\n` +
+        `  const first = await agent("first");\n` +
+        `  const second = await agent("second", { onError: "null" });\n` +
+        `  return [first, second];\n}`,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(control.spawnCount()).toBe(1);
+    expect(outcome.summary.result).toEqual(["reply 1", null]);
+    expect(tracker.getBudgetStatus().currentCostUsd).toBe(1.1);
+  });
+
   test("does not cache a budget-blocked nullable call across resume", async () => {
     const dir = await workflowTmpDir();
     const script =
@@ -887,5 +915,79 @@ describe("runWorkflow: budget admission", () => {
     expect(resumed.summary.result).toEqual(["reply 1", "fresh"]);
     expect(resumed.summary.cachedCount).toBe(1);
     expect(resumedControl.spawnCount()).toBe(1);
+  });
+});
+
+describe("runWorkflow: total agent admission limit", () => {
+  const maxAgentCalls = 1_000;
+
+  test("allows a dry run to reach the cap without exceeding it", async () => {
+    const dir = await workflowTmpDir();
+    const outcome = await runWorkflow({
+      ctx: makeWorkflowCtx(dir),
+      control: makeFakeControl(),
+      dryRun: true,
+      script:
+        `${metaHeader("at-agent-limit", ["main"])}` +
+        `export default async function run({ agent, parallel }) {\n` +
+        `  return (await parallel(Array.from({ length: ${maxAgentCalls} }, () => () => agent("work")))).length;\n}`,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.summary.agentCount).toBe(maxAgentCalls);
+    expect(outcome.summary.result).toBe(maxAgentCalls);
+    expect(outcome.summary.erroredCount).toBe(0);
+  });
+
+  test("a parallel fan-out cannot swallow the fatal agent ceiling", async () => {
+    const dir = await workflowTmpDir();
+    await expect(
+      runWorkflow({
+        ctx: makeWorkflowCtx(dir),
+        control: makeFakeControl(),
+        dryRun: true,
+        script:
+          `${metaHeader("parallel-agent-limit", ["main"])}` +
+          `export default async function run({ agent, parallel }) {\n` +
+          `  await parallel(Array.from({ length: ${maxAgentCalls + 5} }, () => () => agent("work", { onError: "null" })));\n` +
+          `  return "swallowed failure";\n}`,
+      }),
+    ).rejects.toThrow("1000-agent ceiling");
+  });
+
+  test("catch-and-retry cannot retain extra rows or logs after the agent ceiling", async () => {
+    const dir = await workflowTmpDir();
+    const control = makeFakeControl();
+    let maxRetainedAgents = 0;
+    let terminalOutcome: string | undefined;
+    const logs: string[] = [];
+
+    await expect(
+      runWorkflow({
+        ctx: makeWorkflowCtx(dir),
+        control,
+        script:
+          `${metaHeader("retry-agent-limit", ["main"])}` +
+          `export default async function run({ agent, phase, log }) {\n` +
+          `  for (let index = 0; index < ${maxAgentCalls + 5}; index += 1) {\n` +
+          `    try { await agent(""); } catch {}\n` +
+          `    if (index >= ${maxAgentCalls}) { phase("main"); log("after ceiling"); }\n` +
+          `  }\n` +
+          `  return "swallowed failure";\n}`,
+        onProgress: (progress) => {
+          maxRetainedAgents = Math.max(maxRetainedAgents, progress.agents.length);
+          if (progress.outcome) {
+            terminalOutcome = progress.outcome;
+            logs.push(...progress.logs);
+          }
+        },
+      }),
+    ).rejects.toThrow("1000-agent ceiling");
+
+    expect(control.spawnCount()).toBe(0);
+    expect(maxRetainedAgents).toBeLessThanOrEqual(maxAgentCalls);
+    expect(terminalOutcome).toBe("errored");
+    expect(logs).toEqual([]);
   });
 });

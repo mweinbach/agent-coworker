@@ -32,6 +32,7 @@ export type ResponsesStreamProjector = {
   model?: PiModel;
   currentItem: Record<string, any> | null;
   currentBlock: AssistantContentBlock | null;
+  completed: boolean;
 };
 
 function parseStreamingJson(partialJson: string): Record<string, unknown> {
@@ -130,9 +131,13 @@ function buildOpenAiResponseFailedError(event: Record<string, any>): OpenAiRespo
   const eventError = asRecord(event.error);
   const responseError = asRecord(response?.error);
   const error = responseError ?? eventError;
+  const incompleteReason = firstString(asRecord(response?.incomplete_details)?.reason);
   const message =
-    firstString(error?.message, event.message, response?.error) ?? "OpenAI response failed.";
-  const code = firstString(error?.code, event.code);
+    firstString(error?.message, event.message, response?.error) ??
+    (event.type === "response.incomplete"
+      ? "OpenAI response incomplete."
+      : "OpenAI response failed.");
+  const code = firstString(error?.code, event.code, incompleteReason);
   const status = firstString(response?.status);
   const failureType = firstString(error?.type);
   const param = firstString(error?.param);
@@ -167,6 +172,7 @@ export function createResponsesStreamProjector(
     model,
     currentItem: null,
     currentBlock: null,
+    completed: false,
   };
 }
 
@@ -407,7 +413,11 @@ export function projectResponsesStreamEvent(
     return;
   }
 
-  if (event.type === "response.completed") {
+  if (
+    event.type === "response.completed" ||
+    event.type === "response.incomplete" ||
+    event.type === "response.failed"
+  ) {
     const response = event.response as Record<string, any> | undefined;
     if (response?.usage) {
       const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
@@ -428,7 +438,16 @@ export function projectResponsesStreamEvent(
         output.usage.cost = projectedCost;
       }
     }
-    output.stopReason = mapStopReason(response?.status);
+    output.stopReason =
+      event.type === "response.failed" ? "error" : mapStopReason(response?.status);
+    if (event.type !== "response.completed") {
+      const error = buildOpenAiResponseFailedError(event);
+      output.errorMessage = error.message;
+      output.errorCode = error.code;
+      output.error = asRecord(asRecord(event.response)?.error) ?? event.error;
+      throw error;
+    }
+    projector.completed = true;
     if (
       output.content.some((block: { type: string }) => block.type === "toolCall") &&
       output.stopReason === "stop"
@@ -443,15 +462,6 @@ export function projectResponsesStreamEvent(
     output.stopReason = "error";
     output.errorMessage = error.message;
     output.errorCode = error.code;
-    throw error;
-  }
-
-  if (event.type === "response.failed") {
-    const error = buildOpenAiResponseFailedError(event);
-    output.stopReason = "error";
-    output.errorMessage = error.message;
-    output.errorCode = error.code;
-    output.error = asRecord(asRecord(event.response)?.error) ?? event.error;
     throw error;
   }
 }

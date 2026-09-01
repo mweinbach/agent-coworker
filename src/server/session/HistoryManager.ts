@@ -3,20 +3,22 @@ import type { SessionContext } from "./SessionContext";
 
 const MAX_MESSAGE_HISTORY = 200;
 
+function runtimeMessageWindow(messages: ModelMessage[]): ModelMessage[] {
+  if (messages.length <= MAX_MESSAGE_HISTORY) return [...messages];
+
+  let start = messages.length - (MAX_MESSAGE_HISTORY - 1);
+  // Tool results belong to the immediately preceding assistant call. If that
+  // call falls outside the window, omit its results as well.
+  while (start < messages.length && messages[start].role === "tool") start += 1;
+
+  return [messages[0], ...messages.slice(start)];
+}
+
 export class HistoryManager {
   constructor(private readonly context: SessionContext) {}
 
   refreshRuntimeMessagesFromHistory() {
-    if (this.context.state.allMessages.length <= MAX_MESSAGE_HISTORY) {
-      this.context.state.messages = [...this.context.state.allMessages];
-      return;
-    }
-
-    const first = this.context.state.allMessages[0];
-    this.context.state.messages = [
-      first,
-      ...this.context.state.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1)),
-    ];
+    this.context.state.messages = runtimeMessageWindow(this.context.state.allMessages);
   }
 
   appendMessagesToHistory(messages: ModelMessage[]) {
@@ -24,14 +26,8 @@ export class HistoryManager {
 
     // Avoid V8 max argument limit by concatenating instead of spreading large arrays
     this.context.state.allMessages = this.context.state.allMessages.concat(messages);
-    this.context.state.messages = this.context.state.messages.concat(messages);
-
-    if (this.context.state.messages.length > MAX_MESSAGE_HISTORY) {
-      const first = this.context.state.messages[0];
-      this.context.state.messages = [
-        first,
-        ...this.context.state.messages.slice(-(MAX_MESSAGE_HISTORY - 1)),
-      ];
-    }
+    this.context.state.messages = runtimeMessageWindow(
+      this.context.state.messages.concat(messages),
+    );
   }
 }

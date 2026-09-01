@@ -10,14 +10,18 @@ import {
 } from "../src/advancedMemory/store";
 import type { ToolContext } from "../src/tools/context";
 import { createRecallMemoryTool } from "../src/tools/recallMemory";
+import { pinHome } from "./helpers/platform";
 
 let tmpDir: string;
+let restoreHome: () => void;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "adv-mem-recall-"));
+  restoreHome = pinHome(tmpDir);
 });
 
 afterEach(async () => {
+  restoreHome();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 

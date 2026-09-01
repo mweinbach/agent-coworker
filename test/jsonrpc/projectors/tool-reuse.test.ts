@@ -6,6 +6,97 @@ import { digestToolInput } from "../../../src/shared/toolInputDigestHasher";
 import { sessionId, streamChunk, turnId } from "./fixtures";
 
 describe("JSON-RPC projectors", () => {
+  test.each([false, true])(
+    "keeps overlapping same-name tool calls separate (streaming input: %s)",
+    (streamingInput) => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const emissions: Array<{ eventType: string; payload: any }> = [];
+      const live = createJsonRpcNotificationProjector({
+        threadId: sessionId,
+        send: (message) => outbound.push(message as { method: string; params?: any }),
+      });
+      const journal = createThreadJournalNotificationProjector({
+        threadId: sessionId,
+        emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+      });
+
+      for (const projector of [live, journal]) {
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          turnId,
+          busy: true,
+          cause: "user_message",
+        });
+        for (const id of ["a", "b"]) {
+          if (streamingInput) {
+            projector.handle(streamChunk("tool_input_start", { id, toolName: "read" }));
+            projector.handle(
+              streamChunk("tool_input_delta", { id, delta: JSON.stringify({ path: `${id}.txt` }) }),
+            );
+            projector.handle(streamChunk("tool_input_end", { id, toolName: "read" }));
+          }
+          projector.handle(
+            streamChunk("tool_call", {
+              toolCallId: id,
+              toolName: "read",
+              input: { path: `${id}.txt` },
+            }),
+          );
+        }
+        projector.handle(
+          streamChunk("tool_approval_request", {
+            approvalId: "approval-a",
+            toolCall: { toolCallId: "a", toolName: "read" },
+          }),
+        );
+        for (const id of ["b", "a"]) {
+          projector.handle(
+            streamChunk("tool_result", {
+              toolCallId: id,
+              toolName: "read",
+              output: `contents ${id}`,
+            }),
+          );
+        }
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          turnId,
+          busy: false,
+          outcome: "completed",
+        });
+      }
+
+      const projectedItems = [
+        outbound
+          .filter((event) => event.method === "item/completed")
+          .map((event) => event.params?.item),
+        emissions
+          .filter((event) => event.eventType === "item/completed")
+          .map((event) => event.payload?.item),
+      ];
+      for (const items of projectedItems) {
+        expect(items.find((item) => item?.state === "approval-requested")).toMatchObject({
+          id: `toolCall:${turnId}:a`,
+          args: { path: "a.txt" },
+        });
+        expect(
+          items
+            .filter((item) => item?.state === "output-available")
+            .map((item) => ({
+              id: item.id,
+              args: item.args,
+              result: item.result,
+            })),
+        ).toEqual([
+          { id: `toolCall:${turnId}:b`, args: { path: "b.txt" }, result: "contents b" },
+          { id: `toolCall:${turnId}:a`, args: { path: "a.txt" }, result: "contents a" },
+        ]);
+      }
+    },
+  );
+
   test("projectors keep completed tools terminal when stale input chunks arrive later", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const emissions: Array<{ eventType: string; payload: any }> = [];

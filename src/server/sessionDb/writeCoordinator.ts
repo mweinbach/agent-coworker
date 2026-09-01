@@ -344,10 +344,8 @@ export class SessionDbWriteCoordinator {
     const owner = await readOwnerMetadata(this.ownerFilePath);
     const staleCutoff = this.now() - this.staleLockMs;
     if (owner) {
-      const updatedAtMs = Date.parse(owner.updatedAt);
-      const isStaleByTime = !Number.isFinite(updatedAtMs) || updatedAtMs <= staleCutoff;
-      const isStaleByPid = !this.processAlive(owner.pid);
-      if (!isStaleByTime && !isStaleByPid) {
+      // A stalled heartbeat is not proof that a live writer released its lock.
+      if (this.processAlive(owner.pid)) {
         return false;
       }
       await fs.rm(this.lockDir, { recursive: true, force: true });

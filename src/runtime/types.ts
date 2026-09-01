@@ -1,6 +1,16 @@
 import type { ProviderContinuationState } from "../shared/providerContinuation";
 import type { AgentConfig, ApproveCommandOptions, ModelMessage, TodoItem } from "../types";
 
+/** Internal pre-cancellation proof; symbol keys never enter JSON stream notifications. */
+export const RUNTIME_COMMITTED_PROGRESS = Symbol("runtime.committedProgress");
+
+export type RuntimeCommittedProgress = {
+  /** Canonical assistant records captured when a model step has completed. */
+  assistantMessages?: readonly ModelMessage[];
+  /** Provider-owned tool events captured before deferred delivery or cancellation. */
+  toolParts?: readonly unknown[];
+};
+
 export type RuntimeModelRawEvent = {
   format: "openai-responses-v1" | "google-interactions-v1" | "codex-app-server-v2";
   event: Record<string, unknown>;
@@ -18,9 +28,12 @@ export type RuntimeUsage = {
 
 /** Error from a partial turn that may still include progress and token usage. */
 export type PartialTurnError = Error & {
+  [RUNTIME_COMMITTED_PROGRESS]?: RuntimeCommittedProgress;
   usage?: RuntimeUsage;
+  /** Request-level rows covering usage; omit when only aggregate usage is available. */
+  requestUsages?: RuntimeUsage[];
   responseMessages?: ModelMessage[];
-  providerState?: ProviderContinuationState;
+  providerState?: ProviderContinuationState | null;
 };
 
 export type RuntimeToolDefinition = {
@@ -92,10 +105,13 @@ export interface RuntimeRunTurnParams {
 }
 
 export interface RuntimeRunTurnResult {
+  [RUNTIME_COMMITTED_PROGRESS]?: RuntimeCommittedProgress;
   text: string;
   reasoningText?: string;
   responseMessages: ModelMessage[];
   usage?: RuntimeUsage;
+  /** Request-level rows covering usage; omit when only aggregate usage is available. */
+  requestUsages?: RuntimeUsage[];
   providerState?: ProviderContinuationState;
 }
 

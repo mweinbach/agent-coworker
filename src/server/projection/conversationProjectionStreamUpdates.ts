@@ -216,9 +216,11 @@ export function createStreamUpdateHandler(
 
     if (update.kind === "tool_approval_request") {
       const name = tools.toolNameFromApproval(update.toolCall);
-      const syntheticKey = tools.toolSyntheticApprovalKey(update.turnId, update.approvalId);
-      const currentState = state.toolByKey.get(`${update.turnId}:${syntheticKey}`);
-      const { state: toolState } = tools.resolveToolState(update.turnId, syntheticKey, name, {
+      const key =
+        tools.toolKeyFromApproval(update.toolCall) ??
+        tools.toolSyntheticApprovalKey(update.turnId, update.approvalId);
+      const currentState = state.toolByKey.get(`${update.turnId}:${key}`);
+      const { state: toolState } = tools.resolveToolState(update.turnId, key, name, {
         startNewOccurrence: Boolean(
           currentState && isTerminalProjectedToolState(currentState.state),
         ),

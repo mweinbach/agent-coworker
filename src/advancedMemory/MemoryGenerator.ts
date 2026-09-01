@@ -4,12 +4,13 @@ import { z } from "zod";
 import { parseChildModelRef } from "../models/childModelRouting";
 import { createRuntime } from "../runtime";
 import { type AgentConfig, defaultRuntimeNameForProvider, type ModelMessage } from "../types";
+import { raceWithAbort } from "../utils/abortSignal";
 
 import { AdvancedMemoryStore, resolveMemoriesDir, resolveMemoryFolderName } from "./store";
 
 /** Per-tool truncation cap for tool results in the serialized transcript. */
 const TOOL_RESULT_CHAR_CAP = 600;
-/** Overall cap on the serialized delta handed to the generator. */
+/** Cap on each transcript batch handed to the generator. */
 const TRANSCRIPT_CHAR_CAP = 24_000;
 
 function truncate(value: string, max: number): string {
@@ -50,7 +51,7 @@ function stringifyToolOutput(output: unknown): string {
  * and assistant text, tool calls (name + small args), and truncated tool
  * results. Reasoning is omitted to save tokens.
  */
-export function serializeTurnDelta(messages: ModelMessage[]): string {
+function serializeMessages(messages: ModelMessage[]): string {
   const lines: string[] = [];
   for (const message of messages) {
     const role = (message as { role?: string }).role;
@@ -98,7 +99,53 @@ export function serializeTurnDelta(messages: ModelMessage[]): string {
       }
     }
   }
-  return truncate(lines.join("\n"), TRANSCRIPT_CHAR_CAP);
+  return lines.join("\n");
+}
+
+/** Compact preview used by transcript tools and skill-improvement evidence. */
+export function serializeTurnDelta(messages: ModelMessage[]): string {
+  return truncate(serializeMessages(messages), TRANSCRIPT_CHAR_CAP);
+}
+
+type MemoryTranscriptBatch = {
+  transcript: string;
+  processedMessageCount: number;
+  fragmentRole?: string;
+};
+
+/** Preserve whole messages where possible; oversized messages are retried until every part succeeds. */
+function* memoryTranscriptBatches(messages: ModelMessage[]): Generator<MemoryTranscriptBatch> {
+  let transcript = "";
+  let processedMessageCount = 0;
+  for (const [index, message] of messages.entries()) {
+    const rendered = serializeMessages([message]);
+    if (!rendered) {
+      processedMessageCount = index + 1;
+      continue;
+    }
+    if (transcript && transcript.length + 1 + rendered.length > TRANSCRIPT_CHAR_CAP) {
+      yield { transcript, processedMessageCount };
+      transcript = "";
+    }
+    if (rendered.length > TRANSCRIPT_CHAR_CAP) {
+      for (let offset = 0; offset < rendered.length; ) {
+        let end = Math.min(offset + TRANSCRIPT_CHAR_CAP, rendered.length);
+        const lastCodeUnit = rendered.charCodeAt(end - 1);
+        if (end < rendered.length && lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
+        yield {
+          transcript: rendered.slice(offset, end),
+          // A successful fragment cannot checkpoint the rest of its message.
+          processedMessageCount: end === rendered.length ? index + 1 : index,
+          fragmentRole: message.role,
+        };
+        offset = end;
+      }
+    } else {
+      transcript += `${transcript ? "\n" : ""}${rendered}`;
+    }
+    processedMessageCount = index + 1;
+  }
+  if (transcript) yield { transcript, processedMessageCount };
 }
 
 function hasMeaningfulContent(messages: ModelMessage[]): boolean {
@@ -174,6 +221,15 @@ export type MemoryGeneratorRunOpts = {
 
 export type MemoryConsolidatorRunOpts = Omit<MemoryGeneratorRunOpts, "deltaMessages">;
 
+export type MemoryGeneratorRunResult = {
+  /** At least one batch completed, possibly before a later failure. */
+  ran: boolean;
+  /** Every batch completed, or the delta intentionally contained nothing to process. */
+  ok: boolean;
+  /** Contiguous complete input messages processed successfully; never includes a partial message. */
+  processedMessageCount: number;
+};
+
 /**
  * Headless agent that maintains the advanced (file-based) memory tree after each
  * turn. Mirrors `DelegateRunner` but with a dedicated prompt and a minimal,
@@ -202,91 +258,122 @@ export class MemoryGenerator {
   }
 
   /**
-   * Runs the headless memory pass. `ok` is false only on a runtime failure (so
-   * the caller can avoid advancing its delta marker and retry later); empty
-   * deltas resolve `{ ran: false, ok: true }`. Never throws.
+   * Runs ordered, bounded transcript batches. Failures leave the incomplete
+   * suffix unprocessed; callers may checkpoint only processedMessageCount.
+   * Empty or tool-only deltas are intentional no-ops. Never throws.
    */
-  async run(opts: MemoryGeneratorRunOpts): Promise<{ ran: boolean; ok: boolean }> {
+  async run(opts: MemoryGeneratorRunOpts): Promise<MemoryGeneratorRunResult> {
     const log = opts.log ?? (() => {});
-    if (!hasMeaningfulContent(opts.deltaMessages)) {
-      return { ran: false, ok: true };
-    }
-    const transcript = serializeTurnDelta(opts.deltaMessages);
-    if (!transcript.trim()) return { ran: false, ok: true };
-
-    const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
-    const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
-
-    const tools = this.buildTools(store, folder, opts.sessionId);
-    const system = await this.deps.loadGeneratorPrompt(opts.config);
-    const genConfig = this.resolveTargetConfig(opts.config);
-
-    const userMessage =
-      `Active memory folder: ${folder}\n\n` +
-      `Conversation delta since memory was last updated:\n\n${transcript}`;
-
+    let processedMessageCount = 0;
+    let ran = false;
     try {
-      const runtime = this.deps.createRuntime(genConfig);
-      await runtime.runTurn({
-        config: genConfig,
-        system,
-        messages: [{ role: "user", content: userMessage }] as ModelMessage[],
-        tools,
-        maxSteps: 8,
-        providerOptions: genConfig.providerOptions,
-        abortSignal: opts.abortSignal,
-        log: (line) => log(`[memory] ${line}`),
-        enableMcp: false,
-      } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]);
-      return { ran: true, ok: true };
+      opts.abortSignal?.throwIfAborted();
+      if (!hasMeaningfulContent(opts.deltaMessages)) {
+        return { ran: false, ok: true, processedMessageCount: opts.deltaMessages.length };
+      }
+      const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
+      const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
+      const tools = this.buildTools(store, folder, opts.sessionId);
+      const genConfig = this.resolveTargetConfig(opts.config);
+      let system: string | undefined;
+      let batchNumber = 0;
+      for (const batch of memoryTranscriptBatches(opts.deltaMessages)) {
+        opts.abortSignal?.throwIfAborted();
+        system ??= await this.deps.loadGeneratorPrompt(opts.config);
+        opts.abortSignal?.throwIfAborted();
+        const userMessage =
+          `Active memory folder: ${folder}\n\n` +
+          `Batch ${++batchNumber} of an ordered conversation delta. Read existing memories before updating them.\n` +
+          (batch.fragmentRole
+            ? `This batch contains a fragment of one ${batch.fragmentRole} message; later batches may continue it.\n`
+            : "") +
+          `\nConversation delta since memory was last updated:\n\n${batch.transcript}`;
+        const runtime = this.deps.createRuntime(genConfig);
+        let modelAborted = false;
+        await raceWithAbort(
+          runtime.runTurn({
+            config: genConfig,
+            system,
+            messages: [{ role: "user", content: userMessage }] as ModelMessage[],
+            tools,
+            maxSteps: 8,
+            providerOptions: genConfig.providerOptions,
+            abortSignal: opts.abortSignal,
+            onModelAbort: () => {
+              modelAborted = true;
+            },
+            log: (line) => log(`[memory] ${line}`),
+            enableMcp: false,
+          } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]),
+          opts.abortSignal,
+          "Memory generation aborted.",
+        );
+        opts.abortSignal?.throwIfAborted();
+        if (modelAborted) throw new Error("Memory generation aborted.");
+        processedMessageCount = batch.processedMessageCount;
+        ran = true;
+      }
+      return { ran, ok: true, processedMessageCount: opts.deltaMessages.length };
     } catch (error) {
       log(`[memory] generation failed: ${String(error)}`);
-      return { ran: false, ok: false };
+      return { ran, ok: false, processedMessageCount };
     }
   }
 
   /**
    * Runs a reflective cleanup over the active memory folder. `ok` is false only
-   * when the runtime failed; empty folders resolve `{ ran: false, ok: true }`.
+   * when setup or the runtime failed; empty folders resolve `{ ran: false, ok: true }`.
    * Never throws.
    */
   async consolidate(opts: MemoryConsolidatorRunOpts): Promise<{ ran: boolean; ok: boolean }> {
     const log = opts.log ?? (() => {});
-    const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
-    const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
-    const memories = await store.listMemories(folder);
-    if (memories.length === 0) {
-      return { ran: false, ok: true };
-    }
-
-    const index = await store.renderIndex(folder);
-    const tools = this.buildTools(store, folder, opts.sessionId, {
-      includeConsolidationTools: true,
-    });
-    const system = await (this.deps.loadConsolidatorPrompt ?? defaultLoadConsolidatorPrompt)(
-      opts.config,
-    );
-    const genConfig = this.resolveTargetConfig(opts.config);
-    const userMessage = [
-      `Active memory folder: ${folder}`,
-      `Current MEMORY.md index:\n\n${index || "(empty)"}`,
-      `Memory file count: ${memories.length}`,
-      "Run one consolidation pass now.",
-    ].join("\n\n");
-
     try {
+      opts.abortSignal?.throwIfAborted();
+      const store = opts.store ?? new AdvancedMemoryStore(resolveMemoriesDir(opts.config));
+      const folder = opts.folder ?? resolveMemoryFolderName(opts.config);
+      const memories = await store.listMemories(folder);
+      if (memories.length === 0) {
+        return { ran: false, ok: true };
+      }
+
+      const index = await store.renderIndex(folder);
+      const tools = this.buildTools(store, folder, opts.sessionId, {
+        includeConsolidationTools: true,
+      });
+      const system = await (this.deps.loadConsolidatorPrompt ?? defaultLoadConsolidatorPrompt)(
+        opts.config,
+      );
+      const genConfig = this.resolveTargetConfig(opts.config);
+      const userMessage = [
+        `Active memory folder: ${folder}`,
+        `Current MEMORY.md index:\n\n${index || "(empty)"}`,
+        `Memory file count: ${memories.length}`,
+        "Run one consolidation pass now.",
+      ].join("\n\n");
+
+      opts.abortSignal?.throwIfAborted();
       const runtime = this.deps.createRuntime(genConfig);
-      await runtime.runTurn({
-        config: genConfig,
-        system,
-        messages: [{ role: "user", content: userMessage }] as ModelMessage[],
-        tools,
-        maxSteps: 20,
-        providerOptions: genConfig.providerOptions,
-        abortSignal: opts.abortSignal,
-        log: (line) => log(`[memory] ${line}`),
-        enableMcp: false,
-      } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]);
+      let modelAborted = false;
+      await raceWithAbort(
+        runtime.runTurn({
+          config: genConfig,
+          system,
+          messages: [{ role: "user", content: userMessage }] as ModelMessage[],
+          tools,
+          maxSteps: 20,
+          providerOptions: genConfig.providerOptions,
+          abortSignal: opts.abortSignal,
+          onModelAbort: () => {
+            modelAborted = true;
+          },
+          log: (line) => log(`[memory] ${line}`),
+          enableMcp: false,
+        } as Parameters<ReturnType<typeof createRuntime>["runTurn"]>[0]),
+        opts.abortSignal,
+        "Memory consolidation aborted.",
+      );
+      opts.abortSignal?.throwIfAborted();
+      if (modelAborted) throw new Error("Memory consolidation aborted.");
       return { ran: true, ok: true };
     } catch (error) {
       log(`[memory] consolidation failed: ${String(error)}`);

@@ -1,10 +1,20 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import { scratchRoots } from "../src/platform/sandbox";
+import {
+  type CodexAppServerJsonRpcNotification,
+  closePooledCodexAppServerClients,
+  __internal as codexAppServerClientInternal,
+} from "../src/providers/codexAppServerClient";
+import { createCodexAppServerRuntime } from "../src/runtime/codexAppServerRuntime";
 import type { SessionEvent } from "../src/server/protocol";
 import { AgentSession } from "../src/server/session/AgentSession";
-import type { PersistedModelStreamChunk, SessionDb } from "../src/server/sessionDb";
+import { type PersistedModelStreamChunk, SessionDb } from "../src/server/sessionDb";
 import type { AgentConfig } from "../src/types";
+import { createMockClient } from "./fixtures/codexAppServerMock";
 
 const mockRunTurn = mock(async () => ({
   text: "",
@@ -120,6 +130,200 @@ describe("AgentSession stream pipeline", () => {
     await observabilityRuntimeInternal.resetForTests();
   });
 
+  test("persists completed Codex tools queued behind a stream callback before cancellation", async () => {
+    const [scratchRoot] = scratchRoots();
+    if (!scratchRoot) throw new Error("No platform scratch root is available");
+    const dir = await fs.mkdtemp(path.join(scratchRoot, "session-codex-queued-progress-"));
+    const config: AgentConfig = {
+      ...makeConfig(dir),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      userCoworkDir: path.join(dir, "home", ".cowork"),
+      builtInDir: path.resolve("."),
+      builtInConfigDir: path.resolve("config"),
+      enableMcp: false,
+    };
+    const sessionDb = await SessionDb.create({
+      paths: {
+        rootDir: config.userCoworkDir,
+        sessionsDir: path.join(config.userCoworkDir, "sessions"),
+      },
+    });
+    const turnStarted = Promise.withResolvers<void>();
+    const callbackEntered = Promise.withResolvers<void>();
+    const releaseCallback = Promise.withResolvers<void>();
+    const listeners = new Set<(notification: CodexAppServerJsonRpcNotification) => void>();
+    const turnRequests: Record<string, unknown>[] = [];
+    const emitNotification = (
+      method: string,
+      payload: Record<string, unknown>,
+      turnId = "turn_1",
+    ) => {
+      for (const listener of listeners) {
+        listener({ method, params: { threadId: "thread_1", turnId, ...payload } });
+      }
+    };
+    codexAppServerClientInternal.setClientFactoryForTests(async () => {
+      const client = createMockClient();
+      const request = client.request.bind(client);
+      client.onNotification = (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      };
+      client.request = async (method, params, timeout, opts) => {
+        if (method !== "turn/start") return await request(method, params, timeout, opts);
+        turnRequests.push(structuredClone(params as Record<string, unknown>));
+        const turnId = `turn_${turnRequests.length}`;
+        if (turnRequests.length === 1) {
+          turnStarted.resolve();
+        } else {
+          queueMicrotask(() => {
+            emitNotification(
+              "turn/completed",
+              { turn: { id: turnId, status: "completed", items: [], error: null } },
+              turnId,
+            );
+          });
+        }
+        return { turn: { id: turnId, status: "inProgress", items: [] } };
+      };
+      client.interruptTurn = async () => {};
+      return client;
+    });
+    const runtime = createCodexAppServerRuntime();
+    let heldCallback = false;
+    const realRunTurn = createRunTurn({
+      createTools: () => ({}),
+      createRuntime: () => ({
+        name: runtime.name,
+        runTurn: async (params) =>
+          await runtime.runTurn({
+            ...params,
+            onModelStreamPart: async (part) => {
+              if ((part as { type?: string }).type === "text-delta" && !heldCallback) {
+                heldCallback = true;
+                callbackEntered.resolve();
+                await releaseCallback.promise;
+              }
+              await params.onModelStreamPart?.(part);
+            },
+          }),
+      }),
+    });
+    const runTurnImpl: typeof realRunTurn = async (params) =>
+      await realRunTurn({ ...params, toolEnv: { COWORK_DISABLE_RUNTIME: "1" } });
+    const { emit, events } = makeEmit();
+    const session = new AgentSession({
+      config,
+      system: "Test assistant.",
+      discoveredSkills: [],
+      emit,
+      yolo: true,
+      sessionDb,
+      runTurnImpl,
+      getProviderStatusesImpl: async () => [],
+      generateSessionTitleImpl: mockGenerateSessionTitle,
+      writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,
+    });
+    let restored: AgentSession | undefined;
+    const code = 'await tools.writeFile({ path: "note.txt", content: "saved" })';
+    const turn = session.sendUserMessage("Save a note using Code Mode.");
+    try {
+      await turnStarted.promise;
+      emitNotification("item/started", {
+        item: { type: "agentMessage", id: "held-text", text: "" },
+      });
+      emitNotification("item/agentMessage/delta", { itemId: "held-text", delta: "Working" });
+      await callbackEntered.promise;
+      emitNotification("rawResponseItem/completed", {
+        item: { type: "custom_tool_call", call_id: "saved-exec", name: "exec", input: code },
+      });
+      await fs.writeFile(path.join(dir, "note.txt"), "saved", "utf8");
+      emitNotification("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          call_id: "saved-exec",
+          output: "saved via code mode",
+        },
+      });
+      emitNotification("item/started", {
+        item: { type: "commandExecution", id: "unfinished", command: "slow command", cwd: dir },
+      });
+      emitNotification("item/commandExecution/outputDelta", {
+        itemId: "unfinished",
+        delta: "preliminary output",
+      });
+      session.cancel();
+      emitNotification("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "unfinished",
+          command: "slow command",
+          aggregatedOutput: "late result",
+          exitCode: 0,
+        },
+      });
+      emitNotification("turn/completed", {
+        turn: { id: "turn_1", status: "interrupted", items: [], error: null },
+      });
+      releaseCallback.resolve();
+      await turn;
+      await session.waitForPersistenceIdle({ throwOnError: true });
+
+      expect(session.currentTurnOutcome).toBe("cancelled");
+      const persisted = sessionDb.getSessionRecord(session.id);
+      expect(persisted?.messages).toHaveLength(3);
+      expect(persisted?.providerState).toBeNull();
+      expect(persisted?.messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "saved-exec", input: code }],
+      });
+      const serialized = JSON.stringify(persisted?.messages);
+      expect(serialized).toContain("saved via code mode");
+      expect(serialized).not.toContain("preliminary output");
+      expect(serialized).not.toContain("late result");
+      expect(serialized).not.toContain("unfinished");
+      expect(JSON.stringify(events)).not.toContain("saved via code mode");
+      expect(await fs.readFile(path.join(dir, "note.txt"), "utf8")).toBe("saved");
+
+      await session.sendUserMessage("Continue without repeating the completed write.");
+      expect(JSON.stringify(turnRequests[1]?.input)).toContain("saved via code mode");
+      expect(JSON.stringify(turnRequests[1]?.input)).toContain("saved-exec");
+      session.dispose("restart after cancellation");
+      await session.waitForPersistenceIdle();
+      restored = AgentSession.fromPersisted({
+        persisted: persisted!,
+        baseConfig: config,
+        discoveredSkills: [],
+        emit: () => {},
+        yolo: true,
+        sessionDb,
+        runTurnImpl,
+        getProviderStatusesImpl: async () => [],
+        generateSessionTitleImpl: mockGenerateSessionTitle,
+        writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,
+      });
+      await restored.sendUserMessage("Resume from the saved tool result after restart.");
+      expect(turnRequests).toHaveLength(3);
+      expect(JSON.stringify(turnRequests[2]?.input)).toContain("saved via code mode");
+      expect(JSON.stringify(turnRequests[2]?.input)).toContain("saved-exec");
+      expect(JSON.stringify(turnRequests[2]?.input)).not.toContain("late result");
+    } finally {
+      releaseCallback.resolve();
+      session.cancel();
+      await turn;
+      session.dispose("test complete");
+      restored?.dispose("test complete");
+      await session.waitForPersistenceIdle();
+      await restored?.waitForPersistenceIdle();
+      await closePooledCodexAppServerClients();
+      codexAppServerClientInternal.setClientFactoryForTests(undefined);
+      sessionDb.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("provider raw stream events are emitted and redundant normalized chunks are suppressed for raw-backed replay", async () => {
     const { session, events } = makeSession();
     mockRunTurn.mockImplementationOnce(async (params: any) => {
@@ -154,6 +358,76 @@ describe("AgentSession stream pipeline", () => {
     expect(rawIndex).toBeGreaterThanOrEqual(0);
     // Redundant normalized stream chunk is suppressed for raw-backed replay
     expect(chunkIndex).toBe(-1);
+  });
+
+  test.each([
+    {
+      label: "Codex app-server diagnostics",
+      provider: "codex-cli",
+      format: "codex-app-server-v2",
+      event: {
+        direction: "client_request",
+        message: { id: 4, method: "turn/start", params: { threadId: "thread-1" } },
+      },
+    },
+    {
+      label: "unknown raw provider events",
+      provider: "openai",
+      format: "openai-responses-v1",
+      event: { type: "response.unknown_future_event" },
+    },
+    {
+      label: "raw native web-search activity",
+      provider: "openai",
+      format: "openai-responses-v1",
+      event: {
+        type: "response.output_item.added",
+        item: {
+          id: "web-search-1",
+          type: "web_search_call",
+          action: { type: "search", query: "example" },
+        },
+      },
+    },
+  ])("keeps normalized text and tool input after $label", async ({ provider, format, event }) => {
+    const { session, events } = makeSession({ provider });
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      await params.onModelRawEvent?.({ format, event });
+      for (const part of [
+        { type: "text-start", id: "answer" },
+        { type: "text-delta", id: "answer", text: "Visible streaming output." },
+        { type: "text-end", id: "answer" },
+        { type: "tool-input-start", id: "read-1", toolName: "read" },
+        {
+          type: "tool-call",
+          toolCallId: "read-1",
+          toolName: "read",
+          input: { path: "result.txt" },
+        },
+        { type: "tool-result", toolCallId: "read-1", toolName: "read", output: "contents" },
+      ]) {
+        await params.onModelStreamPart(part);
+      }
+      return { text: "", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("show streaming output");
+
+    const chunks = getStreamChunks(events);
+    expect(chunks.map((chunk) => chunk.partType)).toEqual([
+      "text_start",
+      "text_delta",
+      "text_end",
+      "tool_input_start",
+      "tool_call",
+      "tool_result",
+    ]);
+    expect(chunks.find((chunk) => chunk.partType === "text_delta")?.part.text).toBe(
+      "Visible streaming output.",
+    );
+    expect(chunks.find((chunk) => chunk.partType === "tool_call")?.part.input).toEqual({
+      path: "result.txt",
+    });
   });
 
   test("codex app-server raw JSON-RPC requests persist through the SQLite raw stream path", async () => {

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createAgentProfilesRouteHandlers } from "../src/server/jsonrpc/routes/agentProfiles";
 import { createAgentRouteHandlers } from "../src/server/jsonrpc/routes/agents";
+import { createMarketplacesRouteHandlers } from "../src/server/jsonrpc/routes/marketplaces";
 import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
 import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
 import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
@@ -14,6 +15,7 @@ import type {
   JsonRpcRouteContext,
 } from "../src/server/jsonrpc/routes/types";
 import { createWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/workspaceBackups";
+import { createSessionEventCapture } from "../src/server/jsonrpc/sessionEventCapture";
 import type { SessionEvent } from "../src/server/protocol";
 import type { McpServerLookup } from "../src/server/session/mcp/McpServerLookup";
 
@@ -100,6 +102,7 @@ function createRuntimeDouble(session: Record<string, any>) {
         await session.generateAdvancedMemoryForHistory?.(folder),
     },
     skills: {
+      addMarketplace: async (sourceInput: string) => await session.addMarketplace?.(sourceInput),
       getCatalog: async () => await session.getSkillsCatalog?.(),
       list: async () => await session.listSkills?.(),
       read: async (skillName: string) => await session.readSkill?.(skillName),
@@ -226,6 +229,16 @@ function createRouteHarness(
         await action();
         return emitted.find((event) => predicate(event)) ?? null;
       },
+      captureMutationEvents: async (
+        _binding: any,
+        action: () => Promise<void> | void,
+        predicate: (event: SessionEvent) => boolean,
+        timeoutMs?: number,
+      ) => {
+        captureTimeouts.push(timeoutMs);
+        await action();
+        return emitted.filter(predicate);
+      },
     },
     runtime: {
       checkLibreOffice: async (checkOpts: { smoke?: boolean }) =>
@@ -301,7 +314,141 @@ function sessionError(
   };
 }
 
+function useLiveEventCapture(harness: RouteHarness) {
+  const sinks = new Map<string, (event: SessionEvent) => void>();
+  harness.context.events = createSessionEventCapture({
+    addBindingSink: (_binding, id, sink) => sinks.set(id, sink),
+    removeBindingSink: (_binding, id) => {
+      sinks.delete(id);
+    },
+  });
+  return (event: SessionEvent) => {
+    harness.emitted.push(event);
+    for (const sink of sinks.values()) sink(event);
+  };
+}
+
 describe("JSON-RPC extracted route review fixes", () => {
+  for (const scenario of [
+    {
+      method: "cowork/marketplaces/add",
+      sessionMethod: "addMarketplace",
+      handlers: createMarketplacesRouteHandlers,
+      params: { sourceInput: "fixture/marketplace" },
+      event: { type: "marketplaces_list", sessionId: "session-1", marketplaces: [] },
+    },
+    {
+      method: "cowork/skills/install",
+      sessionMethod: "installSkills",
+      handlers: createSkillsRouteHandlers,
+      params: { sourceInput: "fixture/skill", targetScope: "project" },
+      event: {
+        type: "skills_catalog",
+        sessionId: "session-1",
+        catalog: { scopes: [], effectiveSkills: [], installations: [], availableSkills: [] },
+        mutationBlocked: false,
+      },
+    },
+    {
+      method: "cowork/memory/upsert",
+      sessionMethod: "upsertMemory",
+      handlers: createMemoryRouteHandlers,
+      params: { scope: "workspace", content: "remember this" },
+      event: { type: "memory_list", sessionId: "session-1", memories: [] },
+    },
+  ] satisfies Array<{
+    method: string;
+    sessionMethod: string;
+    handlers: (context: JsonRpcRouteContext) => JsonRpcRequestHandlerMap;
+    params: Record<string, unknown>;
+    event: SessionEvent;
+  }>) {
+    test(`${scenario.method} waits for action completion before returning the final event and disposing`, async () => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const finalEvent = structuredClone(scenario.event);
+      let emit!: (event: SessionEvent) => void;
+      let disposed = false;
+      const harness = createRouteHarness({
+        [scenario.sessionMethod]: async () => {
+          emit(scenario.event);
+          started.resolve();
+          await finish.promise;
+          emit(finalEvent);
+        },
+      });
+      emit = useLiveEventCapture(harness);
+      const withSession = harness.context.workspaceControl.withSession;
+      harness.context.workspaceControl.withSession = async (cwd, runner) => {
+        try {
+          return await withSession(cwd, runner);
+        } finally {
+          disposed = true;
+        }
+      };
+      const request = harness.invoke(scenario.handlers(harness.context), scenario.method, {
+        cwd: "C:/workspace",
+        ...scenario.params,
+      });
+      await started.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const earlyResponses = [...harness.results, ...harness.errors];
+      const disposedBeforeCompletion = disposed;
+      finish.resolve();
+      const response = await request;
+
+      expect(earlyResponses).toEqual([]);
+      expect(disposedBeforeCompletion).toBe(false);
+      expect(response.error).toBeUndefined();
+      expect((response.result as { event: SessionEvent }).event).toBe(finalEvent);
+      expect(disposed).toBe(true);
+    });
+
+    test.each(["emitted", "thrown"] as const)(
+      `${scenario.method} reports %s failure after a success event`,
+      async (failureMode) => {
+        const failure = sessionError("Refresh failed after mutation.");
+        let emit!: (event: SessionEvent) => void;
+        const harness = createRouteHarness({
+          [scenario.sessionMethod]: async () => {
+            emit(scenario.event);
+            await Promise.resolve();
+            if (failureMode === "thrown") throw new Error(failure.message);
+            emit(failure);
+            emit(scenario.event);
+          },
+        });
+        emit = useLiveEventCapture(harness);
+        const request = harness.invoke(scenario.handlers(harness.context), scenario.method, {
+          cwd: "C:/workspace",
+          ...scenario.params,
+        });
+
+        if (failureMode === "thrown") {
+          await expect(request).rejects.toThrow(failure.message);
+        } else {
+          const response = await request;
+          expect(response.error?.message).toBe(failure.message);
+        }
+        expect(harness.results).toEqual([]);
+      },
+    );
+  }
+
+  test("workspace outcome capture rejects an action that emits no result", async () => {
+    const harness = createRouteHarness({ upsertMemory: async () => {} });
+    useLiveEventCapture(harness);
+
+    await expect(
+      harness.invoke(createMemoryRouteHandlers(harness.context), "cowork/memory/upsert", {
+        cwd: "C:/workspace",
+        scope: "workspace",
+        content: "remember this",
+      }),
+    ).rejects.toThrow("Workspace control operation completed without an outcome event");
+    expect(harness.results).toEqual([]);
+  });
+
   test("provider auth authorize returns a session error instead of a timeout result", async () => {
     const harness = createRouteHarness({
       authorizeProviderAuth: async () => {
@@ -796,6 +943,129 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.error?.message).toContain("Defaults could not be applied");
     expect(response.result).toBeUndefined();
   });
+
+  test.each(["workspace", "thread"] as const)(
+    "session defaults apply rejects unpaired provider/model fields for a %s target",
+    async (target) => {
+      for (const selection of [{ provider: "openai" }, { model: "gpt-5.4" }]) {
+        const applied: unknown[] = [];
+        const session = {
+          getSessionConfigEvent: () => ({ type: "session_config", config: {} }),
+          applySessionDefaults: async (patch: unknown) => {
+            applied.push(patch);
+          },
+        };
+        const harness =
+          target === "thread"
+            ? createRouteHarness({}, [], { threadSession: session })
+            : createRouteHarness(session);
+        const response = await harness.invoke(
+          createSessionRouteHandlers(harness.context),
+          "cowork/session/defaults/apply",
+          {
+            cwd: "C:/workspace",
+            ...(target === "thread" ? { threadId: "thread-1" } : {}),
+            ...selection,
+            config: { backupsEnabled: true },
+          },
+        );
+
+        expect(response.error).toMatchObject({ code: JSONRPC_ERROR_CODES.invalidParams });
+        expect(response.error?.message).toContain("provider and model must be supplied together");
+        expect(response.result).toBeUndefined();
+        expect(applied).toEqual([]);
+      }
+    },
+  );
+
+  test.each(["workspace", "thread"] as const)(
+    "session defaults apply waits for final settings on a %s target",
+    async (target) => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let backupsEnabled = false;
+      let emit!: (event: SessionEvent) => void;
+      const session = {
+        id: "thread-1",
+        getSessionConfigEvent: () => ({
+          type: "session_config",
+          sessionId: "thread-1",
+          config: { backupsEnabled },
+        }),
+        applySessionDefaults: async () => {
+          emit({
+            type: "config_updated",
+            sessionId: "thread-1",
+            config: { provider: "openai", model: "gpt-5.4", workingDirectory: "C:/workspace" },
+          });
+          started.resolve();
+          await finish.promise;
+          backupsEnabled = true;
+        },
+      };
+      const harness =
+        target === "thread"
+          ? createRouteHarness({}, [], { threadSession: session })
+          : createRouteHarness(session);
+      emit = useLiveEventCapture(harness);
+      const request = harness.invoke(
+        createSessionRouteHandlers(harness.context),
+        "cowork/session/defaults/apply",
+        {
+          cwd: "C:/workspace",
+          ...(target === "thread" ? { threadId: "thread-1" } : {}),
+          provider: "openai",
+          model: "gpt-5.4",
+          config: { backupsEnabled: true },
+        },
+      );
+      await started.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const earlyResponses = [...harness.results, ...harness.errors];
+      finish.resolve();
+      const response = await request;
+
+      expect(earlyResponses).toEqual([]);
+      expect(response.error).toBeUndefined();
+      expect(response.result).toEqual({ event: session.getSessionConfigEvent() });
+    },
+  );
+
+  test.each(["workspace", "thread"] as const)(
+    "session defaults apply reports persistence errors after success events on a %s target",
+    async (target) => {
+      let emit!: (event: SessionEvent) => void;
+      const session = {
+        getSessionConfigEvent: () => ({ type: "session_config", config: { backupsEnabled: true } }),
+        applySessionDefaults: async () => {
+          emit({
+            type: "config_updated",
+            sessionId: "thread-1",
+            config: { provider: "openai", model: "gpt-5.4", workingDirectory: "C:/workspace" },
+          });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          emit({ ...sessionError("Failed to persist defaults."), code: "internal_error" });
+        },
+      };
+      const harness =
+        target === "thread"
+          ? createRouteHarness({}, [], { threadSession: session })
+          : createRouteHarness(session);
+      emit = useLiveEventCapture(harness);
+      const response = await harness.invoke(
+        createSessionRouteHandlers(harness.context),
+        "cowork/session/defaults/apply",
+        {
+          cwd: "C:/workspace",
+          ...(target === "thread" ? { threadId: "thread-1" } : {}),
+          config: { backupsEnabled: true },
+        },
+      );
+
+      expect(response.error?.message).toBe("Failed to persist defaults.");
+      expect(response.result).toBeUndefined();
+    },
+  );
 
   test("session delete forwards emitted session errors", async () => {
     let harness!: RouteHarness;

@@ -142,7 +142,10 @@ export const sessionDefaultsApplyRequestSchema = z
       .passthrough()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => (request.provider === undefined) === (request.model === undefined), {
+    message: "provider and model must be supplied together",
+  });
 
 export const configUpdatedEventSchema = z
   .object({

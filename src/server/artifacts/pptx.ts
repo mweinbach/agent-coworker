@@ -26,29 +26,54 @@ type OrderedSlidePart = {
   part: string;
 };
 
-export async function extractPptxSnapshot(bytes: Uint8Array): Promise<PptxSnapshot> {
+type PptxExtractionOptions = {
+  maxSlides?: number;
+  includeMedia?: boolean;
+  signal?: AbortSignal;
+};
+
+export async function extractPptxSnapshot(
+  bytes: Uint8Array,
+  options: PptxExtractionOptions = {},
+): Promise<PptxSnapshot> {
+  options.signal?.throwIfAborted();
   const zip = await loadBoundedOoxmlPackage(bytes);
-  const orderedParts = await readOrderedSlideParts(zip);
+  options.signal?.throwIfAborted();
+  const orderedParts = await readOrderedSlideParts(zip, options.signal);
+  options.signal?.throwIfAborted();
   if (orderedParts.length === 0) {
     throw new Error("PPTX package does not contain any slides.");
   }
-  if (orderedParts.length > MAX_SLIDES) {
-    throw new Error(`PPTX package exceeds the ${MAX_SLIDES}-slide limit.`);
+  const maxSlides = Math.min(options.maxSlides ?? MAX_SLIDES, MAX_SLIDES);
+  if (!Number.isSafeInteger(maxSlides) || maxSlides < 1) {
+    throw new Error("PPTX slide limit must be a positive integer.");
+  }
+  if (orderedParts.length > maxSlides) {
+    throw new Error(`PPTX package exceeds the ${maxSlides}-slide limit.`);
   }
 
   const slides: PptxSlide[] = [];
   for (const [index, entry] of orderedParts.entries()) {
-    slides.push(await readSlide(zip, entry, index));
+    options.signal?.throwIfAborted();
+    slides.push(await readSlide(zip, entry, index, options));
   }
+  options.signal?.throwIfAborted();
+  const media = options.includeMedia === false ? [] : await readMedia(zip, "ppt/media/");
+  options.signal?.throwIfAborted();
   return {
     slides,
-    media: await readMedia(zip, "ppt/media/"),
+    media,
   };
 }
 
-async function readOrderedSlideParts(zip: JSZip): Promise<OrderedSlidePart[]> {
+async function readOrderedSlideParts(
+  zip: JSZip,
+  signal?: AbortSignal,
+): Promise<OrderedSlidePart[]> {
   const presentationXml = await readBoundedTextPart(zip, "ppt/presentation.xml");
+  signal?.throwIfAborted();
   const presentationRelationships = await readRelationships(zip, "ppt/presentation.xml");
+  signal?.throwIfAborted();
   const ordered: OrderedSlidePart[] = [];
   const tagPattern = /<(?:p:)?sldId\b([^>]*)\/?\s*>/gi;
   for (const match of presentationXml.matchAll(tagPattern)) {
@@ -82,11 +107,18 @@ function numericPart(part: string): number {
   return match?.[1] ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
-async function readSlide(zip: JSZip, entry: OrderedSlidePart, index: number): Promise<PptxSlide> {
+async function readSlide(
+  zip: JSZip,
+  entry: OrderedSlidePart,
+  index: number,
+  options: PptxExtractionOptions,
+): Promise<PptxSlide> {
   const root = await readBoundedXmlPart(zip, entry.part);
+  options.signal?.throwIfAborted();
   const slide = asRecord(root?.sld);
   if (!slide) throw new Error(`PPTX slide part is invalid: ${entry.part}`);
   const relationships = await readRelationships(zip, entry.part);
+  options.signal?.throwIfAborted();
   const mediaPaths = new Set<string>();
   let notesPart: string | null = null;
   for (const relationship of relationships.values()) {
@@ -110,7 +142,10 @@ async function readSlide(zip: JSZip, entry: OrderedSlidePart, index: number): Pr
     throw new Error(`PPTX slide exceeds the ${MAX_SHAPES_PER_SLIDE}-shape limit: ${entry.part}`);
   }
   const notesRoot = notesPart ? await readBoundedXmlPart(zip, notesPart) : null;
-  const media = await readMedia(zip, "ppt/media/", mediaPaths);
+  options.signal?.throwIfAborted();
+  const media =
+    options.includeMedia === false ? [] : await readMedia(zip, "ppt/media/", mediaPaths);
+  options.signal?.throwIfAborted();
   const text = normalizeWhitespace(
     shapes
       .map((shape) => shape.text)

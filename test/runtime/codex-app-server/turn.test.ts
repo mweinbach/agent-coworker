@@ -8,10 +8,19 @@ import {
   type CodexAppServerClient,
   type CodexAppServerJsonRpcNotification,
   type CodexAppServerJsonRpcRawMessage,
+  closePooledCodexAppServerClients,
   __internal as codexAppServerClientInternal,
+  getPooledCodexAppServerClient,
 } from "../../../src/providers/codexAppServerClient";
 import { createRuntime } from "../../../src/runtime";
+import { startCodexAppServer } from "../../../src/runtime/codexAppServer/clientLifecycle";
 import { buildCodexTurnInput } from "../../../src/runtime/codexAppServer/turnInput";
+import {
+  type PartialTurnError,
+  RUNTIME_COMMITTED_PROGRESS,
+  type RuntimeModelRawEvent,
+  type RuntimeRunTurnResult,
+} from "../../../src/runtime/types";
 import type { ModelMessage } from "../../../src/types";
 import { mockInterrupts, writeMockAppServer } from "../../fixtures/codexAppServerMock";
 import {
@@ -146,6 +155,106 @@ function createControlledCodexTurnClient(): {
 }
 
 describe("codex app-server turn lifecycle", () => {
+  test.serial("isolates raw RPC capture across parallel pooled turns and disposal", async () => {
+    const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-turn-scope-"));
+    const script = path.join(dir, "mock.cjs");
+    await fs.writeFile(
+      script,
+      `const readline = require("node:readline");
+const pending = new Map();
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "test/exchange") {
+    const id = "server-" + message.params.owner;
+    pending.set(id, message);
+    send({ id, method: "item/tool/call", params: {
+      threadId: message.params.threadId,
+      tool: "cowork_mcp__test__echo",
+      arguments: { owner: message.params.owner }
+    } });
+  } else if (message.method && message.id !== undefined) {
+    send({ id: message.id, result: message.params ?? {} });
+  } else if (pending.has(message.id)) {
+    const request = pending.get(message.id);
+    pending.delete(message.id);
+    send({ id: request.id, result: { owner: request.params.owner, tool: message.result } });
+  }
+});
+`,
+    );
+    process.env.COWORK_CODEX_APP_SERVER_COMMAND = process.execPath;
+    process.env.COWORK_CODEX_APP_SERVER_ARGS = script;
+    codexAppServerClientInternal.setClientFactoryForTests(undefined);
+    const config = { ...makeConfig(dir), userCoworkDir: path.join(dir, ".cowork") };
+    const captures: Record<string, RuntimeModelRawEvent[]> = { alpha: [], beta: [] };
+    const turns: Awaited<ReturnType<typeof startCodexAppServer>>[] = [];
+    try {
+      for (const owner of ["alpha", "beta"]) {
+        turns.push(
+          await startCodexAppServer(
+            {
+              config,
+              system: "You are Codex.",
+              messages: [],
+              tools: { mcp__test__echo: { execute: (input) => ({ owner, input }) } },
+              maxSteps: 1,
+              onModelRawEvent: (event) => {
+                captures[owner]!.push(event);
+              },
+            },
+            { threadId: () => owner, turnId: () => undefined },
+          ),
+        );
+      }
+      await Promise.all(
+        turns.map((turn, index) =>
+          turn.client.request(
+            "test/exchange",
+            { threadId: index === 0 ? "alpha" : "beta", owner: index === 0 ? "alpha" : "beta" },
+            1_000,
+          ),
+        ),
+      );
+      await turns[0]!.client.interruptTurn({ threadId: "alpha" });
+      const pooled = await getPooledCodexAppServerClient({
+        cwd: dir,
+        codexHome: path.join(dir, ".cowork", "auth", "codex-cli"),
+        env: { ...process.env },
+      });
+      await pooled.request("test/unowned", { owner: "unowned" }, 1_000);
+      await Promise.all(turns.map((turn) => turn.waitForRawEvents()));
+
+      expect(JSON.stringify(captures.alpha)).not.toContain("beta");
+      expect(JSON.stringify(captures.beta)).not.toContain("alpha");
+      expect(JSON.stringify(captures)).not.toContain("unowned");
+      expect(captures.beta!.map((event) => event.event.direction)).toEqual([
+        "client_request",
+        "server_request",
+        "client_response",
+        "server_response",
+      ]);
+      expect(captures.alpha!.map((event) => event.event.direction)).toEqual([
+        "client_request",
+        "server_request",
+        "client_response",
+        "server_response",
+        "client_request",
+        "server_response",
+      ]);
+
+      const countBeforeDispose = captures.alpha!.length;
+      turns[0]!.dispose();
+      await turns[0]!.client.request("test/after-dispose", { owner: "disposed" }, 1_000);
+      expect(captures.alpha).toHaveLength(countBeforeDispose);
+      expect(JSON.stringify(captures.beta)).not.toContain("disposed");
+    } finally {
+      for (const turn of turns) turn.dispose();
+      await closePooledCodexAppServerClients();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   const emissionCases: Array<{
     name: string;
     notifications: CodexAppServerJsonRpcNotification[];
@@ -194,6 +303,7 @@ describe("codex app-server turn lifecycle", () => {
           toolName: "commandExecution",
           output: "/repo",
           providerExecuted: true,
+          preliminary: true,
         },
         {
           type: "tool-result",
@@ -327,7 +437,14 @@ describe("codex app-server turn lifecycle", () => {
         expect(invoked.slice(2)).toEqual([expectedParts[0]]);
         expect(delivered).toHaveLength(2);
         release.resolve();
-        await turnPromise;
+        const result = (await turnPromise) as RuntimeRunTurnResult;
+        expect(result[RUNTIME_COMMITTED_PROGRESS]).toEqual({
+          toolParts: expectedParts.filter(
+            (part) =>
+              ["tool-call", "tool-result", "tool-error"].includes(String(part.type)) &&
+              part.preliminary !== true,
+          ),
+        });
         expect(delivered.slice(2, -2)).toEqual(expectedParts);
         expect(delivered.slice(-2)).toEqual([
           expect.objectContaining({ type: "finish-step" }),
@@ -340,6 +457,118 @@ describe("codex app-server turn lifecycle", () => {
       }
     });
   }
+
+  test.serial(
+    "preserves completed tool evidence queued behind a blocked callback when Stop wins",
+    async () => {
+      const controlled = createControlledCodexTurnClient();
+      const controller = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const invoked: string[] = [];
+      const savedInput = { path: "note.txt", content: "saved" };
+      const savedOutput = { file: { path: "note.txt" }, bytesWritten: 5 };
+      let outcome: Promise<RuntimeRunTurnResult | PartialTurnError> | undefined;
+      codexAppServerClientInternal.setClientFactoryForTests(async () => controlled.client);
+      const emit = (method: string, payload: Record<string, unknown>) =>
+        controlled.emitNotification({
+          method,
+          params: { threadId: "thread_1", turnId: "turn_1", ...payload },
+        });
+      try {
+        outcome = createRuntime(makeConfig(process.cwd()))
+          .runTurn({
+            config: makeConfig(process.cwd()),
+            system: "You are Codex.",
+            messages: [{ role: "user", content: "Save the note" }],
+            tools: {},
+            maxSteps: 1,
+            abortSignal: controller.signal,
+            onModelStreamPart: async (part) => {
+              const type = (part as { type: string }).type;
+              invoked.push(type);
+              if (type === "text-delta") {
+                entered.resolve();
+                await release.promise;
+              }
+            },
+          })
+          .catch((error: PartialTurnError) => error);
+        await controlled.turnStartEntered;
+        controlled.resolveTurnStart({ turn: { id: "turn_1", status: "inProgress", items: [] } });
+        emit("item/agentMessage/delta", { itemId: "text", delta: "Saving." });
+        await entered.promise;
+        emit("item/started", {
+          item: { type: "dynamicToolCall", id: "saved", tool: "write_file", arguments: savedInput },
+        });
+        emit("item/completed", {
+          item: {
+            type: "dynamicToolCall",
+            id: "saved",
+            tool: "write_file",
+            result: savedOutput,
+            success: true,
+          },
+        });
+        emit("item/started", {
+          item: { type: "commandExecution", id: "running", command: "build", cwd: "/repo" },
+        });
+        emit("item/commandExecution/outputDelta", { itemId: "running", delta: "still running" });
+        savedInput.content = "mutated after receipt";
+        savedOutput.file.path = "mutated after receipt";
+        controller.abort();
+        emit("item/completed", {
+          item: { type: "commandExecution", id: "running", aggregatedOutput: "late completion" },
+        });
+        emit("item/started", {
+          item: {
+            type: "dynamicToolCall",
+            id: "late",
+            tool: "write_file",
+            arguments: { path: "late.txt" },
+          },
+        });
+        emit("item/completed", {
+          item: { type: "dynamicToolCall", id: "late", tool: "write_file", result: { ok: true } },
+        });
+        emit("turn/completed", { turn: { id: "turn_1", status: "interrupted", items: [] } });
+        release.resolve();
+        const error = (await outcome) as PartialTurnError;
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toContain("Cancelled by user");
+        expect(invoked).toEqual(["start", "start-step", "text-delta"]);
+        expect(error[RUNTIME_COMMITTED_PROGRESS]).toEqual({
+          toolParts: [
+            {
+              type: "tool-call",
+              toolCallId: "saved",
+              toolName: "write_file",
+              input: { path: "note.txt", content: "saved" },
+            },
+            {
+              type: "tool-result",
+              toolCallId: "saved",
+              toolName: "write_file",
+              output: { file: { path: "note.txt" }, bytesWritten: 5 },
+              error: undefined,
+            },
+            {
+              type: "tool-call",
+              toolCallId: "running",
+              toolName: "commandExecution",
+              input: { command: "build", cwd: "/repo" },
+              providerExecuted: true,
+            },
+          ],
+        });
+      } finally {
+        release.resolve();
+        controlled.resolveTurnStart();
+        await controlled.client.close();
+        await outcome;
+      }
+    },
+  );
 
   for (const asyncSink of [false, true]) {
     test.serial(
@@ -857,6 +1086,167 @@ describe("codex app-server turn lifecycle", () => {
     },
   );
 
+  test.serial(
+    "replays completed pre-abort tool history when provider continuation is cleared",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-codex-tool-replay-"));
+      const capturePath = path.join(dir, "requests.jsonl");
+      process.env.CODEX_APP_SERVER_CAPTURE_PATH = capturePath;
+      const call = {
+        type: "tool-call",
+        toolCallId: "written_before_abort",
+        toolName: "write_file",
+        input: { path: "note.txt", content: "saved" },
+        providerMetadata: { codex: { itemId: "item_written" } },
+      };
+      const result = {
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        output: { type: "json", value: { path: "note.txt", bytesWritten: 5 } },
+      };
+      const allMessages: ModelMessage[] = [
+        { role: "user", content: "Save the note" },
+        { role: "assistant", content: [{ type: "text", text: "Saving the note." }, call] },
+        { role: "tool", content: [result] },
+        { role: "user", content: "What was saved before I stopped you?" },
+      ];
+      const snapshot = structuredClone(allMessages);
+      let executions = 0;
+      await createRuntime(makeConfig(dir)).runTurn({
+        config: makeConfig(dir),
+        system: "You are Codex.",
+        allMessages,
+        messages: [allMessages.at(-1)!],
+        providerState: null,
+        tools: {
+          write_file: {
+            description: "Write a file",
+            inputSchema: z.object({ path: z.string(), content: z.string() }),
+            execute: async () => {
+              executions += 1;
+              return { ok: true };
+            },
+          },
+        },
+        maxSteps: 1,
+      });
+
+      const requests = await readCapturedRequests(capturePath);
+      expect(requests.some((entry) => entry.method === "thread/resume")).toBe(false);
+      expect(requests.find((entry) => entry.method === "turn/start")?.params.input).toEqual([
+        { type: "text", text: "User: Save the note", text_elements: [] },
+        {
+          type: "text",
+          text: `Assistant: Saving the note.\n[Historical tool call] ${JSON.stringify(call)}`,
+          text_elements: [],
+        },
+        {
+          type: "text",
+          text: `tool: [Historical tool result] ${JSON.stringify(result)}`,
+          text_elements: [],
+        },
+        { type: "text", text: "User: What was saved before I stopped you?", text_elements: [] },
+      ]);
+      expect(executions).toBe(0);
+      expect(allMessages).toEqual(snapshot);
+      expect(buildCodexTurnInput(allMessages, { resumedThread: true })).toEqual([
+        { type: "text", text: "What was saved before I stopped you?", text_elements: [] },
+      ]);
+    },
+  );
+
+  test("keeps historical tool errors and labels nested media without copying binary payloads into text", () => {
+    const result = {
+      type: "tool-result",
+      toolCallId: "inspection_before_abort",
+      toolName: "inspect_file",
+      isError: true,
+      error: { code: "INVALID_IMAGE", message: "Could not inspect the attachment" },
+      output: {
+        type: "content",
+        content: [
+          { type: "text", text: "The readable diagnostic" },
+          { type: "image", mimeType: "image/png", data: "MEDIA_PAYLOAD", filename: "chart.png" },
+          { type: "audio", mimeType: "audio/wav", data: "MEDIA_PAYLOAD" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,MEDIA_PAYLOAD" } },
+          {
+            type: "resource",
+            resource: {
+              uri: "file:///note.pdf",
+              mimeType: "application/pdf",
+              blob: "MEDIA_PAYLOAD",
+            },
+          },
+          { type: "input_audio", input_audio: { data: "MEDIA_PAYLOAD", format: "wav" } },
+        ],
+        bytes: new Uint8Array([1, 2, 3]),
+        serializedOutput: JSON.stringify({
+          content: [{ type: "image", mimeType: "image/png", data: "MEDIA_PAYLOAD" }],
+        }),
+        plainJsonText: '{ "path": "note.txt" }',
+      },
+    };
+    const snapshot = structuredClone(result);
+    const input = buildCodexTurnInput([{ role: "tool", content: [result] }], {
+      resumedThread: false,
+    });
+    expect(input).toHaveLength(1);
+    const text = (input[0] as { text: string }).text;
+    expect(text.startsWith("tool: [Historical tool result] ")).toBe(true);
+    const encoded = JSON.parse(text.slice("tool: [Historical tool result] ".length));
+    expect(encoded).toEqual({
+      ...result,
+      output: {
+        ...result.output,
+        content: [
+          result.output.content[0],
+          { ...result.output.content[1], data: "[media data omitted]" },
+          { ...result.output.content[2], data: "[media data omitted]" },
+          { type: "image_url", image_url: { url: "[media data omitted]" } },
+          {
+            type: "resource",
+            resource: {
+              uri: "file:///note.pdf",
+              mimeType: "application/pdf",
+              blob: "[media data omitted]",
+            },
+          },
+          { type: "input_audio", input_audio: { data: "[media data omitted]", format: "wav" } },
+        ],
+        bytes: "[binary data omitted]",
+        serializedOutput: JSON.stringify({
+          content: [{ type: "image", mimeType: "image/png", data: "[media data omitted]" }],
+        }),
+      },
+    });
+    expect(text).not.toContain("MEDIA_PAYLOAD");
+    expect(result).toEqual(snapshot);
+  });
+
+  test("preserves structured Error details in historical tool failures", () => {
+    const error = Object.assign(new Error("denied"), {
+      code: "EACCES",
+      data: { path: "note.txt" },
+    });
+    const input = buildCodexTurnInput(
+      [
+        {
+          role: "tool",
+          content: [{ type: "tool-error", toolCallId: "failed", toolName: "write_file", error }],
+        },
+      ],
+      { resumedThread: false },
+    );
+    const text = (input[0] as { text: string }).text;
+    expect(JSON.parse(text.slice("tool: [Historical tool result] ".length)).error).toEqual({
+      name: "Error",
+      message: "denied",
+      code: "EACCES",
+      data: { path: "note.txt" },
+    });
+  });
+
   test("omits non-image files and preserves attachment-only text element context", () => {
     expect(
       buildCodexTurnInput(
@@ -1239,7 +1629,7 @@ describe("codex app-server turn lifecycle", () => {
   });
 
   test.serial(
-    "settles a threadId-less turn/completed routed before the turn/start ack",
+    "correlates a buffered threadId-less turn/completed with the turn/start ack",
     async () => {
       const dir = await fs.mkdtemp(
         path.join(scratchRoots()[0] ?? "/tmp", "cowork-codex-preack-threadless-"),
@@ -1259,12 +1649,13 @@ describe("codex app-server turn lifecycle", () => {
           maxSteps: 1,
         });
 
-        // The turn/start response and turn/completed notification can coalesce
-        // into one stdout chunk, so the completion routes while the turn id is
-        // still unknown. A payload that omits threadId must settle the turn
-        // rather than being dropped and stranding it until the completion
-        // timeout.
+        // A threadless completion can arrive before the start response is
+        // delivered. Keep it pending until the response establishes ownership.
         await controlled.turnStartEntered;
+        let settled = false;
+        void turnPromise.then(() => {
+          settled = true;
+        });
         controlled.emitNotification({
           method: "turn/completed",
           params: {
@@ -1277,6 +1668,11 @@ describe("codex app-server turn lifecycle", () => {
           },
         });
 
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        controlled.resolveTurnStart({
+          turn: { id: "turn_threadless", status: "inProgress", items: [] },
+        });
         await expect(turnPromise).resolves.toMatchObject({ text: "threadless before ack" });
       } finally {
         controlled.resolveTurnStart();

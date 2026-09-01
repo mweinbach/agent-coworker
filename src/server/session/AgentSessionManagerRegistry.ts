@@ -24,6 +24,7 @@ export type AgentSessionManagerHost = {
   readonly backupController: SessionBackupController;
   readonly sessionSnapshotProjector: SessionSnapshotProjector;
   sendUserMessage(text: string, clientMessageId?: string, displayText?: string): Promise<void>;
+  prepareUserMessageTurn(): Promise<boolean>;
   flushPendingExternalSkillRefresh(): Promise<void>;
   triggerMemoryGeneration(): void;
   triggerSkillImprovementUsage(): void;
@@ -62,6 +63,7 @@ export class AgentSessionManagerRegistry {
   constructor(private readonly host: AgentSessionManagerHost) {}
 
   disposeManagers(): void {
+    this.turnExecutionManager?.dispose();
     this.mcpManager?.close();
     this.mcpManager = null;
     this.providerAuthManager = null;
@@ -100,6 +102,7 @@ export class AgentSessionManagerRegistry {
         triggerMemoryGeneration: () => this.host.triggerMemoryGeneration(),
         triggerSkillImprovementUsage: () => this.host.triggerSkillImprovementUsage(),
         onAdvancedMemoryChanged: async (folder) => await this.host.onAdvancedMemoryChanged(folder),
+        prepareUserMessageTurn: () => this.host.prepareUserMessageTurn(),
       });
     }
     return this.turnExecutionManager;
@@ -159,7 +162,8 @@ export class AgentSessionManagerRegistry {
           this.host.state.providerState = null;
         },
         persistModelSelection: this.host.deps.persistModelSelectionImpl,
-        updateSessionInfo: (patch) => this.host.metadataManager.updateSessionInfo(patch),
+        updateSessionInfo: (patch, opts) =>
+          this.host.metadataManager.updateSessionInfo(patch, opts),
         queuePersistSessionSnapshot: (reason) => this.host.queuePersistSessionSnapshot(reason),
         emitConfigUpdated: () => this.host.metadataManager.emitConfigUpdated(),
         emitProviderCatalog: async (opts) =>

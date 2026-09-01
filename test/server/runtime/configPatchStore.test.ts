@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadConfig } from "../../../src/config";
 import { scratchRoots } from "../../../src/platform/sandbox/policy";
 import {
   mergeConfigPatch,
@@ -8,7 +9,8 @@ import {
   persistProjectConfigPatch,
 } from "../../../src/server/runtime/ConfigPatchStore";
 import { defaultRuntimeNameForProvider } from "../../../src/types";
-import { makeConfig } from "../../session/agentSession.harness";
+import { pinHome } from "../../helpers/platform";
+import { makeConfig, makeSession } from "../../session/agentSession.harness";
 
 const testScratchRoot = scratchRoots()[0];
 if (!testScratchRoot) {
@@ -16,6 +18,19 @@ if (!testScratchRoot) {
 }
 
 describe("ConfigPatchStore", () => {
+  let configTestHome: string;
+  let restoreHome: () => void;
+
+  beforeAll(async () => {
+    configTestHome = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-test-home-"));
+    restoreHome = pinHome(configTestHome);
+  });
+
+  afterAll(async () => {
+    restoreHome?.();
+    if (configTestHome) await fs.rm(configTestHome, { recursive: true, force: true });
+  });
+
   test("persists model selection defaults and round-trips them through runtime config", async () => {
     const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, "project", ".cowork");
@@ -95,6 +110,103 @@ describe("ConfigPatchStore", () => {
     });
   });
 
+  test.each([true, false])(
+    "persists explicit observability consent (%s) to user config across reloads",
+    async (enabled) => {
+      const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-observability-consent-"));
+      const cwd = path.join(dir, "project");
+      const home = path.join(dir, "home");
+      const projectCoworkDir = path.join(cwd, ".cowork");
+      const globalConfigDir = path.join(home, ".cowork", "config");
+      const projectConfigPath = path.join(projectCoworkDir, "config.json");
+      const userConfigPath = path.join(globalConfigDir, "config.json");
+      const configOptions = {
+        cwd,
+        homedir: home,
+        builtInDir: path.resolve(import.meta.dir, "../../.."),
+        env: {},
+      };
+
+      try {
+        await fs.mkdir(projectCoworkDir, { recursive: true });
+        await fs.mkdir(globalConfigDir, { recursive: true });
+        await fs.writeFile(
+          projectConfigPath,
+          JSON.stringify({ observabilityEnabled: !enabled, userName: "Project User" }),
+        );
+        await fs.writeFile(userConfigPath, JSON.stringify({ observabilityEnabled: !enabled }));
+        const config = await loadConfig(configOptions);
+        const { session, events } = makeSession({
+          config,
+          persistProjectConfigPatchImpl: (patch) =>
+            persistProjectConfigPatch(projectCoworkDir, patch, undefined, { globalConfigDir }),
+        });
+
+        await session.setConfig({ observabilityEnabled: enabled });
+
+        expect(events.filter((event) => event.type === "error")).toEqual([]);
+        expect(session.getSessionConfigEvent().config.observabilityEnabled).toBe(enabled);
+        expect(JSON.parse(await fs.readFile(userConfigPath, "utf8"))).toEqual({
+          observabilityEnabled: enabled,
+        });
+        expect(JSON.parse(await fs.readFile(projectConfigPath, "utf8"))).toEqual({
+          userName: "Project User",
+        });
+        expect((await loadConfig(configOptions)).observabilityEnabled).toBe(enabled);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("rejects observability consent without a trusted user config directory", async () => {
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-observability-missing-home-"));
+    const projectCoworkDir = path.join(dir, ".cowork");
+    const configPath = path.join(projectCoworkDir, "config.json");
+    const original = JSON.stringify({ observabilityEnabled: false, userName: "Unchanged" });
+
+    try {
+      await fs.mkdir(projectCoworkDir);
+      await fs.writeFile(configPath, original);
+
+      await expect(
+        persistProjectConfigPatch(projectCoworkDir, {
+          observabilityEnabled: true,
+          userName: "Changed",
+        }),
+      ).rejects.toThrow("user config directory");
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves a workspace telemetry restriction if the user consent write fails", async () => {
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-observability-write-failure-"));
+    const projectCoworkDir = path.join(dir, "project", ".cowork");
+    const globalConfigDir = path.join(dir, "home", ".cowork", "config");
+    const configPath = path.join(projectCoworkDir, "config.json");
+    const original = JSON.stringify({ observabilityEnabled: false, userName: "Unchanged" });
+
+    try {
+      await fs.mkdir(projectCoworkDir, { recursive: true });
+      await fs.mkdir(globalConfigDir, { recursive: true });
+      await fs.writeFile(configPath, original);
+      await fs.writeFile(path.join(globalConfigDir, "config.json"), "invalid json");
+
+      await expect(
+        persistProjectConfigPatch(projectCoworkDir, { observabilityEnabled: true }, undefined, {
+          globalConfigDir,
+        }),
+      ).rejects.toThrow("Invalid JSON");
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("clears a persisted memory generation model override", async () => {
     const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-patch-"));
     const projectCoworkDir = path.join(dir, ".cowork");
@@ -152,5 +264,56 @@ describe("ConfigPatchStore", () => {
       { clearSkillImprovementModel: true },
     );
     expect(merged.skillImprovementModel).toBeUndefined();
+  });
+
+  test("preserves independent concurrent project config updates", async () => {
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-concurrent-"));
+    const projectCoworkDir = path.join(dir, "project", ".cowork");
+    try {
+      await Promise.all([
+        persistProjectConfigPatch(projectCoworkDir, { enableMemory: false }),
+        persistProjectConfigPatch(projectCoworkDir, { enableMcp: true }),
+        persistProjectConfigPatch(projectCoworkDir, { backupsEnabled: true }),
+      ]);
+
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(projectCoworkDir, "config.json"), "utf-8"),
+      );
+      expect(persisted).toEqual({
+        enableMemory: false,
+        enableMcp: true,
+        backupsEnabled: true,
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves concurrent global config updates from different workspaces", async () => {
+    const dir = await fs.mkdtemp(path.join(testScratchRoot, "cowork-config-concurrent-global-"));
+    const globalConfigDir = path.join(dir, "home", ".cowork", "config");
+    try {
+      await Promise.all([
+        persistProjectConfigPatch(
+          path.join(dir, "project-a", ".cowork"),
+          { advancedMemory: true },
+          undefined,
+          { globalConfigDir },
+        ),
+        persistProjectConfigPatch(
+          path.join(dir, "project-b", ".cowork"),
+          { skillImprovementEnabled: true },
+          undefined,
+          { globalConfigDir },
+        ),
+      ]);
+
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(globalConfigDir, "config.json"), "utf-8"),
+      );
+      expect(persisted).toEqual({ advancedMemory: true, skillImprovementEnabled: true });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

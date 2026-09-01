@@ -223,7 +223,7 @@ export function processStreamEvent(
     const deltaText = typeof content.arguments === "string" ? content.arguments : undefined;
     if (!deltaText) return;
     if (existing?.type === "toolCall" || existing?.type === "providerToolCall") {
-      appendJsonObjectDelta(existing.arguments, deltaText);
+      appendJsonObjectDelta(existing, deltaText);
     }
   } else if (contentType === "thought_summary") {
     const thinkingBlock = ensureThinkingBlock(contentBlocks, index);

@@ -45,7 +45,7 @@ export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRp
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (runtime) => await runtime.plugins.getCatalog(),
+        async (runtime) => await runtime.plugins.getCatalog({ awaitRemoteMarketplace: true }),
         (event): event is Extract<SessionEvent, { type: "plugins_catalog" }> =>
           event.type === "plugins_catalog",
       );

@@ -124,7 +124,11 @@ async function handleDynamicToolCall(
     return dynamicToolResponse(false, "Dynamic tool call is missing a tool name.");
   }
   const coworkToolName = coworkToolNameFromCodexDynamicName(toolName);
-  if (!isCodexDynamicCoworkToolName(coworkToolName)) {
+  if (
+    !isCodexDynamicCoworkToolName(coworkToolName, {
+      preserveScopedFileReadTools: (params.agentTargetPaths?.length ?? 0) > 0,
+    })
+  ) {
     return dynamicToolResponse(
       false,
       `Dynamic tool ${JSON.stringify(toolName)} is owned by Codex app-server natively.`,
@@ -139,7 +143,7 @@ async function handleDynamicToolCall(
   try {
     const input = validateDynamicToolInput(tool, requestParams?.arguments ?? {});
     const result = await tool.execute(input, { abortSignal: params.abortSignal });
-    return dynamicToolResponse(true, dynamicToolResultText(result));
+    return dynamicToolResponse(asRecord(result)?.isError !== true, dynamicToolResultText(result));
   } catch (error) {
     return dynamicToolResponse(
       false,

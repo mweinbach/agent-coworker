@@ -68,13 +68,10 @@ function reviewPrompt(round: number, requiredRounds: number, focus?: string): st
     .join("\n\n");
 }
 
-function parseVerdict(feedback: string, reportStatus?: string): TaskReviewVerdict {
+function parseVerdict(feedback: string): TaskReviewVerdict {
   const matches = [...feedback.matchAll(/VERDICT:\s*(PASS|PARTIAL|FAIL)\b/gi)];
   const explicit = matches.at(-1)?.[1]?.toLowerCase();
   if (explicit === "pass" || explicit === "partial" || explicit === "fail") return explicit;
-  if (reportStatus === "completed") return "pass";
-  if (reportStatus === "blocked") return "partial";
-  if (reportStatus === "failed") return "fail";
   throw new Error("Reviewer did not provide a valid PASS, PARTIAL, or FAIL verdict");
 }
 
@@ -138,12 +135,22 @@ export function createTaskReviewTool(ctx: ToolContext) {
           includeReport: true,
         });
         if (waited.timedOut) throw new Error(`Reviewer ${reviewer.agentId} timed out`);
+        const settledReviewer = waited.agents.find((agent) => agent.agentId === reviewer.agentId);
+        if (
+          settledReviewer?.executionState !== "completed" ||
+          settledReviewer.busy ||
+          waited.erroredAgentIds.includes(reviewer.agentId)
+        ) {
+          throw new Error(
+            `Reviewer ${reviewer.agentId} did not complete successfully (${settledReviewer?.executionState ?? "unknown"})`,
+          );
+        }
         const inspection = waited.inspections?.find(
           (candidate) => candidate.agentId === reviewer.agentId,
         );
         const feedback = inspection?.latestAssistantText?.trim();
         if (!feedback) throw new Error(`Reviewer ${reviewer.agentId} returned no critique`);
-        const verdict = parseVerdict(feedback, inspection?.parsedReport?.status);
+        const verdict = parseVerdict(feedback);
         const result = await applyTaskDirective({
           type: "record_review",
           idempotencyKey: `review:${context.id}:${reviewer.agentId}`,

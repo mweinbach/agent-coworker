@@ -198,9 +198,10 @@ export function codexDeveloperInstructions(
 
 export function codexDynamicToolSpecs(
   tools: RuntimeRunTurnParams["tools"],
+  opts: { preserveScopedFileReadTools?: boolean } = {},
 ): CodexDynamicToolSpec[] {
   return Object.entries(tools)
-    .filter(([name]) => isCodexDynamicCoworkToolName(name))
+    .filter(([name]) => isCodexDynamicCoworkToolName(name, opts))
     .map(([name, tool]): CodexDynamicToolSpec | null => {
       const record = asRecord(tool);
       if (!record) return null;

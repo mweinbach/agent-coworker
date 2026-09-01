@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   codexDeveloperInstructions,
+  codexDynamicToolSpecs,
   normalizeEffort,
   normalizeSummaryForModel,
   resolveEffectiveCodexModel,
@@ -54,6 +55,29 @@ describe("codex app-server developer tool boundary", () => {
     expect(instructions).toContain("For user clarification");
     expect(instructions).toContain("Cowork MCP tools are exposed");
     expect(instructions).toContain("Never call the native `request_user_input` tool");
+  });
+});
+
+describe("codex app-server dynamic tool registration", () => {
+  const tools = Object.fromEntries(
+    ["read", "glob", "grep", "bash", "write", "edit", "webFetch", "skill"].map((name) => [
+      name,
+      {
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+        execute: () => name,
+      },
+    ]),
+  );
+
+  test("registers scoped file readers without exposing native execution tools", () => {
+    const specs = codexDynamicToolSpecs(tools, { preserveScopedFileReadTools: true });
+
+    expect(specs.map(({ name }) => name)).toEqual(["read", "glob", "grep", "skill"]);
+  });
+
+  test("keeps unscoped file access on the native tool boundary", () => {
+    expect(codexDynamicToolSpecs(tools).map(({ name }) => name)).toEqual(["skill"]);
   });
 });
 

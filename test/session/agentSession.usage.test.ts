@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createTurnUsageAggregator } from "../../src/server/session/turnExecution/turnUsageAggregator";
 import type { TodoItem } from "./agentSession.harness";
 import {
   AgentSession,
@@ -43,6 +44,132 @@ describe("AgentSession", () => {
   });
 
   describe("Token usage passthrough", () => {
+    test.each(["completed", "failed"] as const)(
+      "prices the individual requests of a %s turn before aggregating usage",
+      async (outcome) => {
+        const requestUsages = [
+          { promptTokens: 150_000, completionTokens: 1_000, totalTokens: 151_000 },
+          { promptTokens: 150_000, completionTokens: 1_000, totalTokens: 151_000 },
+        ];
+        const usage = {
+          promptTokens: 300_000,
+          completionTokens: 2_000,
+          totalTokens: 302_000,
+          estimatedCostUsd: 1.236,
+        };
+        mockRunTurn.mockImplementation(async () => {
+          if (outcome === "failed") {
+            throw Object.assign(new Error("Provider stopped after partial progress"), {
+              usage,
+              requestUsages,
+            });
+          }
+          return { text: "done", responseMessages: [], usage, requestUsages };
+        });
+
+        const { session, events } = makeSession({
+          config: {
+            ...makeConfig("/tmp/test-session-request-usage"),
+            model: "gemini-3.1-pro-preview",
+          },
+        });
+        await session.sendUserMessage("go");
+
+        const turnUsage = events.find((event) => event.type === "turn_usage");
+        expect(turnUsage?.usage.estimatedCostUsd).toBeCloseTo(0.624, 10);
+        expect(turnUsage?.usage).not.toHaveProperty("requestUsages");
+        const sessionUsage = events.findLast((event) => event.type === "session_usage");
+        expect(sessionUsage?.usage?.estimatedTotalCostUsd).toBeCloseTo(0.624, 10);
+        expect(sessionUsage?.usage?.totalTurns).toBe(1);
+        expect(sessionUsage?.usage?.costBreakdown).toMatchObject({
+          inputCostUsd: 0.6,
+          outputCostUsd: 0.024,
+        });
+      },
+    );
+
+    test("does not assign a request tier to an opaque aggregate usage total", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "done",
+        responseMessages: [],
+        usage: {
+          promptTokens: 300_000,
+          completionTokens: 2_000,
+          totalTokens: 302_000,
+          estimatedCostUsd: 1.236,
+        },
+      }));
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session-opaque-usage"),
+          model: "gemini-3.1-pro-preview",
+        },
+      });
+
+      await session.sendUserMessage("go");
+
+      const turnUsage = events.find((event) => event.type === "turn_usage");
+      expect(turnUsage?.usage.estimatedCostUsd).toBeUndefined();
+      const sessionUsage = events.findLast((event) => event.type === "session_usage");
+      expect(sessionUsage?.usage?.estimatedTotalCostUsd).toBeNull();
+      expect(sessionUsage?.usage?.costTrackingAvailable).toBe(false);
+    });
+
+    test("combines partial and resumed request usage only once", () => {
+      const tracker = new SessionCostTracker("session-request-usage");
+      const { emit, events } = makeEmit();
+      const aggregator = createTurnUsageAggregator({
+        sessionId: "session-request-usage",
+        turnId: "turn-request-usage",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        costTracker: tracker,
+        emit,
+      });
+      const usage = {
+        promptTokens: 150_000,
+        completionTokens: 1_000,
+        totalTokens: 151_000,
+      };
+      const error = Object.assign(new Error("Resume required"), {
+        usage,
+        requestUsages: [usage],
+      });
+
+      aggregator.mergeUsageFromError(error);
+      aggregator.mergeUsageFromError(error);
+      aggregator.mergeTurnUsage(usage, [usage]);
+      aggregator.persistAggregatedUsage();
+      aggregator.persistAggregatedUsage();
+
+      expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(0.624, 10);
+      expect(tracker.getSnapshot().totalTurns).toBe(1);
+      expect(events.filter((event) => event.type === "turn_usage")).toHaveLength(1);
+    });
+
+    test("does not expose a partial sum as a complete runtime cost estimate", () => {
+      const { emit, events } = makeEmit();
+      const aggregator = createTurnUsageAggregator({
+        sessionId: "session-partial-cost",
+        turnId: "turn-partial-cost",
+        provider: "openai",
+        model: "unknown-model",
+        emit,
+      });
+      aggregator.mergeTurnUsage({
+        promptTokens: 100,
+        completionTokens: 10,
+        totalTokens: 110,
+        estimatedCostUsd: 0.1,
+      });
+      aggregator.mergeTurnUsage({ promptTokens: 100, completionTokens: 10, totalTokens: 110 });
+      aggregator.persistAggregatedUsage();
+
+      const turnUsage = events.find((event) => event.type === "turn_usage");
+      expect(turnUsage?.usage.estimatedCostUsd).toBeUndefined();
+      expect(turnUsage?.usage.totalTokens).toBe(220);
+    });
+
     test("emits turn_usage event when runTurn returns usage", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "done",
@@ -383,6 +510,31 @@ describe("AgentSession", () => {
       expect(usageEvt?.usage?.turns.at(-1)?.turnId).toBeDefined();
     });
 
+    test("emits compact session_usage snapshots for workflow cost adjustments", () => {
+      const { session, events } = makeSession();
+      const tracker = (session as unknown as { state: { costTracker: SessionCostTracker } }).state
+        .costTracker;
+      for (let index = 0; index < 20; index += 1) {
+        tracker.recordTurn({
+          turnId: `turn-${index}`,
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+        });
+      }
+      events.length = 0;
+
+      tracker.recordUnattributedCost(0.25);
+
+      const usageEvent = events.find((event) => event.type === "session_usage");
+      expect(usageEvent).toMatchObject({
+        usage: { totalTurns: 20, totalTokens: 2200 },
+      });
+      if (usageEvent?.type !== "session_usage") throw new Error("Expected session usage event");
+      expect(usageEvent.usage).toEqual(tracker.getCompactSnapshot());
+      expect(usageEvent.usage?.turns).toHaveLength(8);
+    });
+
     test("emits proactive budget alert events when a turn crosses warning and stop thresholds", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "ok",
@@ -602,7 +754,7 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().executionState).toBe("errored");
     });
 
-    test("rehydrates stale in-flight child execution states as completed when no turn is active", () => {
+    test("rehydrates interrupted child execution states as errored without trusting inherited text", () => {
       for (const executionState of ["running", "pending_init"] as const) {
         const { emit } = makeEmit();
 
@@ -638,10 +790,13 @@ describe("AgentSession", () => {
             status: "active",
             hasPendingAsk: false,
             hasPendingApproval: false,
-            messageCount: 1,
+            messageCount: 2,
             lastEventSeq: 1,
             systemPrompt: "system",
-            messages: [{ role: "user", content: "hello" }] as any,
+            messages: [
+              { role: "user", content: "hello" },
+              { role: "assistant", content: "A completed answer inherited from the parent" },
+            ] as any,
             providerState: null,
             todos: [],
             harnessContext: null,
@@ -653,8 +808,12 @@ describe("AgentSession", () => {
           getProviderStatusesImpl: async () => [],
         });
 
-        expect(session.currentTurnOutcome).toBe("completed");
-        expect(session.getSessionInfoEvent().executionState).toBe("completed");
+        expect(session.currentTurnOutcome).toBe("error");
+        expect(session.getSessionInfoEvent().executionState).toBe("errored");
+        expect(session.isBusy).toBe(false);
+        expect(session.getLatestAssistantText()).toBe(
+          "A completed answer inherited from the parent",
+        );
       }
     });
 

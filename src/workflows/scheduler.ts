@@ -19,6 +19,9 @@ export const WORKFLOW_MAX_INFLIGHT_AGENTS = 12;
  */
 export const WORKFLOW_MAX_CONFIGURABLE_AGENTS = 16;
 
+/** Total agent() attempts per run; exceeding this cap aborts the whole run. */
+export const WORKFLOW_MAX_AGENTS_PER_RUN = 1_000;
+
 /**
  * Resolve the in-flight cap for a run.
  *

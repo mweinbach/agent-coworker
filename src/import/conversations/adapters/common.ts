@@ -1,7 +1,34 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { ConversationImportWarning } from "../types";
+import type {
+  ConversationImportWarning,
+  ConversationPreviewOptions,
+  ExternalConversation,
+} from "../types";
+
+/** Keep a bounded preview while scanning past rows outside the current selection. */
+export async function collectConversationPreviews<T>(
+  candidates: Iterable<T>,
+  parse: (candidate: T) => ExternalConversation | null | Promise<ExternalConversation | null>,
+  opts: ConversationPreviewOptions,
+): Promise<ExternalConversation[]> {
+  const limit = Math.max(1, Math.floor(opts.limit ?? 250));
+  const preferred: ExternalConversation[] = [];
+  const fallback: ExternalConversation[] = [];
+  for (const candidate of candidates) {
+    const conversation = await parse(candidate);
+    if (!conversation) continue;
+    if (!opts.preferConversation || opts.preferConversation(conversation)) {
+      preferred.push(conversation);
+      fallback.length = Math.min(fallback.length, limit - preferred.length);
+      if (preferred.length === limit) break;
+    } else if (fallback.length < limit - preferred.length) {
+      fallback.push(conversation);
+    }
+  }
+  return [...preferred, ...fallback];
+}
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {

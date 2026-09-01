@@ -30,6 +30,7 @@ function makeBaseContext(): SessionContext {
       yolo: false,
       messages: [],
       allMessages: [],
+      historyRevision: 0,
       running: false,
       connecting: false,
       abortController: null,

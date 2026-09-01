@@ -176,6 +176,7 @@ async function routeStreamingNotification(
               asString(payload?.summary) ??
               ""),
         providerExecuted: true,
+        preliminary: true,
       });
       break;
     case "todoList/updated":
@@ -247,6 +248,8 @@ async function routeStreamingNotification(
 export type CodexTurnNotificationRouter = {
   dispose: () => void;
   assistantText: () => string;
+  committedToolParts: () => readonly unknown[];
+  setTurnId: (turnId: string) => void;
   waitForCompletion: () => Promise<unknown>;
 };
 
@@ -318,8 +321,15 @@ export function createCodexTurnNotificationRouter(
   let completionDisposeExtras = () => {};
   let disposed = false;
   let streamParts = Promise.resolve();
+  const committedToolParts: unknown[] = [];
   const pendingUsageByTurnId = new Map<string, RuntimeUsage>();
+  const pendingCompletionsByTurnId = new Map<string, Record<string, unknown>>();
+  let acknowledgedTurnId: string | undefined;
   let abortSettlementTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const currentTurnId = () =>
+    acknowledgedTurnId ??
+    (typeof completion.turnId === "function" ? completion.turnId() : completion.turnId);
 
   const flushPendingUsage = (id: string | undefined) => {
     if (!id) return;
@@ -332,6 +342,7 @@ export function createCodexTurnNotificationRouter(
   const settleReject = (error: Error) => {
     if (completionSettled) return;
     completionSettled = true;
+    pendingCompletionsByTurnId.clear();
     completionDisposeExtras();
     completionReject?.(error);
   };
@@ -340,6 +351,7 @@ export function createCodexTurnNotificationRouter(
     if (completionReceived || completionSettled) return;
     // Seal incoming events now, but keep the deadlines until delivery drains.
     completionReceived = true;
+    pendingCompletionsByTurnId.clear();
     void streamParts.then(() => {
       if (completionSettled) return;
       if ("error" in outcome) {
@@ -352,11 +364,59 @@ export function createCodexTurnNotificationRouter(
     });
   };
 
+  const completeTurn = (turn: Record<string, unknown> | null) => {
+    flushPendingUsage(currentTurnId() ?? asString(turn?.id));
+    const status = asString(turn?.status);
+    if (status === "failed") {
+      const error = asRecord(turn?.error);
+      completeAfterStream({
+        error: Object.assign(
+          new Error(asString(error?.message) ?? "codex app-server turn failed."),
+          { code: "provider_error" as const, source: "provider" as const },
+        ),
+      });
+      return;
+    }
+    if (
+      (status === "cancelled" || status === "canceled" || status === "interrupted") &&
+      !completion.abortSignal?.aborted
+    ) {
+      const error = asRecord(turn?.error);
+      const detail = asString(error?.message);
+      completeAfterStream({
+        error: Object.assign(
+          new Error(
+            `Codex app-server turn was ${status} before completion${detail ? `: ${detail}` : "."}`,
+          ),
+          { code: "provider_error" as const, source: "provider" as const },
+        ),
+      });
+      return;
+    }
+    completeAfterStream({ turn });
+  };
+
   const failStream = (error: unknown) => {
     settleReject(error instanceof Error ? error : new Error(String(error)));
   };
 
   const emitPart = (part: unknown) => {
+    const record = asRecord(part);
+    if (
+      !disposed &&
+      !completionSettled &&
+      !completion.abortSignal?.aborted &&
+      record?.preliminary !== true &&
+      (record?.type === "tool-call" ||
+        record?.type === "tool-result" ||
+        record?.type === "tool-error")
+    ) {
+      try {
+        committedToolParts.push(structuredClone(part));
+      } catch {
+        // Uncloneable records cannot serve as durable completion evidence.
+      }
+    }
     streamParts = streamParts
       .then(async () => {
         if (disposed || completionSettled || completion.abortSignal?.aborted) return;
@@ -394,8 +454,7 @@ export function createCodexTurnNotificationRouter(
 
       const disposeClose = client.onClose?.(() => {
         if (completionReceived) return;
-        const expectedTurnId =
-          typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
+        const expectedTurnId = currentTurnId();
         if (expectedTurnId) {
           flushPendingUsage(expectedTurnId);
         }
@@ -428,10 +487,12 @@ export function createCodexTurnNotificationRouter(
 
     const expectedThreadId =
       typeof completion.threadId === "function" ? completion.threadId() : completion.threadId;
-    const expectedTurnId =
-      typeof completion.turnId === "function" ? completion.turnId() : completion.turnId;
+    const expectedTurnId = currentTurnId();
     const payloadThreadId = codexPayloadThreadId(payload);
     const payloadTurnId = codexPayloadTurnId(payload);
+
+    // A buffered terminal seals its turn before the start response identifies ownership.
+    if (payloadTurnId && pendingCompletionsByTurnId.has(payloadTurnId)) return;
 
     if (notification.method === "thread/tokenUsage/updated") {
       if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
@@ -452,53 +513,24 @@ export function createCodexTurnNotificationRouter(
     if (notification.method === "turn/completed") {
       const turn = asRecord(payload?.turn);
       const completedTurnId = asString(turn?.id);
+      if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
       if (expectedTurnId) {
         if (completedTurnId !== expectedTurnId) return;
-        if (payloadThreadId && expectedThreadId && payloadThreadId !== expectedThreadId) return;
-      } else if (expectedThreadId && payloadThreadId && payloadThreadId !== expectedThreadId) {
-        // Pre-ack, only a positively mismatched threadId marks a foreign turn:
-        // the start response and the completion can coalesce into one stdout
-        // chunk, routing the completion before the turn id is recorded, and a
-        // payload without threadId must not strand the turn until the
-        // 30-minute completion timeout.
+      } else if (!expectedThreadId || !payloadThreadId) {
+        // The shared transport may deliver another thread's completion before
+        // our start response. Retain threadless terminals until the ack identifies
+        // their owner, including responses coalesced into the same stdout chunk.
+        if (turn && completedTurnId && !pendingCompletionsByTurnId.has(completedTurnId)) {
+          pendingCompletionsByTurnId.set(completedTurnId, turn);
+        }
         return;
       }
-      flushPendingUsage(expectedTurnId ?? completedTurnId);
-      const status = asString(turn?.status);
-      if (status === "failed") {
-        const error = asRecord(turn?.error);
-        completeAfterStream({
-          error: Object.assign(
-            new Error(asString(error?.message) ?? "codex app-server turn failed."),
-            {
-              code: "provider_error" as const,
-              source: "provider" as const,
-            },
-          ),
-        });
-        return;
-      }
-      if (
-        (status === "cancelled" || status === "canceled" || status === "interrupted") &&
-        !completion.abortSignal?.aborted
-      ) {
-        const error = asRecord(turn?.error);
-        const detail = asString(error?.message);
-        completeAfterStream({
-          error: Object.assign(
-            new Error(
-              `Codex app-server turn was ${status} before completion${detail ? `: ${detail}` : "."}`,
-            ),
-            { code: "provider_error" as const, source: "provider" as const },
-          ),
-        });
-        return;
-      }
-      completeAfterStream({ turn });
+      completeTurn(turn);
       return;
     }
 
-    if (!targetsActiveCodexTurn(payload, target)) return;
+    if (!targetsActiveCodexTurn(payload, { threadId: target.threadId, turnId: currentTurnId }))
+      return;
     if (completion.abortSignal?.aborted) return;
 
     if (item?.type === "dynamicToolCall") {
@@ -670,10 +702,20 @@ export function createCodexTurnNotificationRouter(
   });
 
   return {
+    committedToolParts: () => structuredClone(committedToolParts),
     dispose: () => {
       disposed = true;
+      pendingCompletionsByTurnId.clear();
       disposeNotification();
       completionDisposeExtras();
+    },
+    setTurnId: (turnId) => {
+      if (disposed || completionReceived || completionSettled) return;
+      acknowledgedTurnId = turnId;
+      flushPendingUsage(turnId);
+      const pendingTurn = pendingCompletionsByTurnId.get(turnId);
+      pendingCompletionsByTurnId.clear();
+      if (pendingTurn) completeTurn(pendingTurn);
     },
     assistantText: () =>
       [...textByItemId]

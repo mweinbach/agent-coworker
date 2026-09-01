@@ -121,6 +121,15 @@ type TaskRow = {
   updated_at: string;
 };
 
+type TaskSummaryRow = Omit<TaskRow, "creation_idempotency_key"> & {
+  thread_count: number;
+  completed_work_item_count: number;
+  total_work_item_count: number;
+  active_blocker_count: number;
+  pending_question_count: number;
+  blocking_question_count: number;
+};
+
 export type CreateTaskInput = {
   id: string;
   workspacePath: string;
@@ -629,16 +638,30 @@ export class SessionTaskRepository {
   }
 
   listTasks(workspacePath?: string | null): TaskSummary[] {
-    const rows = (
-      workspacePath
-        ? this.db
-            .query("SELECT task_id FROM tasks WHERE workspace_path = ? ORDER BY updated_at DESC")
-            .all(canonicalWorkspacePath(workspacePath))
-        : this.db.query("SELECT task_id FROM tasks ORDER BY updated_at DESC").all()
-    ) as Array<{
-      task_id: string;
-    }>;
-    return rows.map(({ task_id }) => this.toSummary(this.requireTask(task_id)));
+    const rows = this.db
+      .query(
+        sql([
+          "SELECT task.task_id, task.workspace_path, task.title, task.objective, task.context,",
+          "  task.source_session_id, task.creation_origin, task.status, task.revision,",
+          "  task.review_required, task.review_rounds, task.created_at, task.updated_at,",
+          "  (SELECT COUNT(*) FROM task_threads WHERE task_id = task.task_id) AS thread_count,",
+          "  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id AND status = 'done') AS completed_work_item_count,",
+          "  (SELECT COUNT(*) FROM task_work_items WHERE task_id = task.task_id) AS total_work_item_count,",
+          "  COALESCE(blockers.active_count, 0) AS active_blocker_count,",
+          "  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending') AS pending_question_count,",
+          "  (SELECT COUNT(*) FROM task_questions WHERE task_id = task.task_id AND status = 'pending' AND blocking = 1) AS blocking_question_count",
+          "FROM tasks AS task",
+          // Blockers have no task-id index, so aggregate once rather than scan per task.
+          "LEFT JOIN (",
+          "  SELECT task_id, COUNT(*) AS active_count FROM task_blockers",
+          "  WHERE status = 'active' GROUP BY task_id",
+          ") AS blockers ON blockers.task_id = task.task_id",
+          ...(workspacePath ? ["WHERE task.workspace_path = ?"] : []),
+          "ORDER BY task.updated_at DESC",
+        ]),
+      )
+      .all(...(workspacePath ? [canonicalWorkspacePath(workspacePath)] : [])) as TaskSummaryRow[];
+    return rows.map((row) => this.mapTaskSummary(row));
   }
 
   getTask(taskId: string): TaskRecord | null {
@@ -2389,20 +2412,28 @@ export class SessionTaskRepository {
     return task;
   }
 
-  private toSummary(task: TaskRecord): TaskSummary {
-    const {
-      requirements: _requirements,
-      threads: _threads,
-      workItems: _workItems,
-      decisions: _decisions,
-      questions: _questions,
-      artifacts: _artifacts,
-      blockers: _blockers,
-      activity: _activity,
-      latestCheckpoint: _latestCheckpoint,
-      ...summary
-    } = task;
-    return summary;
+  private mapTaskSummary(row: TaskSummaryRow): TaskSummary {
+    return {
+      id: row.task_id,
+      workspacePath: row.workspace_path,
+      title: row.title,
+      objective: row.objective,
+      context: row.context,
+      sourceSessionId: row.source_session_id,
+      creationOrigin: row.creation_origin,
+      status: row.status,
+      revision: Number(row.revision),
+      reviewRequired: bool(row.review_required),
+      reviewRounds: Number(row.review_rounds ?? 0),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      threadCount: Number(row.thread_count),
+      completedWorkItemCount: Number(row.completed_work_item_count),
+      totalWorkItemCount: Number(row.total_work_item_count),
+      activeBlockerCount: Number(row.active_blocker_count),
+      pendingQuestionCount: Number(row.pending_question_count),
+      blockingQuestionCount: Number(row.blocking_question_count),
+    };
   }
 
   private mapTask(row: TaskRow): TaskRecord {

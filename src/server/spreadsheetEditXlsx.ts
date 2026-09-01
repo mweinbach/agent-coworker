@@ -6,7 +6,8 @@ import type {
   SpreadsheetBatchPatchOperation,
   SpreadsheetCellStylePatch,
 } from "../shared/spreadsheetPreview";
-import { type CellAddress, parseAddress, parseRange } from "./spreadsheetA1";
+import { type CellAddress, MAX_SPREADSHEET_COLS, parseAddress, parseRange } from "./spreadsheetA1";
+import { encodeColumnWidth, MAX_COLUMN_WIDTH_PX } from "./spreadsheetColumnWidth";
 import type { EditFailure, OpsOutcome } from "./spreadsheetEditTypes";
 import { asRecord, resolveWorksheetPart, stringValue, type XmlRecord } from "./spreadsheetOoxml";
 import { validateXlsxZipSignature } from "./spreadsheetPreview";
@@ -291,7 +292,13 @@ async function applyXlsxColumnWidthOp(
   session: XlsxSession,
   op: { sheetName?: string; col: number; widthPx: number | null },
 ): Promise<EditFailure | null> {
-  if (op.widthPx !== null && (!Number.isFinite(op.widthPx) || op.widthPx <= 0)) {
+  if (!Number.isSafeInteger(op.col) || op.col < 0 || op.col >= MAX_SPREADSHEET_COLS) {
+    return { kind: "parse_error", message: `Invalid column index: ${op.col}` };
+  }
+  if (
+    op.widthPx !== null &&
+    (!Number.isFinite(op.widthPx) || op.widthPx <= 0 || op.widthPx > MAX_COLUMN_WIDTH_PX)
+  ) {
     return { kind: "parse_error", message: `Invalid column width: ${op.widthPx}` };
   }
 
@@ -360,10 +367,12 @@ async function writeXlsxSession(
 const OOXML_STYLE_PARSER = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
-  removeNSPrefix: true,
+  removeNSPrefix: false,
   parseAttributeValue: false,
   parseTagValue: false,
   trimValues: false,
+  // Empty elements must stay objects, or the builder serializes <b/> as b="".
+  alwaysCreateTextNode: true,
 });
 
 const OOXML_STYLE_BUILDER = new XMLBuilder({
@@ -432,28 +441,38 @@ function parseStylesheet(xml: string): {
 } {
   const root = asRecord(OOXML_STYLE_PARSER.parse(xml)) ?? {};
   delete root["?xml"];
-  const styleSheet = ensureRecord(root, "styleSheet");
-  styleSheet.xmlns ??= OOXML_SPREADSHEET_NS;
-  const numFmtsNode = ensureRecord(styleSheet, "numFmts");
-  const fontsNode = ensureRecord(styleSheet, "fonts");
-  const fillsNode = ensureRecord(styleSheet, "fills");
-  const bordersNode = ensureRecord(styleSheet, "borders");
-  const cellStyleXfsNode = ensureRecord(styleSheet, "cellStyleXfs");
-  const cellXfsNode = ensureRecord(styleSheet, "cellXfs");
+  const rootName = Object.keys(root).find(
+    (name) => name === "styleSheet" || name.endsWith(":styleSheet"),
+  );
+  if (!rootName) throw new Error("Workbook styles part has no styleSheet element.");
+  const prefix = rootName.slice(0, -"styleSheet".length);
+  const tag = (name: string) => `${prefix}${name}`;
+  const styleSheet = ensureRecord(root, rootName);
+  styleSheet[prefix ? `xmlns:${prefix.slice(0, -1)}` : "xmlns"] ??= OOXML_SPREADSHEET_NS;
+  const numFmtsNode = ensureRecord(styleSheet, tag("numFmts"));
+  const fontsNode = ensureRecord(styleSheet, tag("fonts"));
+  const fillsNode = ensureRecord(styleSheet, tag("fills"));
+  const bordersNode = ensureRecord(styleSheet, tag("borders"));
+  const cellStyleXfsNode = ensureRecord(styleSheet, tag("cellStyleXfs"));
+  const cellXfsNode = ensureRecord(styleSheet, tag("cellXfs"));
 
-  const numFmts = ensureNodeArray(numFmtsNode, "numFmt", []);
-  const fonts = ensureNodeArray(fontsNode, "font", [defaultFont()]);
-  const fills = ensureNodeArray(fillsNode, "fill", defaultFills());
-  ensureNodeArray(bordersNode, "border", [defaultBorder()]);
-  ensureNodeArray(cellStyleXfsNode, "xf", [defaultXf()]);
-  const cellXfs = ensureNodeArray(cellXfsNode, "xf", [defaultXf()]);
+  const numFmts = ensureNodeArray(numFmtsNode, tag("numFmt"), []);
+  const fonts = ensureNodeArray(fontsNode, tag("font"), [defaultFont(prefix)]);
+  const fills = ensureNodeArray(fillsNode, tag("fill"), defaultFills(prefix));
+  ensureNodeArray(bordersNode, tag("border"), [defaultBorder(prefix)]);
+  ensureNodeArray(cellStyleXfsNode, tag("xf"), [defaultXf()]);
+  const cellXfs = ensureNodeArray(cellXfsNode, tag("xf"), [defaultXf()]);
 
   const syncCounts = () => {
     numFmtsNode.count = String(numFmts.length);
     fontsNode.count = String(fonts.length);
     fillsNode.count = String(fills.length);
-    bordersNode.count = String(ensureNodeArray(bordersNode, "border", [defaultBorder()]).length);
-    cellStyleXfsNode.count = String(ensureNodeArray(cellStyleXfsNode, "xf", [defaultXf()]).length);
+    bordersNode.count = String(
+      ensureNodeArray(bordersNode, tag("border"), [defaultBorder(prefix)]).length,
+    );
+    cellStyleXfsNode.count = String(
+      ensureNodeArray(cellStyleXfsNode, tag("xf"), [defaultXf()]).length,
+    );
     cellXfsNode.count = String(cellXfs.length);
   };
 
@@ -483,57 +502,57 @@ function parseStylesheet(xml: string): {
       const baseXf = cloneRecord(cellXfs[styleIndex] ?? cellXfs[0] ?? defaultXf());
       const fontId = readNonnegativeInteger(baseXf.fontId) ?? 0;
       const fillId = readNonnegativeInteger(baseXf.fillId) ?? 0;
-      const font = cloneRecord(fonts[fontId] ?? fonts[0] ?? defaultFont());
-      let fill = cloneRecord(fills[fillId] ?? fills[0] ?? defaultFill());
+      const font = cloneRecord(fonts[fontId] ?? fonts[0] ?? defaultFont(prefix));
+      let fill = cloneRecord(fills[fillId] ?? fills[0] ?? defaultFill(prefix));
       let fontChanged = false;
       let fillChanged = false;
       let alignmentChanged = false;
 
       if (Object.hasOwn(patch, "bold")) {
         fontChanged = true;
-        if (patch.bold) font.b = {};
-        else delete font.b;
+        if (patch.bold) font[tag("b")] = {};
+        else delete font[tag("b")];
       }
       if (Object.hasOwn(patch, "italic")) {
         fontChanged = true;
-        if (patch.italic) font.i = {};
-        else delete font.i;
+        if (patch.italic) font[tag("i")] = {};
+        else delete font[tag("i")];
       }
       if (Object.hasOwn(patch, "fontSize")) {
         fontChanged = true;
-        if (patch.fontSize === null || patch.fontSize === undefined) delete font.sz;
-        else font.sz = { val: formatStyleNumber(patch.fontSize) };
+        if (patch.fontSize === null || patch.fontSize === undefined) delete font[tag("sz")];
+        else font[tag("sz")] = { val: formatStyleNumber(patch.fontSize) };
       }
       if (Object.hasOwn(patch, "textColor")) {
         fontChanged = true;
-        if (patch.textColor === null) delete font.color;
-        else font.color = { rgb: normalizeColor(patch.textColor) };
+        if (patch.textColor === null) delete font[tag("color")];
+        else font[tag("color")] = { rgb: normalizeColor(patch.textColor) };
       }
       if (Object.hasOwn(patch, "fillColor")) {
         fillChanged = true;
         fill =
           patch.fillColor === null
-            ? cloneRecord(defaultFill())
+            ? cloneRecord(defaultFill(prefix))
             : {
-                patternFill: {
+                [tag("patternFill")]: {
                   patternType: "solid",
-                  fgColor: { rgb: normalizeColor(patch.fillColor) },
-                  bgColor: { indexed: "64" },
+                  [tag("fgColor")]: { rgb: normalizeColor(patch.fillColor) },
+                  [tag("bgColor")]: { indexed: "64" },
                 },
               };
       }
       if (Object.hasOwn(patch, "horizontalAlign")) {
         alignmentChanged = true;
         if (patch.horizontalAlign === null) {
-          const alignment = asRecord(baseXf.alignment);
+          const alignment = asRecord(baseXf[tag("alignment")]);
           if (alignment) {
             delete alignment.horizontal;
-            if (Object.keys(alignment).length === 0) delete baseXf.alignment;
+            if (Object.keys(alignment).length === 0) delete baseXf[tag("alignment")];
           }
           delete baseXf.applyAlignment;
         } else {
-          baseXf.alignment = {
-            ...(asRecord(baseXf.alignment) ?? {}),
+          baseXf[tag("alignment")] = {
+            ...(asRecord(baseXf[tag("alignment")]) ?? {}),
             horizontal: patch.horizontalAlign,
           };
           baseXf.applyAlignment = "1";
@@ -557,7 +576,7 @@ function parseStylesheet(xml: string): {
         baseXf.fillId = String(findOrAdd(fills, fill));
         baseXf.applyFill = "1";
       }
-      if (alignmentChanged && baseXf.alignment) {
+      if (alignmentChanged && baseXf[tag("alignment")]) {
         baseXf.applyAlignment = "1";
       }
 
@@ -662,20 +681,26 @@ function formatStyleNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
 }
 
-function defaultFont(): XmlRecord {
-  return { sz: { val: "11" }, name: { val: "Calibri" } };
+function defaultFont(prefix = ""): XmlRecord {
+  return { [`${prefix}sz`]: { val: "11" }, [`${prefix}name`]: { val: "Calibri" } };
 }
 
-function defaultFills(): XmlRecord[] {
-  return [defaultFill(), { patternFill: { patternType: "gray125" } }];
+function defaultFills(prefix = ""): XmlRecord[] {
+  return [defaultFill(prefix), { [`${prefix}patternFill`]: { patternType: "gray125" } }];
 }
 
-function defaultFill(): XmlRecord {
-  return { patternFill: { patternType: "none" } };
+function defaultFill(prefix = ""): XmlRecord {
+  return { [`${prefix}patternFill`]: { patternType: "none" } };
 }
 
-function defaultBorder(): XmlRecord {
-  return { left: {}, right: {}, top: {}, bottom: {}, diagonal: {} };
+function defaultBorder(prefix = ""): XmlRecord {
+  return {
+    [`${prefix}left`]: {},
+    [`${prefix}right`]: {},
+    [`${prefix}top`]: {},
+    [`${prefix}bottom`]: {},
+    [`${prefix}diagonal`]: {},
+  };
 }
 
 function defaultXf(): XmlRecord {
@@ -775,9 +800,7 @@ function applyWorksheetColumnWidth(xml: string, col: number, widthPx: number | n
   const colXml =
     widthPx === null
       ? null
-      : `<col min="${colIndex}" max="${colIndex}" width="${formatStyleNumber(
-          Math.max(0.1, (widthPx - 5) / 7),
-        )}" customWidth="1"/>`;
+      : `<col min="${colIndex}" max="${colIndex}" width="${encodeColumnWidth(widthPx)}" customWidth="1"/>`;
   const colsRe = /<cols\b[^>]*>([\s\S]*?)<\/cols>/;
   const colsMatch = colsRe.exec(xml);
   if (!colsMatch) {
@@ -869,6 +892,12 @@ function insertCell(xml: string, addr: CellAddress, _ref: string, cellXml: strin
   const rowNum = addr.row + 1;
   const rowOpen = new RegExp(`<row\\b[^>]*\\br="${rowNum}"[^>]*?>`).exec(xml);
   if (rowOpen) {
+    if (rowOpen[0].endsWith("/>")) {
+      const expandedRow = `${rowOpen[0].slice(0, -2)}>${cellXml}</row>`;
+      return (
+        xml.slice(0, rowOpen.index) + expandedRow + xml.slice(rowOpen.index + rowOpen[0].length)
+      );
+    }
     const innerStart = rowOpen.index + rowOpen[0].length;
     const innerEnd = xml.indexOf("</row>", innerStart);
     if (innerEnd === -1) throw new Error(`Row ${rowNum} is not closed.`);

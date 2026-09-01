@@ -42,6 +42,7 @@ export function createSocketModule(
       evt: SessionEvent,
       pendingFirstMessage?: string,
       pendingFirstMessageQueued?: boolean,
+      options?: { recordEventSequence?: boolean },
     ) => void;
   },
 ) {
@@ -166,19 +167,36 @@ export function createSocketModule(
           ) as SessionEvent,
           pendingFirstMessage,
           pendingFirstMessageQueued,
+          { recordEventSequence: false },
         );
         const runtime = get().threadRuntimeById[activeThreadId];
-        handleThreadEvent(get, set, activeThreadId, {
-          ...buildSyntheticSessionSettings(
-            runtime,
-            get().workspaces.find((workspace) => workspace.id === workspaceId),
-          ),
-          sessionId: thread.id,
-        } as SessionEvent);
-        handleThreadEvent(get, set, activeThreadId, {
-          ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
-          sessionId: thread.id,
-        } as SessionEvent);
+        handleThreadEvent(
+          get,
+          set,
+          activeThreadId,
+          {
+            ...buildSyntheticSessionSettings(
+              runtime,
+              get().workspaces.find((workspace) => workspace.id === workspaceId),
+            ),
+            sessionId: thread.id,
+          } as SessionEvent,
+          undefined,
+          false,
+          { recordEventSequence: false },
+        );
+        handleThreadEvent(
+          get,
+          set,
+          activeThreadId,
+          {
+            ...buildSyntheticSessionInfoFromJsonRpcThread(thread),
+            sessionId: thread.id,
+          } as SessionEvent,
+          undefined,
+          false,
+          { recordEventSequence: false },
+        );
         const forceSnapshotFeed = response?.replayHealth?.snapshotRequired === true;
         if (opts?.refreshSnapshot !== false || forceSnapshotFeed) {
           const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);

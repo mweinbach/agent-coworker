@@ -229,7 +229,11 @@ export class CanvasDocumentController {
     this.setState({
       ...this.state,
       content,
-      saveStatus: content === this.lastSavedContent ? "saved" : "dirty",
+      saveStatus: this.saveInFlight
+        ? "saving"
+        : content === this.lastSavedContent
+          ? "saved"
+          : "dirty",
       problem: null,
     });
     this.clearSaveTimer();
@@ -243,16 +247,15 @@ export class CanvasDocumentController {
 
   async flush(): Promise<boolean> {
     this.clearSaveTimer();
-    while (this.active && this.state.content !== this.lastSavedContent) {
-      if (this.state.saveStatus === "conflict") {
-        return false;
-      }
+    while (this.active) {
       const existing = this.saveInFlight;
       if (existing) {
         const saved = await existing;
         if (!saved) return false;
         continue;
       }
+      if (this.state.content === this.lastSavedContent) return true;
+      if (this.state.saveStatus === "conflict") return false;
       const saved = await this.saveOnce();
       if (!saved) return false;
     }
@@ -380,17 +383,34 @@ export class CanvasDocumentController {
     this.setSaveProblem(message);
   }
 
-  async prepareForTransition(nextPath: string | null): Promise<boolean> {
+  async prepareForTransition(_nextPath: string | null): Promise<boolean> {
+    return await this.flush();
+  }
+
+  async close(): Promise<boolean> {
+    const request = ++this.transitionRequest;
+    this.pendingTarget = null;
+    const active = this.active;
+    const generation = this.generation;
     const saved = await this.flush();
     if (!saved) return false;
-    if (nextPath === null && this.active) {
-      const active = this.active;
-      await this.closeSession(active);
-      if (this.active === active) {
-        this.active = null;
-        this.setState(INITIAL_STATE);
-      }
+    if (
+      request !== this.transitionRequest ||
+      this.active !== active ||
+      this.generation !== generation
+    ) {
+      return false;
     }
+    if (active) await this.closeSession(active);
+    if (
+      request !== this.transitionRequest ||
+      this.active !== active ||
+      this.generation !== generation
+    ) {
+      return false;
+    }
+    this.active = null;
+    this.setState(INITIAL_STATE);
     return true;
   }
 

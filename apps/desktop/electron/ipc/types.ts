@@ -39,7 +39,7 @@ export type DesktopIpcDeps = {
   ) => void;
 
   shouldKeepPopupWindowsAlive?: () => boolean;
-  applyPersistedState?: (state: PersistedState) => void;
+  applyPersistedState?: (state: PersistedState) => void | Promise<void>;
   /**
    * Shared approved-roots controller. Pass the same instance used by the
    * `cowork-media:` protocol handler so workspace approvals made over IPC are

@@ -1,3 +1,4 @@
+import { sessionConfigEventSchema } from "../../../../../src/server/jsonrpc/schema.sessionRuntime";
 import {
   type AppStoreActions,
   appendThreadTranscript,
@@ -10,9 +11,9 @@ import {
   requestJsonRpcControlEvent,
   type StoreGet,
   type StoreSet,
-  sendThread,
 } from "../store.helpers";
 import { workspaceBackupActionKey } from "../store.helpers/backupActionKey";
+import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { operationKey, runAcknowledgedOperation } from "../store.helpers/operations";
 
 function setWorkspaceBackupsLoading(
@@ -50,13 +51,15 @@ function addWorkspaceBackupPendingAction(set: StoreSet, workspaceId: string, act
 
 function clearWorkspaceBackupPendingAction(set: StoreSet, workspaceId: string, actionKey: string) {
   set((s) => {
-    const current = { ...s.workspaceRuntimeById[workspaceId].workspaceBackupPendingActionKeys };
+    const runtime = s.workspaceRuntimeById[workspaceId];
+    if (!runtime) return {};
+    const current = { ...runtime.workspaceBackupPendingActionKeys };
     delete current[actionKey];
     return {
       workspaceRuntimeById: {
         ...s.workspaceRuntimeById,
         [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
+          ...runtime,
           workspaceBackupPendingActionKeys: current,
         },
       },
@@ -123,14 +126,18 @@ export function createWorkspaceBackupActions(
         return () => clearWorkspaceBackupPendingAction(set, workspaceId, pendingActionKey);
       },
       execute: async () => {
-        await ensureWorkspaceControl(workspaceId);
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, method, {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          ...(checkpointId ? { checkpointId } : {}),
-        });
-        if (!ok) {
-          throw new Error(errorMessage);
+        try {
+          await ensureWorkspaceControl(workspaceId);
+          const ok = await requestJsonRpcControlEvent(get, set, workspaceId, method, {
+            cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+            targetSessionId,
+            ...(checkpointId ? { checkpointId } : {}),
+          });
+          if (!ok) {
+            throw new Error(errorMessage);
+          }
+        } finally {
+          clearWorkspaceBackupPendingAction(set, workspaceId, pendingActionKey);
         }
       },
     });
@@ -323,13 +330,23 @@ export function createWorkspaceBackupActions(
           return () => {
             set((state) => {
               const runtime = state.threadRuntimeById[thread.id];
-              if (!runtime) return {};
+              if (
+                !previousSessionConfig ||
+                runtime?.sessionId !== targetSessionId ||
+                runtime.sessionConfig?.backupsEnabled !== enabled
+              ) {
+                return {};
+              }
+              const sessionConfig = {
+                ...runtime.sessionConfig,
+                backupsEnabled: previousSessionConfig.backupsEnabled,
+              };
               return {
                 threadRuntimeById: {
                   ...state.threadRuntimeById,
                   [thread.id]: {
                     ...runtime,
-                    sessionConfig: previousSessionConfig,
+                    sessionConfig,
                   },
                 },
               };
@@ -340,15 +357,17 @@ export function createWorkspaceBackupActions(
           if (!thread) {
             throw new Error("Connect the selected session to change its backup setting.");
           }
-          const ok = sendThread(get, thread.id, (sessionId) => ({
-            type: "set_config",
-            sessionId,
-            config: {
-              backupsEnabled: enabled,
-            },
-          }));
-          if (!ok) {
-            throw new Error("Unable to update the selected session backup setting.");
+          const result = await requestJsonRpc(get, set, workspaceId, "cowork/session/config/set", {
+            threadId: targetSessionId,
+            config: { backupsEnabled: enabled },
+          });
+          const acknowledgement = sessionConfigEventSchema.safeParse(result.event);
+          if (
+            !acknowledgement.success ||
+            acknowledgement.data.sessionId !== targetSessionId ||
+            acknowledgement.data.config.backupsEnabled !== enabled
+          ) {
+            throw new Error("The server did not confirm the selected session backup setting.");
           }
           appendThreadTranscript(thread.id, "client", {
             type: "set_config",

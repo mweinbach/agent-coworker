@@ -14,6 +14,89 @@ import {
 const skillActionsModule = await import("../src/app/store.actions/skills");
 const { createSkillActions } = skillActionsModule;
 
+describe("skill action request ownership", () => {
+  beforeEach(resetSkillPluginActionRuntime);
+
+  test.each([false, true])(
+    "stale skill details cannot replace a newer selection (%s)",
+    async (fail) => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId] = {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://mock",
+      };
+      const { get, set } = createStoreHarness(state);
+      const gate = Promise.withResolvers<Record<string, unknown>>();
+      let reads = 0;
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async (_method: string, params: { skillName: string }) => {
+          if (++reads === 1) return gate.promise;
+          return {
+            event: {
+              type: "skill_content",
+              sessionId: "control",
+              skill: { name: params.skillName },
+              content: "Latest content",
+            },
+          };
+        },
+        respond: () => true,
+        close: () => {},
+      } as never);
+      const actions = createSkillActions(set, get);
+      const old = actions.selectSkill("alpha");
+      await actions.selectSkill("beta");
+      await actions.selectSkill("alpha");
+      if (fail) gate.reject(new Error("Old request failed"));
+      else
+        gate.resolve({
+          event: {
+            type: "skill_content",
+            sessionId: "control",
+            skill: { name: "alpha" },
+            content: "Old content",
+          },
+        });
+      await old;
+
+      expect(state.workspaceRuntimeById[workspaceId].selectedSkillName).toBe("alpha");
+      expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("Latest content");
+    },
+  );
+
+  test("independent workspace skill mutations do not suppress each other", async () => {
+    const state = createState();
+    state.workspaces.push({ id: secondaryWorkspaceId, path: "/tmp/secondary" });
+    const { get, set } = createStoreHarness(state);
+    const gates = [
+      Promise.withResolvers<Record<string, unknown>>(),
+      Promise.withResolvers<Record<string, unknown>>(),
+    ];
+    const requested: string[] = [];
+    for (const [index, id] of [workspaceId, secondaryWorkspaceId].entries()) {
+      state.workspaceRuntimeById[id] = { ...defaultWorkspaceRuntime(), serverUrl: `ws://${id}` };
+      RUNTIME.jsonRpcSockets.set(id, {
+        readyPromise: Promise.resolve(),
+        request: async () => {
+          requested.push(id);
+          return gates[index]!.promise;
+        },
+        respond: () => true,
+        close: () => {},
+      } as never);
+    }
+    const actions = createSkillActions(set, get);
+    const first = actions.disableSkill("same-skill");
+    state.selectedWorkspaceId = secondaryWorkspaceId;
+    const second = actions.disableSkill("same-skill");
+    gates.forEach((gate) => gate.resolve({}));
+    expect(await first).toMatchObject({ ok: true });
+    expect(await second).toMatchObject({ ok: true });
+    expect(requested).toEqual([workspaceId, secondaryWorkspaceId]);
+  });
+});
+
 const failedSkillMutationActions = [
   {
     name: "deleteSkill",

@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { scratchRoots } from "../../../src/platform/sandbox/policy";
+import { symlinkOrJunction } from "../../../test/helpers/platform";
 import { createElectronMock } from "./helpers/mockElectron";
 
 let diagnosticsImportNonce = 0;
@@ -85,6 +87,8 @@ async function createService(opts: {
   uploadUrl?: string;
   disableNetworkTelemetry?: boolean;
   fetchImpl?: typeof fetch;
+  uploadTimeoutMs?: number;
+  beforeLoadState?: () => Promise<void>;
   serverDiagnostics?: () => {
     workspaces: Array<{
       workspaceId: string;
@@ -105,7 +109,10 @@ async function createService(opts: {
   const state = createState(opts.uploadEnabled);
   return new DiagnosticsService({
     persistence: {
-      loadState: async () => state,
+      loadState: async () => {
+        await opts.beforeLoadState?.();
+        return state;
+      },
     } as never,
     updater: {
       getState: () => ({
@@ -127,6 +134,7 @@ async function createService(opts: {
     },
     now: () => new Date("2026-06-01T12:00:00.000Z"),
     fetchImpl: opts.fetchImpl,
+    uploadTimeoutMs: opts.uploadTimeoutMs,
     appVersion: () => "1.2.3",
     isPackaged: () => false,
     platform: "darwin",
@@ -324,6 +332,131 @@ describe("desktop diagnostics service", () => {
         diagnosticId: "diag_123",
         url: "https://support/diag_123",
       });
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a bundle reached through a directory symlink outside diagnostics", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-diagnostics-"));
+    const fetchImpl = mock(async () => new Response("{}"));
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: true,
+        uploadUrl: "https://support.example/upload",
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      await service.createBundle();
+      const outsideDir = path.join(userDataDir, "private");
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, "cowork-diagnostics-private.json"), "private data");
+      const linkPath = path.join(service.getDiagnosticsDir(), "linked");
+      await symlinkOrJunction(outsideDir, linkPath, { type: "dir" });
+
+      await expect(
+        service.uploadBundle(path.join(linkPath, "cowork-diagnostics-private.json"), true),
+      ).rejects.toThrow("diagnostics folder");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a file replaced between validation and opening", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-diagnostics-"));
+    const fetchImpl = mock(async () => new Response("{}"));
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: true,
+        uploadUrl: "https://support.example/upload",
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      const bundle = await service.createBundle();
+      const canonicalPath = await fs.realpath(bundle.path);
+      const open = fs.open.bind(fs);
+      const readFile = fs.readFile.bind(fs);
+      let replaced = false;
+      const replaceBundle = async (filePath: unknown) => {
+        if (replaced || String(filePath) !== canonicalPath) return;
+        replaced = true;
+        await fs.rename(canonicalPath, `${canonicalPath}.original`);
+        await fs.writeFile(canonicalPath, "private replacement");
+      };
+      spyOn(fs, "open").mockImplementation(async (...args) => {
+        await replaceBundle(args[0]);
+        return open(...args);
+      });
+      spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        await replaceBundle(args[0]);
+        return readFile(...args);
+      });
+
+      await expect(service.uploadBundle(bundle.path, true)).rejects.toThrow("changed");
+      expect(replaced).toBe(true);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      mock.restore();
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("reads the validated descriptor when the bundle path changes during consent loading", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-diagnostics-"));
+    const fetchImpl = mock(async () => new Response("{}"));
+    let replacePath: string | null = null;
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: true,
+        uploadUrl: "https://support.example/upload",
+        fetchImpl: fetchImpl as typeof fetch,
+        beforeLoadState: async () => {
+          if (!replacePath) return;
+          const target = replacePath;
+          replacePath = null;
+          await fs.rename(target, `${target}.original`);
+          await fs.writeFile(target, "private replacement");
+        },
+      });
+      const bundle = await service.createBundle();
+      const originalPayload = await fs.readFile(bundle.path, "utf8");
+      replacePath = bundle.path;
+
+      expect((await service.uploadBundle(bundle.path, true)).uploaded).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "https://support.example/upload",
+        expect.objectContaining({ body: originalPayload }),
+      );
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts an upload that exceeds its timeout", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(scratchRoots()[0], "cowork-diagnostics-"));
+    const fetchImpl = mock(async (_url: unknown, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      const signal = init?.signal as AbortSignal;
+      return await new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    try {
+      const service = await createService({
+        userDataDir,
+        uploadEnabled: true,
+        uploadUrl: "https://support.example/upload",
+        uploadTimeoutMs: 10,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      const bundle = await service.createBundle();
+      await expect(service.uploadBundle(bundle.path, true)).rejects.toMatchObject({
+        name: "TimeoutError",
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true });
     }

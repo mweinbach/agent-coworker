@@ -13,6 +13,7 @@ import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY_MS = 10 * 1000;
+const FINAL_INSTALL_TIMEOUT_MS = 60 * 1000;
 const RELEASE_NOTES_URL = "https://github.com/mweinbach/agent-coworker/releases/latest";
 const UNAVAILABLE_RELEASE_FEED_MESSAGE =
   "Updates are unavailable for this platform because no update feed is published.";
@@ -84,6 +85,7 @@ type DesktopUpdaterServiceOptions = {
   isPackaged: boolean;
   onStateChange?: (state: UpdaterState) => void;
   notifyUpdateReady?: (state: UpdaterState) => void;
+  requestQuitAndInstall?: (install: (onFailure?: () => void) => void) => void;
   captureError?: (error: unknown, context: { operation: string }) => void;
   updater?: UpdaterClient;
   platform?: NodeJS.Platform;
@@ -179,6 +181,7 @@ export class DesktopUpdaterService {
   private readonly isPackaged: boolean;
   private readonly onStateChange?: (state: UpdaterState) => void;
   private readonly notifyUpdateReady?: (state: UpdaterState) => void;
+  private readonly requestQuitAndInstall?: (install: (onFailure?: () => void) => void) => void;
   private readonly captureError?: (error: unknown, context: { operation: string }) => void;
   private readonly updater: UpdaterClient;
   private readonly platform: NodeJS.Platform;
@@ -191,6 +194,8 @@ export class DesktopUpdaterService {
 
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private startupHandle: ReturnType<typeof setTimeout> | null = null;
+  private finalInstallHandle: ReturnType<typeof setTimeout> | null = null;
+  private finalInstallFailure: (() => void) | null = null;
   private started = false;
   private state: UpdaterState;
   private checkStartedAtMs: number | null = null;
@@ -200,6 +205,7 @@ export class DesktopUpdaterService {
     this.isPackaged = options.isPackaged;
     this.onStateChange = options.onStateChange;
     this.notifyUpdateReady = options.notifyUpdateReady;
+    this.requestQuitAndInstall = options.requestQuitAndInstall;
     this.captureError = options.captureError;
     this.updater = options.updater ?? getDefaultUpdaterClient();
     this.platform = options.platform ?? process.platform;
@@ -239,6 +245,7 @@ export class DesktopUpdaterService {
   }
 
   dispose(): void {
+    this.clearFinalInstall();
     if (this.startupHandle) {
       this.clearTimeoutFn(this.startupHandle);
       this.startupHandle = null;
@@ -338,11 +345,44 @@ export class DesktopUpdaterService {
     if (!this.isPackaged || this.state.phase !== "downloaded") {
       return;
     }
-    captureProductEvent("update_install_started", {
-      eventSource: "main",
-      status: "started",
-    });
-    this.updater.quitAndInstall(false, true);
+    const install = (onFailure?: () => void) => {
+      this.clearFinalInstall();
+      if (onFailure) {
+        this.finalInstallFailure = onFailure;
+        this.finalInstallHandle = this.setTimeoutFn(() => {
+          this.failFinalInstall();
+        }, FINAL_INSTALL_TIMEOUT_MS);
+      }
+      try {
+        captureProductEvent("update_install_started", {
+          eventSource: "main",
+          status: "started",
+        });
+        this.updater.quitAndInstall(false, true);
+      } catch (error) {
+        this.failFinalInstall();
+        throw error;
+      }
+    };
+    if (this.requestQuitAndInstall) {
+      this.requestQuitAndInstall(install);
+    } else {
+      install();
+    }
+  }
+
+  private clearFinalInstall(): void {
+    this.finalInstallFailure = null;
+    if (this.finalInstallHandle !== null) {
+      this.clearTimeoutFn(this.finalInstallHandle);
+      this.finalInstallHandle = null;
+    }
+  }
+
+  private failFinalInstall(): void {
+    const onFailure = this.finalInstallFailure;
+    this.clearFinalInstall();
+    onFailure?.();
   }
 
   private registerListeners(): void {
@@ -442,6 +482,7 @@ export class DesktopUpdaterService {
     });
 
     this.updater.on("error", (error: unknown) => {
+      this.failFinalInstall();
       const message = toMessage(error);
       if (isMissingReleaseFeedMessage(message)) {
         logUpdater("warn", "auto updater feed unavailable", { error: message });

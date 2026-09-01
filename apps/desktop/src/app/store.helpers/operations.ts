@@ -21,6 +21,26 @@ export type AcknowledgedOperationOptions<T> = {
   audience?: "foreground" | "background";
 };
 
+const workspaceSettingsWriteTails = new WeakMap<StoreGet, Promise<void>>();
+
+/** Global memory defaults and workspace defaults mutate the same workspace records. */
+export function serializeWorkspaceSettingsMutation<T>(
+  get: StoreGet,
+  execute: () => Promise<T>,
+): Promise<T> {
+  const previous = workspaceSettingsWriteTails.get(get);
+  const write = previous ? previous.then(execute) : execute();
+  const tail = write.then(
+    () => undefined,
+    () => undefined,
+  );
+  workspaceSettingsWriteTails.set(get, tail);
+  void tail.then(() => {
+    if (workspaceSettingsWriteTails.get(get) === tail) workspaceSettingsWriteTails.delete(get);
+  });
+  return write;
+}
+
 export function operationKey(
   ...parts: Array<string | number | boolean | null | undefined>
 ): string {

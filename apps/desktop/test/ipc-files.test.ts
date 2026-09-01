@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { renameSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { hostPlatform } from "../../../src/platform/host";
 import { scratchRoots } from "../../../src/platform/sandbox";
 import { getOneOffChatsRoot } from "../../../src/utils/oneOffChats";
 import { pinHome } from "../../../test/helpers/platform";
+import { parseWithSchema } from "../electron/ipc/parse";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { createElectronMock } from "./helpers/mockElectron";
 
@@ -63,11 +65,317 @@ async function loadRegisterFilesIpc() {
   return (await loadFilesIpcModule()).registerFilesIpc;
 }
 
+async function createFileMutationHarness(onReadRoots?: (root: string) => void) {
+  const registerFilesIpc = await loadRegisterFilesIpc();
+  const temporaryPath = await fs.mkdtemp(
+    path.join(scratchRoots()[0] ?? "/tmp", "cowork-file-mutation-"),
+  );
+  const root = await fs.realpath(temporaryPath);
+  const handlers = new Map<string, (event: unknown, args?: unknown) => unknown>();
+  const dispose = registerFilesIpc({
+    deps: {} as never,
+    workspaceRoots: {
+      async ensureApprovedWorkspaceRoots() {},
+      async refreshApprovedWorkspaceRootsFromState() {},
+      async assertApprovedWorkspacePath(value) {
+        return value;
+      },
+      async addApprovedWorkspacePath(value) {
+        return value;
+      },
+      setApprovedWorkspaceRoots() {},
+      getApprovedWorkspaceRoots() {
+        onReadRoots?.(root);
+        return [root];
+      },
+    },
+    handleDesktopInvoke(channel, handler) {
+      handlers.set(channel, handler as never);
+    },
+    parseWithSchema,
+  });
+  return {
+    root,
+    async invoke(channel: string, input: unknown) {
+      const handler = handlers.get(channel);
+      if (!handler) throw new Error(`Missing ${channel} handler`);
+      return await handler({ sender: {} }, input);
+    },
+    async dispose() {
+      dispose();
+      await fs.rm(temporaryPath, { recursive: true, force: true });
+    },
+  };
+}
+
 afterEach(() => {
   mock.restore();
 });
 
 describe("files IPC", () => {
+  test.skipIf(hostPlatform() === "win32")(
+    "trashPath trashes the selected symlink rather than its target",
+    async () => {
+      const harness = await createFileMutationHarness();
+      try {
+        const target = path.join(harness.root, "keep.txt");
+        const link = path.join(harness.root, "link.txt");
+        await fs.writeFile(target, "keep the target");
+        await fs.symlink(target, link);
+        trashItemMock.mockClear();
+
+        await harness.invoke(DESKTOP_IPC_CHANNELS.trashPath, { path: link });
+
+        expect(trashItemMock).toHaveBeenCalledWith(link);
+        expect(await fs.readFile(target, "utf8")).toBe("keep the target");
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
+  test.skipIf(hostPlatform() === "win32").each(["existing", "missing"] as const)(
+    "renamePath renames symlink entries with %s targets",
+    async (kind) => {
+      const harness = await createFileMutationHarness();
+      try {
+        const target = path.join(harness.root, "target.txt");
+        const link = path.join(harness.root, "link.txt");
+        if (kind === "existing") await fs.writeFile(target, "keep the target");
+        await fs.symlink(target, link);
+
+        await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: link,
+          newName: "renamed.txt",
+        });
+
+        expect(await fs.readlink(path.join(harness.root, "renamed.txt"))).toBe(target);
+        await expect(fs.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+        if (kind === "existing") {
+          expect(await fs.readFile(target, "utf8")).toBe("keep the target");
+        }
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
+  test("renamePath rejects an existing destination without changing either file", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "first.txt");
+      const target = path.join(harness.root, "second.txt");
+      await fs.writeFile(source, "FIRST");
+      await fs.writeFile(target, "SECOND");
+
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: source, newName: "second.txt" }),
+      ).rejects.toThrow(/already exists/i);
+
+      expect(await fs.readFile(source, "utf8")).toBe("FIRST");
+      expect(await fs.readFile(target, "utf8")).toBe("SECOND");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  test.skipIf(hostPlatform() === "win32").each(["rename", "trash"] as const)(
+    "%s handles a workspace symlink without touching its outside target",
+    async (operation) => {
+      const harness = await createFileMutationHarness();
+      const outside = await fs.mkdtemp(
+        path.join(scratchRoots()[0] ?? "/tmp", "cowork-link-target-"),
+      );
+      try {
+        const target = path.join(outside, "keep.txt");
+        const link = path.join(harness.root, "outside-link.txt");
+        await fs.writeFile(target, "outside file");
+        await fs.symlink(target, link);
+        trashItemMock.mockClear();
+
+        await harness.invoke(
+          operation === "rename" ? DESKTOP_IPC_CHANNELS.renamePath : DESKTOP_IPC_CHANNELS.trashPath,
+          { path: link, newName: "renamed.txt" },
+        );
+
+        expect(await fs.readFile(target, "utf8")).toBe("outside file");
+        if (operation === "rename") {
+          expect(await fs.readlink(path.join(harness.root, "renamed.txt"))).toBe(target);
+        } else {
+          expect(trashItemMock).toHaveBeenCalledWith(link);
+        }
+      } finally {
+        await harness.dispose();
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(hostPlatform() === "win32")(
+    "rename rejects a dangling destination symlink",
+    async () => {
+      const harness = await createFileMutationHarness();
+      try {
+        const source = path.join(harness.root, "source.txt");
+        const destination = path.join(harness.root, "destination.txt");
+        const missing = path.join(harness.root, "missing.txt");
+        await fs.writeFile(source, "source");
+        await fs.symlink(missing, destination);
+
+        await expect(
+          harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+            path: source,
+            newName: "destination.txt",
+          }),
+        ).rejects.toThrow(/already exists/i);
+        expect(await fs.readFile(source, "utf8")).toBe("source");
+        expect(await fs.readlink(destination)).toBe(missing);
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
+  test("renamePath supports a case-only filename change", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "Original.txt");
+      await fs.writeFile(source, "source");
+      await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+        path: source,
+        newName: "original.txt",
+      });
+      expect(await fs.readdir(harness.root)).toEqual(["original.txt"]);
+      expect(await fs.readFile(path.join(harness.root, "original.txt"), "utf8")).toBe("source");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  test("concurrent renames to the same filename preserve the losing source", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const first = path.join(harness.root, "first.txt");
+      const second = path.join(harness.root, "second.txt");
+      await fs.writeFile(first, "FIRST");
+      await fs.writeFile(second, "SECOND");
+      const results = await Promise.allSettled([
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: first, newName: "target.txt" }),
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, { path: second, newName: "target.txt" }),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const winner = await fs.readFile(path.join(harness.root, "target.txt"), "utf8");
+      expect(await fs.readFile(winner === "FIRST" ? second : first, "utf8")).toBe(
+        winner === "FIRST" ? "SECOND" : "FIRST",
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  test("renamePath removes its new link when unlinking the original fails", async () => {
+    const harness = await createFileMutationHarness();
+    const source = path.join(harness.root, "original.txt");
+    const destination = path.join(harness.root, "renamed.txt");
+    await fs.writeFile(source, "keep the source");
+    const originalUnlink = fs.unlink.bind(fs);
+    const unlink = spyOn(fs, "unlink").mockImplementation(async (filePath) => {
+      if (String(filePath) === source) {
+        throw Object.assign(new Error("Source entry is locked"), { code: "EACCES" });
+      }
+      await originalUnlink(filePath);
+    });
+    try {
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: source,
+          newName: "renamed.txt",
+        }),
+      ).rejects.toThrow("Source entry is locked");
+      expect(await fs.readFile(source, "utf8")).toBe("keep the source");
+      await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      unlink.mockRestore();
+      await harness.dispose();
+    }
+  });
+
+  test("renamePath preserves the source when exclusive linking is unsupported", async () => {
+    const harness = await createFileMutationHarness();
+    const source = path.join(harness.root, "source.txt");
+    await fs.writeFile(source, "keep the source");
+    const link = spyOn(fs, "link").mockRejectedValueOnce(
+      Object.assign(new Error("Hard links are unsupported"), { code: "ENOTSUP" }),
+    );
+    try {
+      await expect(
+        harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+          path: source,
+          newName: "renamed.txt",
+        }),
+      ).rejects.toThrow(/rename it in your file manager/i);
+      expect(await fs.readFile(source, "utf8")).toBe("keep the source");
+      await expect(fs.lstat(path.join(harness.root, "renamed.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      link.mockRestore();
+      await harness.dispose();
+    }
+  });
+
+  test("renamePath reports success for directories", async () => {
+    const harness = await createFileMutationHarness();
+    try {
+      const source = path.join(harness.root, "old-directory");
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "child.txt"), "child");
+      await harness.invoke(DESKTOP_IPC_CHANNELS.renamePath, {
+        path: source,
+        newName: "new-directory",
+      });
+      expect(await fs.readFile(path.join(harness.root, "new-directory", "child.txt"), "utf8")).toBe(
+        "child",
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  test.skipIf(hostPlatform() === "win32").each(["readFile", "readFileForPreview"] as const)(
+    "%s rejects an ancestor replaced after IPC authorization",
+    async (method) => {
+      let armed = false;
+      let outside = "";
+      const harness = await createFileMutationHarness((root) => {
+        if (!armed) return;
+        armed = false;
+        queueMicrotask(() => {
+          renameSync(path.join(root, "sub"), path.join(root, "original-sub"));
+          symlinkSync(outside, path.join(root, "sub"));
+        });
+      });
+      outside = await fs.mkdtemp(path.join(scratchRoots()[0] ?? "/tmp", "cowork-preview-outside-"));
+      try {
+        await fs.mkdir(path.join(harness.root, "sub"));
+        const selected = path.join(harness.root, "sub", "file.txt");
+        await fs.writeFile(selected, "inside");
+        await fs.writeFile(path.join(outside, "file.txt"), "outside marker");
+        armed = true;
+
+        await expect(
+          harness.invoke(DESKTOP_IPC_CHANNELS[method], {
+            path: selected,
+            maxBytes: 1024,
+          }),
+        ).rejects.toThrow(/authorized file path/i);
+      } finally {
+        await harness.dispose();
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("pickCanvasSavePath suggests a copy and rejects destinations outside workspace roots", async () => {
     const registerFilesIpc = await loadRegisterFilesIpc();
     const scratchRoot = scratchRoots()[0] ?? "/tmp";

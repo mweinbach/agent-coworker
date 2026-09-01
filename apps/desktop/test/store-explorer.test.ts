@@ -293,4 +293,92 @@ describe("store explorer actions", () => {
       unregister();
     }
   });
+
+  test("reselecting the open file cancels an older pending preview navigation", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    const nextPath = `${rootPath}/next.md`;
+    const approval = Promise.withResolvers<boolean>();
+    useAppStore.setState({ filePreview: { path: currentPath } });
+    const unregister = registerCanvasDocumentTransitionHandler(async () => await approval.promise);
+    const opening = useAppStore.getState().openFilePreview({ path: nextPath });
+    try {
+      expect(await useAppStore.getState().openFilePreview({ path: currentPath })).toBe(true);
+      approval.resolve(true);
+
+      expect(await opening).toBe(false);
+      expect(useAppStore.getState().filePreview?.path).toBe(currentPath);
+    } finally {
+      approval.resolve(false);
+      await opening;
+      unregister();
+    }
+  });
+
+  test("only the latest requested file commits after pending save approval", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    const firstPath = `${rootPath}/first.md`;
+    const latestPath = `${rootPath}/latest.md`;
+    const firstApproval = Promise.withResolvers<boolean>();
+    const latestApproval = Promise.withResolvers<boolean>();
+    useAppStore.setState({ filePreview: { path: currentPath } });
+    const unregister = registerCanvasDocumentTransitionHandler(async (path) =>
+      path === firstPath ? await firstApproval.promise : await latestApproval.promise,
+    );
+    const first = useAppStore.getState().openFilePreview({ path: firstPath });
+    const latest = useAppStore.getState().openFilePreview({ path: latestPath });
+    try {
+      firstApproval.resolve(true);
+      expect(await first).toBe(false);
+      expect(useAppStore.getState().filePreview?.path).toBe(currentPath);
+
+      useAppStore.setState({ canvasSidebarWidth: 720 });
+      latestApproval.resolve(true);
+      expect(await latest).toBe(true);
+      expect(useAppStore.getState().filePreview?.path).toBe(latestPath);
+      expect(useAppStore.getState().canvasSidebarWidth).toBe(720);
+    } finally {
+      firstApproval.resolve(false);
+      latestApproval.resolve(false);
+      await Promise.all([first, latest]);
+      unregister();
+    }
+  });
+
+  test("a pending close cannot dismiss a newly reselected file", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    const approval = Promise.withResolvers<boolean>();
+    useAppStore.setState({ filePreview: { path: currentPath } });
+    const unregister = registerCanvasDocumentTransitionHandler(async () => await approval.promise);
+    const closing = useAppStore.getState().closeFilePreview();
+    try {
+      expect(await useAppStore.getState().openFilePreview({ path: currentPath })).toBe(true);
+      approval.resolve(true);
+
+      expect(await closing).toBe(false);
+      expect(useAppStore.getState().filePreview?.path).toBe(currentPath);
+    } finally {
+      approval.resolve(false);
+      await closing;
+      unregister();
+    }
+  });
+
+  test("a file request from a previous workspace cannot take over the current preview", async () => {
+    const currentPath = `${rootPath}/current.md`;
+    const approval = Promise.withResolvers<boolean>();
+    useAppStore.setState({ filePreview: { path: currentPath } });
+    const unregister = registerCanvasDocumentTransitionHandler(async () => await approval.promise);
+    const opening = useAppStore.getState().openFilePreview({ path: `${rootPath}/next.md` });
+    try {
+      useAppStore.setState({ selectedWorkspaceId: "ws-2" });
+      approval.resolve(true);
+
+      expect(await opening).toBe(false);
+      expect(useAppStore.getState().filePreview?.path).toBe(currentPath);
+    } finally {
+      approval.resolve(false);
+      await opening;
+      unregister();
+    }
+  });
 });

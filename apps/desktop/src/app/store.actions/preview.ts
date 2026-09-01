@@ -103,20 +103,31 @@ export function createPreviewActions(
       path: string,
       opts?: {
         sheetName?: string;
+        workspaceId?: string;
       },
     ): Promise<SpreadsheetWorkbookSnapshotResult> => {
-      const workspaceId = get().selectedWorkspaceId;
+      const { workspaceId: requestedWorkspaceId, ...requestOptions } = opts ?? {};
+      const workspaceId = requestedWorkspaceId ?? get().selectedWorkspaceId;
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet workbooks.");
       }
       return runOfficePreviewRequest(async () => {
         await ensureServerRunning(get, set, workspaceId);
-        return previewJsonRpcWorkspaceSpreadsheetWorkbook(get, set, workspaceId, path, opts ?? {});
+        return previewJsonRpcWorkspaceSpreadsheetWorkbook(
+          get,
+          set,
+          workspaceId,
+          path,
+          requestOptions,
+        );
       }, "Workbook");
     },
 
-    loadSpreadsheetFileVersion: async (path: string): Promise<SpreadsheetFileVersionResult> => {
-      const workspaceId = get().selectedWorkspaceId;
+    loadSpreadsheetFileVersion: async (
+      path: string,
+      requestedWorkspaceId?: string,
+    ): Promise<SpreadsheetFileVersionResult> => {
+      const workspaceId = requestedWorkspaceId ?? get().selectedWorkspaceId;
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet file versions.");
       }
@@ -128,8 +139,9 @@ export function createPreviewActions(
       path: string,
       operations: SpreadsheetBatchPatchOperation[],
       expectedFileVersion?: SpreadsheetFileVersion,
+      requestedWorkspaceId?: string,
     ): Promise<SpreadsheetBatchPatchResult> => {
-      const workspaceId = get().selectedWorkspaceId;
+      const workspaceId = requestedWorkspaceId ?? get().selectedWorkspaceId;
       if (!workspaceId) {
         throw new Error("No active workspace is available for spreadsheet patching.");
       }

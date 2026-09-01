@@ -1,26 +1,36 @@
+// Approval handlers flush persistence only. Navigation or native close can still
+// be canceled after they succeed, so they must not dispose or reset the editor.
 export type CanvasDocumentTransitionHandler = (nextPath: string | null) => Promise<boolean>;
 
-let activeHandler: CanvasDocumentTransitionHandler | null = null;
+const activeParticipants = new Set<{ handler: CanvasDocumentTransitionHandler }>();
 let transitionChain: Promise<boolean> = Promise.resolve(true);
 
 export function registerCanvasDocumentTransitionHandler(
   handler: CanvasDocumentTransitionHandler,
 ): () => void {
-  activeHandler = handler;
+  const participant = { handler };
+  activeParticipants.add(participant);
   return () => {
-    if (activeHandler === handler) {
-      activeHandler = null;
-    }
+    activeParticipants.delete(participant);
   };
 }
 
 export function requestCanvasDocumentTransition(nextPath: string | null): Promise<boolean> {
-  const handler = activeHandler;
-  if (!handler) return Promise.resolve(true);
-  const request = transitionChain.then(
-    () => handler(nextPath),
-    () => handler(nextPath),
-  );
-  transitionChain = request.catch(() => false);
+  const request = transitionChain.then(async () => {
+    try {
+      // Resolve participants when this request runs, not when it is queued.
+      for (const { handler } of activeParticipants) {
+        if (!(await handler(nextPath))) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  transitionChain = request;
   return request;
+}
+
+export function requestCanvasDocumentCloseApproval(): Promise<boolean> {
+  return requestCanvasDocumentTransition(null);
 }

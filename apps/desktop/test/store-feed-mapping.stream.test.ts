@@ -8,7 +8,124 @@ import {
 } from "../src/app/store.feedMapping";
 import type { TranscriptEvent } from "../src/app/types";
 
+function transcriptChunks(parts: Array<[string, Record<string, unknown>]>): TranscriptEvent[] {
+  return parts.map(([partType, part], index) => ({
+    ts: "2026-09-01T00:00:00.000Z",
+    threadId: "thread-tools",
+    direction: "server",
+    payload: {
+      type: "model_stream_chunk",
+      sessionId: "thread-tools",
+      turnId: "turn-tools",
+      provider: "openai",
+      model: "gpt-5.2",
+      index,
+      partType,
+      part,
+    },
+  }));
+}
+
 describe("desktop transcript feed mapping", () => {
+  test.each([false, true])(
+    "keeps same-name tool calls separate across approvals and reversed results (streaming: %s)",
+    (streaming) => {
+      const parts: Array<[string, Record<string, unknown>]> = [];
+      for (const id of ["a", "b"]) {
+        if (streaming) {
+          parts.push(
+            ["tool_input_start", { id, toolName: "read" }],
+            ["tool_input_delta", { id, delta: JSON.stringify({ path: `${id}.txt` }) }],
+            ["tool_input_end", { id, toolName: "read" }],
+          );
+        }
+        parts.push([
+          "tool_call",
+          { toolCallId: id, toolName: "read", input: { path: `${id}.txt` } },
+        ]);
+      }
+      parts.push([
+        "tool_approval_request",
+        { approvalId: "approval-a", toolCall: { toolCallId: "a", toolName: "read" } },
+      ]);
+      for (const id of ["b", "a"]) {
+        parts.push(["tool_result", { toolCallId: id, toolName: "read", output: `contents ${id}` }]);
+      }
+      parts.push(
+        ["tool_call", { toolCallId: "c", toolName: "read", input: { path: "c.txt" } }],
+        ["tool_result", { toolCallId: "c", toolName: "read", output: "contents c" }],
+      );
+
+      const tools = mapTranscriptToFeed(transcriptChunks(parts)).filter(
+        (item) => item.kind === "tool",
+      );
+      expect(
+        tools.map((item) => ({ args: item.args, result: item.result, state: item.state })),
+      ).toEqual([
+        { args: { path: "a.txt" }, result: "contents a", state: "output-available" },
+        { args: { path: "b.txt" }, result: "contents b", state: "output-available" },
+        { args: { path: "c.txt" }, result: "contents c", state: "output-available" },
+      ]);
+      expect(tools[0]?.approval?.approvalId).toBe("approval-a");
+      expect(tools[1]?.approval).toBeUndefined();
+    },
+  );
+
+  test("reconciles an unambiguous approval placeholder with its later concrete tool call", () => {
+    const feed = mapTranscriptToFeed(
+      transcriptChunks([
+        [
+          "tool_approval_request",
+          { approvalId: "approval-read", toolCall: { toolName: "read", input: { path: "a.txt" } } },
+        ],
+        ["tool_call", { toolCallId: "call-read", toolName: "read", input: { path: "a.txt" } }],
+        ["tool_result", { toolCallId: "call-read", toolName: "read", output: "contents a" }],
+      ]),
+    );
+
+    expect(feed).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        args: { path: "a.txt" },
+        result: "contents a",
+        state: "output-available",
+        approval: expect.objectContaining({ approvalId: "approval-read" }),
+      }),
+    ]);
+  });
+
+  test("does not attach a new ID-less approval to a completed same-name call", () => {
+    const feed = mapTranscriptToFeed(
+      transcriptChunks([
+        ["tool_call", { toolCallId: "a", toolName: "read", input: { path: "a.txt" } }],
+        ["tool_result", { toolCallId: "a", toolName: "read", output: "contents a" }],
+        [
+          "tool_approval_request",
+          { approvalId: "approval-b", toolCall: { toolName: "read", input: { path: "b.txt" } } },
+        ],
+        ["tool_call", { toolCallId: "b", toolName: "read", input: { path: "b.txt" } }],
+        ["tool_result", { toolCallId: "b", toolName: "read", output: "contents b" }],
+      ]),
+    );
+
+    expect(feed).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        state: "output-available",
+        args: { path: "a.txt" },
+        result: "contents a",
+      }),
+      expect.objectContaining({
+        kind: "tool",
+        state: "output-available",
+        args: { path: "b.txt" },
+        result: "contents b",
+        approval: expect.objectContaining({ approvalId: "approval-b" }),
+      }),
+    ]);
+    expect(feed[0]).not.toHaveProperty("approval");
+  });
+
   test("keeps separate assistant text streams within one turn", () => {
     const transcript: TranscriptEvent[] = [
       {

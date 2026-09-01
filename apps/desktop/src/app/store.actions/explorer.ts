@@ -37,6 +37,7 @@ export function createExplorerActions(
   | "setCanvasShowFormattingBar"
   | "setCanvasMaximized"
 > {
+  let previewRequestId = 0;
   const bumpWorkspaceExplorerRefresh = (workspaceId: string) => {
     set((state) => ({
       workspaceExplorerRefreshById: {
@@ -48,13 +49,19 @@ export function createExplorerActions(
 
   return {
     openFilePreview: async (opts: { path: string }): Promise<boolean> => {
-      const state = get();
-      if (state.filePreview?.path === opts.path) {
+      const requestId = ++previewRequestId;
+      const initial = get();
+      if (initial.filePreview?.path === opts.path) {
         return true;
       }
-      if (!(await requestCanvasDocumentTransition(opts.path))) {
+      if (
+        !(await requestCanvasDocumentTransition(opts.path)) ||
+        requestId !== previewRequestId ||
+        get().selectedWorkspaceId !== initial.selectedWorkspaceId
+      ) {
         return false;
       }
+      const state = get();
       const canvasEnabled = state.desktopFeatureFlags?.canvas === true;
       const isCanvasSupported = isCanvasSupportedFile(opts.path);
       if (canvasEnabled && isCanvasSupported) {
@@ -71,7 +78,13 @@ export function createExplorerActions(
     },
 
     closeFilePreview: async (): Promise<boolean> => {
-      if (!(await requestCanvasDocumentTransition(null))) {
+      const requestId = ++previewRequestId;
+      const workspaceId = get().selectedWorkspaceId;
+      if (
+        !(await requestCanvasDocumentTransition(null)) ||
+        requestId !== previewRequestId ||
+        get().selectedWorkspaceId !== workspaceId
+      ) {
         return false;
       }
       set({ filePreview: null, isCanvasMaximized: false });

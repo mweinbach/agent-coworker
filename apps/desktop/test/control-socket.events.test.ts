@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import type { SessionEvent } from "../src/lib/wsProtocol";
 import {
   createControlSocketHelpers,
   createState,
@@ -70,7 +71,7 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
   });
 
-  test("requestJsonRpcControlEvent applies error events and rejects pending skill install waiters", async () => {
+  test("control errors leave pending state and install settlement to their request owners", async () => {
     const workspaceId = "ws-error";
     const { state, get, set } = createState(workspaceId, {
       workspaceRuntimeById: {
@@ -79,6 +80,10 @@ describe("control socket helpers over JSON-RPC", () => {
           serverUrl: "ws://mock",
           skillCatalogLoading: true,
           skillMutationPendingKeys: { "install:global": true },
+          pluginMutationPendingKeys: { "plugin:install:user": true },
+          memoriesLoading: true,
+          workspaceBackupsLoading: true,
+          workspaceBackupPendingActionKeys: { create: true },
         },
       },
     });
@@ -88,43 +93,155 @@ describe("control socket helpers over JSON-RPC", () => {
         sessionId: "jsonrpc-control",
         source: "session",
         code: "internal_error",
-        message: "install failed on disk",
+        message: "Unable to read MCP servers",
       },
     }));
 
-    const rejected = Promise.withResolvers<void>();
-    RUNTIME.skillInstallWaiters.set(workspaceId, {
+    const skillWaiter = {
       pendingKey: "install:global",
-      resolve: rejected.resolve,
-      reject: rejected.reject,
-    });
+      resolve: mock(() => {}),
+      reject: mock(() => {}),
+    };
+    const pluginWaiter = {
+      pendingKey: "plugin:install:user",
+      resolve: mock(() => {}),
+      reject: mock(() => {}),
+    };
+    RUNTIME.skillInstallWaiters.set(workspaceId, skillWaiter);
+    RUNTIME.pluginInstallWaiters.set(workspaceId, pluginWaiter);
 
     const helpers = createControlSocketHelpers(deps);
-    await expect(
-      Promise.all([
-        helpers.requestJsonRpcControlEvent(
-          get as any,
-          set as any,
-          workspaceId,
-          "cowork/skills/install",
-          {
-            cwd: "/tmp/workspace",
-            sourceInput: "foo",
-            targetScope: "global",
-          },
-        ),
-        rejected.promise,
-      ]),
-    ).rejects.toThrow("install failed on disk");
-
-    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
-      "install failed on disk",
+    const errorDetail: { message?: string } = {};
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as never,
+      set as never,
+      workspaceId,
+      "cowork/mcp/servers/read",
+      { cwd: "/tmp/workspace" },
+      errorDetail,
     );
+
+    expect(ok).toBe(false);
+    expect(errorDetail.message).toBe("Unable to read MCP servers");
+    expect(RUNTIME.skillInstallWaiters.get(workspaceId)).toBe(skillWaiter);
+    expect(RUNTIME.pluginInstallWaiters.get(workspaceId)).toBe(pluginWaiter);
+    expect(skillWaiter.reject).not.toHaveBeenCalled();
+    expect(pluginWaiter.reject).not.toHaveBeenCalled();
+    expect(state.workspaceRuntimeById[workspaceId]).toMatchObject({
+      skillCatalogLoading: true,
+      skillMutationPendingKeys: { "install:global": true },
+      skillMutationError: null,
+      pluginMutationPendingKeys: { "plugin:install:user": true },
+      pluginMutationError: null,
+      memoriesLoading: true,
+      workspaceBackupsLoading: true,
+      workspaceBackupPendingActionKeys: { create: true },
+    });
     expect(state.notifications).toHaveLength(1);
   });
+
+  test("skipping stale event application still reports its explicit failure", async () => {
+    const workspaceId = "ws-stale-error";
+    const { state, get, set } = createState(workspaceId);
+    installFakeSocket(workspaceId, async () => ({
+      event: {
+        type: "error",
+        sessionId: "jsonrpc-control",
+        source: "session",
+        code: "internal_error",
+        message: "The old selection failed",
+      },
+    }));
+    const errorDetail: { message?: string } = {};
+    const helpers = createControlSocketHelpers(deps);
+
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as never,
+      set as never,
+      workspaceId,
+      "cowork/skills/read",
+      { cwd: "/tmp/workspace", skillName: "old-selection" },
+      errorDetail,
+      { shouldApplyEvent: () => false },
+    );
+
+    expect(ok).toBe(false);
+    expect(errorDetail.message).toBe("The old selection failed");
+    expect(state.notifications).toHaveLength(0);
+  });
+
+  const skillDetailEvents: Array<{ name: string; event: SessionEvent }> = [
+    {
+      name: "skill content",
+      event: {
+        type: "skill_content",
+        sessionId: "jsonrpc-control",
+        skill: {
+          name: "old-skill",
+          path: "/tmp/workspace/skills/old-skill/SKILL.md",
+          source: "project",
+          enabled: true,
+          triggers: [],
+          description: "Old skill",
+        },
+        content: "Old content",
+      },
+    },
+    {
+      name: "skill installation",
+      event: {
+        type: "skill_installation",
+        sessionId: "jsonrpc-control",
+        installation: {
+          installationId: "old-installation",
+          name: "old-skill",
+          description: "Old skill",
+          scope: "project",
+          enabled: true,
+          writable: true,
+          managed: false,
+          effective: true,
+          state: "effective",
+          rootDir: "/tmp/workspace/skills/old-skill",
+          skillPath: "/tmp/workspace/skills/old-skill/SKILL.md",
+          path: "/tmp/workspace/skills/old-skill/SKILL.md",
+          triggers: [],
+          descriptionSource: "frontmatter",
+          diagnostics: [],
+        },
+        content: "Old content",
+      },
+    },
+  ];
+
+  for (const { name, event } of skillDetailEvents) {
+    for (const selection of ["new-selection", null]) {
+      test(`ignores stale ${name} after ${selection === null ? "closing" : "changing"} selection`, async () => {
+        const workspaceId = `ws-stale-${name}-${selection}`;
+        const { state, get, set } = createState(workspaceId);
+        const runtime = state.workspaceRuntimeById[workspaceId];
+        runtime.selectedSkillName = selection;
+        runtime.selectedSkillInstallationId = selection;
+        runtime.selectedSkillContent = "Current content";
+        installFakeSocket(workspaceId, async () => ({ event }));
+        const helpers = createControlSocketHelpers(deps);
+
+        await helpers.requestJsonRpcControlEvent(
+          get as never,
+          set as never,
+          workspaceId,
+          event.type === "skill_content" ? "cowork/skills/read" : "cowork/skills/installation/read",
+          { skillName: "old-skill", installationId: "old-installation" },
+        );
+
+        expect(state.workspaceRuntimeById[workspaceId].selectedSkillName).toBe(selection);
+        expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallationId).toBe(selection);
+        expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe(
+          "Current content",
+        );
+      });
+    }
+  }
 
   test("session config without model overrides clears stale models and preserves other snapshots", async () => {
     const workspaceId = "ws-memory-clear";

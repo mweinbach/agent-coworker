@@ -1,15 +1,18 @@
-import { type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { app } from "electron";
 import { z } from "zod";
 import {
   COWORK_RUNTIME_BOOTSTRAP_PHASES,
   type CoworkRuntimeBootstrapProgress,
 } from "../../../../src/coworkRuntime/types";
+import { hostPlatform } from "../../../../src/platform/host";
+import { killTree } from "../../../../src/platform/processTree";
 import { findWindowsHelper } from "../../../../src/platform/sandbox/detect";
 import {
   WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
@@ -64,6 +67,7 @@ const FORCED_SERVER_SHUTDOWN_TIMEOUT_MS = 1_000;
 const SERVER_HEALTH_TIMEOUT_MS = 1_500;
 const WINDOWS_SANDBOX_PROBE_TIMEOUT_MS = 15_000;
 const WINDOWS_SANDBOX_SETUP_TIMEOUT_MS = 60_000;
+const WINDOWS_SANDBOX_VERIFICATION_TIMEOUT_MS = 45_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
@@ -113,7 +117,7 @@ type PendingServerHandle = {
   cleanup: () => void;
 };
 
-type ServerChildProcess = ChildProcessByStdio<null, Readable, Readable>;
+type ServerChildProcess = ChildProcessByStdio<Writable | null, Readable, Readable>;
 
 type ServerOutputSource = "stdout" | "stderr";
 
@@ -355,59 +359,75 @@ const windowsSandboxHashManifestSchema = z.object({
   }),
 });
 
-function findBundledWindowsSandboxBundle(): {
+type WindowsSandboxBundle = {
   helperPath: string;
   helperSha256: string;
   setupPath: string;
   setupSha256: string;
   commandRunnerPath: string;
   commandRunnerSha256: string;
-} | null {
-  for (const dir of getSidecarSearchDirs()) {
+};
+
+async function verifyWindowsSandboxSignature(
+  filePath: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const result = await runWindowsSandboxHelper(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid') { exit 0 }; exit 1",
+      filePath,
+    ],
+    WINDOWS_SANDBOX_PROBE_TIMEOUT_MS,
+    signal,
+  );
+  return result.code === 0;
+}
+
+async function findBundledWindowsSandboxBundle(
+  options: {
+    searchDirs?: string[];
+    requireSignature?: boolean;
+    verifySignature?: typeof verifyWindowsSandboxSignature;
+    signal?: AbortSignal;
+  } = {},
+): Promise<WindowsSandboxBundle | null> {
+  const timeout = AbortSignal.timeout(WINDOWS_SANDBOX_VERIFICATION_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const verifySignature = options.verifySignature ?? verifyWindowsSandboxSignature;
+  signal.throwIfAborted();
+  for (const dir of options.searchDirs ?? getSidecarSearchDirs()) {
     const manifestPath = path.join(dir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
     try {
       const manifest = windowsSandboxHashManifestSchema.parse(
-        JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+        JSON.parse(await fsp.readFile(manifestPath, { encoding: "utf8", signal })),
       );
       const helperPath = path.join(dir, WINDOWS_SANDBOX_HELPER_NAME);
       const setupPath = path.join(dir, WINDOWS_SANDBOX_SETUP_NAME);
       const commandRunnerPath = path.join(dir, WINDOWS_SANDBOX_COMMAND_RUNNER_NAME);
-      if (
-        ![helperPath, setupPath, commandRunnerPath].every((candidate) => fs.existsSync(candidate))
-      ) {
-        continue;
-      }
       const binaries = [
         [helperPath, manifest.files[WINDOWS_SANDBOX_HELPER_NAME]],
         [setupPath, manifest.files[WINDOWS_SANDBOX_SETUP_NAME]],
         [commandRunnerPath, manifest.files[WINDOWS_SANDBOX_COMMAND_RUNNER_NAME]],
       ] as const;
-      if (
-        binaries.some(
-          ([filePath, expected]) =>
-            createHash("sha256").update(fs.readFileSync(filePath)).digest("hex") !== expected,
-        )
-      ) {
-        continue;
-      }
-      if (
-        app.isPackaged &&
-        binaries.some(([filePath]) => {
-          const signature = spawnSync(
-            "powershell.exe",
-            [
-              "-NoProfile",
-              "-NonInteractive",
-              "-Command",
-              "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid') { exit 0 }; exit 1",
-              filePath,
-            ],
-            { windowsHide: true, stdio: "ignore", timeout: 15_000 },
-          );
-          return signature.status !== 0;
-        })
-      ) {
-        continue;
+      const hashes = await Promise.allSettled(
+        binaries.map(async ([filePath, expected]) => {
+          const hash = createHash("sha256");
+          for await (const chunk of fs.createReadStream(filePath, { signal })) hash.update(chunk);
+          return hash.digest("hex") === expected;
+        }),
+      );
+      signal.throwIfAborted();
+      if (hashes.some((result) => result.status !== "fulfilled" || !result.value)) continue;
+      if (options.requireSignature ?? app.isPackaged) {
+        const signatures = await Promise.allSettled(
+          binaries.map(([filePath]) => verifySignature(filePath, signal)),
+        );
+        signal.throwIfAborted();
+        if (signatures.some((result) => result.status !== "fulfilled" || !result.value)) continue;
       }
       return {
         helperPath,
@@ -418,54 +438,122 @@ function findBundledWindowsSandboxBundle(): {
         commandRunnerSha256: manifest.files[WINDOWS_SANDBOX_COMMAND_RUNNER_NAME],
       };
     } catch {
+      signal.throwIfAborted();
       // A missing or malformed manifest is never a trusted helper bundle.
     }
   }
   return null;
 }
 
-function runWindowsSandboxHelper(
+function createWindowsSandboxBundleLoader(
+  resolveBundle: (signal: AbortSignal) => Promise<WindowsSandboxBundle | null> = (signal) =>
+    findBundledWindowsSandboxBundle({ signal }),
+) {
+  let active: {
+    controller: AbortController;
+    promise: Promise<WindowsSandboxBundle | null>;
+  } | null = null;
+  let stopped = false;
+  return {
+    async load(signal?: AbortSignal): Promise<WindowsSandboxBundle | null> {
+      signal?.throwIfAborted();
+      if (stopped) throw new Error("Windows sandbox preflight is stopped.");
+      if (!active) {
+        const controller = new AbortController();
+        const promise = Promise.resolve().then(() => {
+          controller.signal.throwIfAborted();
+          return resolveBundle(controller.signal);
+        });
+        const entry = { controller, promise };
+        active = entry;
+        const clear = () => {
+          if (active === entry) active = null;
+        };
+        void promise.then(clear, clear);
+      }
+      return await raceWithAbort(active.promise, signal, SERVER_START_CANCELLED_MESSAGE);
+    },
+    async stop(): Promise<void> {
+      stopped = true;
+      const pending = active;
+      pending?.controller.abort(new Error("Windows sandbox preflight stopped."));
+      await pending?.promise.catch(() => {});
+    },
+  };
+}
+
+async function runWindowsSandboxHelper(
   helperPath: string,
   args: string[],
   timeoutMs = WINDOWS_SANDBOX_PROBE_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
+  signal?.throwIfAborted();
+  return await new Promise((resolve, reject) => {
     const child = spawn(helperPath, args, {
       cwd: path.dirname(helperPath),
       windowsHide: true,
+      detached: hostPlatform() !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let terminating: Promise<void> | null = null;
+    let timedOut = false;
     const settle = (result: { code: number | null; stdout: string; stderr: string }) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeout);
-      resolve(result);
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) reject(signal.reason);
+      else resolve(result);
     };
+    const terminate = () => {
+      if (settled || terminating) return;
+      clearTimeout(timeout);
+      terminating = (async () => {
+        try {
+          if (child.pid) await killTree(child.pid);
+          else child.kill("SIGKILL");
+        } catch {
+          // The helper may have already exited.
+        }
+        await waitForExit(child, FORCED_SERVER_SHUTDOWN_TIMEOUT_MS);
+        child.stdout.destroy();
+        child.stderr.destroy();
+        settle({
+          code: null,
+          stdout,
+          stderr: timedOut ? `${stderr}\nTimed out after ${timeoutMs} ms`.trim() : stderr,
+        });
+      })();
+    };
+    const onAbort = () => terminate();
     const timeout = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // The helper may have exited between the timeout and the kill attempt.
-      }
-      settle({
-        code: null,
-        stdout,
-        stderr: stderr
-          ? `${stderr}\nTimed out after ${timeoutMs} ms`
-          : `Timed out after ${timeoutMs} ms`,
-      });
+      timedOut = true;
+      terminate();
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.on("data", (chunk: string) => (stderr += chunk));
-    child.once("error", (error) => settle({ code: null, stdout, stderr: error.message }));
-    child.once("exit", (code) => settle({ code, stdout, stderr }));
+    child.stdout.on(
+      "data",
+      (chunk: string) => (stdout = (stdout + chunk).slice(-STDERR_TAIL_LIMIT)),
+    );
+    child.stderr.on(
+      "data",
+      (chunk: string) => (stderr = (stderr + chunk).slice(-STDERR_TAIL_LIMIT)),
+    );
+    child.once("error", (error) => {
+      if (!terminating) settle({ code: null, stdout, stderr: error.message });
+    });
+    child.once("close", (code) => {
+      if (!terminating) settle({ code, stdout, stderr });
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) terminate();
   });
 }
 
@@ -479,11 +567,14 @@ async function ensureWindowsSandboxReady(
     platform?: NodeJS.Platform;
     env?: NodeJS.ProcessEnv;
     userDataDir?: string;
-    resolveBundle?: typeof findBundledWindowsSandboxBundle;
+    resolveBundle?: () => WindowsSandboxBundle | null | Promise<WindowsSandboxBundle | null>;
     runHelper?: typeof runWindowsSandboxHelper;
+    signal?: AbortSignal;
   } = {},
 ): Promise<void> {
   if ((overrides.platform ?? process.platform) !== "win32") return;
+  const signal = overrides.signal;
+  signal?.throwIfAborted();
   const userDataDir = overrides.userDataDir ?? app.getPath("userData");
   const runHelper = overrides.runHelper ?? runWindowsSandboxHelper;
   const noEnforcement = {
@@ -492,7 +583,10 @@ async function ensureWindowsSandboxReady(
     process: false,
     integrity: false,
   };
-  const bundle = (overrides.resolveBundle ?? findBundledWindowsSandboxBundle)();
+  const bundle = await (
+    overrides.resolveBundle ?? (() => findBundledWindowsSandboxBundle({ signal }))
+  )();
+  signal?.throwIfAborted();
   if (!bundle) {
     logServerManagerEvent("windows sandbox bundle missing or failed integrity verification");
     await writeWindowsSandboxReadiness(userDataDir, {
@@ -507,7 +601,13 @@ async function ensureWindowsSandboxReady(
   }
   const sandboxHome = path.join(userDataDir, "windows-sandbox");
   const commonArgs = ["--sandbox-home", sandboxHome, "--cwd", path.resolve(workspacePath)];
-  const probe = await runHelper(bundle.helperPath, ["probe", ...commonArgs]);
+  const probe = await runHelper(
+    bundle.helperPath,
+    ["probe", ...commonArgs],
+    WINDOWS_SANDBOX_PROBE_TIMEOUT_MS,
+    signal,
+  );
+  signal?.throwIfAborted();
   const parseEnforcement = (stdout: string) => {
     try {
       const value = JSON.parse(stdout) as Record<string, unknown>;
@@ -539,6 +639,7 @@ async function ensureWindowsSandboxReady(
     enforcement: parseEnforcement(probe.stdout),
     message: "Windows sandbox needs one-time administrator setup or repair.",
   });
+  signal?.throwIfAborted();
 
   logServerManagerEvent("windows sandbox requires one-time setup or repair", {
     probeCode: probe.code,
@@ -563,7 +664,9 @@ async function ensureWindowsSandboxReady(
       path.resolve(workspacePath),
     ],
     WINDOWS_SANDBOX_SETUP_TIMEOUT_MS,
+    signal,
   );
+  signal?.throwIfAborted();
   if (setup.code !== 0) {
     logServerManagerEvent("windows sandbox setup was cancelled or failed", {
       setupCode: setup.code,
@@ -639,6 +742,7 @@ async function gracefulKill(
   options: {
     gracefulTimeoutMs?: number;
     forceKillTimeoutMs?: number;
+    killTree?: (pid: number) => Promise<void>;
   } = {},
 ): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -646,11 +750,14 @@ async function gracefulKill(
   }
 
   try {
-    const signal = getServerTerminationSignal();
-    if (signal) {
-      child.kill(signal);
+    if (child.stdin) {
+      // Only managed sidecars have a private stdin pipe. EOF also covers an
+      // unexpected parent exit, and unlike SIGTERM is cooperative on Windows.
+      child.stdin.once("error", () => {});
+      child.stdin.end();
     } else {
-      child.kill();
+      const signal = getServerTerminationSignal();
+      child.kill(signal);
     }
   } catch {
     // ignore; process may already be gone
@@ -665,12 +772,20 @@ async function gracefulKill(
   }
 
   try {
-    child.kill("SIGKILL");
+    if (child.pid) {
+      await (options.killTree ?? killTree)(child.pid);
+    } else {
+      child.kill("SIGKILL");
+    }
   } catch {
     // ignore
   }
 
-  await waitForExit(child, options.forceKillTimeoutMs ?? FORCED_SERVER_SHUTDOWN_TIMEOUT_MS);
+  if (
+    !(await waitForExit(child, options.forceKillTimeoutMs ?? FORCED_SERVER_SHUTDOWN_TIMEOUT_MS))
+  ) {
+    throw new Error("Workspace server did not exit after forced termination.");
+  }
 }
 
 function getServerStartupTimeoutMs(
@@ -927,6 +1042,7 @@ function buildServerEnv(
     rotateMobileH3Tls?: boolean;
     privacyTelemetrySettings?: PersistedPrivacyTelemetrySettings | null;
     productAnalyticsState?: PersistedProductAnalyticsState | null;
+    windowsSandboxBundle?: WindowsSandboxBundle | null;
   } = {},
 ): NodeJS.ProcessEnv {
   const bundledFoundationModelsSdk =
@@ -937,8 +1053,7 @@ function buildServerEnv(
     opts.includeBundledWindowsAiElectron && !process.env.COWORK_WINDOWS_AI_ELECTRON_DIR
       ? findBundledWindowsAiElectronDir()
       : null;
-  const bundledWindowsSandbox =
-    process.platform === "win32" ? findBundledWindowsSandboxBundle() : null;
+  const bundledWindowsSandbox = opts.windowsSandboxBundle;
   const telemetryConsentEnv = withoutInheritedTelemetryConsentEnv(process.env);
   const privacyTelemetrySettings = resolveTelemetryConsent({
     settings: opts.privacyTelemetrySettings,
@@ -959,6 +1074,7 @@ function buildServerEnv(
     ...processEnv,
     COWORK_WEB_DESKTOP_SERVICE: "1",
     COWORK_DESKTOP_STARTUP_EVENTS: "1",
+    COWORK_DESKTOP_PARENT_MANAGED: "1",
     COWORK_DESKTOP_USER_DATA_DIR: app.getPath("userData"),
     COWORK_BROWSER_ACCESS_TOKEN:
       process.env.COWORK_BROWSER_ACCESS_TOKEN?.trim() ||
@@ -1228,6 +1344,7 @@ function shouldReuseExistingWorkspaceServer(
 }
 
 export class ServerManager {
+  private readonly windowsSandboxBundleLoader = createWindowsSandboxBundleLoader();
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
   private readonly pendingOperations = new Map<string, Promise<void>>();
@@ -1434,11 +1551,12 @@ export class ServerManager {
       yolo,
     });
 
-    await raceWithAbort(
-      ensureWindowsSandboxReady(workspacePath),
+    const windowsSandboxBundle =
+      hostPlatform() === "win32" ? await this.windowsSandboxBundleLoader.load(signal) : null;
+    await ensureWindowsSandboxReady(workspacePath, {
       signal,
-      SERVER_START_CANCELLED_MESSAGE,
-    );
+      resolveBundle: () => windowsSandboxBundle,
+    });
     signal.throwIfAborted();
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
@@ -1453,6 +1571,7 @@ export class ServerManager {
         rotateMobileH3Tls: opts.rotateMobileH3Tls === true,
         privacyTelemetrySettings: opts.privacyTelemetrySettings,
         productAnalyticsState,
+        windowsSandboxBundle,
       });
       const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
@@ -1465,7 +1584,9 @@ export class ServerManager {
         }
         child = spawn("bun", [sourceEntry, ...spawnArgs], {
           cwd: repoRoot,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: hostPlatform() !== "win32",
+          windowsHide: true,
           env: sourceEnvForAttempt.env,
         });
         spawnDescription = "bun";
@@ -1475,7 +1596,9 @@ export class ServerManager {
         }
         child = spawn(sidecar.command, [...sidecar.args, ...spawnArgs], {
           cwd: process.resourcesPath,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: hostPlatform() !== "win32",
+          windowsHide: true,
           env: {
             ...serverEnv,
             COWORK_BUILTIN_DIR: builtInDir,
@@ -1839,7 +1962,10 @@ export class ServerManager {
       }
     }
     this.stopPromise = (async () => {
-      await Promise.all(this.pendingOperations.values());
+      await Promise.all([
+        ...this.pendingOperations.values(),
+        this.windowsSandboxBundleLoader.stop(),
+      ]);
       await this.stopAllOwnedServers();
     })();
     return await this.stopPromise;
@@ -1928,6 +2054,7 @@ export const __internal = {
   GRACEFUL_SERVER_SHUTDOWN_TIMEOUT_MS,
   buildDesktopCrashReportingEnv,
   buildServerEnv,
+  createWindowsSandboxBundleLoader,
   buildSourceEnvForAttempt,
   featureFlagFingerprint,
   findBundledFoundationModelsSdkDir,

@@ -89,6 +89,101 @@ describe("memory store actions", () => {
     expect(state.notifications).toHaveLength(0);
   });
 
+  test("skill status waits quietly while the control socket is still handshaking", async () => {
+    const state = createState();
+    const { get, set } = createStoreHarness(state);
+    let requests = 0;
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: new Promise(() => {}),
+      request: async () => {
+        requests += 1;
+        throw new Error("JSON-RPC socket is not ready for request");
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+    const actions = createWorkspaceMemoryActions(set as any, get as any);
+
+    await Promise.all([
+      actions.requestSkillImprovementStatus(workspaceId),
+      actions.requestSkillImprovementStatus(workspaceId),
+    ]);
+    expect(requests).toBe(0);
+    expect(state.workspaceRuntimeById[workspaceId].skillImprovementLoading).toBe(false);
+    expect(state.notifications).toHaveLength(0);
+  });
+
+  test.each(["transport", "server event"] as const)(
+    "concurrent ready skill-status requests share a %s failure and a later retry can succeed",
+    async (failureKind) => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+      const { get, set } = createStoreHarness(state);
+      const started = Promise.withResolvers<void>();
+      const failure = Promise.withResolvers<unknown>();
+      const statusEvent = {
+        type: "skill_improvement_status",
+        sessionId: "control-session",
+        enabled: false,
+        scope: "user",
+        excludedSkills: [],
+        busy: false,
+        blockReason: null,
+        pendingJobs: [],
+        runHistory: [],
+        backups: [],
+        skills: [],
+      };
+      let requests = 0;
+      let fail = true;
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async () => {
+          requests += 1;
+          started.resolve();
+          if (fail) return await failure.promise;
+          return { event: statusEvent };
+        },
+        respond: () => true,
+        close: () => {},
+      } as any);
+      const actions = createWorkspaceMemoryActions(set as any, get as any);
+      const pending = Promise.all([
+        actions.requestSkillImprovementStatus(workspaceId, { cwd: "/tmp/proj" }),
+        actions.requestSkillImprovementStatus(workspaceId, { cwd: "/tmp/proj" }),
+      ]);
+      await started.promise;
+      if (failureKind === "transport") {
+        failure.reject(new Error("Skill status storage is unavailable."));
+      } else {
+        failure.resolve({
+          event: {
+            type: "error",
+            sessionId: "control-session",
+            source: "server",
+            code: "skill_status_failed",
+            message: "Skill status storage is unavailable.",
+          },
+        });
+      }
+      await pending;
+
+      expect(requests).toBe(1);
+      expect(state.notifications).toHaveLength(1);
+      expect(state.notifications[0]).toMatchObject({
+        kind: "error",
+        title: "Unable to load skill status",
+        detail: "Skill status storage is unavailable.",
+      });
+      expect(state.workspaceRuntimeById[workspaceId].skillImprovementLoading).toBe(false);
+      fail = false;
+      await actions.requestSkillImprovementStatus(workspaceId, { cwd: "/tmp/proj" });
+      expect(requests).toBe(2);
+      expect(state.workspaceRuntimeById[workspaceId].skillImprovementStatus).toEqual(statusEvent);
+      expect(state.notifications).toHaveLength(1);
+    },
+  );
+
   test("requestWorkspaceMemories can target a shared memory cwd", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
@@ -151,7 +246,7 @@ describe("memory store actions", () => {
       "workspace",
       "project-guidance",
       "Prefer acknowledged saves.",
-      { cwd: "/tmp/proj" },
+      { cwd: "/tmp/proj", mode: "create" },
     );
 
     expect(saved).toMatchObject({ ok: true });
@@ -162,6 +257,7 @@ describe("memory store actions", () => {
         scope: "workspace",
         id: "project-guidance",
         content: "Prefer acknowledged saves.",
+        mode: "create",
       },
     });
 
@@ -313,6 +409,72 @@ describe("memory store actions", () => {
     expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toMatchObject({
       advancedMemory: true,
     });
+  });
+
+  test("failed memory settings restore only their own fields", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: () => {
+        started.resolve();
+        return gate.promise;
+      },
+      respond: () => true,
+      close: () => {},
+    } as never);
+    const actions = createWorkspaceMemoryActions(set, get);
+    const result = actions.setWorkspaceAdvancedMemory(workspaceId, true);
+    await started.promise;
+    state.workspaceRuntimeById["ws-other"].controlSessionConfig = {
+      ...state.workspaceRuntimeById["ws-other"].controlSessionConfig,
+      memoryGenerationModel: "newer-model",
+    };
+    gate.reject(new Error("Read-only settings"));
+
+    expect(await result).toMatchObject({ ok: false });
+    expect(state.workspaceRuntimeById["ws-other"].controlSessionConfig).toMatchObject({
+      advancedMemory: false,
+      memoryGenerationModel: "newer-model",
+    });
+  });
+
+  test("rapid global memory edits are serialized and retain the latest intent", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    const configs: unknown[] = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (_method: string, params: { config: unknown }) => {
+        configs.push(params.config);
+        if (configs.length === 1) {
+          started.resolve();
+          return gate.promise;
+        }
+        return {};
+      },
+      respond: () => true,
+      close: () => {},
+    } as never);
+    const actions = createWorkspaceMemoryActions(set, get);
+    const first = actions.setWorkspaceAdvancedMemory(workspaceId, true);
+    await started.promise;
+    const latest = actions.setWorkspaceAdvancedMemory(workspaceId, false);
+    gate.resolve({});
+
+    expect(await first).toMatchObject({ ok: true });
+    expect(await latest).toMatchObject({ ok: true });
+    expect(configs).toEqual([{ advancedMemory: true }, { advancedMemory: false }]);
+    expect(state.workspaces.map((workspace) => workspace.defaultAdvancedMemory)).toEqual([
+      false,
+      false,
+    ]);
   });
 
   test("setWorkspaceMemoryGenerationModel clears the desktop fallback on reset", async () => {

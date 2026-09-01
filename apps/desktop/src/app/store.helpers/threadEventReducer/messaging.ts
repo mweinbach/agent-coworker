@@ -429,19 +429,25 @@ export function createMessagingModule(
       return false;
     }
 
-    if (rt.busy) {
-      if (busyPolicy === "queue") {
-        queuePendingThreadMessage(
-          threadId,
-          trimmed,
-          attachments,
-          references,
-          presetClientMessageId,
-          draftSubmission,
-        );
-        return true;
-      }
+    const shouldQueue = rt.busy
+      ? busyPolicy === "queue"
+      : hasDeferredWorkspaceDefaultApply(threadId);
+    if (shouldQueue) {
+      // Pending messages do not retain tool-retry lineage. Keep those sends with
+      // the caller instead of accepting a retry that would become a normal turn.
+      if (retryToolItemIds?.length) return false;
+      queuePendingThreadMessage(
+        threadId,
+        trimmed,
+        attachments,
+        references,
+        presetClientMessageId,
+        draftSubmission,
+      );
+      return true;
+    }
 
+    if (rt.busy) {
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
         if (

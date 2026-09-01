@@ -42,6 +42,7 @@ import {
 } from "../../src/app/types";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
+import { ELECTRON_USER_DATA_DIR_ENV } from "./userDataOverride";
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -519,6 +520,13 @@ export class PersistenceService {
   }
 
   private async migrateLegacyUserDataIfNeeded(): Promise<void> {
+    // Explicit dev/test profiles must not import or move the user's legacy data.
+    // Main applies this override before constructing persistence; blank values
+    // are ignored and packaged builds reject the override.
+    if (!app.isPackaged && process.env[ELECTRON_USER_DATA_DIR_ENV]?.trim()) {
+      return;
+    }
+
     const currentDir = path.resolve(this.appDataDir);
     const legacyDir = path.resolve(this.legacyAppDataDir);
     if (currentDir === legacyDir) {
@@ -592,73 +600,95 @@ export class PersistenceService {
 
   async loadState(): Promise<PersistedState> {
     await this.ensureStorageReady();
-    return await this.stateLock.run(async () => {
-      try {
-        const raw = await fs.readFile(this.stateFilePath, "utf8");
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          return defaultState();
-        }
-        return await sanitizePersistedState(parsed);
-      } catch (error) {
-        if (isNotFound(error)) {
-          return defaultState();
-        }
-        throw new Error(`Failed to load state: ${String(error)}`);
-      }
-    });
+    return await this.stateLock.run(() => this.readStateUnlocked());
   }
 
   async saveState(state: PersistedState): Promise<void> {
     await this.ensureStorageReady();
     await this.stateLock.run(async () => {
-      await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-
-      let sanitizedState = await sanitizePersistedState(state);
-      if (!sanitizedState.creationDrafts?.research) {
-        let previousState: unknown;
-        try {
-          previousState = JSON.parse(await fs.readFile(this.stateFilePath, "utf8"));
-        } catch (error) {
-          if (!(error instanceof SyntaxError) && !isNotFound(error)) throw error;
-        }
-        const pendingResearch = sanitizePersistedCreationDrafts(
-          isRecord(previousState) ? previousState.creationDrafts : undefined,
-        ).research;
-        if (
-          pendingResearch &&
-          !Object.entries(sanitizedState.composerDrafts ?? {}).some(
-            ([key, draft]) =>
-              JSON.stringify(draft) === JSON.stringify(pendingResearch) &&
-              sanitizedState.workspaces.some((workspace) =>
-                workspace.workspaceKind === "oneOffChat"
-                  ? key === "new:oneOff"
-                  : workspace.workspaceKind === "project" && key === `new:project:${workspace.id}`,
-              ),
-          )
-        ) {
-          sanitizedState = {
-            ...sanitizedState,
-            creationDrafts: {
-              ...sanitizedState.creationDrafts,
-              research: pendingResearch,
-            },
-          };
-        }
-      }
-      const tempPath = `${this.stateFilePath}.tmp`;
-      const payload = JSON.stringify(
-        { ...sanitizedState, version: sanitizedState.version || 2 },
-        null,
-        2,
-      );
-
-      await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-      await fs.rename(tempPath, this.stateFilePath);
-      await fs.chmod(this.stateFilePath, PRIVATE_FILE_MODE);
+      await this.writeStateUnlocked(state);
     });
+  }
+
+  /**
+   * Read, merge, write, and apply one committed state before another writer can
+   * enter. Callbacks must not call persistence methods, which share this lock.
+   */
+  async updateState(
+    update: (current: PersistedState) => PersistedState | Promise<PersistedState>,
+    onCommitted?: (state: PersistedState) => void | Promise<void>,
+  ): Promise<PersistedState> {
+    await this.ensureStorageReady();
+    return await this.stateLock.run(async () => {
+      const next = await update(await this.readStateUnlocked());
+      const committed = await this.writeStateUnlocked(next);
+      await onCommitted?.(committed);
+      return committed;
+    });
+  }
+
+  private async readStateUnlocked(): Promise<PersistedState> {
+    try {
+      const raw = await fs.readFile(this.stateFilePath, "utf8");
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return defaultState();
+      }
+      return await sanitizePersistedState(parsed);
+    } catch (error) {
+      if (isNotFound(error)) {
+        return defaultState();
+      }
+      throw new Error(`Failed to load state: ${String(error)}`);
+    }
+  }
+
+  private async writeStateUnlocked(state: PersistedState): Promise<PersistedState> {
+    await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+
+    let sanitizedState = await sanitizePersistedState(state);
+    if (!sanitizedState.creationDrafts?.research) {
+      let previousState: unknown;
+      try {
+        previousState = JSON.parse(await fs.readFile(this.stateFilePath, "utf8"));
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !isNotFound(error)) throw error;
+      }
+      const pendingResearch = sanitizePersistedCreationDrafts(
+        isRecord(previousState) ? previousState.creationDrafts : undefined,
+      ).research;
+      if (
+        pendingResearch &&
+        !Object.entries(sanitizedState.composerDrafts ?? {}).some(
+          ([key, draft]) =>
+            JSON.stringify(draft) === JSON.stringify(pendingResearch) &&
+            sanitizedState.workspaces.some((workspace) =>
+              workspace.workspaceKind === "oneOffChat"
+                ? key === "new:oneOff"
+                : workspace.workspaceKind === "project" && key === `new:project:${workspace.id}`,
+            ),
+        )
+      ) {
+        sanitizedState = {
+          ...sanitizedState,
+          creationDrafts: {
+            ...sanitizedState.creationDrafts,
+            research: pendingResearch,
+          },
+        };
+      }
+    }
+    const committed = { ...sanitizedState, version: sanitizedState.version || 2 };
+    const tempPath = `${this.stateFilePath}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(committed, null, 2), {
+      encoding: "utf8",
+      mode: PRIVATE_FILE_MODE,
+    });
+    await fs.rename(tempPath, this.stateFilePath);
+    await fs.chmod(this.stateFilePath, PRIVATE_FILE_MODE);
+    return committed;
   }
 
   async readTranscript(threadId: string): Promise<TranscriptEvent[]> {

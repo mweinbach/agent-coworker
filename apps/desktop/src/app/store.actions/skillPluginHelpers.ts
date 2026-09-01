@@ -14,6 +14,20 @@ import { resolveManagementWorkspaceId } from "../workspaceDisplayTargets";
 
 export type MutationDomain = "skill" | "plugin" | "marketplace";
 
+export function createDetailRequestTracker(get: StoreGet) {
+  const requests = new Map<string, symbol>();
+  return (workspaceId: string): (() => boolean) => {
+    const request = Symbol();
+    const path = workspacePathFor(get, workspaceId);
+    requests.set(workspaceId, request);
+    return () =>
+      requests.get(workspaceId) === request &&
+      path !== undefined &&
+      workspacePathFor(get, workspaceId) === path &&
+      Boolean(get().workspaceRuntimeById[workspaceId]);
+  };
+}
+
 function mutationPendingField(
   domain: MutationDomain,
 ): keyof Pick<
@@ -49,20 +63,24 @@ export function setMutationPending(
 ): void {
   const pendingField = mutationPendingField(domain);
   const errorField = mutationErrorField(domain);
-  set((s) => ({
-    workspaceRuntimeById: {
-      ...s.workspaceRuntimeById,
-      [workspaceId]: {
-        ...s.workspaceRuntimeById[workspaceId],
-        [errorField]: null,
-        [pendingField]: {
-          ...s.workspaceRuntimeById[workspaceId][pendingField],
-          [key]: true,
-        },
-        ...(overrides ?? {}),
-      },
-    },
-  }));
+  set((s) =>
+    s.workspaceRuntimeById[workspaceId]
+      ? {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              [errorField]: null,
+              [pendingField]: {
+                ...s.workspaceRuntimeById[workspaceId][pendingField],
+                [key]: true,
+              },
+              ...(overrides ?? {}),
+            },
+          },
+        }
+      : {},
+  );
 }
 
 export function clearMutationPending(
@@ -74,6 +92,7 @@ export function clearMutationPending(
 ): void {
   const pendingField = mutationPendingField(domain);
   set((s) => {
+    if (!s.workspaceRuntimeById[workspaceId]) return {};
     const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
     delete pendingKeys[key];
     return {
@@ -135,31 +154,35 @@ export function clearFailedMutationSend(
   notify = true,
 ): void {
   const pendingField = mutationPendingField(domain);
-  set((s) => ({
-    workspaceRuntimeById: {
-      ...s.workspaceRuntimeById,
-      [workspaceId]: {
-        ...s.workspaceRuntimeById[workspaceId],
-        [pendingField]: (() => {
-          const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
-          delete pendingKeys[key];
-          return pendingKeys;
-        })(),
-        ...(overrides ?? {}),
-      },
-    },
-    ...(notify
+  set((s) =>
+    s.workspaceRuntimeById[workspaceId]
       ? {
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail,
-          }),
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              [pendingField]: (() => {
+                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId][pendingField] };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+              ...(overrides ?? {}),
+            },
+          },
+          ...(notify
+            ? {
+                notifications: pushNotification(s.notifications, {
+                  id: makeId(),
+                  ts: nowIso(),
+                  kind: "error",
+                  title: "Not connected",
+                  detail,
+                }),
+              }
+            : {}),
         }
-      : {}),
-  }));
+      : {},
+  );
 }
 
 export async function refreshSharedWorkspaceState(

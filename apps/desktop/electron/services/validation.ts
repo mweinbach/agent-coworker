@@ -2,25 +2,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { canonicalizeSync } from "../../../../src/platform/paths";
 import { isPathEqualOrInside } from "./pathBoundary";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
-
-function normalizeBoundaryPath(targetPath: string): string {
-  const resolved = path.resolve(targetPath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    // If file doesn't exist, try to get realpath of the parent directory
-    try {
-      const parent = path.dirname(resolved);
-      const parentRealpath = fs.realpathSync(parent);
-      return path.join(parentRealpath, path.basename(resolved));
-    } catch {
-      return resolved;
-    }
-  }
-}
 
 export function assertSafeId(id: string, label: string): void {
   if (!SAFE_ID.test(id)) {
@@ -81,13 +66,33 @@ export function assertPathWithinRoots(roots: string[], targetPath: string, label
     throw new Error(`${label} must not be empty`);
   }
 
-  const normalizedTarget = normalizeBoundaryPath(targetPath);
+  const normalizedTarget = canonicalizeSync(targetPath);
   for (const root of roots) {
-    const normalizedRoot = normalizeBoundaryPath(root);
+    const normalizedRoot = canonicalizeSync(root);
     if (isPathEqualOrInside(normalizedRoot, normalizedTarget)) {
       return normalizedTarget;
     }
   }
 
+  throw new Error(`${label} is outside allowed workspace roots`);
+}
+
+/** Authorize a directory entry without following the leaf being renamed or trashed. */
+export function assertDirectoryEntryWithinRoots(
+  roots: string[],
+  targetPath: string,
+  label: string,
+): string {
+  if (!targetPath.trim()) {
+    throw new Error(`${label} must not be empty`);
+  }
+  const resolved = path.resolve(targetPath);
+  const parent = fs.realpathSync.native(path.dirname(resolved));
+  const entryPath = path.join(parent, path.basename(resolved));
+  for (const root of roots) {
+    if (isPathEqualOrInside(canonicalizeSync(root), entryPath)) {
+      return entryPath;
+    }
+  }
   throw new Error(`${label} is outside allowed workspace roots`);
 }

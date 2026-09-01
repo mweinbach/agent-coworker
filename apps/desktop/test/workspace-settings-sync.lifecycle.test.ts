@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { TaskRecord } from "../../../src/shared/tasks";
+import { createThreadModelStreamRuntime } from "../src/app/store.feedMapping";
+import type { SessionSnapshot } from "../src/app/types";
 import {
   __controlSocketInternal,
   __threadEventReducerInternal,
@@ -181,6 +184,220 @@ describe("workspace settings sync", () => {
     expect(state.workspaces.some((workspace) => workspace.id === managementWorkspaceId)).toBe(
       false,
     );
+  });
+
+  test("removeWorkspace releases its thread and workspace caches without clearing another workspace", async () => {
+    primeWorkspaceConnection();
+    const removed = seedConnectedThread();
+    const removedChild = seedConnectedThread();
+    const retainedWorkspaceId = `retained-${workspaceId}`;
+    const retainedPath = "/tmp/retained-workspace";
+    useAppStore.setState((state) => ({
+      workspaces: [
+        ...state.workspaces,
+        { ...state.workspaces[0]!, id: retainedWorkspaceId, path: retainedPath },
+      ],
+      selectedWorkspaceId: retainedWorkspaceId,
+    }));
+    primeWorkspaceConnection();
+    const retained = seedConnectedThread();
+    const allThreads = [removed, removedChild, retained];
+    const makeTask = (id: string, workspacePath: string): TaskRecord => ({
+      id,
+      workspacePath,
+      title: id,
+      objective: "Keep task state scoped to its workspace",
+      status: "working",
+      revision: 1,
+      reviewRequired: true,
+      createdAt: "2026-09-01T12:00:00.000Z",
+      updatedAt: "2026-09-01T12:00:00.000Z",
+      threadCount: 0,
+      completedWorkItemCount: 0,
+      totalWorkItemCount: 0,
+      activeBlockerCount: 0,
+      pendingQuestionCount: 0,
+      blockingQuestionCount: 0,
+      requirements: [],
+      threads: [],
+      workItems: [],
+      decisions: [],
+      questions: [],
+      artifacts: [],
+      blockers: [],
+      activity: [],
+      latestCheckpoint: null,
+    });
+    const removedTask = makeTask(`task-${workspaceId}`, "/tmp/workspace");
+    const retainedTask = makeTask(`task-${retainedWorkspaceId}`, retainedPath);
+
+    for (const { threadId, sessionId } of allThreads) {
+      const stream = createThreadModelStreamRuntime();
+      stream.assistantTextHistoryInTurn.push("Retained streamed content");
+      RUNTIME.modelStreamByThread.set(threadId, stream);
+      RUNTIME.optimisticUserMessageIds.set(threadId, new Set(["optimistic-message"]));
+      RUNTIME.pendingThreadMessages.set(threadId, [{ text: "Queued message" }]);
+      RUNTIME.pendingThreadAttachments.set(threadId, [[]]);
+      RUNTIME.pendingThreadReferences.set(threadId, [[]]);
+      RUNTIME.pendingThreadSteers.set(threadId, new Map());
+      RUNTIME.threadSelectionRequests.set(threadId, 1);
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+        mode: "auto",
+        draftModelSelection: null,
+      });
+      for (const cacheId of [sessionId, `live-${sessionId}`]) {
+        const snapshot = makeSessionSnapshot(cacheId) as SessionSnapshot;
+        RUNTIME.sessionSnapshots.set(cacheId, { fingerprint: snapshot, snapshot });
+      }
+      useAppStore.setState((state) => ({
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...state.threadRuntimeById[threadId]!,
+            sessionId: `live-${sessionId}`,
+            feed: [
+              {
+                id: "cached-message",
+                kind: "message",
+                role: "assistant",
+                ts: "now",
+                text: "Cached feed",
+              },
+            ],
+          },
+        },
+        latestTodosByThreadId: {
+          ...state.latestTodosByThreadId,
+          [threadId]: [{ content: "Pending work", status: "pending" }],
+        },
+        interactionsByThread: {
+          ...state.interactionsByThread,
+          [threadId]: [
+            {
+              kind: "ask",
+              requestId: "ask-1",
+              receivedSequence: 1,
+              status: "pending",
+              question: "Continue?",
+            },
+          ],
+        },
+      }));
+    }
+    for (const id of [workspaceId, retainedWorkspaceId]) {
+      RUNTIME.agentProfilesCatalogGenerations.set(id, 2);
+      useAppStore.setState((state) => ({
+        workspaceExplorerById: {
+          ...state.workspaceExplorerById,
+          [id]: {
+            rootPath: id,
+            currentPath: id,
+            entries: [],
+            selectedPath: id,
+            loading: false,
+            error: null,
+            requestId: 1,
+          },
+        },
+        workspaceExplorerRefreshById: { ...state.workspaceExplorerRefreshById, [id]: 3 },
+      }));
+    }
+    useAppStore.setState({
+      selectedThreadId: retained.threadId,
+      agentViewerThreadId: removed.threadId,
+      newTaskWorkspaceId: workspaceId,
+      quickChatPreparedWorkspaceId: workspaceId,
+      taskSummariesByWorkspaceId: {
+        [workspaceId]: [removedTask],
+        [retainedWorkspaceId]: [retainedTask],
+      },
+      taskListLoadingByWorkspaceId: { [workspaceId]: true, [retainedWorkspaceId]: true },
+      tasksById: { [removedTask.id]: removedTask, [retainedTask.id]: retainedTask },
+      taskLifecycleRequestByTaskId: {
+        [removedTask.id]: { action: "retry", expectedRevision: 1, requestId: "removed-retry" },
+        [retainedTask.id]: { action: "retry", expectedRevision: 1, requestId: "retained-retry" },
+      },
+    });
+    const before = useAppStore.getState();
+    const retainedStream = RUNTIME.modelStreamByThread.get(retained.threadId);
+
+    try {
+      await useAppStore.getState().removeWorkspace(workspaceId);
+
+      const state = useAppStore.getState();
+      for (const key of [
+        "threadRuntimeById",
+        "latestTodosByThreadId",
+        "interactionsByThread",
+      ] as const) {
+        expect(state[key][removed.threadId]).toBeUndefined();
+        expect(state[key][removedChild.threadId]).toBeUndefined();
+        expect(state[key][retained.threadId]).toBe(before[key][retained.threadId]);
+      }
+      for (const key of [
+        "workspaceRuntimeById",
+        "workspaceExplorerById",
+        "workspaceExplorerRefreshById",
+        "taskSummariesByWorkspaceId",
+        "taskListLoadingByWorkspaceId",
+      ] as const) {
+        expect(state[key][workspaceId]).toBeUndefined();
+        expect(state[key][retainedWorkspaceId]).toBe(before[key][retainedWorkspaceId]);
+      }
+      for (const map of [
+        RUNTIME.optimisticUserMessageIds,
+        RUNTIME.pendingThreadMessages,
+        RUNTIME.pendingThreadAttachments,
+        RUNTIME.pendingThreadReferences,
+        RUNTIME.pendingThreadSteers,
+        RUNTIME.threadSelectionRequests,
+        RUNTIME.pendingWorkspaceDefaultApplyByThread,
+        RUNTIME.modelStreamByThread,
+      ]) {
+        expect(map.has(removed.threadId)).toBe(false);
+        expect(map.has(removedChild.threadId)).toBe(false);
+        expect(map.has(retained.threadId)).toBe(true);
+      }
+      for (const { sessionId } of [removed, removedChild]) {
+        expect(RUNTIME.sessionSnapshots.has(sessionId)).toBe(false);
+        expect(RUNTIME.sessionSnapshots.has(`live-${sessionId}`)).toBe(false);
+      }
+      expect(RUNTIME.sessionSnapshots.has(retained.sessionId)).toBe(true);
+      expect(RUNTIME.sessionSnapshots.has(`live-${retained.sessionId}`)).toBe(true);
+      expect(RUNTIME.modelStreamByThread.get(retained.threadId)).toBe(retainedStream);
+      expect(RUNTIME.agentProfilesCatalogGenerations.has(workspaceId)).toBe(false);
+      expect(RUNTIME.agentProfilesCatalogGenerations.get(retainedWorkspaceId)).toBe(2);
+      expect(state.tasksById[removedTask.id]).toBeUndefined();
+      expect(state.tasksById[retainedTask.id]).toBe(retainedTask);
+      expect(state.taskLifecycleRequestByTaskId[removedTask.id]).toBeUndefined();
+      expect(state.taskLifecycleRequestByTaskId[retainedTask.id]).toBe(
+        before.taskLifecycleRequestByTaskId[retainedTask.id],
+      );
+      expect(state.selectedWorkspaceId).toBe(retainedWorkspaceId);
+      expect(state.selectedThreadId).toBe(retained.threadId);
+      expect(state.agentViewerThreadId).toBeNull();
+      expect(state.newTaskWorkspaceId).toBeNull();
+      expect(state.quickChatPreparedWorkspaceId).toBeNull();
+    } finally {
+      for (const { threadId, sessionId } of allThreads) {
+        RUNTIME.pendingThreadReferences.delete(threadId);
+        RUNTIME.pendingThreadSteers.delete(threadId);
+        RUNTIME.sessionSnapshots.delete(sessionId);
+        RUNTIME.sessionSnapshots.delete(`live-${sessionId}`);
+      }
+      RUNTIME.agentProfilesCatalogGenerations.delete(workspaceId);
+      RUNTIME.agentProfilesCatalogGenerations.delete(retainedWorkspaceId);
+      useAppStore.setState({
+        tasksById: {},
+        taskSummariesByWorkspaceId: {},
+        taskListLoadingByWorkspaceId: {},
+        taskLifecycleRequestByTaskId: {},
+        agentViewerThreadId: null,
+        newTaskWorkspaceId: null,
+        quickChatPreparedWorkspaceId: null,
+        workspaceExplorerRefreshById: {},
+      });
+    }
   });
 
   test("session_config preserves a pending explicit reasoning effort until the server confirms it", async () => {

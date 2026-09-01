@@ -78,6 +78,24 @@ describe("preload validation boundary", () => {
     );
   });
 
+  test("validates the complete transcript batch before forwarding the original payload", async () => {
+    const event = {
+      threadId: "thread-1",
+      direction: "server" as const,
+      ts: "2026-09-01T00:00:00.000Z",
+      payload: { type: "message", content: "hello" },
+    };
+    const batch = [event];
+    await api().appendTranscriptBatch(batch);
+    expect(invoke).toHaveBeenCalledWith(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, batch);
+    expect(invoke.mock.calls[0]?.[1]).toBe(batch);
+
+    expect(() =>
+      api().appendTranscriptBatch([event, { ...event, threadId: "invalid/id" }]),
+    ).toThrow(/^transcript event /);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   test("validates notifications before delivery and removes the subscribed listener", () => {
     const listener = mock(() => {});
     const unsubscribe = api().onWindowCloseRequested(listener);

@@ -11,6 +11,7 @@ type TestState = {
   providerLastAuthChallenge: unknown;
   providerLastAuthResult: unknown;
   providerStatusRefreshing: boolean;
+  providerUiState: { lmstudio: { enabled: boolean; hiddenModels: string[] } };
   selectedWorkspaceId: string | null;
   workspaces: Array<{ id: string; path: string }>;
   workspaceRuntimeById: Record<
@@ -31,6 +32,7 @@ function createHarness(): { state: TestState; get: () => TestState; set: (update
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
     providerStatusRefreshing: false,
+    providerUiState: { lmstudio: { enabled: true, hiddenModels: [] } },
     selectedWorkspaceId: "ws-1",
     workspaces: [{ id: "ws-1", path: "/tmp/ws-1" }],
     workspaceRuntimeById: {
@@ -54,6 +56,48 @@ function createHarness(): { state: TestState; get: () => TestState; set: (update
 }
 
 describe("provider actions", () => {
+  test("failed model visibility saves preserve other model preferences", async () => {
+    const harness = createHarness();
+    const gate = Promise.withResolvers<void>();
+    let saves = 0;
+    const actions = createProviderActions(harness.set as never, harness.get as never, {
+      persistNow: async () => {
+        saves += 1;
+        if (saves === 1) await gate.promise;
+      },
+    });
+    const first = actions.setLmStudioModelVisible("model-a", false);
+    const second = actions.setLmStudioModelVisible("model-b", false);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(saves).toBeGreaterThan(0);
+    } finally {
+      gate.reject(new Error("Unable to persist model-a"));
+    }
+    expect(await first).toMatchObject({ ok: false });
+    expect(await second).toMatchObject({ ok: true });
+    expect(harness.state.providerUiState.lmstudio.hiddenModels).toEqual(["model-b"]);
+  });
+
+  test("model visibility rollback preserves independently refreshed model settings", async () => {
+    const harness = createHarness();
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const actions = createProviderActions(harness.set as never, harness.get as never, {
+      persistNow: async () => {
+        started.resolve();
+        await gate.promise;
+      },
+    });
+    const result = actions.setLmStudioModelVisible("model-a", false);
+    await started.promise;
+    harness.state.providerUiState.lmstudio.hiddenModels = ["model-a", "model-b"];
+    gate.reject(new Error("Persistence unavailable"));
+
+    expect(await result).toMatchObject({ ok: false });
+    expect(harness.state.providerUiState.lmstudio.hiddenModels).toEqual(["model-b"]);
+  });
+
   test("provider auth adapter returns a negative domain acknowledgment as an operation error", async () => {
     const harness = createHarness();
     RUNTIME.jsonRpcSockets.set("ws-1", {

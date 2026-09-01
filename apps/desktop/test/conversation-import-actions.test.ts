@@ -6,6 +6,7 @@ import {
   defaultWorkspaceRuntime,
   RUNTIME,
   resetSkillPluginActionRuntime,
+  secondaryWorkspaceId,
   workspaceId,
 } from "./skill-plugin-actions.harness";
 
@@ -14,6 +15,102 @@ const { createImportActions } = await import("../src/app/store.actions/import");
 describe("conversation import store actions", () => {
   beforeEach(() => {
     resetSkillPluginActionRuntime();
+  });
+
+  test("hydrates newly imported workspaces before refreshing their threads", async () => {
+    const state = Object.assign(createState(), {
+      threads: [],
+      threadRuntimeById: {},
+      selectedThreadId: null,
+      selectedTaskId: null,
+      view: "chat",
+      lastNonSettingsView: "chat",
+    });
+    for (const id of [workspaceId, secondaryWorkspaceId]) {
+      state.workspaceRuntimeById[id] = {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: `ws://${id}`,
+        controlSessionId: "control",
+      };
+    }
+    const importedWorkspace = {
+      id: secondaryWorkspaceId,
+      path: "/tmp/imported-project",
+      name: "Imported project",
+      workspaceKind: "project" as const,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      lastOpenedAt: "2026-09-01T00:00:00.000Z",
+      defaultEnableMcp: true,
+      defaultBackupsEnabled: false,
+      yolo: false,
+    };
+    const importResult = {
+      imported: [
+        {
+          source: "codex",
+          fingerprint: "new-fp",
+          threadId: "new-thread",
+          workspaceId: secondaryWorkspaceId,
+          workspacePath: importedWorkspace.path,
+          title: "Imported chat",
+        },
+      ],
+      skipped: [],
+      failed: [],
+      createdWorkspaces: [
+        {
+          workspaceId: secondaryWorkspaceId,
+          path: importedWorkspace.path,
+          name: importedWorkspace.name,
+        },
+      ],
+    };
+    const listRequests: unknown[] = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => importResult,
+      respond: () => true,
+      close: () => {},
+    } as never);
+    RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (_method: string, params: unknown) => {
+        listRequests.push(params);
+        return {
+          threads: [
+            {
+              id: "new-thread",
+              title: "Imported chat",
+              preview: "Imported",
+              modelProvider: "openai",
+              model: "gpt-5.5",
+              cwd: importedWorkspace.path,
+              createdAt: importedWorkspace.createdAt,
+              updatedAt: importedWorkspace.createdAt,
+              messageCount: 1,
+              lastEventSeq: 1,
+              status: { type: "notLoaded" },
+            },
+          ],
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as never);
+    const { get, set } = createStoreHarness(state);
+    const existingWorkspace = state.workspaces[0];
+    const actions = createImportActions(set, get, {
+      loadState: async () => ({ version: 2, workspaces: [importedWorkspace], threads: [] }),
+    });
+
+    await actions.importConversations({ selected: [{ source: "codex", fingerprint: "new-fp" }] });
+
+    expect(state.workspaces).toContainEqual(importedWorkspace);
+    expect(state.workspaces[0]).toBe(existingWorkspace);
+    expect(listRequests).toEqual([{ cwd: importedWorkspace.path }]);
+    expect(state.threads).toContainEqual(
+      expect.objectContaining({ id: "new-thread", workspaceId: secondaryWorkspaceId }),
+    );
   });
 
   test("requests conversation import sources over JSON-RPC", async () => {

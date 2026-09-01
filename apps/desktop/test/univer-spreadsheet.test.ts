@@ -366,7 +366,7 @@ describe("Univer spreadsheet helpers", () => {
     };
     const latestBaseline = spreadsheetSnapshotToUniverData(latestWorkbook);
 
-    const rebased = applySpreadsheetPatchOperationsToUniverData(latestBaseline, [
+    const result = applySpreadsheetPatchOperationsToUniverData(latestBaseline, [
       {
         type: "cell",
         sheetName: "Summary",
@@ -384,6 +384,9 @@ describe("Univer spreadsheet helpers", () => {
       },
     ]);
 
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected the local edits to rebase onto existing sheets.");
+    const rebased = result.data;
     expect(rebased.sheets["sheet-1"]?.cellData?.[1]?.[0]?.v).toBe("External update");
     expect(rebased.sheets["sheet-1"]?.cellData?.[1]?.[1]?.v).toBe("42");
     expect(
@@ -398,6 +401,42 @@ describe("Univer spreadsheet helpers", () => {
         rawInput: "42",
       },
     ]);
+  });
+
+  test("rejects a rebase whose named sheets disappeared instead of editing the first sheet", () => {
+    const baseline = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const before = cloneUniverWorkbookData(baseline);
+
+    const result = applySpreadsheetPatchOperationsToUniverData(baseline, [
+      { type: "cell", sheetName: "Summary", address: "A2", rawInput: "valid local edit" },
+      { type: "cell", sheetName: "Deleted", address: "A1", rawInput: "must not overwrite Summary" },
+      { type: "format", sheetName: "Renamed", range: "B2", style: { bold: true } },
+      { type: "columnWidth", sheetName: "Deleted", col: 0, widthPx: 240 },
+    ]);
+
+    expect(result).toEqual({ ok: false, missingSheetNames: ["Deleted", "Renamed"] });
+    expect(baseline).toEqual(before);
+  });
+
+  test("defaults to the first sheet only when a patch omits its sheet name", () => {
+    const baseline = spreadsheetSnapshotToUniverData(WORKBOOK);
+    const result = applySpreadsheetPatchOperationsToUniverData(baseline, [
+      { type: "cell", address: "A2", rawInput: "default sheet edit" },
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected the default sheet to be available.");
+    expect(result.data.sheets["sheet-1"]?.cellData?.[1]?.[0]?.v).toBe("default sheet edit");
+    expect(baseline.sheets["sheet-1"]?.cellData?.[1]?.[0]?.v).toBe("Revenue");
+  });
+
+  test("rejects a default-sheet patch when no worksheet remains", () => {
+    const baseline = { ...spreadsheetSnapshotToUniverData(WORKBOOK), sheets: {}, sheetOrder: [] };
+    expect(
+      applySpreadsheetPatchOperationsToUniverData(baseline, [
+        { type: "cell", address: "A1", rawInput: "must be preserved" },
+      ]),
+    ).toEqual({ ok: false, missingSheetNames: [] });
   });
 
   test("diffs column width changes for XLSX save batches", () => {

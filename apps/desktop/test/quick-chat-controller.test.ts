@@ -372,6 +372,217 @@ describe("quick chat window ownership", () => {
   });
 });
 
+describe("native quit coordination", () => {
+  const enabledShortcutState = {
+    version: 2 as const,
+    workspaces: [],
+    threads: [],
+    desktopSettings: {
+      quickChat: { iconEnabled: true, shortcutEnabled: true, shortcutAccelerator: "Alt+Space" },
+    },
+  };
+
+  beforeEach(() => {
+    createdTrays.length = 0;
+    resetGlobalShortcutState();
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
+  for (const surface of ["quick-chat", "utility"] as const) {
+    const show = (controller: InstanceType<typeof QuickChatController>) =>
+      surface === "quick-chat" ? controller.showQuickChatWindow() : controller.showUtilityWindow();
+    const withFactory = (factory: ControllerOptions["createUtilityWindow"]) =>
+      surface === "quick-chat"
+        ? { createQuickChatWindow: factory }
+        : { createUtilityWindow: factory };
+
+    test.each(["darwin", "win32"] as const)(
+      `allows native ${surface} close on %s without disposing integrations`,
+      async (platform) => {
+        const window = new FakeWindow();
+        const controller = createController({
+          platform,
+          ...withFactory(async () => window as never),
+        });
+        controller.applyPersistedState(enabledShortcutState);
+        await show(controller);
+
+        controller.setQuitPending(true);
+        expect(controller.shouldKeepPopupWindowsAlive()).toBe(false);
+        expect(window.destroyed).toBe(false);
+        expect(controller.hasTray()).toBe(true);
+        expect(globalShortcutState.unregisteredAccelerators).toEqual([]);
+        window.close();
+        expect(window.destroyed).toBe(true);
+        expect(createdTrays[0]?.destroyed).toBe(false);
+
+        controller.dispose();
+        controller.setQuitPending(false);
+        controller.initialize();
+        await show(controller);
+        expect(controller.hasTray()).toBe(false);
+        expect(createdTrays).toHaveLength(1);
+        expect(globalShortcutState.unregisteredAccelerators).toEqual(["Alt+Space"]);
+      },
+    );
+
+    test.each(["darwin", "win32"] as const)(
+      `restores ${surface} keepalive on %s after cancelled native quit`,
+      async (platform) => {
+        const window = new FakeWindow();
+        const createWindow = mock(async () => window as never);
+        const retarget = mock(async () => {});
+        const controller = createController({
+          platform,
+          ...withFactory(createWindow),
+          retargetQuickChatWindow: retarget,
+        });
+        controller.applyPersistedState(enabledShortcutState);
+        await show(controller);
+        controller.setQuitPending(true);
+        window.once("close", (event) => event.preventDefault());
+        window.close();
+        expect(window.destroyed).toBe(false);
+        expect(window.visible).toBe(true);
+        await controller.showQuickChatWindow({ threadId: "ignored-during-quit" });
+        expect(retarget).not.toHaveBeenCalled();
+
+        controller.setQuitPending(false);
+        expect(controller.shouldKeepPopupWindowsAlive()).toBe(true);
+        window.close();
+        expect(window.destroyed).toBe(false);
+        expect(window.visible).toBe(false);
+        await show(controller);
+        expect(createWindow).toHaveBeenCalledTimes(1);
+        expect(window.visible).toBe(true);
+        expect(globalShortcutState.unregisteredAccelerators).toEqual([]);
+        controller.dispose();
+      },
+    );
+
+    test(`retires late ${surface} creation and skips queued work during native quit`, async () => {
+      const gate = deferred();
+      const entered = deferred();
+      const windows: FakeWindow[] = [];
+      const createWindow = mock(async () => {
+        entered.resolve();
+        await gate.promise;
+        const window = new FakeWindow();
+        windows.push(window);
+        return window as never;
+      });
+      const controller = createController(withFactory(createWindow));
+      controller.initialize();
+      const first = show(controller);
+      await entered.promise;
+      const queued = show(controller);
+      controller.setQuitPending(true);
+      gate.resolve();
+      await Promise.all([first, queued]);
+      expect(createWindow).toHaveBeenCalledTimes(1);
+      expect(windows[0]?.destroyed).toBe(true);
+      expect(windows[0]?.visible).toBe(false);
+      expect(controller.hasTray()).toBe(true);
+
+      controller.setQuitPending(false);
+      await show(controller);
+      expect(createWindow).toHaveBeenCalledTimes(2);
+      expect(windows[1]?.visible).toBe(true);
+      controller.dispose();
+    });
+
+    test(`does not revive queued ${surface} creation when native quit is cancelled`, async () => {
+      const createWindow = mock(async () => new FakeWindow() as never);
+      const controller = createController(withFactory(createWindow));
+      const queued = show(controller);
+      controller.setQuitPending(true);
+      controller.setQuitPending(false);
+      await queued;
+      expect(createWindow).not.toHaveBeenCalled();
+      await show(controller);
+      expect(createWindow).toHaveBeenCalledTimes(1);
+      controller.dispose();
+    });
+  }
+
+  test("suppresses window requests and tray/shortcut callbacks while native quit is pending", async () => {
+    const createWindow = mock(async () => new FakeWindow() as never);
+    const controller = createController({
+      createMainWindow: createWindow,
+      createQuickChatWindow: createWindow,
+      createUtilityWindow: createWindow,
+    });
+    controller.applyPersistedState(enabledShortcutState);
+    controller.setQuitPending(true);
+    await Promise.all([
+      controller.showMainWindow(),
+      controller.showQuickChatWindow(),
+      controller.toggleQuickChatWindow(),
+      controller.showUtilityWindow(),
+      controller.toggleUtilityWindow(),
+    ]);
+    globalShortcutState.callbacks.get("Alt+Space")?.();
+    createdTrays[0]?.emit("click");
+    createdTrays[0]?.emit("double-click");
+    createdTrays[0]?.emit("right-click");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(createdTrays[0]?.contextMenu).toBe(null);
+    expect(globalShortcutState.callbacks.has("Alt+Space")).toBe(true);
+    controller.dispose();
+  });
+
+  test("does not resume queued retargets after a cancelled quit", async () => {
+    const gate = deferred();
+    const entered = deferred();
+    const window = new FakeWindow();
+    const retarget = mock(async () => {
+      entered.resolve();
+      await gate.promise;
+    });
+    const controller = createController({
+      createQuickChatWindow: async () => window as never,
+      retargetQuickChatWindow: retarget,
+    });
+    await controller.showQuickChatWindow();
+    window.hide();
+    const first = controller.showQuickChatWindow({ threadId: "first" });
+    await entered.promise;
+    const queued = controller.showQuickChatWindow({ threadId: "stale" });
+    controller.setQuitPending(true);
+    controller.setQuitPending(false);
+    gate.resolve();
+    await Promise.all([first, queued]);
+
+    expect(retarget).toHaveBeenCalledTimes(1);
+    expect(window.visible).toBe(false);
+    expect(window.destroyed).toBe(false);
+    await controller.showQuickChatWindow({ threadId: "fresh" });
+    expect(retarget).toHaveBeenCalledTimes(2);
+    expect(window.visible).toBe(true);
+    controller.dispose();
+  });
+
+  test("defers settings-driven native integration changes until quit is cancelled", () => {
+    const controller = createController();
+    controller.applyPersistedState(enabledShortcutState);
+    controller.setQuitPending(true);
+    controller.applyPersistedState({
+      ...enabledShortcutState,
+      desktopFeatureFlagOverrides: { menuBar: false },
+    });
+    controller.initialize();
+    expect(controller.hasTray()).toBe(true);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual([]);
+
+    controller.setQuitPending(false);
+    expect(controller.hasTray()).toBe(false);
+    expect(globalShortcutState.unregisteredAccelerators).toEqual(["Alt+Space"]);
+    controller.dispose();
+  });
+});
+
 describe("resolveTrayIconPath", () => {
   beforeEach(() => {
     createdTrays.length = 0;

@@ -56,7 +56,7 @@ function presentation(
   title: string,
   pngBase64: string,
   dependencies: string[] = [path],
-): PresentationPreviewResult {
+): Extract<PresentationPreviewResult, { ok: true }> {
   return {
     ok: true,
     dependencies,
@@ -109,6 +109,97 @@ function configurePresentationStore(
 }
 
 describe("presentation preview path safety", () => {
+  for (const Preview of [PptxPreview, SlidePreview]) {
+    test.serial(
+      `${Preview.name} labels text-only output and clears the notice on a deck switch`,
+      async () => {
+        const harness = setupJsdom();
+        __internalFilePreviewResources.clear();
+        const pathA = "/workspace/text-only.pptx";
+        const pathB = "/workspace/rendered.pptx";
+        const loadB = deferred<PresentationPreviewResult>();
+        configurePresentationStore(async (path) =>
+          path === pathB
+            ? await loadB.promise
+            : {
+                ...presentation(pathA, "Text-only deck", "data:image/svg+xml;base64,QQ=="),
+                renderingMode: "text",
+                warnings: [
+                  "The verified native renderer is unavailable.",
+                  "Text-only preview: images, charts, layout, and original styling are not shown. Long slide text may be shortened.",
+                ],
+              },
+        );
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const root = createRoot(container);
+        try {
+          await act(async () => {
+            root.render(createElement(Preview, { path: pathA }));
+            await flushUi();
+          });
+          await waitForUi(() => container.querySelectorAll("img").length > 0);
+          const notice = container.querySelector('[role="status"][data-presentation-notice]');
+          expect(notice?.textContent).toContain("Text-only preview");
+          expect(notice?.textContent).toContain(
+            "Images, charts, layout, and original styling are not shown",
+          );
+          expect(notice?.textContent).toContain("verified native renderer is unavailable");
+          expect(notice?.textContent?.match(/original styling are not shown/g)).toHaveLength(1);
+          await act(async () => {
+            root.render(createElement(Preview, { path: pathB }));
+            await flushUi();
+          });
+          expect(container.querySelector("[data-presentation-notice]")).toBeNull();
+          await act(async () => {
+            loadB.resolve({
+              ...presentation(pathB, "Rendered deck", "data:image/png;base64,Qg=="),
+              renderingMode: "rendered",
+              warnings: [],
+            });
+            await flushUi();
+          });
+          await waitForUi(() => container.querySelectorAll("img").length > 0);
+          expect(container.querySelector("[data-presentation-notice]")).toBeNull();
+        } finally {
+          await act(async () => root.unmount());
+          harness.restore();
+        }
+      },
+    );
+
+    test.serial(
+      `${Preview.name} identifies text-only mode even without warning details`,
+      async () => {
+        const harness = setupJsdom();
+        __internalFilePreviewResources.clear();
+        const deckPath = "/workspace/text-only-without-details.pptx";
+        configurePresentationStore(async () => ({
+          ...presentation(deckPath, "Deck", "data:image/svg+xml;base64,QQ=="),
+          renderingMode: "text",
+        }));
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const root = createRoot(container);
+        try {
+          await act(async () => {
+            root.render(createElement(Preview, { path: deckPath }));
+            await flushUi();
+          });
+          await waitForUi(() => container.querySelectorAll("img").length > 0);
+          const notice = container.querySelector('[role="status"][data-presentation-notice]');
+          expect(notice?.textContent).toContain("Text-only preview");
+          expect(notice?.textContent).toContain(
+            "Images, charts, layout, and original styling are not shown",
+          );
+        } finally {
+          await act(async () => root.unmount());
+          harness.restore();
+        }
+      },
+    );
+  }
+
   test.serial("PptxPreview adapts to its container without losing the active slide", async () => {
     const harness = setupJsdom({
       extraGlobals: { ResizeObserver: PresentationResizeObserver },

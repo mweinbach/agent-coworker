@@ -1,4 +1,5 @@
-import fs from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { app, shell } from "electron";
@@ -28,6 +29,7 @@ const DIAGNOSTICS_DIR_NAME = "diagnostics";
 const DIAGNOSTICS_FILE_PREFIX = "cowork-diagnostics-";
 const LOG_TAIL_BYTES = 64 * 1024;
 const MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
+const UPLOAD_TIMEOUT_MS = 30_000;
 
 type DiagnosticsServiceOptions = {
   persistence: PersistenceService;
@@ -35,6 +37,7 @@ type DiagnosticsServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   fetchImpl?: typeof fetch;
+  uploadTimeoutMs?: number;
   appVersion?: () => string;
   isPackaged?: () => boolean;
   platform?: NodeJS.Platform;
@@ -70,6 +73,49 @@ type DiagnosticsBundle = {
   windowsSandbox: WindowsSandboxReadiness | { state: "not-applicable" } | null;
   logs: Partial<Record<"server.log" | "desktop-main.log" | "updater.log" | "renderer.log", string>>;
 };
+
+type ValidatedBundlePath = {
+  path: string;
+  canonicalPath: string;
+  stat: Stats;
+};
+
+function isSameBundleFile(expected: Stats, actual: Stats): boolean {
+  return (
+    actual.isFile() &&
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.size === actual.size &&
+    expected.mtimeMs === actual.mtimeMs
+  );
+}
+
+async function readBundlePayload(handle: FileHandle, expected: Stats): Promise<string> {
+  if (expected.size > MAX_BUNDLE_BYTES) {
+    throw new Error("Diagnostics bundle is too large to upload.");
+  }
+  if (!isSameBundleFile(expected, await handle.stat())) {
+    throw new Error("Diagnostics bundle changed before upload. Create a new bundle.");
+  }
+
+  // Read one extra byte to detect growth without allowing an unbounded readFile allocation.
+  const buffer = Buffer.alloc(expected.size + 1);
+  let totalBytesRead = 0;
+  while (totalBytesRead < buffer.length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      totalBytesRead,
+      buffer.length - totalBytesRead,
+      totalBytesRead,
+    );
+    if (bytesRead === 0) break;
+    totalBytesRead += bytesRead;
+  }
+  if (totalBytesRead !== expected.size || !isSameBundleFile(expected, await handle.stat())) {
+    throw new Error("Diagnostics bundle changed during upload. Create a new bundle.");
+  }
+  return buffer.toString("utf8", 0, totalBytesRead);
+}
 
 function timestampForFile(date: Date): string {
   return date.toISOString().replace(/[:.]/g, "-");
@@ -184,6 +230,7 @@ export class DiagnosticsService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => Date;
   private readonly fetchImpl: typeof fetch;
+  private readonly uploadTimeoutMs: number;
   private readonly appVersion: () => string;
   private readonly isPackaged: () => boolean;
   private readonly platform: NodeJS.Platform;
@@ -196,6 +243,7 @@ export class DiagnosticsService {
     this.env = options.env ?? process.env;
     this.now = options.now ?? (() => new Date());
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.uploadTimeoutMs = options.uploadTimeoutMs ?? UPLOAD_TIMEOUT_MS;
     this.appVersion = options.appVersion ?? (() => app.getVersion().trim() || "unknown");
     this.isPackaged = options.isPackaged ?? (() => app.isPackaged);
     this.platform = options.platform ?? process.platform;
@@ -290,7 +338,8 @@ export class DiagnosticsService {
   }
 
   async revealBundle(bundlePath: string): Promise<void> {
-    shell.showItemInFolder(await this.resolveBundlePath(bundlePath));
+    const bundle = await this.resolveBundlePath(bundlePath);
+    shell.showItemInFolder(bundle.canonicalPath);
   }
 
   async openLogsFolder(): Promise<void> {
@@ -306,75 +355,79 @@ export class DiagnosticsService {
     bundlePath: string,
     confirmed: boolean,
   ): Promise<UploadDiagnosticsBundleOutput> {
-    const safeBundlePath = await this.resolveBundlePath(bundlePath);
-    const state = await this.persistence.loadState();
-    const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
-    if (isNetworkTelemetryGloballyDisabled(this.env)) {
-      throw new Error("Diagnostic log uploads are disabled by COWORK_DISABLE_NETWORK_TELEMETRY.");
-    }
-    if (!settings.diagnosticsUploadEnabled) {
-      throw new Error("Diagnostic log uploads are disabled.");
-    }
-    if (!confirmed) {
-      throw new Error("Diagnostic upload requires explicit confirmation.");
-    }
-
-    const endpoint = readUploadUrl(this.env);
-    if (!endpoint) {
-      logWarn("diagnostics", "diagnostics upload skipped because no endpoint is configured");
-      return {
-        uploaded: false,
-        path: safeBundlePath,
-        diagnosticId: null,
-        url: null,
-        message: "No diagnostics upload endpoint is configured. The local bundle is ready.",
-      };
-    }
-
-    const stat = await fs.stat(safeBundlePath);
-    if (!stat.isFile()) {
-      throw new Error("Diagnostics bundle path is not a file.");
-    }
-    if (stat.size > MAX_BUNDLE_BYTES) {
-      throw new Error("Diagnostics bundle is too large to upload.");
-    }
-
-    const payload = await fs.readFile(safeBundlePath, "utf8");
+    const bundle = await this.resolveBundlePath(bundlePath);
+    const handle = await fs.open(
+      bundle.canonicalPath,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+    );
     try {
-      const response = await this.fetchImpl(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: payload,
-      });
-      if (!response.ok) {
-        throw new Error(`Diagnostics upload failed with HTTP ${response.status}.`);
+      if (!isSameBundleFile(bundle.stat, await handle.stat())) {
+        throw new Error("Diagnostics bundle changed before upload. Create a new bundle.");
       }
-      const resultText = await response.text();
-      let parsed: unknown = null;
-      if (resultText.trim()) {
-        try {
-          parsed = JSON.parse(resultText);
-        } catch {
-          parsed = null;
+      const state = await this.persistence.loadState();
+      const settings = normalizePrivacyTelemetrySettings(state.privacyTelemetrySettings);
+      if (isNetworkTelemetryGloballyDisabled(this.env)) {
+        throw new Error("Diagnostic log uploads are disabled by COWORK_DISABLE_NETWORK_TELEMETRY.");
+      }
+      if (!settings.diagnosticsUploadEnabled) {
+        throw new Error("Diagnostic log uploads are disabled.");
+      }
+      if (!confirmed) {
+        throw new Error("Diagnostic upload requires explicit confirmation.");
+      }
+
+      const endpoint = readUploadUrl(this.env);
+      if (!endpoint) {
+        logWarn("diagnostics", "diagnostics upload skipped because no endpoint is configured");
+        return {
+          uploaded: false,
+          path: bundle.path,
+          diagnosticId: null,
+          url: null,
+          message: "No diagnostics upload endpoint is configured. The local bundle is ready.",
+        };
+      }
+
+      const payload = await readBundlePayload(handle, bundle.stat);
+      try {
+        const response = await this.fetchImpl(endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: payload,
+          signal: AbortSignal.timeout(this.uploadTimeoutMs),
+        });
+        if (!response.ok) {
+          throw new Error(`Diagnostics upload failed with HTTP ${response.status}.`);
         }
+        const resultText = await response.text();
+        let parsed: unknown = null;
+        if (resultText.trim()) {
+          try {
+            parsed = JSON.parse(resultText);
+          } catch {
+            parsed = null;
+          }
+        }
+        const uploadResult = extractUploadResult(parsed);
+        logInfo("diagnostics", "uploaded diagnostics bundle", {
+          diagnosticId: uploadResult.id,
+          hasUrl: Boolean(uploadResult.url),
+        });
+        return {
+          uploaded: true,
+          path: bundle.path,
+          diagnosticId: uploadResult.id,
+          url: uploadResult.url,
+          message: uploadResult.url ?? uploadResult.id ?? "Diagnostics bundle uploaded.",
+        };
+      } catch (error) {
+        logError("diagnostics", error, { operation: "upload" });
+        throw error;
       }
-      const uploadResult = extractUploadResult(parsed);
-      logInfo("diagnostics", "uploaded diagnostics bundle", {
-        diagnosticId: uploadResult.id,
-        hasUrl: Boolean(uploadResult.url),
-      });
-      return {
-        uploaded: true,
-        path: safeBundlePath,
-        diagnosticId: uploadResult.id,
-        url: uploadResult.url,
-        message: uploadResult.url ?? uploadResult.id ?? "Diagnostics bundle uploaded.",
-      };
-    } catch (error) {
-      logError("diagnostics", error, { operation: "upload" });
-      throw error;
+    } finally {
+      await handle.close();
     }
   }
 
@@ -403,7 +456,7 @@ export class DiagnosticsService {
     return logs;
   }
 
-  private async resolveBundlePath(bundlePath: string): Promise<string> {
+  private async resolveBundlePath(bundlePath: string): Promise<ValidatedBundlePath> {
     const diagnosticsDir = this.getDiagnosticsDir();
     const resolved = path.resolve(bundlePath);
     if (!isPathInside(diagnosticsDir, resolved)) {
@@ -415,10 +468,28 @@ export class DiagnosticsService {
     ) {
       throw new Error("Invalid diagnostics bundle path.");
     }
-    const stat = await fs.stat(resolved);
+    const stat = await fs.lstat(resolved);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Diagnostics bundle must not be a symbolic link.");
+    }
     if (!stat.isFile()) {
       throw new Error("Diagnostics bundle path is not a file.");
     }
-    return resolved;
+    const rootStat = await fs.lstat(diagnosticsDir);
+    if (!rootStat.isDirectory()) {
+      throw new Error("The diagnostics folder must not be a symbolic link.");
+    }
+    const [canonicalRoot, canonicalPath] = await Promise.all([
+      fs.realpath(diagnosticsDir),
+      fs.realpath(resolved),
+    ]);
+    if (!isPathInside(canonicalRoot, canonicalPath)) {
+      throw new Error("Diagnostics bundle must be inside the diagnostics folder.");
+    }
+    const currentRootStat = await fs.stat(canonicalRoot);
+    if (rootStat.dev !== currentRootStat.dev || rootStat.ino !== currentRootStat.ino) {
+      throw new Error("The diagnostics folder changed during validation.");
+    }
+    return { path: resolved, canonicalPath, stat };
   }
 }

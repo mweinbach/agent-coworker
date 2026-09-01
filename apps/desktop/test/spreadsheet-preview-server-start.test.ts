@@ -109,4 +109,73 @@ describe("spreadsheet workbook workspace startup", () => {
     });
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
+
+  test.each(["workbook", "version", "patch"] as const)(
+    "keeps %s requests on the document's captured workspace after selection changes",
+    async (operation) => {
+      const requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
+      const requestMock = mock(async (method: string, params?: Record<string, unknown>) => {
+        requests.push({ method, params });
+        return { ok: true };
+      });
+      resetPopupWorkspace(requestMock);
+      reactivateWorkspaceJsonRpcSocketState("ws-selected");
+      RUNTIME.jsonRpcSockets.set("ws-selected", {
+        readyPromise: Promise.resolve(),
+        connect: () => {},
+        close: () => {},
+        respond: () => true,
+        request: requestMock,
+      } as never);
+      useAppStore.setState((state) => ({
+        workspaces: [
+          ...state.workspaces,
+          { ...state.workspaces[0]!, id: "ws-selected", path: "/tmp/new-selection" },
+        ],
+        selectedWorkspaceId: "ws-selected",
+      }));
+
+      const actions = useAppStore.getState();
+      if (operation === "workbook") {
+        await actions.loadSpreadsheetWorkbook(PATH, {
+          workspaceId: "ws-popup",
+          sheetName: "Sheet1",
+        });
+      } else if (operation === "version") {
+        await actions.loadSpreadsheetFileVersion(PATH, "ws-popup");
+      } else {
+        await actions.patchSpreadsheetWorkbook(PATH, [], undefined, "ws-popup");
+      }
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.params).toMatchObject({
+        cwd: "/Users/mweinbach/Projects/preview-workspace",
+        path: PATH,
+      });
+      expect(requests[0]?.params).not.toHaveProperty("workspaceId");
+      expect(startWorkspaceServerMock.mock.calls[0]?.[0]).toMatchObject({
+        workspaceId: "ws-popup",
+      });
+      expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-selected");
+    },
+  );
+
+  test.each(["workbook", "version", "patch"] as const)(
+    "does not redirect a removed document workspace's %s request to the selected workspace",
+    async (operation) => {
+      const requestMock = mock(async () => ({ ok: true }));
+      resetPopupWorkspace(requestMock);
+      const actions = useAppStore.getState();
+      const request =
+        operation === "workbook"
+          ? actions.loadSpreadsheetWorkbook(PATH, { workspaceId: "removed-workspace" })
+          : operation === "version"
+            ? actions.loadSpreadsheetFileVersion(PATH, "removed-workspace")
+            : actions.patchSpreadsheetWorkbook(PATH, [], undefined, "removed-workspace");
+
+      await expect(request).rejects.toThrow();
+      expect(startWorkspaceServerMock).not.toHaveBeenCalled();
+      expect(requestMock).not.toHaveBeenCalled();
+    },
+  );
 });

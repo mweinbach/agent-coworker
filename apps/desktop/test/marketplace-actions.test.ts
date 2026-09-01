@@ -43,6 +43,52 @@ describe("marketplace store actions", () => {
     resetSkillPluginActionRuntime();
   });
 
+  test.each([false, true])(
+    "stale marketplace details cannot replace a newer selection (%s)",
+    async (fail) => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId] = {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://mock",
+      };
+      const { get, set } = createStoreHarness(state);
+      const gate = Promise.withResolvers<Record<string, unknown>>();
+      const started = Promise.withResolvers<void>();
+      let reads = 0;
+      const detail = { source: customMarketplace, plugins: [], skills: [], connectors: [] };
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async () => {
+          if (++reads === 1) {
+            started.resolve();
+            return gate.promise;
+          }
+          return { event: { type: "marketplace_detail", sessionId: "control", detail } };
+        },
+        respond: () => true,
+        close: () => {},
+      } as never);
+      const actions = createMarketplaceActions(set, get);
+      const old = actions.selectMarketplace(customMarketplace.id);
+      await started.promise;
+      await actions.selectMarketplace(null);
+      await actions.selectMarketplace(customMarketplace.id);
+      if (fail) gate.reject(new Error("Old request failed"));
+      else
+        gate.resolve({
+          event: {
+            type: "marketplace_detail",
+            sessionId: "control",
+            detail: { ...detail, source: { ...customMarketplace, displayName: "Old marketplace" } },
+          },
+        });
+      await old;
+
+      expect(state.workspaceRuntimeById[workspaceId].selectedMarketplaceDetail).toEqual(detail);
+      expect(state.workspaceRuntimeById[workspaceId].marketplaceDetailError).toBeNull();
+    },
+  );
+
   test("refreshMarketplaces surfaces an error when the server is unavailable", async () => {
     const state = createState();
     const { get, set } = createStoreHarness(state);

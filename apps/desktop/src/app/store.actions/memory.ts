@@ -13,6 +13,10 @@ import {
   type StoreSet,
 } from "../store.helpers";
 import { createControlEventAcknowledgementDecoder } from "../store.helpers/controlEventAcknowledgement";
+import {
+  type AcknowledgedOperationOptions,
+  serializeWorkspaceSettingsMutation,
+} from "../store.helpers/operations";
 
 export function createWorkspaceMemoryActions(
   set: StoreSet,
@@ -36,6 +40,9 @@ export function createWorkspaceMemoryActions(
   | "setWorkspaceSkillImprovementScope"
   | "setWorkspaceSkillImprovementExcludedSkills"
 > {
+  const runMemorySettingsMutation = (options: AcknowledgedOperationOptions<void>) =>
+    serializeWorkspaceSettingsMutation(get, () => runAcknowledgedOperation(get, set, options));
+
   const resolveMemoryCwd = (workspaceId: string, opts?: { cwd?: string }) => {
     const explicit = opts?.cwd?.trim();
     if (explicit) return explicit;
@@ -47,12 +54,17 @@ export function createWorkspaceMemoryActions(
       left.localeCompare(right),
     );
 
-  const requestSkillImprovementStatusImpl = async (
+  const skillImprovementStatusRequests = new Map<string, Promise<void>>();
+
+  const loadSkillImprovementStatus = async (
     workspaceId: string,
     opts?: { cwd?: string },
   ): Promise<void> => {
     await ensureServerRunning(get, set, workspaceId);
-    ensureControlSocket(get, set, workspaceId);
+    const socket = ensureControlSocket(get, set, workspaceId);
+    if (socket && !get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
+      return;
+    }
 
     set((s) => ({
       workspaceRuntimeById: {
@@ -64,12 +76,17 @@ export function createWorkspaceMemoryActions(
       },
     }));
 
+    const errorDetail: { message?: string } = {};
     const ok = await requestJsonRpcControlEvent(
       get,
       set,
       workspaceId,
       "cowork/skills/improvement/status",
       { cwd: resolveMemoryCwd(workspaceId, opts) },
+      errorDetail,
+      // This request reports its failed acknowledgement below; do not also
+      // publish the same response as a generic control-session error.
+      { shouldApplyEvent: (event) => event.type !== "error" },
     );
     if (!ok) {
       set((s) => ({
@@ -84,11 +101,28 @@ export function createWorkspaceMemoryActions(
           id: makeId(),
           ts: nowIso(),
           kind: "error",
-          title: "Not connected",
-          detail: "Unable to request skill improvement status.",
+          title: "Unable to load skill status",
+          detail: errorDetail.message ?? "Unable to request skill improvement status.",
         }),
       }));
     }
+  };
+
+  const requestSkillImprovementStatusImpl = (
+    workspaceId: string,
+    opts?: { cwd?: string },
+  ): Promise<void> => {
+    const cwd = resolveMemoryCwd(workspaceId, opts);
+    const key = JSON.stringify([workspaceId, cwd]);
+    const existing = skillImprovementStatusRequests.get(key);
+    if (existing) return existing;
+    const request = loadSkillImprovementStatus(workspaceId, { cwd }).finally(() => {
+      if (skillImprovementStatusRequests.get(key) === request) {
+        skillImprovementStatusRequests.delete(key);
+      }
+    });
+    skillImprovementStatusRequests.set(key, request);
+    return request;
   };
 
   const setSkillImprovementPending = (workspaceId: string, key: string, pending: boolean) => {
@@ -177,6 +211,7 @@ export function createWorkspaceMemoryActions(
               scope,
               ...(id ? { id } : {}),
               content,
+              ...(opts?.mode ? { mode: opts.mode } : {}),
             },
             rpcError,
           );
@@ -375,7 +410,7 @@ export function createWorkspaceMemoryActions(
     },
 
     setWorkspaceAdvancedMemory: async (workspaceId, advancedMemory, opts) => {
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("memory", "advanced", workspaceId),
         label: "Update advanced memory",
         errorTitle: "Advanced memory not updated",
@@ -412,7 +447,7 @@ export function createWorkspaceMemoryActions(
 
     setWorkspaceMemoryGenerationModel: async (workspaceId, model, opts) => {
       const modelOverride = model.trim() || undefined;
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("memory", "model", workspaceId),
         label: "Update memory model",
         errorTitle: "Memory model not updated",
@@ -587,7 +622,7 @@ export function createWorkspaceMemoryActions(
     },
 
     setWorkspaceSkillImprovementEnabled: async (workspaceId, enabled, opts) => {
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("skill-improvement", "enabled", workspaceId),
         label: "Update skill improvement",
         errorTitle: "Skill improvement setting not updated",
@@ -625,7 +660,7 @@ export function createWorkspaceMemoryActions(
 
     setWorkspaceSkillImprovementModel: async (workspaceId, model, opts) => {
       const modelOverride = model.trim() || undefined;
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("skill-improvement", "model", workspaceId),
         label: "Update skill improvement model",
         errorTitle: "Skill improvement model not updated",
@@ -664,7 +699,7 @@ export function createWorkspaceMemoryActions(
     },
 
     setWorkspaceSkillImprovementScope: async (workspaceId, scope, opts) => {
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("skill-improvement", "scope", workspaceId),
         label: "Update skill improvement scope",
         errorTitle: "Skill improvement scope not updated",
@@ -702,7 +737,7 @@ export function createWorkspaceMemoryActions(
 
     setWorkspaceSkillImprovementExcludedSkills: async (workspaceId, excludedSkills, opts) => {
       const normalized = normalizeExcludedSkills(excludedSkills);
-      return await runAcknowledgedOperation(get, set, {
+      return await runMemorySettingsMutation({
         key: operationKey("skill-improvement", "excluded-skills", workspaceId),
         label: "Update included skills",
         errorTitle: "Included skills not updated",
@@ -767,19 +802,15 @@ function applyOptimisticMemoryConfig(
   },
 ): () => void {
   const state = get();
-  const recordKeys = Object.keys(patch.record);
-  const prevRecordsByWorkspaceId = new Map<string, Record<string, unknown>>();
-  for (const workspace of state.workspaces) {
-    const prevRecord: Record<string, unknown> = {};
-    for (const key of recordKeys) {
-      prevRecord[key] = (workspace as Record<string, unknown>)[key];
-    }
-    prevRecordsByWorkspaceId.set(workspace.id, prevRecord);
-  }
-  const prevSessionConfigByWorkspaceId = new Map<string, unknown>();
-  for (const [runtimeWorkspaceId, runtime] of Object.entries(state.workspaceRuntimeById)) {
-    prevSessionConfigByWorkspaceId.set(runtimeWorkspaceId, runtime?.controlSessionConfig ?? null);
-  }
+  const prevRecordsByWorkspaceId = new Map(
+    state.workspaces.map((workspace) => [workspace.id, workspace]),
+  );
+  const prevSessionConfigByWorkspaceId = new Map(
+    Object.entries(state.workspaceRuntimeById).map(([workspaceId, runtime]) => [
+      workspaceId,
+      runtime.controlSessionConfig,
+    ]),
+  );
 
   set((s) => ({
     workspaces: s.workspaces.map((w) => ({ ...w, ...patch.record })),
@@ -798,24 +829,44 @@ function applyOptimisticMemoryConfig(
 
   return () => {
     set((s) => ({
-      workspaces: s.workspaces.map((w) => ({
-        ...w,
-        ...(prevRecordsByWorkspaceId.get(w.id) ?? {}),
-      })),
+      workspaces: s.workspaces.map((workspace) => {
+        const previous = prevRecordsByWorkspaceId.get(workspace.id);
+        return previous ? restoreOwnedFields(workspace, previous, patch.record) : workspace;
+      }),
       workspaceRuntimeById: Object.fromEntries(
-        Object.entries(s.workspaceRuntimeById).map(([runtimeWorkspaceId, runtime]) => [
-          runtimeWorkspaceId,
-          {
-            ...runtime,
-            controlSessionConfig:
-              prevSessionConfigByWorkspaceId.get(runtimeWorkspaceId) ??
-              runtime?.controlSessionConfig ??
-              null,
-          },
-        ]),
+        Object.entries(s.workspaceRuntimeById).map(([runtimeWorkspaceId, runtime]) => {
+          const previous = prevSessionConfigByWorkspaceId.get(runtimeWorkspaceId);
+          return [
+            runtimeWorkspaceId,
+            {
+              ...runtime,
+              controlSessionConfig:
+                previous && runtime.controlSessionConfig
+                  ? restoreOwnedFields(runtime.controlSessionConfig, previous, patch.sessionConfig)
+                  : runtime.controlSessionConfig,
+            },
+          ];
+        }),
       ) as typeof s.workspaceRuntimeById,
     }));
   };
+}
+
+function restoreOwnedFields<T extends object>(
+  current: T,
+  previous: T,
+  patch: Partial<NoInfer<T>>,
+): T {
+  const restored = { ...current };
+  for (const key of Object.keys(patch) as Array<keyof T>) {
+    if (!Object.is(current[key], patch[key])) continue;
+    if (Object.hasOwn(previous, key)) {
+      restored[key] = previous[key];
+    } else {
+      delete restored[key];
+    }
+  }
+  return restored;
 }
 
 function latestRunOutcome(
@@ -868,9 +919,9 @@ function latestRunOutcomeFromHistory(
 async function syncAdvancedMemoryDefaultsAcrossThreads(get: StoreGet): Promise<void> {
   const state = get();
   const threadIds = state.threads.map((thread) => thread.id);
-  for (const threadId of threadIds) {
-    await state.applyWorkspaceDefaultsToThread(threadId, "explicit");
-  }
+  await Promise.allSettled(
+    threadIds.map((threadId) => state.applyWorkspaceDefaultsToThread(threadId, "explicit")),
+  );
 }
 
 function applySessionConfigMemoryPatch<

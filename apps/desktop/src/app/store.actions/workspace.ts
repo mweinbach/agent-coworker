@@ -38,6 +38,12 @@ import { getThreadSelectionIntent } from "../threadSelectionContext";
 import type { WorkspaceRecord } from "../types";
 import { hydrateThreadSelection } from "./thread";
 
+function omitRecordKeys<T>(record: Record<string, T>, keys: Iterable<string>): Record<string, T> {
+  const next = { ...record };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
 export function createWorkspaceActions(
   set: StoreSet,
   get: StoreGet,
@@ -211,13 +217,6 @@ export function createWorkspaceActions(
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         closeThreadSession(thread.id);
-        RUNTIME.optimisticUserMessageIds.delete(thread.id);
-        RUNTIME.pendingThreadMessages.delete(thread.id);
-        RUNTIME.pendingThreadAttachments.delete(thread.id);
-        RUNTIME.threadSelectionRequests.delete(thread.id);
-        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
-        RUNTIME.modelStreamByThread.delete(thread.id);
-        clearPendingThreadSteers(thread.id);
       }
 
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
@@ -237,9 +236,50 @@ export function createWorkspaceActions(
         disposeWorkspaceJsonRpcState(get, workspaceId);
       }
 
+      // Disposal resets model streams for tracked threads, so release their
+      // remaining state only after the connection helpers have finished.
+      const removedThreads = get().threads.filter((thread) => thread.workspaceId === workspaceId);
+      const removedThreadIds = new Set(removedThreads.map((thread) => thread.id));
+      for (const thread of removedThreads) {
+        RUNTIME.optimisticUserMessageIds.delete(thread.id);
+        RUNTIME.pendingThreadMessages.delete(thread.id);
+        RUNTIME.pendingThreadAttachments.delete(thread.id);
+        RUNTIME.pendingThreadReferences.delete(thread.id);
+        RUNTIME.threadSelectionRequests.delete(thread.id);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
+        RUNTIME.modelStreamByThread.delete(thread.id);
+        clearPendingThreadSteers(thread.id);
+        for (const sessionId of [thread.sessionId, get().threadRuntimeById[thread.id]?.sessionId]) {
+          if (sessionId) RUNTIME.sessionSnapshots.delete(sessionId);
+        }
+      }
+      RUNTIME.agentProfilesCatalogGenerations.delete(workspaceId);
+
       set((s) => {
+        const removedWorkspace = s.workspaces.find((workspace) => workspace.id === workspaceId);
         const remainingWorkspaces = s.workspaces.filter((w) => w.id !== workspaceId);
         const remainingThreads = s.threads.filter((t) => t.workspaceId !== workspaceId);
+        const removedTaskIds = new Set(
+          (s.taskSummariesByWorkspaceId[workspaceId] ?? []).map((task) => task.id),
+        );
+        for (const thread of removedThreads) {
+          if (thread.taskId) removedTaskIds.add(thread.taskId);
+        }
+        if (removedWorkspace) {
+          const platform = getDesktopPlatformInfo().rawPlatform as NodeJS.Platform;
+          for (const task of Object.values(s.tasksById)) {
+            if (sameWorkspacePath(task.workspacePath, removedWorkspace.path, platform)) {
+              removedTaskIds.add(task.id);
+            }
+          }
+        }
+        for (const [id, summaries] of Object.entries(s.taskSummariesByWorkspaceId)) {
+          if (id === workspaceId) continue;
+          for (const task of summaries) removedTaskIds.delete(task.id);
+        }
+        for (const thread of remainingThreads) {
+          if (thread.taskId) removedTaskIds.delete(thread.taskId);
+        }
         const selectedWorkspaceId =
           s.selectedWorkspaceId === workspaceId
             ? (remainingWorkspaces[0]?.id ?? null)
@@ -278,6 +318,36 @@ export function createWorkspaceActions(
           selectedWorkspaceId,
           selectedThreadId,
           selectedTaskId,
+          workspaceRuntimeById: omitRecordKeys(s.workspaceRuntimeById, [workspaceId]),
+          workspaceExplorerById: omitRecordKeys(s.workspaceExplorerById, [workspaceId]),
+          workspaceExplorerRefreshById: omitRecordKeys(s.workspaceExplorerRefreshById, [
+            workspaceId,
+          ]),
+          threadRuntimeById: omitRecordKeys(s.threadRuntimeById, removedThreadIds),
+          interactionsByThread: omitRecordKeys(s.interactionsByThread, removedThreadIds),
+          latestTodosByThreadId: omitRecordKeys(s.latestTodosByThreadId, removedThreadIds),
+          taskSummariesByWorkspaceId: omitRecordKeys(s.taskSummariesByWorkspaceId, [workspaceId]),
+          taskListLoadingByWorkspaceId: omitRecordKeys(s.taskListLoadingByWorkspaceId, [
+            workspaceId,
+          ]),
+          tasksById: omitRecordKeys(s.tasksById, removedTaskIds),
+          taskLifecycleRequestByTaskId: omitRecordKeys(
+            s.taskLifecycleRequestByTaskId,
+            removedTaskIds,
+          ),
+          agentViewerThreadId:
+            s.agentViewerThreadId && removedThreadIds.has(s.agentViewerThreadId)
+              ? null
+              : s.agentViewerThreadId,
+          lmStudioStartModal:
+            s.lmStudioStartModal?.workspaceId === workspaceId ? null : s.lmStudioStartModal,
+          quickChatPreparedWorkspaceId:
+            s.quickChatPreparedWorkspaceId === workspaceId ? null : s.quickChatPreparedWorkspaceId,
+          newChatLandingTarget:
+            s.newChatLandingTarget?.kind === "project" &&
+            s.newChatLandingTarget.workspaceId === workspaceId
+              ? null
+              : s.newChatLandingTarget,
           newTaskWorkspaceId: s.newTaskWorkspaceId === workspaceId ? null : s.newTaskWorkspaceId,
         };
       });

@@ -158,6 +158,18 @@ export function Canvas({ path }: { path: string }) {
   const [floatingPromptText, setFloatingPromptText] = useState<string>("");
   const [promptError, setPromptError] = useState<string | null>(null);
   const [promptSending, setPromptSending] = useState(false);
+  const promptSubmissionRef = useRef<symbol | null>(null);
+  const promptOwnerRef = useRef({ path, workspaceId: selectedWorkspaceId, selectedThreadId });
+
+  useEffect(() => {
+    promptOwnerRef.current = { path, workspaceId: selectedWorkspaceId, selectedThreadId };
+    promptSubmissionRef.current = null;
+    setPromptSending(false);
+    setPromptError(null);
+    return () => {
+      promptSubmissionRef.current = null;
+    };
+  }, [path, selectedWorkspaceId, selectedThreadId]);
 
   const contentRef = useRef<string>("");
   const isEditingRef = useRef<boolean>(false);
@@ -218,7 +230,7 @@ export function Canvas({ path }: { path: string }) {
 
   useEffect(() => {
     if (isSpreadsheet || isPptx) {
-      void controller.prepareForTransition(null);
+      void controller.close();
       return;
     }
     const workspaceId = activeWorkspace?.id ?? selectedWorkspaceId;
@@ -432,17 +444,16 @@ export function Canvas({ path }: { path: string }) {
         const canvasEl = document.querySelector(".app-canvas");
 
         // Ensure the selection is actually inside our canvas
-        const selectionInCanvas =
-          canvasEl?.contains(activeElement || null) ||
-          (selection.anchorNode && canvasEl?.contains(selection.anchorNode)) ||
-          (selection.focusNode && canvasEl?.contains(selection.focusNode));
+        const selectionInCanvas = canvasEl?.contains(
+          selection.getRangeAt(0).commonAncestorContainer,
+        );
 
         // Let the user edit the prompt box without wiping out the floating menu coordinates.
         if (activeElement && floatingRef.current?.contains(activeElement)) {
           return;
         }
 
-        if (text && (selectionInCanvas || activeTab === "preview")) {
+        if (text && selectionInCanvas) {
           setSelectedText(text);
 
           try {
@@ -479,7 +490,7 @@ export function Canvas({ path }: { path: string }) {
 
     document.addEventListener("selectionchange", handleSelection);
     return () => document.removeEventListener("selectionchange", handleSelection);
-  }, [activeTab, isSpreadsheet, isPptx]);
+  }, [isSpreadsheet, isPptx]);
 
   const clearSelectionState = useCallback(() => {
     setSelectedText("");
@@ -541,9 +552,7 @@ export function Canvas({ path }: { path: string }) {
         const text = selection.toString().trim();
         if (!text) return;
         const canvasEl = document.querySelector(".app-canvas");
-        const inCanvas =
-          (selection.anchorNode && canvasEl?.contains(selection.anchorNode)) ||
-          (selection.focusNode && canvasEl?.contains(selection.focusNode));
+        const inCanvas = canvasEl?.contains(selection.getRangeAt(0).commonAncestorContainer);
         if (!inCanvas) return;
         setSelectedText(text);
         try {
@@ -571,26 +580,56 @@ export function Canvas({ path }: { path: string }) {
 
   const handleSendPrompt = async (explicitPrompt?: string) => {
     const textToSend = (explicitPrompt !== undefined ? explicitPrompt : promptText).trim();
-    if (!textToSend || promptSending) return;
+    if (!textToSend || promptSubmissionRef.current) return;
     if (!selectedThreadId) {
       setPromptError("Please select or start a chat thread to collaborate with the agent.");
       return;
     }
+    const state = controller.getState();
+    const document = state.document;
+    const workspaceId = activeWorkspace?.id ?? selectedWorkspaceId;
+    if (!workspaceId || !document || state.phase !== "ready" || state.requestedPath !== path) {
+      setPromptError("Wait for the document to finish loading before asking the agent.");
+      return;
+    }
+    const submission = Symbol();
+    promptSubmissionRef.current = submission;
+    const ownsSubmission = () => {
+      const owner = promptOwnerRef.current;
+      const currentDocument = controller.getState().document;
+      return (
+        promptSubmissionRef.current === submission &&
+        owner.path === path &&
+        owner.workspaceId === workspaceId &&
+        owner.selectedThreadId === selectedThreadId &&
+        currentDocument?.documentId === document.documentId &&
+        currentDocument.generation === document.generation &&
+        currentDocument.path === document.path
+      );
+    };
     setPromptError(null);
     setPromptSending(true);
 
-    const filename = basenamePath(documentPath);
-    const canvasKind = isMarkdown ? "markdown" : isSlide ? "slide" : "text";
-    const promptWithContext = buildCanvasDocumentPrompt({
-      path: documentPath,
-      fileName: filename,
-      kind: canvasKind,
-      selection: selectedText || null,
-      request: textToSend,
-    });
-
     try {
-      const acknowledged = await sendMessage(promptWithContext);
+      const saved = await controller.flush();
+      if (!ownsSubmission()) return;
+      if (!saved) {
+        setPromptError(
+          "The request was not sent because your changes could not be saved. Resolve the save error or conflict, then try again.",
+        );
+        return;
+      }
+      const promptWithContext = buildCanvasDocumentPrompt({
+        path: document.path,
+        fileName: basenamePath(document.path),
+        kind: isMarkdown ? "markdown" : isSlide ? "slide" : "text",
+        selection: selectedText || null,
+        request: textToSend,
+      });
+      const acknowledged = await sendMessage(promptWithContext, undefined, undefined, undefined, {
+        targetThreadId: selectedThreadId,
+      });
+      if (!ownsSubmission()) return;
       if (!acknowledged) {
         setPromptError(
           "The request was not sent. The chat may be busy, reconnecting, or missing an active session. Try again when it is ready.",
@@ -604,10 +643,14 @@ export function Canvas({ path }: { path: string }) {
       }
       clearSelection();
     } catch (err) {
+      if (!ownsSubmission()) return;
       console.error("Failed to send collaborative edit instructions:", err);
       setPromptError("The request was not sent. Check the chat connection and try again.");
     } finally {
-      setPromptSending(false);
+      if (promptSubmissionRef.current === submission) {
+        promptSubmissionRef.current = null;
+        setPromptSending(false);
+      }
     }
   };
 

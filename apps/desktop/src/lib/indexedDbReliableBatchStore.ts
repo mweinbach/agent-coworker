@@ -579,7 +579,9 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
       ((await requestResult(scopes.get(scope))) as ScopeRecord | undefined) ??
       defaultScopeRecord(scope);
     for (const batch of matching) {
-      if (!batch.items.some(matches)) {
+      // Mixed batches must keep their original payload and idempotency key. The
+      // server's per-thread generation tombstone cancels only the deleted items.
+      if (!batch.items.every(matches)) {
         continue;
       }
       batches.delete([scope, batch.id]);
@@ -595,12 +597,10 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
   }
 
   async close(): Promise<void> {
-    if (!this.databasePromise) {
-      return;
-    }
-    const database = await this.databasePromise;
-    database.close();
+    const opening = this.databasePromise;
     this.databasePromise = null;
+    const database = await opening?.catch(() => null);
+    database?.close();
   }
 
   private async removeOwnedBatch(
@@ -663,10 +663,18 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
   }
 
   private database(): Promise<IDBDatabase> {
-    this.databasePromise ??= new Promise<IDBDatabase>((resolve, reject) => {
+    if (this.databasePromise) {
+      return this.databasePromise;
+    }
+    const opening = new Promise<IDBDatabase>((resolve, reject) => {
       const request = this.factory.open(this.dbName, DB_VERSION);
-      request.onerror = () => reject(request.error ?? new Error("Unable to open IndexedDB"));
-      request.onblocked = () => reject(new Error("IndexedDB upgrade was blocked"));
+      let rejected = false;
+      const fail = (error: Error): void => {
+        rejected = true;
+        reject(error);
+      };
+      request.onerror = () => fail(request.error ?? new Error("Unable to open IndexedDB"));
+      request.onblocked = () => fail(new Error("IndexedDB upgrade was blocked"));
       request.onupgradeneeded = (event) => {
         const database = request.result;
         const oldVersion = (event as IDBVersionChangeEvent).oldVersion;
@@ -699,8 +707,32 @@ export class IndexedDbReliableBatchStore<T> implements ReliableBatchStore<T> {
           }
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const database = request.result;
+        if (rejected) {
+          // A blocked request can still open after its caller has retried.
+          database.close();
+          return;
+        }
+        const invalidate = (): void => {
+          if (this.databasePromise === opening) {
+            this.databasePromise = null;
+          }
+        };
+        database.onversionchange = () => {
+          database.close();
+          invalidate();
+        };
+        database.onclose = invalidate;
+        resolve(database);
+      };
     });
-    return this.databasePromise;
+    this.databasePromise = opening;
+    void opening.catch(() => {
+      if (this.databasePromise === opening) {
+        this.databasePromise = null;
+      }
+    });
+    return opening;
   }
 }

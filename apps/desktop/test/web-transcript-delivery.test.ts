@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { IDBFactory } from "fake-indexeddb";
 import "fake-indexeddb/auto";
 
@@ -98,6 +98,29 @@ function createStore(
   });
 }
 
+function createTestDelivery(
+  factory: IDBFactory,
+  name: string,
+  clock: ManualClock,
+  overrides: Partial<Parameters<typeof createWebTranscriptDelivery>[0]> = {},
+) {
+  const store = createStore(factory, name, clock);
+  const delivery = createWebTranscriptDelivery({
+    scope: name,
+    destination: "http://server/transcript",
+    accessHeaders: () => ({}),
+    fetch: async () => new Response(null, { status: 204 }),
+    indexedDB: factory,
+    createId: createIds(name),
+    now: () => clock.now,
+    schedule: clock.schedule,
+    cancelScheduled: clock.cancel,
+    store,
+    ...overrides,
+  });
+  return { delivery, store };
+}
+
 function eventWithSerializedSize(targetBytes: number): TranscriptBatchInput {
   const template: WebTranscriptBatchInput = {
     ...EVENT,
@@ -133,6 +156,15 @@ async function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatab
     const request = factory.open(name);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+}
+
+async function deleteDatabase(factory: IDBFactory, name: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = factory.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("IndexedDB deletion was blocked"));
   });
 }
 
@@ -715,6 +747,194 @@ describe("web transcript IndexedDB delivery", () => {
     };
     expect(payload.events[0]?.generation).toBe(1);
     await delivery.close();
+  });
+
+  test("preserves an immutable mixed-thread batch when one thread is deleted", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const requests: Array<{ body: string; id: string | null }> = [];
+    const { delivery, store } = createTestDelivery(factory, "delete-mixed-thread", clock, {
+      fetch: async (_input, init) => {
+        requests.push({
+          body: String(init?.body),
+          id: new Headers(init?.headers).get("Idempotency-Key"),
+        });
+        return new Response(null, { status: 204 });
+      },
+    });
+    try {
+      await delivery.append([EVENT, { ...EVENT, threadId: "other-thread" }]);
+      const before = await delivery.snapshot();
+      expect(before).toHaveLength(1);
+      const stats = await store.stats("delete-mixed-thread");
+
+      await delivery.deleteThread(EVENT.threadId);
+
+      expect(await delivery.snapshot()).toEqual(before);
+      expect(await store.stats("delete-mixed-thread")).toEqual(stats);
+      await clock.advance(0);
+      expect(requests).toEqual([
+        {
+          body: JSON.stringify({ batchId: before[0]?.id, events: before[0]?.items }),
+          id: before[0]?.id,
+        },
+      ]);
+      expect(await delivery.snapshot()).toEqual([]);
+    } finally {
+      await delivery.close();
+    }
+  });
+
+  test.each(["same tab", "another tab"])(
+    "does not retry a rejected payload after deletion in %s",
+    async (deletingTab) => {
+      const factory = new IDBFactory();
+      const clock = new ManualClock();
+      const name = `delete-recovery-${deletingTab.replaceAll(" ", "-")}`;
+      const { delivery, store } = createTestDelivery(factory, name, clock);
+      const other = createTestDelivery(factory, name, clock, {
+        createId: createIds("other-owner"),
+      }).delivery;
+      const enqueue = store.enqueue.bind(store);
+      try {
+        await delivery.deleteThread(EVENT.threadId);
+        store.enqueue = async () => {
+          throw new DOMException("quota reached", "QuotaExceededError");
+        };
+        const rejected = await delivery.capture(EVENT);
+        expect(rejected.accepted).toBe(false);
+        if (rejected.accepted) throw new Error("Expected a rejected capture");
+        store.enqueue = enqueue;
+
+        await (deletingTab === "same tab" ? delivery : other).deleteThread(EVENT.threadId);
+
+        await expect(delivery.retry(rejected.recoveryId)).rejects.toThrow("deleted");
+        expect(await delivery.snapshot()).toEqual([]);
+      } finally {
+        await delivery.close();
+        await other.close();
+      }
+    },
+  );
+
+  test.each(["same tab", "another tab"])(
+    "retains unrelated rejected events after deletion in %s",
+    async (deletingTab) => {
+      const factory = new IDBFactory();
+      const clock = new ManualClock();
+      const name = `delete-mixed-recovery-${deletingTab.replaceAll(" ", "-")}`;
+      const { delivery, store } = createTestDelivery(factory, name, clock);
+      const other = createTestDelivery(factory, name, clock, {
+        createId: createIds("other-owner"),
+      }).delivery;
+      const enqueue = store.enqueue.bind(store);
+      const retained = { ...EVENT, threadId: "retained-thread" };
+      try {
+        store.enqueue = async () => {
+          throw new DOMException("quota reached", "QuotaExceededError");
+        };
+        const [rejected] = await delivery.append([EVENT, retained]);
+        expect(rejected?.accepted).toBe(false);
+        if (!rejected || rejected.accepted) throw new Error("Expected a rejected capture");
+        store.enqueue = enqueue;
+
+        await (deletingTab === "same tab" ? delivery : other).deleteThread(EVENT.threadId);
+        await delivery.retry(rejected.recoveryId);
+
+        expect((await delivery.snapshot()).flatMap((batch) => batch.items)).toEqual([
+          { ...retained, generation: 0 },
+        ]);
+      } finally {
+        await delivery.close();
+        await other.close();
+      }
+    },
+  );
+
+  test("retains rejected recovery when its generation check temporarily fails", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const { delivery, store } = createTestDelivery(factory, "retry-generation-read", clock);
+    const enqueue = store.enqueue.bind(store);
+    const getGeneration = store.getGeneration.bind(store);
+    try {
+      await delivery.deleteThread(EVENT.threadId);
+      store.enqueue = async () => {
+        throw new DOMException("quota reached", "QuotaExceededError");
+      };
+      const rejected = await delivery.capture(EVENT);
+      if (rejected.accepted) throw new Error("Expected a rejected capture");
+      store.enqueue = enqueue;
+      store.getGeneration = async () => {
+        throw new Error("generation unavailable");
+      };
+
+      await expect(delivery.retry(rejected.recoveryId)).rejects.toThrow("generation unavailable");
+      store.getGeneration = getGeneration;
+      await delivery.retry(rejected.recoveryId);
+
+      expect((await delivery.snapshot()).flatMap((batch) => batch.items)).toEqual([
+        { ...EVENT, generation: 1 },
+      ]);
+    } finally {
+      await delivery.close();
+    }
+  });
+
+  test("reopens IndexedDB after a temporary open failure", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const store = createStore(factory, "reopen-after-error", clock);
+    const open = spyOn(factory, "open").mockImplementationOnce(() => {
+      throw new DOMException("temporarily unavailable", "UnknownError");
+    });
+    try {
+      await expect(store.stats("scope")).rejects.toThrow("temporarily unavailable");
+      await expect(store.stats("scope")).resolves.toEqual({ batches: 0, events: 0, bytes: 0 });
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      open.mockRestore();
+      await store.close().catch(() => undefined);
+    }
+  });
+
+  test("recovers from a blocked upgrade without leaking the abandoned connection", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const name = "blocked-upgrade-recovery";
+    await seedLegacyOutbox(factory, name);
+    const blocking = await openDatabase(factory, name);
+    const store = createStore(factory, name, clock);
+    try {
+      await expect(store.stats("legacy-scope")).rejects.toThrow("blocked");
+      blocking.close();
+      await settle();
+
+      await expect(store.stats("legacy-scope")).resolves.toEqual({
+        batches: 2,
+        events: 2,
+        bytes: 200,
+      });
+      await store.close();
+      await deleteDatabase(factory, name);
+    } finally {
+      blocking.close();
+      await store.close().catch(() => undefined);
+    }
+  });
+
+  test("closes on versionchange and reopens after database deletion", async () => {
+    const factory = new IDBFactory();
+    const clock = new ManualClock();
+    const name = "versionchange-recovery";
+    const store = createStore(factory, name, clock);
+    try {
+      await store.stats("scope");
+      await deleteDatabase(factory, name);
+      await expect(store.stats("scope")).resolves.toEqual({ batches: 0, events: 0, bytes: 0 });
+    } finally {
+      await store.close();
+    }
   });
 
   test("reports quota failures with recoverable rejected events", async () => {

@@ -1,4 +1,3 @@
-import { canonicalWorkspacePath, sameWorkspacePath } from "@cowork/utils/workspacePath";
 import {
   type ArtifactDiff,
   type ArtifactPreview,
@@ -10,8 +9,6 @@ import {
   type TaskCreationInput,
   type TaskQuestionAnswerInput,
   type TaskQuestionResumeStatus,
-  type TaskRecord,
-  type TaskSummary,
   taskActivitySchema,
   taskArtifactDetailSchema,
   taskArtifactRevisionSchema,
@@ -19,7 +16,6 @@ import {
   taskRecordSchema,
   taskSummarySchema,
 } from "../../../../../src/shared/tasks";
-import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import { createEmptyTaskCreationDraft } from "../creationDrafts";
 import type { AbortableActionOptions, AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import {
@@ -43,7 +39,13 @@ import {
   isThreadNavigationIntentCurrent,
 } from "../store.helpers/operationIntent";
 import { persist } from "../store.helpers/persistence";
-import { isOneOffChatWorkspace, type OperationResult, type ThreadRecord } from "../types";
+import { isOneOffChatWorkspace, type OperationResult } from "../types";
+import {
+  mergeTaskSummaries,
+  upsertTask,
+  workspaceIdForTask,
+  workspacePathsMatch,
+} from "./taskState";
 
 const taskRouterCleanupByWorkspace = new Map<string, () => void>();
 
@@ -101,76 +103,6 @@ function taskLifecycleLabel(method: TaskLifecycleMethod): string {
   }
 }
 
-function workspacePlatform(): NodeJS.Platform {
-  return getDesktopPlatformInfo().rawPlatform as NodeJS.Platform;
-}
-
-function workspacePathsMatch(a: string, b: string): boolean {
-  const platform = workspacePlatform();
-  if (sameWorkspacePath(a, b, platform)) return true;
-  if (platform !== "win32") return false;
-
-  const aCurrentDriveRooted = isCurrentDriveRootedWindowsPath(a);
-  const bCurrentDriveRooted = isCurrentDriveRootedWindowsPath(b);
-  if (aCurrentDriveRooted === bCurrentDriveRooted) return false;
-
-  if (aCurrentDriveRooted) {
-    const drive = windowsDrivePrefix(b);
-    return drive
-      ? sameWorkspacePath(`${drive}${normalizeWindowsSeparators(a)}`, b, platform)
-      : false;
-  }
-
-  const drive = windowsDrivePrefix(a);
-  return drive ? sameWorkspacePath(a, `${drive}${normalizeWindowsSeparators(b)}`, platform) : false;
-}
-
-function normalizeWindowsSeparators(value: string): string {
-  return value.trim().replaceAll("/", "\\");
-}
-
-function isCurrentDriveRootedWindowsPath(value: string): boolean {
-  return /^\\(?!\\)/.test(normalizeWindowsSeparators(value));
-}
-
-function windowsDrivePrefix(value: string): string | null {
-  return /^([a-z]:)\\/.exec(canonicalWorkspacePath(value, "win32"))?.[1] ?? null;
-}
-
-function taskSummary(task: TaskRecord): TaskSummary {
-  return {
-    id: task.id,
-    workspacePath: task.workspacePath,
-    title: task.title,
-    objective: task.objective,
-    status: task.status,
-    revision: task.revision,
-    reviewRequired: task.reviewRequired,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    threadCount: task.threadCount,
-    completedWorkItemCount: task.completedWorkItemCount,
-    totalWorkItemCount: task.totalWorkItemCount,
-    activeBlockerCount: task.activeBlockerCount,
-    pendingQuestionCount: task.pendingQuestionCount,
-    blockingQuestionCount: task.blockingQuestionCount,
-    ...(task.context ? { context: task.context } : {}),
-    ...(task.sourceSessionId !== undefined ? { sourceSessionId: task.sourceSessionId } : {}),
-    ...(task.creationOrigin ? { creationOrigin: task.creationOrigin } : {}),
-    ...(task.reviewRounds !== undefined ? { reviewRounds: task.reviewRounds } : {}),
-  };
-}
-
-function workspaceIdForTask(
-  get: StoreGet,
-  task: Pick<TaskSummary, "workspacePath">,
-): string | null {
-  return (
-    get().workspaces.find((workspace) => workspacePathsMatch(workspace.path, task.workspacePath))
-      ?.id ?? null
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -197,83 +129,6 @@ function parseArtifactPreview(value: unknown): ArtifactPreview {
     throw new Error("Invalid task/artifact/version/preview response");
   }
   return parsed.data;
-}
-
-function synthesizeTaskThreads(
-  get: StoreGet,
-  task: TaskRecord,
-  threadMetadata?: Record<string, unknown>,
-): ThreadRecord[] {
-  const workspaceId = workspaceIdForTask(get, task);
-  if (!workspaceId) return [];
-  return task.threads.map((taskThread) => {
-    const existing = get().threads.find((thread) => thread.id === taskThread.sessionId);
-    const metadata =
-      threadMetadata && threadMetadata.id === taskThread.sessionId ? threadMetadata : null;
-    return {
-      id: taskThread.sessionId,
-      workspaceId,
-      title: taskThread.title,
-      titleSource: existing?.titleSource ?? "manual",
-      createdAt:
-        typeof metadata?.createdAt === "string" ? metadata.createdAt : taskThread.createdAt,
-      lastMessageAt:
-        typeof metadata?.updatedAt === "string"
-          ? metadata.updatedAt
-          : (existing?.lastMessageAt ?? taskThread.updatedAt),
-      status: "active",
-      sessionId: taskThread.sessionId,
-      messageCount:
-        typeof metadata?.messageCount === "number"
-          ? metadata.messageCount
-          : (existing?.messageCount ?? 0),
-      lastEventSeq:
-        typeof metadata?.lastEventSeq === "number"
-          ? metadata.lastEventSeq
-          : (existing?.lastEventSeq ?? 0),
-      draft: false,
-      taskId: task.id,
-      taskThreadId: taskThread.id,
-    };
-  });
-}
-
-function mergeTaskThreads(existing: ThreadRecord[], taskThreads: ThreadRecord[]): ThreadRecord[] {
-  const ids = new Set(taskThreads.map((thread) => thread.id));
-  return [...taskThreads, ...existing.filter((thread) => !ids.has(thread.id))];
-}
-
-function upsertTask(
-  set: StoreSet,
-  get: StoreGet,
-  task: TaskRecord,
-  deps: TaskActionDependencies,
-  metadata?: unknown,
-): void {
-  const workspaceId = workspaceIdForTask(get, task);
-  if (!workspaceId) return;
-  const parsedMetadata =
-    typeof metadata === "object" && metadata !== null
-      ? (metadata as Record<string, unknown>)
-      : undefined;
-  const taskThreads = synthesizeTaskThreads(get, task, parsedMetadata);
-  set((state) => {
-    const summaries = state.taskSummariesByWorkspaceId[workspaceId] ?? [];
-    const nextSummary = taskSummary(task);
-    const nextSummaries = [nextSummary, ...summaries.filter((item) => item.id !== task.id)].sort(
-      (left, right) => right.updatedAt.localeCompare(left.updatedAt),
-    );
-    return {
-      tasksById: { ...state.tasksById, [task.id]: task },
-      taskSummariesByWorkspaceId: {
-        ...state.taskSummariesByWorkspaceId,
-        [workspaceId]: nextSummaries,
-      },
-      threads: mergeTaskThreads(state.threads, taskThreads),
-      taskError: null,
-    };
-  });
-  for (const thread of taskThreads) deps.ensureThreadRuntime(get, set, thread.id);
 }
 
 function ensureTaskRouter(
@@ -365,7 +220,7 @@ function ensureTaskRouter(
       const activity = parsedActivity.data;
       const next = {
         ...current,
-        updatedAt: activity.createdAt,
+        updatedAt: activity.createdAt > current.updatedAt ? activity.createdAt : current.updatedAt,
         activity: [activity, ...current.activity.filter((item) => item.id !== activity.id)],
       };
       upsertTask(set, get, next, deps);
@@ -461,6 +316,8 @@ export function createTaskActions(
   | "acceptTaskArtifactVersion"
   | "startTaskArtifactRevision"
 > {
+  const taskListRequests = new Map<string, symbol>();
+
   const setTaskCreationError = (revision: number, message: string | null): boolean => {
     let applied = false;
     set((state) => {
@@ -646,15 +503,26 @@ export function createTaskActions(
     },
 
     refreshTasks: async (workspaceId, options = {}) => {
-      const isCurrent = () => options.signal?.aborted !== true;
-      if (!isCurrent()) return;
+      if (options.signal?.aborted) return;
       if (get().desktopFeatureFlags.tasks !== true) return;
       const resolvedWorkspaceId = workspaceId ?? get().selectedWorkspaceId;
       const workspace = resolvedWorkspaceId
         ? get().workspaces.find((item) => item.id === resolvedWorkspaceId)
         : null;
       if (!resolvedWorkspaceId || !workspace) return;
-      if (!isCurrent()) return;
+      const request = Symbol();
+      const summariesBeforeRequest = new Map(
+        (get().taskSummariesByWorkspaceId[resolvedWorkspaceId] ?? []).map((task) => [
+          task.id,
+          task,
+        ]),
+      );
+      taskListRequests.set(resolvedWorkspaceId, request);
+      const ownsRequest = () => taskListRequests.get(resolvedWorkspaceId) === request;
+      const isCurrent = () =>
+        ownsRequest() &&
+        options.signal?.aborted !== true &&
+        get().workspaces.some((item) => item.id === resolvedWorkspaceId);
       set((state) => ({
         taskListLoadingByWorkspaceId: {
           ...state.taskListLoadingByWorkspaceId,
@@ -664,35 +532,45 @@ export function createTaskActions(
       try {
         await ensureTaskTransport(get, set, resolvedWorkspaceId, deps, options);
         if (!isCurrent()) return;
-        const result = await deps.requestJsonRpc(get, set, resolvedWorkspaceId, "task/list", {
-          cwd: workspace.path,
-        });
+        const result = await deps.requestJsonRpc(
+          get,
+          set,
+          resolvedWorkspaceId,
+          "task/list",
+          { cwd: workspace.path },
+          options,
+        );
         if (!isCurrent()) return;
-        const values = Array.isArray(result?.tasks) ? result.tasks : [];
-        const tasks = values.flatMap((value: unknown) => {
-          const parsed = taskSummarySchema.safeParse(value);
-          return parsed.success ? [parsed.data] : [];
-        });
+        const parsed = taskSummarySchema.array().safeParse(result?.tasks);
+        if (!parsed.success) throw new Error("Invalid task/list response");
         set((state) => ({
           taskSummariesByWorkspaceId: {
             ...state.taskSummariesByWorkspaceId,
-            [resolvedWorkspaceId]: tasks,
-          },
-          taskListLoadingByWorkspaceId: {
-            ...state.taskListLoadingByWorkspaceId,
-            [resolvedWorkspaceId]: false,
+            [resolvedWorkspaceId]: mergeTaskSummaries(
+              state.taskSummariesByWorkspaceId[resolvedWorkspaceId] ?? [],
+              parsed.data,
+              summariesBeforeRequest,
+            ),
           },
           taskError: null,
         }));
       } catch (error) {
         if (!isCurrent()) return;
-        set((state) => ({
-          taskListLoadingByWorkspaceId: {
-            ...state.taskListLoadingByWorkspaceId,
-            [resolvedWorkspaceId]: false,
-          },
-        }));
         notifyError(set, "Unable to load tasks", error);
+      } finally {
+        if (ownsRequest()) {
+          taskListRequests.delete(resolvedWorkspaceId);
+          set((state) =>
+            state.workspaces.some((item) => item.id === resolvedWorkspaceId)
+              ? {
+                  taskListLoadingByWorkspaceId: {
+                    ...state.taskListLoadingByWorkspaceId,
+                    [resolvedWorkspaceId]: false,
+                  },
+                }
+              : {},
+          );
+        }
       }
     },
 
@@ -778,7 +656,8 @@ export function createTaskActions(
     selectTask: async (taskId, options = {}) => {
       const isCurrent = () => options.signal?.aborted !== true;
       if (!isCurrent()) return;
-      invalidateNavigationIntent();
+      const selectionIntent = beginCreationOperationIntent();
+      const canNavigate = () => isCurrent() && isCreationNavigationIntentCurrent(selectionIntent);
       if (get().desktopFeatureFlags.tasks !== true) return;
       const summaryEntry = Object.entries(get().taskSummariesByWorkspaceId).find(([, tasks]) =>
         tasks.some((task) => task.id === taskId),
@@ -792,17 +671,21 @@ export function createTaskActions(
       try {
         await ensureTaskTransport(get, set, workspaceId, deps, options);
         if (!isCurrent()) return;
-        const result = await deps.requestJsonRpc(get, set, workspaceId, "task/read", {
-          cwd: workspace.path,
-          taskId,
-        });
+        const result = await deps.requestJsonRpc(
+          get,
+          set,
+          workspaceId,
+          "task/read",
+          { cwd: workspace.path, taskId },
+          options,
+        );
         if (!isCurrent()) return;
         const parsed = taskRecordSchema.safeParse(result?.task);
         if (!parsed.success) throw new Error("Task was not found");
         if (!isCurrent()) return;
         upsertTask(set, get, parsed.data, deps);
-        const mainThread = parsed.data.threads[0];
-        if (!isCurrent()) return;
+        const mainThread = (get().tasksById[taskId] ?? parsed.data).threads[0];
+        if (!canNavigate()) return;
         set({
           selectedWorkspaceId: workspaceId,
           selectedTaskId: taskId,
@@ -817,12 +700,12 @@ export function createTaskActions(
             refreshSnapshot: true,
             signal: options.signal,
           });
-          if (!isCurrent()) return;
+          if (!canNavigate()) return;
         }
-        if (!isCurrent()) return;
+        if (!canNavigate()) return;
         deps.syncDesktopStateCache(get);
       } catch (error) {
-        if (!isCurrent()) return;
+        if (!canNavigate()) return;
         notifyError(set, "Unable to open task", error);
       }
     },
@@ -1066,6 +949,7 @@ export function createTaskActions(
         errorTitle: "Artifact revision not started",
         errorMessage: "Unable to start artifact revision.",
         execute: async () => {
+          const operationIntent = beginCreationOperationIntent();
           if (get().desktopFeatureFlags.tasks !== true) {
             throw new Error("Task mode is not enabled.");
           }
@@ -1104,16 +988,18 @@ export function createTaskActions(
             throw new Error("Artifact revision did not return its focused task thread");
           }
           upsertTask(set, get, parsedTask.data, deps, thread);
-          set({
-            selectedWorkspaceId: context.workspaceId,
-            selectedTaskId: taskId,
-            selectedThreadId: thread.id,
-            view: "task",
-          });
-          await get().reconnectThread(thread.id, undefined, {
-            skipWorkspaceSelect: true,
-            refreshSnapshot: true,
-          });
+          if (isCreationNavigationIntentCurrent(operationIntent)) {
+            set({
+              selectedWorkspaceId: context.workspaceId,
+              selectedTaskId: taskId,
+              selectedThreadId: thread.id,
+              view: "task",
+            });
+            await get().reconnectThread(thread.id, undefined, {
+              skipWorkspaceSelect: true,
+              refreshSnapshot: true,
+            });
+          }
           deps.syncDesktopStateCache(get);
           return detail;
         },

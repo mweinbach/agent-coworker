@@ -17,6 +17,7 @@ import {
 import {
   clearFailedMutationSend,
   clearMutationPending,
+  createDetailRequestTracker,
   dismissMutationError,
   managementWorkspaceIdFor,
   mutationPendingKey,
@@ -51,6 +52,7 @@ export function createPluginActions(
   | "updatePlugin"
   | "dismissPluginMutationError"
 > {
+  const beginDetailRequest = createDetailRequestTracker(get);
   const resolvePluginScopeForMutation = (
     workspaceId: string,
     pluginId: string,
@@ -93,13 +95,13 @@ export function createPluginActions(
     pluginId: string,
     scope?: PluginSelection["scope"],
   ) => {
+    const workspaceId = managementWorkspaceIdFor(get);
     return await runAcknowledgedOperation(get, set, {
-      key: operationKey("plugin", action, scope ?? "resolved", pluginId),
+      key: operationKey("plugin", action, scope ?? "resolved", pluginId, workspaceId),
       label: `${action[0]?.toUpperCase() ?? ""}${action.slice(1)} plugin`,
       errorTitle: `Plugin ${action} failed`,
       errorMessage: `Unable to ${action} plugin.`,
       execute: async () => {
-        const workspaceId = managementWorkspaceIdFor(get);
         if (!workspaceId) throw new Error("Select a workspace first.");
         const cwd = workspacePathFor(get, workspaceId);
         const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
@@ -209,6 +211,10 @@ export function createPluginActions(
     selectPlugin: async (pluginId: string | null, scope?: PluginSelection["scope"] | null) => {
       const workspaceId = managementWorkspaceIdFor(get);
       if (!workspaceId) return;
+      const requestIsCurrent = beginDetailRequest(workspaceId);
+      const isCurrent = () =>
+        requestIsCurrent() &&
+        get().workspaceRuntimeById[workspaceId]?.selectedPluginId === pluginId;
       if (pluginId === null) {
         set((s) => ({
           workspaceRuntimeById: {
@@ -218,6 +224,8 @@ export function createPluginActions(
               selectedPluginId: null,
               selectedPluginScope: null,
               selectedPlugin: null,
+              pluginsLoading: false,
+              pluginsError: null,
             },
           },
         }));
@@ -250,9 +258,9 @@ export function createPluginActions(
           ...(resolvedScope ? { scope: resolvedScope } : {}),
         },
         undefined,
-        { requiredEventType: "plugin_detail" },
+        { requiredEventType: "plugin_detail", shouldApplyEvent: isCurrent },
       );
-      if (!ok) {
+      if (!ok && isCurrent()) {
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -308,8 +316,9 @@ export function createPluginActions(
     },
 
     installPlugins: async (sourceInput: string, targetScope: "workspace" | "user") => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("plugin", "install"),
+        key: operationKey("plugin", "install", workspaceId),
         label: "Install plugin",
         errorTitle: "Plugin not installed",
         errorMessage: "Unable to install plugin.",
@@ -317,7 +326,6 @@ export function createPluginActions(
         execute: async () => {
           const normalizedSource = sourceInput.trim();
           if (!normalizedSource) throw new Error("Enter a plugin source.");
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) throw new Error("Select a workspace first.");
           const cwd = workspacePathFor(get, workspaceId);
           const key = pluginPendingKey(`install:${targetScope}`);
@@ -430,13 +438,13 @@ export function createPluginActions(
     },
 
     updatePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("plugin", "update", scope ?? "resolved", pluginId),
+        key: operationKey("plugin", "update", scope ?? "resolved", pluginId, workspaceId),
         label: "Update plugin",
         errorTitle: "Plugin not updated",
         errorMessage: "Unable to update plugin.",
         execute: async () => {
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) throw new Error("Select a workspace first.");
           const cwd = workspacePathFor(get, workspaceId);
           const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);

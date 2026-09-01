@@ -370,6 +370,82 @@ describe("control socket plugin catalog events", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
   });
 
+  for (const selection of [
+    { id: "new-plugin", scope: "workspace" },
+    { id: "old-plugin", scope: "user" },
+    { id: null, scope: null },
+  ]) {
+    for (const missing of [false, true]) {
+      test(`ignores ${missing ? "missing" : "stale"} plugin details for selection ${selection.id}:${selection.scope}`, async () => {
+        const workspaceId = "ws-stale-plugin-detail";
+        const { state, get, set } = createState(workspaceId);
+        const runtime = state.workspaceRuntimeById[workspaceId];
+        runtime.selectedPluginId = selection.id;
+        runtime.selectedPluginScope = selection.scope;
+        runtime.pluginsLoading = true;
+        const currentRuntime = { ...runtime };
+        installFakeSocket(workspaceId, async () => ({
+          event: {
+            type: "plugin_detail",
+            sessionId: "jsonrpc-control",
+            plugin: missing
+              ? null
+              : {
+                  id: "old-plugin",
+                  name: "old-plugin",
+                  displayName: "Old Plugin",
+                  description: "",
+                  scope: "workspace",
+                  discoveryKind: "direct",
+                  installed: true,
+                  enabled: true,
+                  rootDir: "/tmp/workspace/plugins/old-plugin",
+                  skills: [],
+                  mcpServers: [],
+                  apps: [],
+                  warnings: [],
+                },
+          },
+        }));
+        const helpers = createControlSocketHelpers(deps);
+
+        await helpers.requestJsonRpcControlEvent(
+          get as never,
+          set as never,
+          workspaceId,
+          "cowork/plugins/read",
+          { pluginId: "old-plugin", scope: "workspace" },
+        );
+
+        expect(state.workspaceRuntimeById[workspaceId]).toEqual(currentRuntime);
+      });
+    }
+  }
+
+  test("a missing selected plugin clears only the matching detail request", async () => {
+    const workspaceId = "ws-missing-selected-plugin";
+    const { state, get, set } = createState(workspaceId);
+    const runtime = state.workspaceRuntimeById[workspaceId];
+    runtime.selectedPluginId = "removed-plugin";
+    runtime.selectedPluginScope = "workspace";
+    runtime.pluginsLoading = true;
+    installFakeSocket(workspaceId, async () => ({
+      event: { type: "plugin_detail", sessionId: "jsonrpc-control", plugin: null },
+    }));
+    const helpers = createControlSocketHelpers(deps);
+
+    await helpers.requestJsonRpcControlEvent(
+      get as never,
+      set as never,
+      workspaceId,
+      "cowork/plugins/read",
+      { pluginId: "removed-plugin", scope: "workspace" },
+    );
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+  });
+
   test("control notifications apply background plugin refresh events", async () => {
     const workspaceId = "ws-control-notification";
     const { state, get, set } = createState(workspaceId, {

@@ -43,6 +43,7 @@ export function createHandlersModule(
     evt: SessionEvent,
     pendingFirstMessage?: string,
     pendingFirstMessageQueued = false,
+    options?: { recordEventSequence?: boolean },
   ) {
     if (evt.type !== "server_hello") {
       const activeSessionId = get().threadRuntimeById[threadId]?.sessionId;
@@ -54,7 +55,11 @@ export function createHandlersModule(
     ctx.deps.appendThreadTranscript(threadId, "server", evt);
     const batchedContentEvent =
       evt.type === "model_stream_chunk" || evt.type === "model_stream_raw";
-    if (batchedContentEvent) {
+    if (options?.recordEventSequence === false) {
+      // Reconstructed reconnect metadata is not another persisted server event.
+      // Counting it would make the following authoritative snapshot look stale.
+      if (!batchedContentEvent) moduleContext.flushPendingContentForThread(set, threadId);
+    } else if (batchedContentEvent) {
       moduleContext.recordPendingThreadEvent(get, set, threadId);
     } else {
       moduleContext.flushPendingContentForThread(set, threadId);

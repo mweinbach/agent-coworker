@@ -1,3 +1,6 @@
+import type { ReadStream } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { Readable } from "node:stream";
 import type * as Electron from "electron";
 
 import { hostPlatform } from "../../../../src/platform/host";
@@ -6,8 +9,8 @@ import {
   type PathStyle,
   resolve as resolvePathString,
   styleFor,
-  toFileUrl,
 } from "../../../../src/platform/pathString";
+import { openAuthorizedFile } from "../../../../src/utils/filePreviewRead";
 import {
   DESKTOP_MEDIA_PROTOCOL_SCHEME,
   decodeDesktopMediaUrl,
@@ -109,44 +112,152 @@ export function registerDesktopMediaSchemePrivileges(protocol: Electron.Protocol
   ]);
 }
 
+type MediaByteRange = { start: number; end: number };
+
+const MEDIA_STREAM_BUFFER_BYTES = 64 * 1024;
+
+function parseMediaByteRange(
+  header: string | null,
+  size: number,
+): MediaByteRange | "unsatisfiable" | undefined {
+  if (!header) return undefined;
+  // Unsupported units, malformed ranges, and multipart requests fall back to
+  // the complete representation, as permitted for an ignored Range header.
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return undefined;
+  if (size === 0) return "unsatisfiable";
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (suffixLength === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  if (start >= size || start > end) return "unsatisfiable";
+  return { start, end };
+}
+
+async function createMediaFileResponse(
+  request: Request,
+  absPath: string,
+  handle: FileHandle,
+  size: number,
+): Promise<Response> {
+  let stream: ReadStream | undefined;
+  try {
+    // No entity validator is emitted for mutable workspace files, so an
+    // If-Range condition cannot match: serve the complete representation.
+    const range =
+      request.method === "GET" && !request.headers.has("If-Range")
+        ? parseMediaByteRange(request.headers.get("Range"), size)
+        : undefined;
+    const headers = new Headers({
+      "Content-Type": desktopMediaMimeType(absPath),
+      "Cache-Control": "no-cache",
+      "Accept-Ranges": "bytes",
+    });
+    if (range === "unsatisfiable") {
+      headers.set("Content-Range", `bytes */${size}`);
+      headers.set("Content-Length", "0");
+      return new Response(null, { status: 416, headers });
+    }
+
+    const start = range?.start ?? 0;
+    const end = range?.end ?? size - 1;
+    headers.set("Content-Length", String(end - start + 1));
+    if (range) {
+      headers.set("Content-Range", `bytes ${start}-${end}/${size}`);
+    }
+    const status = range ? 206 : 200;
+    if (request.method === "HEAD" || size === 0) {
+      return new Response(null, { status, headers });
+    }
+
+    // Stream the authorized descriptor, never reopen its pathname. Both stream
+    // queues are byte-bounded so a stalled renderer cannot buffer a whole image.
+    stream = handle.createReadStream({
+      start,
+      end,
+      highWaterMark: MEDIA_STREAM_BUFFER_BYTES,
+      autoClose: true,
+      signal: request.signal,
+    });
+    const source = Readable.toWeb(stream, {
+      strategy: {
+        highWaterMark: MEDIA_STREAM_BUFFER_BYTES,
+        size: (chunk: Uint8Array) => chunk.byteLength,
+      },
+    });
+    // Adapt the default reader, not incompatible Node/DOM BYOB reader types.
+    // The outer stream has no queue and passes each byte chunk without copying.
+    const reader = source.getReader();
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          try {
+            const next = await reader.read();
+            if (cancelled) return;
+            if (next.done) {
+              controller.close();
+              reader.releaseLock();
+            } else {
+              controller.enqueue(next.value);
+            }
+          } catch (error) {
+            reader.releaseLock();
+            throw error;
+          }
+        },
+        async cancel(reason) {
+          cancelled = true;
+          try {
+            await reader.cancel(reason);
+          } finally {
+            reader.releaseLock();
+          }
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(body, { status, headers });
+  } catch (error) {
+    stream?.destroy();
+    throw error;
+  } finally {
+    // Once created, the stream owns the descriptor, including errors, aborted
+    // requests, and response-body cancellation. Bodyless responses close here.
+    if (!stream) await handle.close();
+  }
+}
+
 export function registerDesktopMediaProtocolHandler(
   protocol: Electron.Protocol,
-  net: typeof Electron.net,
   workspaceRoots: DesktopMediaWorkspaceRoots,
 ): void {
   const hostPathAdapter = hostDesktopMediaPathAdapter();
   protocol.handle(DESKTOP_MEDIA_PROTOCOL_SCHEME, async (request) => {
-    let absPath: string | null = null;
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
+    }
     try {
       await workspaceRoots.ensureApprovedWorkspaceRoots();
-      absPath = resolveDesktopMediaRequestPath(
+      const absPath = resolveDesktopMediaRequestPath(
         request.url,
         workspaceRoots.getApprovedWorkspaceRoots(),
         hostPathAdapter,
       );
-    } catch {
-      absPath = null;
-    }
-    if (!absPath) {
-      return new Response("Not found", { status: 404 });
-    }
-    try {
-      if (absolutePathStyle(absPath) !== hostPathAdapter.style) {
-        return new Response("Not found", { status: 404 });
+      if (!absPath || absolutePathStyle(absPath) !== hostPathAdapter.style) {
+        return new Response(request.method === "HEAD" ? null : "Not found", { status: 404 });
       }
-      const fileResponse = await net.fetch(toFileUrl(absPath, hostPathAdapter.style));
-      if (!fileResponse.ok) {
-        return new Response("Not found", { status: 404 });
-      }
-      return new Response(fileResponse.body, {
-        status: 200,
-        headers: {
-          "Content-Type": desktopMediaMimeType(absPath),
-          "Cache-Control": "no-cache",
-        },
+      const { handle, stat } = await openAuthorizedFile(absPath, {
+        expectedCanonicalPath: absPath,
       });
+      return await createMediaFileResponse(request, absPath, handle, stat.size);
     } catch {
-      return new Response("Not found", { status: 404 });
+      return new Response(request.method === "HEAD" ? null : "Not found", { status: 404 });
     }
   });
 }

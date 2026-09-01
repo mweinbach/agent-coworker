@@ -9,6 +9,7 @@ import type * as Electron from "electron";
 
 import { DirectoryListingCoordinator } from "../../../../src/filesystem/directoryListingCoordinator";
 import type { WorkspaceFileChangeEvent as DirectoryWorkspaceFileChangeEvent } from "../../../../src/filesystem/workspaceFileEvents";
+import { canonicalizeSync } from "../../../../src/platform/paths";
 import { MAX_ATTACHMENT_UPLOAD_BYTE_SIZE } from "../../../../src/shared/attachments";
 import type { WorkspaceFileChangeEvent as PreviewFileChangeEvent } from "../../../../src/shared/fileVersion";
 import { isPathInside, resolvePathInsideRootForBoundaryCheck } from "../../../../src/utils/paths";
@@ -57,13 +58,16 @@ import {
 } from "../../src/lib/desktopSchemas";
 import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import { isExplorerEntryHidden } from "../services/explorerVisibility";
+import { createFileEntryRenamer } from "../services/fileEntryRename";
 import {
   DEFAULT_PREVIEW_MAX_BYTES,
+  fileChangeVersionFromStat,
   readCappedFilePreview,
   readFileChangeVersion,
 } from "../services/filePreviewRead";
 import {
   resolveAllowedDirectoryPath,
+  resolveAllowedEntryPath,
   resolveAllowedPath,
   resolveAllowedRevealPath,
 } from "../services/ipcSecurity";
@@ -171,7 +175,7 @@ async function readUploadSourceIdentity(sourcePath: string): Promise<AuthorizedU
 async function readExternalFileIdentity(
   requestedPath: string,
 ): Promise<{ identity: AuthorizedUploadSource; path: string }> {
-  const resolvedPath = await fs.realpath(path.resolve(requestedPath));
+  const resolvedPath = canonicalizeSync(requestedPath);
   const stat = await fs.stat(resolvedPath);
   if (!stat.isFile()) {
     throw new Error("Path is not a file");
@@ -253,6 +257,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     readDirectory: async (input) => await readExplorerDirectory(input.path, input.includeHidden),
   });
   const directoryWatcher = new WorkspaceDirectoryWatcher();
+  const renameEntry = createFileEntryRenamer();
   const destroyListenerBySenderId = new Set<number>();
 
   const invalidateWorkspaceFileChange = (event: DirectoryWorkspaceFileChangeEvent): void => {
@@ -470,16 +475,24 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     const input = parseWithSchema(readFileInputSchema, args, "readFile options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
-    const stat = await fs.stat(safePath);
-    if (!stat.isFile()) {
-      throw new Error("Path is not a file");
-    }
-    if (stat.size > MAX_READ_FILE_BYTES) {
+    const snapshot = await readCappedFilePreview(safePath, MAX_READ_FILE_BYTES + 1, {
+      expectedCanonicalPath: safePath,
+    });
+    if (snapshot.version.size > MAX_READ_FILE_BYTES) {
       throw new Error(
-        `File is too large to read fully (${stat.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
+        `File is too large to read fully (${snapshot.version.size} bytes exceeds ${MAX_READ_FILE_BYTES} bytes).`,
       );
     }
-    return { content: await fs.readFile(safePath, "utf8") };
+    if (snapshot.truncated) {
+      throw new Error("The complete file could not be read. Try again.");
+    }
+    return {
+      content: Buffer.from(
+        snapshot.bytes.buffer,
+        snapshot.bytes.byteOffset,
+        snapshot.bytes.byteLength,
+      ).toString("utf8"),
+    };
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.writeFile, async (event, args: WriteFileInput) => {
@@ -505,7 +518,9 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
       );
       await workspaceRoots.ensureApprovedWorkspaceRoots();
       const safePath = await resolveAllowedPreviewOrOpenPath(event, input.path);
-      return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
+      return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES, {
+        expectedCanonicalPath: safePath,
+      });
     },
   );
 
@@ -676,10 +691,10 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const roots = workspaceRoots.getApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(roots, input.path);
+    const safePath = resolveAllowedEntryPath(roots, input.path);
     const targetPath = path.join(path.dirname(safePath), input.newName);
-    resolveAllowedPath(roots, targetPath);
-    await fs.rename(safePath, targetPath);
+    resolveAllowedEntryPath(roots, targetPath);
+    await renameEntry(safePath, targetPath);
     directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));
     directoryListings.invalidatePathAcrossWorkspaces(safePath, true);
     directoryListings.invalidatePathAcrossWorkspaces(targetPath, true);
@@ -691,14 +706,17 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): () => void {
     sendPreviewFileChanged(event, {
       kind: "changed",
       path: targetPath,
-      version: await readFileChangeVersion(targetPath),
+      version: fileChangeVersionFromStat(await fs.lstat(targetPath)),
     });
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (event, args: TrashPathInput) => {
     const input = parseWithSchema(trashPathInputSchema, args, "trashPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = resolveAllowedEntryPath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.path,
+    );
     try {
       await shell.trashItem(safePath);
       directoryListings.invalidatePathAcrossWorkspaces(path.dirname(safePath));

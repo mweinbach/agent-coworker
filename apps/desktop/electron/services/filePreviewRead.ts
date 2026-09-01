@@ -1,5 +1,6 @@
 export {
   type CappedFilePreview,
+  fileChangeVersionFromStat,
   readCappedFilePreview,
   readFileChangeVersion,
 } from "../../../../src/utils/filePreviewRead";

@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { pinHome } from "../../../test/helpers/platform";
+import {
+  applyElectronUserDataDirOverride,
+  ELECTRON_USER_DATA_DIR_ENV,
+} from "../electron/services/userDataOverride";
 import { createEmptyTaskCreationDraft } from "../src/app/creationDrafts";
 import { isStandardChatThread } from "../src/app/threadFilters";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
@@ -12,6 +16,7 @@ import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElec
 let userDataDir = "";
 let appDataDir = "";
 let restoreHome: (() => void) | null = null;
+let originalUserDataOverride: string | undefined;
 const oneOffTestDirs: string[] = [];
 
 const electronMockOverrides = {
@@ -42,6 +47,8 @@ const TS = "2024-01-01T00:00:00.000Z";
 
 describe("desktop persistence state validation", () => {
   beforeEach(() => {
+    originalUserDataOverride = process.env[ELECTRON_USER_DATA_DIR_ENV];
+    delete process.env[ELECTRON_USER_DATA_DIR_ENV];
     setElectronMockOverrides(electronMockOverrides);
   });
 
@@ -53,6 +60,11 @@ describe("desktop persistence state validation", () => {
   });
 
   afterEach(async () => {
+    if (originalUserDataOverride === undefined) {
+      delete process.env[ELECTRON_USER_DATA_DIR_ENV];
+    } else {
+      process.env[ELECTRON_USER_DATA_DIR_ENV] = originalUserDataOverride;
+    }
     if (!appDataDir) {
       return;
     }
@@ -63,6 +75,75 @@ describe("desktop persistence state validation", () => {
     restoreHome = null;
     userDataDir = "";
     appDataDir = "";
+  });
+
+  test("updateState serializes read-modify-write and committed callbacks", async () => {
+    const persistence = new PersistenceService();
+    let releaseFirst!: () => void;
+    const firstMayFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstCommitted!: () => void;
+    const firstCommitted = new Promise<void>((resolve) => {
+      markFirstCommitted = resolve;
+    });
+    let secondEntered = false;
+    const first = persistence.updateState(
+      (state) => ({ ...state, developerMode: true }),
+      async (committed) => {
+        expect(committed.developerMode).toBe(true);
+        markFirstCommitted();
+        await firstMayFinish;
+      },
+    );
+    await firstCommitted;
+    const second = persistence.updateState((state) => {
+      secondEntered = true;
+      expect(state.developerMode).toBe(true);
+      return { ...state, showHiddenFiles: true };
+    });
+    await Promise.resolve();
+    expect(secondEntered).toBe(false);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    const saved = await persistence.loadState();
+    expect(saved.developerMode).toBe(true);
+    expect(saved.showHiddenFiles).toBe(true);
+  });
+
+  test("updateState returns and applies the canonical committed state", async () => {
+    const persistence = new PersistenceService();
+    const applied: unknown[] = [];
+    const committed = await persistence.updateState(
+      (state) => ({
+        ...state,
+        desktopSettings: { quickChat: { shortcutEnabled: "invalid" } } as never,
+      }),
+      (state) => {
+        applied.push(state);
+      },
+    );
+
+    expect(committed).toEqual(await persistence.loadState());
+    expect(applied).toEqual([committed]);
+    expect(committed.desktopSettings?.quickChat?.shortcutEnabled).toBe(false);
+  });
+
+  test("failed state updates do not apply callbacks or poison subsequent updates", async () => {
+    const persistence = new PersistenceService();
+    const apply = mock(() => {});
+    await expect(
+      persistence.updateState(() => {
+        throw new Error("update failed");
+      }, apply),
+    ).rejects.toThrow("update failed");
+    expect(apply).not.toHaveBeenCalled();
+    const committed = await persistence.updateState((state) => ({
+      ...state,
+      developerMode: true,
+    }));
+    expect(committed.developerMode).toBe(true);
   });
 
   test("saveState skips invalid workspaces and orphan threads instead of failing", async () => {
@@ -1572,68 +1653,115 @@ describe("desktop persistence state validation", () => {
     expect(transcript[1]?.direction).toBe("client");
   });
 
-  test("loadState migrates legacy desktop user data into Cowork on first access", async () => {
-    const persistence = new PersistenceService();
+  test("an explicit dev/test profile does not import or move legacy desktop data", async () => {
     const legacyDir = path.join(appDataDir, "desktop");
-    const legacyWorkspace = path.join(legacyDir, "workspace-from-legacy");
-    const legacyTranscriptDir = path.join(legacyDir, "transcripts");
-    await fs.mkdir(legacyWorkspace, { recursive: true });
-    await fs.mkdir(legacyTranscriptDir, { recursive: true });
+    const legacyEntries = [
+      [
+        "state.json",
+        JSON.stringify({ version: 2, workspaces: [], threads: [], developerMode: true }),
+      ],
+      [
+        path.join("transcripts", "thread_legacy.jsonl"),
+        `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
+      ],
+      [path.join("logs", "server.log"), "legacy server log\n"],
+    ] as const;
+    for (const [relativePath, content] of legacyEntries) {
+      const legacyPath = path.join(legacyDir, relativePath);
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, content);
+    }
 
-    await fs.writeFile(
-      path.join(legacyDir, "state.json"),
-      JSON.stringify(
-        {
-          version: 2,
-          workspaces: [
-            {
-              id: "ws_legacy",
-              name: "Legacy workspace",
-              path: legacyWorkspace,
-              createdAt: TS,
-              lastOpenedAt: TS,
-              defaultEnableMcp: true,
-              yolo: false,
-            },
-          ],
-          threads: [
-            {
-              id: "thread_legacy",
-              workspaceId: "ws_legacy",
-              title: "Legacy thread",
-              createdAt: TS,
-              lastMessageAt: TS,
-              status: "active",
-              sessionId: null,
-              lastEventSeq: 0,
-            },
-          ],
-          developerMode: false,
-          showHiddenFiles: false,
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(legacyTranscriptDir, "thread_legacy.jsonl"),
-      `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
-      "utf8",
-    );
+    process.env[ELECTRON_USER_DATA_DIR_ENV] = `  ${path.join(appDataDir, "isolated-profile")}  `;
+    applyElectronUserDataDirOverride({
+      isPackaged: false,
+      setPath: (_name, value) => {
+        userDataDir = value;
+      },
+    });
 
+    const persistence = new PersistenceService();
     const loaded = await persistence.loadState();
-    const transcript = await persistence.readTranscript("thread_legacy");
+    expect(loaded.developerMode).toBe(false);
+    expect(await persistence.readTranscript("thread_legacy")).toEqual([]);
+    for (const [relativePath, content] of legacyEntries) {
+      expect(await fs.readFile(path.join(legacyDir, relativePath), "utf8")).toBe(content);
+      await expect(fs.stat(path.join(userDataDir, relativePath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
 
-    expect(loaded.workspaces).toHaveLength(1);
-    expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
-    expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
-    expect(transcript).toHaveLength(1);
-    expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain(
-      '"ws_legacy"',
-    );
-    expect(
-      await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8"),
-    ).toContain('"thread_legacy"');
+    await persistence.saveState({ ...loaded, showHiddenFiles: true });
+    expect((await persistence.loadState()).showHiddenFiles).toBe(true);
+    expect(await fs.readFile(path.join(legacyDir, "state.json"), "utf8")).toBe(legacyEntries[0][1]);
   });
+
+  test.each([undefined, "  "])(
+    "loadState migrates legacy desktop user data with override %p",
+    async (override) => {
+      if (override !== undefined) process.env[ELECTRON_USER_DATA_DIR_ENV] = override;
+      const persistence = new PersistenceService();
+      const legacyDir = path.join(appDataDir, "desktop");
+      const legacyWorkspace = path.join(legacyDir, "workspace-from-legacy");
+      const legacyTranscriptDir = path.join(legacyDir, "transcripts");
+      await fs.mkdir(legacyWorkspace, { recursive: true });
+      await fs.mkdir(legacyTranscriptDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(legacyDir, "state.json"),
+        JSON.stringify(
+          {
+            version: 2,
+            workspaces: [
+              {
+                id: "ws_legacy",
+                name: "Legacy workspace",
+                path: legacyWorkspace,
+                createdAt: TS,
+                lastOpenedAt: TS,
+                defaultEnableMcp: true,
+                yolo: false,
+              },
+            ],
+            threads: [
+              {
+                id: "thread_legacy",
+                workspaceId: "ws_legacy",
+                title: "Legacy thread",
+                createdAt: TS,
+                lastMessageAt: TS,
+                status: "active",
+                sessionId: null,
+                lastEventSeq: 0,
+              },
+            ],
+            developerMode: false,
+            showHiddenFiles: false,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(legacyTranscriptDir, "thread_legacy.jsonl"),
+        `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
+        "utf8",
+      );
+
+      const loaded = await persistence.loadState();
+      const transcript = await persistence.readTranscript("thread_legacy");
+
+      expect(loaded.workspaces).toHaveLength(1);
+      expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
+      expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
+      expect(transcript).toHaveLength(1);
+      expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain(
+        '"ws_legacy"',
+      );
+      expect(
+        await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8"),
+      ).toContain('"thread_legacy"');
+    },
+  );
 });

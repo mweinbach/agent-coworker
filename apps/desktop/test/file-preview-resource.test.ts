@@ -101,6 +101,100 @@ describe("VersionedResourceCache", () => {
     cache.dispose();
   });
 
+  test("evicts least-recently-used previews when their total bytes exceed the budget", async () => {
+    const changes = new FileChangeEventStore();
+    const cache = new VersionedResourceCache<string>({
+      changes,
+      byteBudget: { maxBytes: 8, sizeOf: (value) => value.length },
+    });
+    const loadCounts = new Map<string, number>();
+    const load = (name: string) =>
+      cache.load({
+        cacheKey: name,
+        path: `/workspace/${name}`,
+        loader: async () => {
+          loadCounts.set(name, (loadCounts.get(name) ?? 0) + 1);
+          return { path: `/workspace/${name}`, value: "data", version: VERSION_ONE };
+        },
+      });
+
+    await load("a");
+    await load("b");
+    await load("a");
+    await load("c");
+    await load("a");
+    await load("c");
+    await load("b");
+
+    expect(Object.fromEntries(loadCounts)).toEqual({ a: 1, b: 2, c: 1 });
+    cache.dispose();
+  });
+
+  test("returns oversized previews without retaining them or evicting smaller previews", async () => {
+    const changes = new FileChangeEventStore();
+    const cache = new VersionedResourceCache<string>({
+      changes,
+      byteBudget: { maxBytes: 4, sizeOf: (value) => value.length },
+    });
+    const smallLoader = mock(async () => ({
+      path: "/workspace/small",
+      value: "data",
+      version: VERSION_ONE,
+    }));
+    const largeLoader = mock(async () => ({
+      path: "/workspace/large",
+      value: "oversized",
+      version: VERSION_TWO,
+    }));
+    const loadSmall = () =>
+      cache.load({ cacheKey: "small", path: "/workspace/small", loader: smallLoader });
+    const loadLarge = () =>
+      cache.load({ cacheKey: "large", path: "/workspace/large", loader: largeLoader });
+
+    await loadSmall();
+    expect((await loadLarge()).value).toBe("oversized");
+    expect((await loadLarge()).value).toBe("oversized");
+    await loadSmall();
+
+    expect(largeLoader).toHaveBeenCalledTimes(2);
+    expect(smallLoader).toHaveBeenCalledTimes(1);
+    cache.dispose();
+  });
+
+  test("reclaims retained bytes when previews are invalidated, replaced, or cleared", async () => {
+    const changes = new FileChangeEventStore();
+    const cache = new VersionedResourceCache<string>({
+      changes,
+      byteBudget: { maxBytes: 8, sizeOf: (value) => value.length },
+    });
+    const loadCounts = new Map<string, number>();
+    const load = (name: string, value: string, force = false) =>
+      cache.load({
+        cacheKey: name,
+        path: `/workspace/${name}`,
+        force,
+        loader: async () => {
+          loadCounts.set(name, (loadCounts.get(name) ?? 0) + 1);
+          return { path: `/workspace/${name}`, value, version: VERSION_ONE };
+        },
+      });
+
+    await load("a", "1234");
+    await load("b", "1234");
+    changes.publish({ kind: "deleted", path: "/workspace/b", version: null });
+    await load("c", "1234");
+    await load("c", "12", true);
+    await load("d", "12");
+    await load("a", "1234");
+    expect(loadCounts.get("a")).toBe(1);
+
+    cache.clear();
+    await load("e", "12345678");
+    await load("e", "12345678");
+    expect(loadCounts.get("e")).toBe(1);
+    cache.dispose();
+  });
+
   test("invalidates cached data and prevents an older in-flight result from being retained", async () => {
     const changes = new FileChangeEventStore();
     const cache = new VersionedResourceCache<string>({ changes });

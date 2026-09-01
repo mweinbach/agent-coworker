@@ -40,6 +40,10 @@ type UniverRowMatrix = NonNullable<IWorksheetData["rowData"]>;
 type UniverColumnMatrix = NonNullable<IWorksheetData["columnData"]>;
 type UniverMergeRange = NonNullable<IWorksheetData["mergeData"]>[number];
 
+type UniverWorkbookPatchResult =
+  | { ok: true; data: IWorkbookData }
+  | { ok: false; missingSheetNames: string[] };
+
 export function spreadsheetSnapshotToUniverData(
   workbook: SpreadsheetWorkbookSnapshot,
 ): IWorkbookData {
@@ -164,7 +168,22 @@ export function cloneUniverWorkbookData(workbook: IWorkbookData): IWorkbookData 
 export function applySpreadsheetPatchOperationsToUniverData(
   workbook: IWorkbookData,
   operations: SpreadsheetBatchPatchOperation[],
-): IWorkbookData {
+): UniverWorkbookPatchResult {
+  const missingTargets = operations.filter(
+    (operation) => !findSheetForPatchOperation(workbook, operation.sheetName),
+  );
+  if (missingTargets.length > 0) {
+    return {
+      ok: false,
+      missingSheetNames: [
+        ...new Set(
+          missingTargets.flatMap((operation) =>
+            operation.sheetName === undefined ? [] : [operation.sheetName],
+          ),
+        ),
+      ],
+    };
+  }
   const next = cloneUniverWorkbookData(workbook);
   const styleIds = new Map(
     Object.entries(next.styles ?? {}).map(([id, style]) => [stableStringify(style), id]),
@@ -184,7 +203,7 @@ export function applySpreadsheetPatchOperationsToUniverData(
     }
   }
 
-  return next;
+  return { ok: true, data: next };
 }
 
 export function buildUniverSpreadsheetPrompt(opts: {
@@ -579,9 +598,10 @@ function findSheetForPatchOperation(
   workbook: IWorkbookData,
   sheetName: string | undefined,
 ): Partial<IWorksheetData> | null {
-  if (sheetName) {
-    const named = Object.values(workbook.sheets).find((candidate) => candidate?.name === sheetName);
-    if (named) return named;
+  if (sheetName !== undefined) {
+    return (
+      Object.values(workbook.sheets).find((candidate) => candidate?.name === sheetName) ?? null
+    );
   }
   const firstSheetId = workbook.sheetOrder[0];
   return firstSheetId ? (workbook.sheets[firstSheetId] ?? null) : null;

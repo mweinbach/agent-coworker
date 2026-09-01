@@ -134,11 +134,11 @@ function mergeMainWindowThreads(
   return [...merged.values()];
 }
 
-async function mergePopupPersistedState(
+function mergePopupPersistedState(
   current: PersistedState,
   incoming: PersistedState,
   removedThreadIds: ReadonlySet<string>,
-): Promise<PersistedState> {
+): PersistedState {
   const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
   const incomingThreads = incoming.threads.filter((thread) =>
     currentWorkspaceIds.has(thread.workspaceId),
@@ -166,6 +166,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         args ?? {},
         "createOneOffChatWorkspace options",
       );
+      await workspaceRoots.ensureApprovedWorkspaceRoots();
       const workspace = await createOneOffChatWorkspace(input);
       return {
         ...workspace,
@@ -235,69 +236,74 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         popupThreadIds.delete(thread.id);
       }
     }
-    await workspaceRoots.refreshApprovedWorkspaceRootsFromState(state);
-    deps.applyPersistedState?.(state);
+    // A read may finish after a newer save. Only startup and committed writes
+    // apply global consent and workspace approvals; a snapshot must not replay
+    // those side effects. Observed popup IDs above remain deletable by the UI.
     return state;
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
     const input = parseWithSchema(persistedStateInputSchema, state, "state");
     const windowMode = resolveDesktopWindowMode(_event);
-    const nextState = await (async () => {
-      if (windowMode !== "main") {
-        const currentState = await deps.persistence.loadState();
-        const nextPopupState = await mergePopupPersistedState(
-          currentState,
-          input,
-          removedThreadIds,
-        );
-        const currentThreadIds = new Set(currentState.threads.map((thread) => thread.id));
-        for (const thread of nextPopupState.threads) {
-          if (!currentThreadIds.has(thread.id)) {
-            popupThreadIds.add(thread.id);
-          }
+    // Initial root loading reads persistence too, so perform it before entering
+    // the read/merge/write transaction rather than reentering its state lock.
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    let commitThreadBookkeeping: (committed: PersistedState) => void = () => {};
+    await deps.persistence.updateState(
+      async (currentState) => {
+        let nextState: PersistedState;
+        if (windowMode !== "main") {
+          nextState = mergePopupPersistedState(currentState, input, removedThreadIds);
+          const currentThreadIds = new Set(currentState.threads.map((thread) => thread.id));
+          commitThreadBookkeeping = (committed) => {
+            for (const thread of committed.threads) {
+              if (!currentThreadIds.has(thread.id)) {
+                popupThreadIds.add(thread.id);
+              }
+            }
+          };
+        } else {
+          const workspaces = await Promise.all(
+            input.workspaces.map(async (workspace) => ({
+              ...workspace,
+              path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
+            })),
+          );
+          const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+          nextState = {
+            ...input,
+            workspaces,
+            threads: mergeMainWindowThreads(
+              currentState.threads,
+              input.threads,
+              popupThreadIds,
+              workspaceIds,
+            ),
+          };
+          commitThreadBookkeeping = (committed) => {
+            for (const thread of Array.isArray(input.threads) ? input.threads : []) {
+              popupThreadIds.delete(thread.id);
+            }
+            trackRemovedThreadIds(removedThreadIds, currentState.threads, committed.threads);
+          };
         }
-        return nextPopupState;
-      }
-
-      const currentState = await deps.persistence.loadState();
-      const workspaces = await Promise.all(
-        input.workspaces.map(async (workspace) => ({
-          ...workspace,
-          path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
-        })),
-      );
-      const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
-      const threads = mergeMainWindowThreads(
-        currentState.threads,
-        input.threads,
-        popupThreadIds,
-        workspaceIds,
-      );
-      const nextState = {
-        ...input,
-        workspaces,
-        threads,
-      } satisfies PersistedState;
-      for (const thread of Array.isArray(input.threads) ? input.threads : []) {
-        popupThreadIds.delete(thread.id);
-      }
-      trackRemovedThreadIds(removedThreadIds, currentState.threads, nextState.threads);
-      return nextState;
-    })();
-
-    const preparedState =
-      deps.productAnalytics?.preparePersistedState(nextState).state ?? nextState;
-    await deps.persistence.saveState(preparedState);
-    if (deps.cloudSync) {
-      void Promise.resolve(deps.cloudSync.enqueuePersistedState(preparedState)).catch(() => {
-        // Cloud sync is best-effort and must not affect local persistence.
-      });
-    }
-    workspaceRoots.setApprovedWorkspaceRoots(
-      preparedState.workspaces.map((workspace) => workspace.path),
+        return deps.productAnalytics?.preparePersistedState(nextState).state ?? nextState;
+      },
+      async (committed) => {
+        commitThreadBookkeeping(committed);
+        if (deps.cloudSync) {
+          void Promise.resolve()
+            .then(() => deps.cloudSync?.enqueuePersistedState(committed))
+            .catch(() => {
+              // Cloud sync is best-effort and must not affect local persistence.
+            });
+        }
+        workspaceRoots.setApprovedWorkspaceRoots(
+          committed.workspaces.map((workspace) => workspace.path),
+        );
+        await deps.applyPersistedState?.(committed);
+      },
     );
-    deps.applyPersistedState?.(preparedState);
   });
 
   handleDesktopInvoke(
@@ -365,6 +371,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       return null;
     }
 
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
     return await workspaceRoots.addApprovedWorkspacePath(selectedPath);
   });
 }

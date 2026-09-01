@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { canonicalizeSync } from "../../../src/platform/paths";
 import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
@@ -93,6 +94,7 @@ describe("desktop IPC security helpers", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-root-"));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-outside-"));
     try {
+      const canonicalWorkspaceRoot = await fs.realpath(workspaceRoot);
       const nested = path.join(workspaceRoot, "src");
       await fs.mkdir(nested, { recursive: true });
 
@@ -104,17 +106,26 @@ describe("desktop IPC security helpers", () => {
       ).toThrow("outside allowed workspace roots");
 
       if (process.platform !== "win32") {
-        const escapeLink = path.join(workspaceRoot, "escape");
+        const escapeLink = path.join(canonicalWorkspaceRoot, "escape");
         await fs.symlink(outsideRoot, escapeLink);
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeLink)).toThrow(
           "outside allowed workspace roots",
         );
+        expect(() =>
+          resolveAllowedDirectoryPath([workspaceRoot], path.join(escapeLink, "missing", "nested")),
+        ).toThrow("outside allowed workspace roots");
       } else {
-        const escapeJunction = path.join(workspaceRoot, "escape-junction");
+        const escapeJunction = path.join(canonicalWorkspaceRoot, "escape-junction");
         await fs.symlink(outsideRoot, escapeJunction, "junction");
         expect(() => resolveAllowedDirectoryPath([workspaceRoot], escapeJunction)).toThrow(
           "outside allowed workspace roots",
         );
+        expect(() =>
+          resolveAllowedDirectoryPath(
+            [workspaceRoot],
+            path.join(escapeJunction, "missing", "nested"),
+          ),
+        ).toThrow("outside allowed workspace roots");
       }
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -129,7 +140,7 @@ describe("desktop IPC security helpers", () => {
 
     expect(
       resolveAllowedPath(["C:\\Users\\Max\\Workspace"], "c:\\users\\max\\workspace\\file.txt"),
-    ).toBe("c:\\users\\max\\workspace\\file.txt");
+    ).toBe(canonicalizeSync("c:\\users\\max\\workspace\\file.txt"));
     expect(() =>
       resolveAllowedPath(
         ["C:\\Users\\Max\\Workspace"],

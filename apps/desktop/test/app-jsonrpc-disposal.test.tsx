@@ -129,6 +129,7 @@ class MockJsonRpcSocket {
     | null = null;
   readonly readyPromise = Promise.resolve();
   closed = false;
+  closeCalls = 0;
 
   constructor(
     public readonly opts: {
@@ -179,6 +180,7 @@ class MockJsonRpcSocket {
   }
 
   close() {
+    this.closeCalls += 1;
     this.closed = true;
     this.opts.onClose?.();
   }
@@ -611,7 +613,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       const pendingBootstrap = useAppStore.getState().init();
 
       await act(async () => {
-        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("unload"));
         expect(useAppStore.getState().init()).toBe(pendingBootstrap);
         authoritativeLoad.resolve(bootstrapLoadedState);
         await flushAsyncWork();
@@ -739,7 +741,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(socketsBeforeUnload.length).toBeGreaterThan(0);
 
       await act(async () => {
-        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("unload"));
         deferredServerStart.resolve({ url: "ws://late-server" });
         await useAppStore.getState().drainBootstrap();
       });
@@ -827,7 +829,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(MockJsonRpcSocket.instances).toHaveLength(1);
 
       await act(async () => {
-        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("unload"));
         deferredThreadList.resolve({
           threads: [
             {
@@ -856,6 +858,76 @@ describe("App JSON-RPC shutdown disposal", () => {
         await act(async () => {
           root.unmount();
         });
+      }
+      harness.restore();
+    }
+  });
+
+  test("canceled unload keeps sockets live until a confirmed pagehide disposes them once", {
+    timeout: 30_000,
+  }, async () => {
+    const harness = setupAppJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const cancelUnload = (event: Event) => event.preventDefault();
+
+    try {
+      const { workspaceId, threadId } = seedWorkspaceState();
+      const invalidateBootstrap = mock(useAppStore.getState().invalidateBootstrap);
+      useAppStore.setState({ invalidateBootstrap, selectedThreadId: threadId });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root?.render(createElement(StrictMode, null, createElement(App)));
+        await flushAsyncWork();
+        ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+        ensureThreadSocket(
+          useAppStore.getState as any,
+          useAppStore.setState as any,
+          threadId,
+          "ws://mock",
+        );
+        await flushAsyncWork();
+      });
+      const sockets = [...MockJsonRpcSocket.instances];
+      expect(sockets.length).toBeGreaterThan(0);
+
+      // Register after App, so an early defaultPrevented check is not sufficient.
+      harness.dom.window.addEventListener("beforeunload", cancelUnload);
+      await act(async () => {
+        const beforeUnload = new harness.dom.window.Event("beforeunload", { cancelable: true });
+        expect(harness.dom.window.dispatchEvent(beforeUnload)).toBe(false);
+        expect(beforeUnload.defaultPrevented).toBe(true);
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.PageTransitionEvent("pagehide", { persisted: true }),
+        );
+        await flushAsyncWork();
+      });
+
+      expect(invalidateBootstrap).not.toHaveBeenCalled();
+      expect(sockets.every((socket) => !socket.closed)).toBe(true);
+      expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
+      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(false);
+      expect(useAppStore.getState().selectedWorkspaceId).toBe(workspaceId);
+      expect(useAppStore.getState().selectedThreadId).toBe(threadId);
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(
+          new harness.dom.window.PageTransitionEvent("pagehide", { persisted: false }),
+        );
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("unload"));
+        await flushAsyncWork();
+      });
+
+      expect(invalidateBootstrap).toHaveBeenCalledTimes(1);
+      expect(sockets.every((socket) => socket.closed && socket.closeCalls === 1)).toBe(true);
+      expect(RUNTIME.jsonRpcSockets.size).toBe(0);
+      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).isDisposed).toBe(true);
+    } finally {
+      harness.dom.window.removeEventListener("beforeunload", cancelUnload);
+      if (root) {
+        await act(async () => root?.unmount());
       }
       harness.restore();
     }
@@ -900,7 +972,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
 
       await act(async () => {
-        harness.dom.window.dispatchEvent(new harness.dom.window.Event("beforeunload"));
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("unload"));
         await flushAsyncWork();
       });
 

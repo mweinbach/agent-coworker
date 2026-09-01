@@ -759,7 +759,7 @@ export type AppStoreState = {
     scope: "workspace" | "user",
     id: string | undefined,
     content: string,
-    opts?: { cwd?: string },
+    opts?: { cwd?: string; mode?: "create" | "upsert" },
   ) => Promise<OperationResult>;
   deleteWorkspaceMemory: (
     workspaceId: string,
@@ -960,13 +960,18 @@ export type AppStoreState = {
     path: string,
     opts?: {
       sheetName?: string;
+      workspaceId?: string;
     },
   ) => Promise<SpreadsheetWorkbookSnapshotResult>;
-  loadSpreadsheetFileVersion: (path: string) => Promise<SpreadsheetFileVersionResult>;
+  loadSpreadsheetFileVersion: (
+    path: string,
+    workspaceId?: string,
+  ) => Promise<SpreadsheetFileVersionResult>;
   patchSpreadsheetWorkbook: (
     path: string,
     operations: SpreadsheetBatchPatchOperation[],
     expectedFileVersion?: SpreadsheetFileVersion,
+    workspaceId?: string,
   ) => Promise<SpreadsheetBatchPatchResult>;
   loadPresentationPreview: (path: string) => Promise<PresentationPreviewResult>;
 };

@@ -97,12 +97,33 @@ import {
   type SessionSnapshotFingerprint,
   type ThreadBusyPolicy,
   type ThreadRecord,
+  type ThreadRuntime,
   type TranscriptEvent,
 } from "../types";
 
 const RECONNECT_OUTCOME_TIMEOUT_MS = 15_000;
 const RECONNECT_OUTCOME_POLL_MS = 50;
 const composerSubmissionCreationControl = new Map<string, CreationOperationControl>();
+
+type PendingWorkspaceDefaultApply = NonNullable<
+  ReturnType<typeof RUNTIME.pendingWorkspaceDefaultApplyByThread.get>
+>;
+
+type ThreadPreferenceMutation = {
+  sessionId: string;
+  nextSequence: number;
+  latestSequence: number | null;
+  confirmedSequence: number;
+  confirmedEffort: ThreadRecord["reasoningEffort"];
+  confirmedComposerEffort: ThreadRuntime["composerReasoningEffort"];
+  pendingRequests: number;
+  pendingModelRequests: number;
+  modelSucceeded: boolean;
+  defaultApply: {
+    previous: PendingWorkspaceDefaultApply;
+    optimistic: PendingWorkspaceDefaultApply;
+  } | null;
+};
 
 type HydrateThreadSelectionOptions = {
   preserveView?: boolean;
@@ -251,7 +272,7 @@ export async function hydrateThreadSelection(
     isCurrentThreadSelectionRequest(threadId, requestId);
 
   const clearThreadHydrationIfCurrent = (requestId: number) => {
-    if (!isOperationCurrent() || !isCurrentThreadSelectionRequest(threadId, requestId)) {
+    if (!isCurrentThreadSelectionRequest(threadId, requestId)) {
       return;
     }
     set((state) => {
@@ -263,7 +284,6 @@ export async function hydrateThreadSelection(
           [threadId]: {
             ...rt,
             hydrating: false,
-            transcriptOnly: false,
           },
         },
       };
@@ -525,11 +545,10 @@ export async function hydrateThreadSelection(
 
   if (!isOperationCurrent()) return;
   const requestId = beginThreadSelectionRequest(threadId);
-  const selectedTaskId = selectedTaskIdForThread(thread);
-  if (!isOperationCurrent()) return;
-  set((state) => {
-    if (!isOperationCurrent()) return {};
-    return {
+  try {
+    if (!isOperationCurrent()) return;
+    const selectedTaskId = selectedTaskIdForThread(thread);
+    set((state) => ({
       selectedThreadId: threadId,
       selectedWorkspaceId: thread.workspaceId,
       selectedTaskId,
@@ -542,79 +561,53 @@ export async function hydrateThreadSelection(
           transcriptOnly: false,
         },
       },
-    };
-  });
-  if (!isOperationCurrent()) return;
-  syncDesktopStateCache(get);
+    }));
+    if (!isSelectionCurrent(requestId)) return;
+    syncDesktopStateCache(get);
 
-  let appliedCachedSnapshot = false;
-  if (matchingCachedSnapshot && sessionId) {
-    if (!isOperationCurrent()) return;
-    applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
-    appliedCachedSnapshot = true;
-  }
-
-  await waitForNextPaintOrTimeout();
-  if (!isSelectionCurrent(requestId)) {
-    clearThreadHydrationIfCurrent(requestId);
-    return;
-  }
-
-  if (!isSelectionCurrent(requestId)) {
-    if (appliedCachedSnapshot) {
-      clearThreadHydrationIfCurrent(requestId);
+    if (matchingCachedSnapshot && sessionId) {
+      applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
     }
-    return;
-  }
 
-  let stayTranscriptOnly = false;
-  if (!alreadyLoaded || matchingCachedSnapshot) {
-    try {
-      let loadedFromHarness = false;
-      if (sessionId && shouldFetchHarnessSnapshot) {
-        await ensureServerRunning(get, set, thread.workspaceId, { signal: options.signal });
-        if (!isSelectionCurrent(requestId)) {
-          clearThreadHydrationIfCurrent(requestId);
-          return;
-        }
-        ensureControlSocket(get, set, thread.workspaceId);
-        if (!isSelectionCurrent(requestId)) {
-          clearThreadHydrationIfCurrent(requestId);
-          return;
-        }
-        const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
-        if (!isSelectionCurrent(requestId)) {
-          clearThreadHydrationIfCurrent(requestId);
-          return;
-        }
-        if (snapshot) {
+    await waitForNextPaintOrTimeout();
+    if (!isSelectionCurrent(requestId)) return;
+
+    let stayTranscriptOnly = false;
+    if (!alreadyLoaded || matchingCachedSnapshot) {
+      try {
+        let loadedFromHarness = false;
+        if (sessionId && shouldFetchHarnessSnapshot) {
+          await ensureServerRunning(get, set, thread.workspaceId, { signal: options.signal });
           if (!isSelectionCurrent(requestId)) return;
-          applySessionSnapshot(threadId, sessionId, snapshot);
-          cacheSessionSnapshot(snapshot);
-          loadedFromHarness = true;
-        } else if (matchingCachedSnapshot) {
-          applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
-        } else {
-          stayTranscriptOnly = true;
+          ensureControlSocket(get, set, thread.workspaceId);
+          if (!isSelectionCurrent(requestId)) return;
+          const snapshot = await waitForOperation(
+            requestSessionSnapshot(get, set, thread.workspaceId, sessionId),
+            options.signal,
+          );
+          if (!isSelectionCurrent(requestId)) return;
+          if (snapshot) {
+            applySessionSnapshot(threadId, sessionId, snapshot);
+            cacheSessionSnapshot(snapshot);
+            loadedFromHarness = true;
+          } else if (matchingCachedSnapshot) {
+            applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
+          } else {
+            stayTranscriptOnly = true;
+          }
         }
-      }
 
-      if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
-        const snapshot = await hydrateLegacyTranscript(thread);
-        if (!snapshot) {
-          throw new Error("No harness snapshot or legacy transcript cache was available.");
-        }
-        if (!isSelectionCurrent(requestId)) {
-          clearThreadHydrationIfCurrent(requestId);
-          return;
-        }
-        set((state) => {
-          const currentRuntime = state.threadRuntimeById[threadId];
-          return {
+        if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
+          const snapshot = await waitForOperation(hydrateLegacyTranscript(thread), options.signal);
+          if (!snapshot) {
+            throw new Error("No harness snapshot or legacy transcript cache was available.");
+          }
+          if (!isSelectionCurrent(requestId)) return;
+          set((state) => ({
             threadRuntimeById: {
               ...state.threadRuntimeById,
               [threadId]: {
-                ...currentRuntime,
+                ...state.threadRuntimeById[threadId],
                 sessionUsage: snapshot.sessionUsage,
                 lastTurnUsage: snapshot.lastTurnUsage,
                 agents: snapshot.agents,
@@ -624,68 +617,45 @@ export async function hydrateThreadSelection(
                 transcriptOnly: true,
               },
             },
-          };
-        });
-      }
-    } catch (error) {
-      if (!isSelectionCurrent(requestId)) {
-        clearThreadHydrationIfCurrent(requestId);
+          }));
+        }
+      } catch (error) {
+        if (!isSelectionCurrent(requestId)) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        set((state) => ({
+          notifications: pushNotification(state.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Transcript load failed",
+            detail,
+          }),
+        }));
         return;
       }
-
-      const detail = error instanceof Error ? error.message : String(error);
-      set((state) => ({
-        notifications: pushNotification(state.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Transcript load failed",
-          detail,
-        }),
-      }));
-      clearThreadHydrationIfCurrent(requestId);
-      return;
     }
-  }
 
-  if (!isSelectionCurrent(requestId)) {
-    clearThreadHydrationIfCurrent(requestId);
-    return;
-  }
-
-  if (stayTranscriptOnly) {
-    if (!isOperationCurrent()) return;
+    if (!isSelectionCurrent(requestId)) return;
     set((state) => ({
       threadRuntimeById: {
         ...state.threadRuntimeById,
         [threadId]: {
           ...state.threadRuntimeById[threadId],
           hydrating: false,
-          transcriptOnly: true,
+          transcriptOnly: stayTranscriptOnly,
         },
       },
     }));
-    clearThreadSelectionRequest(threadId, requestId);
-    return;
+    if (!stayTranscriptOnly && options.reconnectAfterHydration) {
+      await get().reconnectThread(threadId, undefined, {
+        selectionRequestId: requestId,
+        skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
+        signal: options.signal,
+      });
+    }
+  } finally {
+    clearThreadHydrationIfCurrent(requestId);
   }
-
-  if (!isOperationCurrent()) return;
-  set((state) => ({
-    threadRuntimeById: {
-      ...state.threadRuntimeById,
-      [threadId]: { ...state.threadRuntimeById[threadId], hydrating: false, transcriptOnly: false },
-    },
-  }));
-
-  if (options.reconnectAfterHydration) {
-    await get().reconnectThread(threadId, undefined, {
-      selectionRequestId: requestId,
-      skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
-      signal: options.signal,
-    });
-  }
-  if (!isOperationCurrent()) return;
-  clearThreadSelectionRequest(threadId, requestId);
 }
 
 export function createThreadActions(
@@ -733,6 +703,158 @@ export function createThreadActions(
   | "retryInteractionResponse"
   | "loadAllThreadUsage"
 > {
+  const preferenceMutations = new Map<string, ThreadPreferenceMutation>();
+
+  function sendThreadPreference(
+    threadId: string,
+    kind: "model" | "reasoning",
+    effort: ThreadRecord["reasoningEffort"],
+    build: Parameters<typeof sendThread>[2],
+  ): void {
+    const thread = get().threads.find((candidate) => candidate.id === threadId);
+    const runtime = get().threadRuntimeById[threadId];
+    if (!thread || !runtime?.sessionId) return;
+    const sessionId = runtime.sessionId;
+    let mutation = preferenceMutations.get(threadId);
+    if (!mutation || mutation.sessionId !== sessionId) {
+      mutation = {
+        sessionId,
+        nextSequence: 0,
+        latestSequence: null,
+        confirmedSequence: 0,
+        confirmedEffort: thread.reasoningEffort,
+        confirmedComposerEffort: runtime.composerReasoningEffort,
+        pendingRequests: 0,
+        pendingModelRequests: 0,
+        modelSucceeded: false,
+        defaultApply: null,
+      };
+      preferenceMutations.set(threadId, mutation);
+    }
+    const owner = mutation;
+    const sequence = ++owner.nextSequence;
+    owner.latestSequence = sequence;
+    owner.pendingRequests += 1;
+    const optimisticEffort = effort ?? null;
+
+    if (kind === "model") {
+      owner.pendingModelRequests += 1;
+      const pending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pending?.draftModelSelection && !owner.defaultApply) {
+        const optimistic = { ...pending, draftModelSelection: null };
+        owner.defaultApply = { previous: pending, optimistic };
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, optimistic);
+      }
+    }
+    // Only the runtime picker is optimistic. The persisted thread preference
+    // stays at its confirmed value until the RPC acknowledges this request.
+    set((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          composerReasoningEffort: optimisticEffort,
+        },
+      },
+    }));
+
+    let settled = false;
+    const settle = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (preferenceMutations.get(threadId) !== owner) return;
+      const currentRuntime = get().threadRuntimeById[threadId];
+      if (
+        currentRuntime?.sessionId !== sessionId ||
+        !get().threads.some((candidate) => candidate.id === threadId)
+      ) {
+        preferenceMutations.delete(threadId);
+        return;
+      }
+
+      owner.pendingRequests -= 1;
+      if (kind === "model") {
+        owner.pendingModelRequests -= 1;
+        owner.modelSucceeded ||= !error;
+        if (owner.pendingModelRequests === 0) {
+          if (
+            !owner.modelSucceeded &&
+            owner.defaultApply &&
+            RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId) ===
+              owner.defaultApply.optimistic
+          ) {
+            RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, owner.defaultApply.previous);
+          }
+          owner.defaultApply = null;
+          owner.modelSucceeded = false;
+        }
+      }
+
+      const previousConfirmedComposer = owner.confirmedComposerEffort;
+      const confirmsLatestValue = !error && sequence > owner.confirmedSequence;
+      if (confirmsLatestValue) {
+        owner.confirmedSequence = sequence;
+        owner.confirmedEffort = effort;
+        owner.confirmedComposerEffort = optimisticEffort;
+      }
+      const ownsPicker = owner.latestSequence === sequence;
+      if (ownsPicker) owner.latestSequence = null;
+      const restorePicker =
+        error && ownsPicker && currentRuntime.composerReasoningEffort === optimisticEffort;
+      const followEarlierConfirmation =
+        confirmsLatestValue &&
+        !ownsPicker &&
+        owner.latestSequence === null &&
+        currentRuntime.composerReasoningEffort === previousConfirmedComposer;
+
+      set((state) => ({
+        ...(confirmsLatestValue
+          ? {
+              threads: state.threads.map((candidate) =>
+                candidate.id === threadId
+                  ? { ...candidate, reasoningEffort: owner.confirmedEffort }
+                  : candidate,
+              ),
+            }
+          : {}),
+        ...(restorePicker || followEarlierConfirmation
+          ? {
+              threadRuntimeById: {
+                ...state.threadRuntimeById,
+                [threadId]: {
+                  ...state.threadRuntimeById[threadId],
+                  composerReasoningEffort: owner.confirmedComposerEffort,
+                },
+              },
+            }
+          : {}),
+        ...(error
+          ? {
+              notifications: pushNotification(state.notifications, {
+                id: makeId(),
+                ts: nowIso(),
+                kind: "error",
+                title:
+                  kind === "model" ? "Unable to change model" : "Unable to change reasoning effort",
+                detail: composerSubmissionErrorMessage(error),
+              }),
+            }
+          : {}),
+      }));
+      if (confirmsLatestValue) persist(get);
+      if (!error) appendThreadTranscript(threadId, "client", build(sessionId));
+      if (owner.pendingRequests === 0) preferenceMutations.delete(threadId);
+    };
+
+    try {
+      if (!sendThread(get, threadId, build, { onSettled: settle })) {
+        settle(new Error("Not connected. Reconnect and try again."));
+      }
+    } catch (error) {
+      settle(error);
+    }
+  }
+
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
@@ -1057,6 +1179,7 @@ export function createThreadActions(
     },
 
     removeThread: async (threadId: string) => {
+      preferenceMutations.delete(threadId);
       const thread = get().threads.find((t) => t.id === threadId);
       get().discardComposerDraft(composerDraftKeyForThread(threadId));
       const runtimeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? null;
@@ -1140,9 +1263,14 @@ export function createThreadActions(
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
       const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
+      if (!targetSessionId) {
+        await get().removeThread(threadId);
+        return;
+      }
 
       let deleteOk = false;
-      if (targetSessionId) {
+      const errorDetail: { message?: string } = {};
+      try {
         await ensureServerRunning(get, set, thread.workspaceId);
         ensureControlSocket(get, set, thread.workspaceId);
         deleteOk = await requestJsonRpcControlEvent(
@@ -1154,12 +1282,22 @@ export function createThreadActions(
             cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
             targetSessionId,
           },
+          errorDetail,
+          {
+            requiredEventType: "session_deleted",
+            decodeAcknowledgement: (event) =>
+              event.type === "session_deleted" && event.targetSessionId !== targetSessionId
+                ? { ok: false, message: "The server did not confirm deletion of this session." }
+                : null,
+          },
         );
+      } catch (error) {
+        errorDetail.message = composerSubmissionErrorMessage(error);
       }
 
-      await get().removeThread(threadId);
-
-      if (!targetSessionId) return;
+      if (deleteOk) {
+        await get().removeThread(threadId);
+      }
 
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -1167,7 +1305,9 @@ export function createThreadActions(
           ts: nowIso(),
           kind: deleteOk ? "info" : "error",
           title: deleteOk ? "Session history deleted" : "Delete session history failed",
-          detail: deleteOk ? targetSessionId : "Control session is unavailable.",
+          detail: deleteOk
+            ? targetSessionId
+            : (errorDetail.message ?? "Control session is unavailable."),
         }),
       }));
     },
@@ -2272,6 +2412,7 @@ export function createThreadActions(
       if (!thread) return;
 
       if (thread.draft) {
+        preferenceMutations.delete(threadId);
         set((s) => ({
           threads: s.threads.map((candidate) =>
             candidate.id === threadId ? { ...candidate, reasoningEffort: undefined } : candidate,
@@ -2292,40 +2433,12 @@ export function createThreadActions(
 
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
-      set((state) => ({
-        threads: state.threads.map((candidate) =>
-          candidate.id === threadId ? { ...candidate, reasoningEffort: undefined } : candidate,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...state.threadRuntimeById[threadId],
-            composerReasoningEffort: null,
-          },
-        },
-      }));
-      persist(get);
-      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-      if (pendingApply?.draftModelSelection) {
-        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
-          ...pendingApply,
-          draftModelSelection: null,
-        });
-      }
-      const ok = sendThread(get, threadId, (sessionId) => ({
+      sendThreadPreference(threadId, "model", undefined, (sessionId) => ({
         type: "set_model",
         sessionId,
         provider,
         model,
       }));
-      if (ok) {
-        appendThreadTranscript(threadId, "client", {
-          type: "set_model",
-          sessionId: rt.sessionId,
-          provider,
-          model,
-        });
-      }
     },
 
     setThreadReasoningEffort: (threadId, provider, effort) => {
@@ -2342,52 +2455,31 @@ export function createThreadActions(
       const currentRuntime = get().threadRuntimeById[threadId];
       if (!thread.draft && currentRuntime?.busy) return;
 
-      set((state) => ({
-        threads: state.threads.map((candidate) =>
-          candidate.id === threadId ? { ...candidate, reasoningEffort: effort } : candidate,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...state.threadRuntimeById[threadId],
-            composerReasoningEffort: effort,
+      if (thread.draft || !currentRuntime?.sessionId) {
+        preferenceMutations.delete(threadId);
+        set((state) => ({
+          threads: state.threads.map((candidate) =>
+            candidate.id === threadId ? { ...candidate, reasoningEffort: effort } : candidate,
+          ),
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...state.threadRuntimeById[threadId],
+              composerReasoningEffort: effort,
+            },
           },
-        },
-      }));
-      persist(get);
-
-      if (thread.draft) return;
-      const rt = currentRuntime;
-      if (!rt?.sessionId) return;
+        }));
+        persist(get);
+        return;
+      }
       const config = {
         providerOptions: providerConfig,
       };
-      const ok = sendThread(get, threadId, (sessionId) => ({
+      sendThreadPreference(threadId, "reasoning", effort, (sessionId) => ({
         type: "set_config",
         sessionId,
         config,
       }));
-      if (ok) {
-        appendThreadTranscript(threadId, "client", {
-          type: "set_config",
-          sessionId: rt.sessionId,
-          config,
-        });
-      } else {
-        // The change never left the client, so no session_config ack will
-        // arrive to clear the optimistic value — revert it now so the selector
-        // does not stay stuck on an effort the session never received.
-        set((state) => {
-          const current = state.threadRuntimeById[threadId];
-          if (!current || current.composerReasoningEffort !== effort) return {};
-          return {
-            threadRuntimeById: {
-              ...state.threadRuntimeById,
-              [threadId]: { ...current, composerReasoningEffort: null },
-            },
-          };
-        });
-      }
     },
 
     setComposerText: (text, references = []) => {

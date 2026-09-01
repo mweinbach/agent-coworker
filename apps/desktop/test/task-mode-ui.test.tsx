@@ -130,6 +130,39 @@ function taskQuestion(overrides: Partial<TaskQuestion> = {}): TaskQuestion {
   };
 }
 
+function taskWithFailedAnswerResume(): TaskRecord {
+  return taskRecord({
+    status: "failed",
+    revision: 6,
+    artifacts: [],
+    questions: [
+      taskQuestion({
+        status: "answered",
+        answer: "Internal team",
+        answerOptionId: "internal",
+        resolutionSource: "user",
+        resolvedAt: NOW,
+      }),
+    ],
+    activity: [
+      {
+        id: "resume-failure-status",
+        seq: 3,
+        taskId: "task-1",
+        threadId: "task-thread-1",
+        workItemId: null,
+        kind: "status_changed",
+        summary: "Task failed after saving answers",
+        detail: JSON.stringify({
+          kind: "input_resume_failed",
+          message: "Provider is unavailable.",
+        }),
+        createdAt: NOW,
+      },
+    ],
+  });
+}
+
 function artifactDetail(): TaskArtifactDetail {
   const artifact = taskRecord().artifacts[0];
   if (!artifact) throw new Error("missing artifact fixture");
@@ -2029,53 +2062,211 @@ describe("desktop task mode UI", () => {
     }
   });
 
-  test.serial("refreshes artifact review state when the task revision changes", async () => {
-    const harness = setupJsdom();
-    let nextDetail = artifactDetail();
-    const readArtifact = mock(async () => nextDetail);
-    try {
+  test.serial(
+    "keeps saved-answer recovery visible and retries without resolving answers again",
+    async () => {
+      const harness = setupJsdom();
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
       const root = createRoot(container);
-      const initialTask = taskRecord();
-      resetStore(initialTask);
-      useAppStore.setState({ readTaskArtifact: readArtifact } as never);
+      const retryResult = Promise.withResolvers<{ task: TaskRecord }>();
+      try {
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const initialTask = taskRecord({
+          status: "blocked",
+          pendingQuestionCount: 1,
+          blockingQuestionCount: 1,
+          questions: [taskQuestion()],
+          artifacts: [],
+        });
+        const failedTask = taskWithFailedAnswerResume();
+        resetStore(initialTask);
+        const requestJsonRpc = installTaskLifecycleActions((method) => {
+          if (method === "task/questions/resolve") {
+            return { task: failedTask, resumeStatus: "failed" };
+          }
+          if (method === "task/retry") return retryResult.promise;
+          throw new Error(`Unexpected ${method}`);
+        });
 
-      await act(async () => root.render(createElement(TaskContextSidebar)));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-      const artifactCard = container.querySelector('[data-artifact-id="artifact-1"]');
-      expect(artifactCard?.textContent).toContain("Needs review");
-      expect(readArtifact).toHaveBeenCalledTimes(1);
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        const answerButton = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Answer question",
+        );
+        await act(async () => answerButton?.click());
+        const option = harness.dom.window.document.querySelector<HTMLElement>('[role="radio"]');
+        await act(async () => option?.click());
+        const submitButton = Array.from(
+          harness.dom.window.document.body.querySelectorAll("button"),
+        ).find((button) => button.textContent?.trim() === "Submit 1 answer");
+        await act(async () => submitButton?.click());
 
-      nextDetail = {
-        ...nextDetail,
-        acceptedVersionId: nextDetail.latestVersionId,
-        versions: nextDetail.versions.map((version) => ({
-          ...version,
-          reviewStatus: version.id === nextDetail.latestVersionId ? "accepted" : "superseded",
-        })),
-      };
-      await act(async () => {
+        expect(container.querySelector("[data-task-questions]")).toBeNull();
+        expect(harness.dom.window.document.body.textContent).not.toContain("Answer task questions");
+        const failureNotice = container.querySelector("[data-task-input-resume-failure]");
+        expect(failureNotice).not.toBeNull();
+        expect(failureNotice?.textContent).toContain("Your answers are saved");
+        expect(failureNotice?.textContent).toContain("Provider is unavailable.");
+
+        await act(async () => root.render(null));
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        const recovery = container.querySelector("[data-task-input-resume-failure]");
+        expect(recovery?.textContent).toContain("Your answers are saved");
+        const retryButton = recovery?.querySelector("button");
+        await act(async () => {
+          retryButton?.click();
+          retryButton?.click();
+        });
+        expect(retryButton?.disabled).toBe(true);
+        expect(retryButton?.textContent).toContain("Retrying...");
+        expect(requestJsonRpc.mock.calls.filter((call) => call[3] === "task/retry")).toHaveLength(
+          1,
+        );
+        expect(
+          requestJsonRpc.mock.calls.find((call) => call[3] === "task/retry")?.[4],
+        ).toMatchObject({
+          taskId: failedTask.id,
+          expectedRevision: failedTask.revision,
+        });
+
+        await act(async () => {
+          retryResult.resolve({
+            task: { ...failedTask, status: "working", revision: failedTask.revision + 1 },
+          });
+          await retryResult.promise;
+        });
+        expect(container.querySelector("[data-task-input-resume-failure]")).toBeNull();
+        expect(useAppStore.getState().tasksById[failedTask.id]?.questions[0]?.answer).toBe(
+          "Internal team",
+        );
+        expect(
+          requestJsonRpc.mock.calls.filter((call) => call[3] === "task/questions/resolve"),
+        ).toHaveLength(1);
+      } finally {
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
+    "shows a late answer-resume failure without reviving it after an unrelated failure",
+    async () => {
+      const harness = setupJsdom();
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      try {
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const previousFailure = taskWithFailedAnswerResume();
+        const failureStatus = previousFailure.activity[0];
+        if (!failureStatus) throw new Error("missing failure status fixture");
+        resetStore({ ...previousFailure, status: "working", activity: [] });
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        expect(container.querySelector("[data-task-input-resume-failure]")).toBeNull();
+        await act(async () => {
+          useAppStore.setState({ tasksById: { [previousFailure.id]: previousFailure } });
+        });
+        expect(container.querySelector("[data-task-input-resume-failure]")).not.toBeNull();
+        const laterFailure: TaskRecord = {
+          ...previousFailure,
+          revision: 8,
+          activity: [
+            {
+              ...failureStatus,
+              id: "later-failure-status",
+              seq: 5,
+              summary: "Task failed during a later run",
+              detail: "A different failure",
+            },
+            ...previousFailure.activity,
+          ],
+        };
+        await act(async () => {
+          useAppStore.setState({ tasksById: { [laterFailure.id]: laterFailure } });
+        });
+        expect(container.querySelector("[data-task-input-resume-failure]")).toBeNull();
+        expect(container.textContent).toContain("Retry task");
+      } finally {
+        await act(async () => root.unmount());
+        harness.restore();
+      }
+    },
+  );
+
+  test.serial(
+    "refreshes artifact review state without replacing the selected version",
+    async () => {
+      const harness = setupJsdom();
+      let nextDetail = artifactDetail();
+      const readArtifact = mock(async () => nextDetail);
+      const acceptVersion = mock(async () => ({ ok: true as const, value: nextDetail }));
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const { TaskContextSidebar } = await import("../src/ui/tasks/TaskContextSidebar");
+        const root = createRoot(container);
+        const initialTask = taskRecord();
+        resetStore(initialTask);
         useAppStore.setState({
-          tasksById: {
-            "task-1": { ...initialTask, revision: initialTask.revision + 1 },
-          },
+          readTaskArtifact: readArtifact,
+          acceptTaskArtifactVersion: acceptVersion,
         } as never);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
 
-      expect(artifactCard?.textContent).toContain("Accepted");
-      expect(artifactCard?.textContent).not.toContain("Needs review");
-      expect(readArtifact).toHaveBeenCalledTimes(2);
+        await act(async () => root.render(createElement(TaskContextSidebar)));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        const artifactCard = container.querySelector('[data-artifact-id="artifact-1"]');
+        expect(artifactCard?.textContent).toContain("Needs review");
+        expect(readArtifact).toHaveBeenCalledTimes(1);
 
-      await act(async () => root.unmount());
-    } finally {
-      harness.restore();
-    }
-  });
+        const reviewButton = Array.from(artifactCard?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Revise this",
+        );
+        await act(async () => reviewButton?.click());
+        const reviewDialog = harness.dom.window.document.querySelector(
+          '[data-slot="dialog-content"]',
+        );
+        const versionOneButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.includes("Version 1"),
+        );
+        await act(async () => versionOneButton?.click());
+        expect(versionOneButton?.getAttribute("aria-current")).toBe("true");
+
+        nextDetail = {
+          ...nextDetail,
+          acceptedVersionId: nextDetail.latestVersionId,
+          versions: nextDetail.versions.map((version) => ({
+            ...version,
+            reviewStatus: version.id === nextDetail.latestVersionId ? "accepted" : "superseded",
+          })),
+        };
+        await act(async () => {
+          useAppStore.setState({
+            tasksById: {
+              "task-1": { ...initialTask, revision: initialTask.revision + 1 },
+            },
+          } as never);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(artifactCard?.textContent).toContain("Accepted");
+        expect(artifactCard?.textContent).not.toContain("Needs review");
+        expect(readArtifact).toHaveBeenCalledTimes(2);
+        expect(versionOneButton?.getAttribute("aria-current")).toBe("true");
+        const acceptButton = Array.from(reviewDialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent?.trim() === "Accept",
+        );
+        await act(async () => acceptButton?.click());
+        expect(acceptVersion).toHaveBeenCalledWith("task-1", "artifact-1", "version-1");
+
+        await act(async () => root.unmount());
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 
   test.serial("loads artifact review state under React Strict Mode", async () => {
     const harness = setupJsdom();

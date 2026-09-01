@@ -1,3 +1,6 @@
+import { sameWorkspacePath } from "../../../../../src/utils/workspacePath";
+import { loadState } from "../../lib/desktopCommands";
+import { getDesktopPlatformInfo } from "../../lib/desktopPlatform";
 import type {
   ConversationImportSource,
   ConversationPreviewItem,
@@ -14,6 +17,7 @@ import {
   type AppStoreActions,
   ensureControlSocket,
   ensureServerRunning,
+  ensureWorkspaceRuntime,
   operationKey,
   requestJsonRpcControl,
   requestJsonRpcControlEvent,
@@ -49,6 +53,7 @@ type ConversationImportResult = Awaited<ReturnType<AppStoreActions["importConver
 export function createImportActions(
   set: StoreSet,
   get: StoreGet,
+  deps: { loadState: typeof loadState } = { loadState },
 ): Pick<
   AppStoreActions,
   | "listImportable"
@@ -59,6 +64,8 @@ export function createImportActions(
   | "validateConversationWorkspaceMappings"
   | "importConversations"
 > {
+  const pathsMatch = (left: string, right: string) =>
+    sameWorkspacePath(left, right, getDesktopPlatformInfo().rawPlatform as NodeJS.Platform);
   const setImportState = (
     workspaceId: string,
     key: string,
@@ -158,11 +165,38 @@ export function createImportActions(
         "cowork/conversationImport/import",
         params,
       );
+      const importedWorkspaceIds = new Set([
+        ...result.imported.flatMap((item) => (item.workspaceId ? [item.workspaceId] : [])),
+        ...result.createdWorkspaces.map((workspace) => workspace.workspaceId),
+      ]);
+      const missingWorkspaceIds = new Set(
+        [...importedWorkspaceIds].filter(
+          (id) => !get().workspaces.some((workspace) => workspace.id === id),
+        ),
+      );
+      if (missingWorkspaceIds.size > 0) {
+        const persisted = await deps.loadState();
+        set((state) => ({
+          workspaces: [
+            ...state.workspaces,
+            ...persisted.workspaces.filter(
+              (workspace) =>
+                missingWorkspaceIds.has(workspace.id) &&
+                !state.workspaces.some(
+                  (current) =>
+                    current.id === workspace.id || pathsMatch(current.path, workspace.path),
+                ),
+            ),
+          ],
+        }));
+      }
       const workspaceIds = new Set<string>();
       for (const imported of result.imported) {
-        const workspaceId =
-          imported.workspaceId ??
-          get().workspaces.find((workspace) => workspace.path === imported.workspacePath)?.id;
+        const workspaceId = get().workspaces.find(
+          (workspace) =>
+            workspace.id === imported.workspaceId ||
+            pathsMatch(workspace.path, imported.workspacePath),
+        )?.id;
         if (workspaceId) workspaceIds.add(workspaceId);
       }
       for (const created of result.createdWorkspaces) {
@@ -175,7 +209,12 @@ export function createImportActions(
         if (workspaceId) workspaceIds.add(workspaceId);
       }
       await Promise.all(
-        [...workspaceIds].map((workspaceId) => requestWorkspaceSessions(get, set, workspaceId)),
+        [...workspaceIds].map(async (workspaceId) => {
+          ensureWorkspaceRuntime(get, set, workspaceId);
+          await ensureServerRunning(get, set, workspaceId);
+          ensureControlSocket(get, set, workspaceId);
+          await requestWorkspaceSessions(get, set, workspaceId);
+        }),
       );
       return result;
     },
@@ -202,14 +241,14 @@ export function createImportActions(
     },
 
     importPlugin: async (item: ImportableItem, targetScope: "workspace" | "user") => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("import", "plugin", item.source, item.id, targetScope),
+        key: operationKey("import", "plugin", item.source, item.id, targetScope, workspaceId),
         label: "Import plugin",
         errorTitle: "Plugin not imported",
         errorMessage: "Unable to import plugin.",
         repairAction: "Review the import source and target, then retry.",
         execute: async () => {
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) {
             throw new Error("Add or select a workspace before importing a plugin.");
           }
@@ -252,14 +291,14 @@ export function createImportActions(
     },
 
     importSkill: async (item: ImportableItem, targetScope: "workspace" | "user") => {
+      const workspaceId = managementWorkspaceIdFor(get);
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("import", "skill", item.source, item.id, targetScope),
+        key: operationKey("import", "skill", item.source, item.id, targetScope, workspaceId),
         label: "Import skill",
         errorTitle: "Skill not imported",
         errorMessage: "Unable to import skill.",
         repairAction: "Review the import source and target, then retry.",
         execute: async () => {
-          const workspaceId = managementWorkspaceIdFor(get);
           if (!workspaceId) {
             throw new Error("Add or select a workspace before importing a skill.");
           }

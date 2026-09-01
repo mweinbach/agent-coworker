@@ -16,7 +16,7 @@ import {
   normalizePrivacyTelemetrySettings,
   type PersistedState,
 } from "../types";
-import { getEffectiveThreadLastEventSeq, RUNTIME } from "./runtimeState";
+import { RUNTIME } from "./runtimeState";
 
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
@@ -24,6 +24,8 @@ const MAX_DEFERRED_PERSIST_RETRIES = 3;
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingPersistGet: (() => AppStoreState) | null = null;
+let _pendingDesktopCacheGet: (() => AppStoreState) | null = null;
 
 /**
  * Filters out draft threads from persistence.
@@ -41,14 +43,16 @@ function buildPersistableThreads(state: AppStoreState) {
     .filter((thread) => thread.draft !== true && !thread.taskId)
     .map((thread) => ({
       ...thread,
-      lastEventSeq: getEffectiveThreadLastEventSeq(state, thread.id),
+      lastEventSeq: Math.max(
+        0,
+        Math.floor(
+          Math.max(thread.lastEventSeq ?? 0, state.threadRuntimeById[thread.id]?.lastEventSeq ?? 0),
+        ),
+      ),
     }));
 }
 
-function buildPersistedState(
-  state: AppStoreState,
-  options: { includeDraftAttachmentData?: boolean } = {},
-): PersistedState {
+function buildPersistedState(state: AppStoreState): PersistedState {
   const providerState = normalizePersistedProviderState({
     statusByName: state.providerStatusByName,
     statusLastUpdatedAt: state.providerStatusLastUpdatedAt,
@@ -69,11 +73,6 @@ function buildPersistedState(
     activeKey: resolveActiveComposerDraftKey(state),
   }).drafts;
   const composerDrafts = serializeComposerDrafts(prunedDrafts);
-  if (options.includeDraftAttachmentData === false) {
-    for (const draft of Object.values(composerDrafts)) {
-      draft.attachments = [];
-    }
-  }
 
   return {
     version: 2,
@@ -94,8 +93,11 @@ function buildPersistedState(
   };
 }
 
-function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
-  const persistedThreadIds = new Set(buildPersistableThreads(state).map((thread) => thread.id));
+function buildCachedDesktopUiState(
+  state: AppStoreState,
+  threads: PersistedState["threads"],
+): CachedDesktopUiState {
+  const persistedThreadIds = new Set(threads.map((thread) => thread.id));
   const selectedThreadId =
     state.selectedThreadId && persistedThreadIds.has(state.selectedThreadId)
       ? state.selectedThreadId
@@ -125,8 +127,16 @@ function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   }
   saveDesktopStateCache({
     version: 2,
-    persistedState: buildPersistedState(state, { includeDraftAttachmentData: false }),
-    ui: buildCachedDesktopUiState(state),
+    persistedState: {
+      ...persistedState,
+      composerDrafts: Object.fromEntries(
+        Object.entries(persistedState.composerDrafts ?? {}).map(([key, draft]) => [
+          key,
+          { ...draft, attachments: [] },
+        ]),
+      ),
+    },
+    ui: buildCachedDesktopUiState(state, persistedState.threads),
     sessionSnapshots: Object.fromEntries(RUNTIME.sessionSnapshots.entries()),
   });
   return persistedState;
@@ -136,9 +146,11 @@ export function syncDesktopStateCache(get: () => AppStoreState) {
   if (_desktopCacheTimer) {
     clearTimeout(_desktopCacheTimer);
   }
+  _pendingDesktopCacheGet = get;
   _desktopCacheTimer = setTimeout(() => {
     _desktopCacheTimer = null;
     syncDesktopStateCacheState(get());
+    _pendingDesktopCacheGet = null;
   }, DESKTOP_CACHE_DEBOUNCE_MS);
 }
 
@@ -147,7 +159,9 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
     clearTimeout(_desktopCacheTimer);
     _desktopCacheTimer = null;
   }
-  return syncDesktopStateCacheState(get());
+  const state = syncDesktopStateCacheState(get());
+  _pendingDesktopCacheGet = null;
+  return state;
 }
 
 /**
@@ -160,34 +174,43 @@ export function syncDesktopStateCacheNow(get: () => AppStoreState) {
  */
 let _lastPersistedJson: string | null = null;
 let _persistWriteTail: Promise<void> | null = null;
+let _pendingPersistedState: PersistedState | null = null;
 
 function enqueuePersistedState(state: PersistedState): Promise<void> {
+  _pendingPersistedState = state;
   const serialized = JSON.stringify(state);
   const save = async () => {
-    if (serialized === _lastPersistedJson) return;
-    await saveState(state);
-    _lastPersistedJson = serialized;
+    if (serialized !== _lastPersistedJson) {
+      await saveState(state);
+      _lastPersistedJson = serialized;
+    }
+    if (_pendingPersistedState === state) _pendingPersistedState = null;
   };
-  const write = _persistWriteTail ? _persistWriteTail.then(save) : save();
+  const write = _persistWriteTail ? _persistWriteTail.catch(() => {}).then(save) : save();
 
   // A failed write must not poison either deduplication or later queued writes.
-  const tail = write.catch(() => {});
-  _persistWriteTail = tail;
-  void tail.then(() => {
-    if (_persistWriteTail === tail) {
+  // Retain the real result so close approval can observe failure, not just completion.
+  _persistWriteTail = write;
+  const clearTail = () => {
+    if (_persistWriteTail === write) {
       _persistWriteTail = null;
     }
-  });
+  };
+  void write.then(clearTail, clearTail);
   return write;
 }
 
 function schedulePersist(get: () => AppStoreState, retryAttempt = 0) {
   if (_persistTimer) clearTimeout(_persistTimer);
+  _pendingPersistGet = get;
   _persistTimer = setTimeout(
     () => {
       _persistTimer = null;
       const state = syncDesktopStateCacheNow(get);
+      _pendingPersistGet = null;
       void enqueuePersistedState(state).catch(() => {
+        // A newer scheduled or queued projection owns persistence now.
+        if (_pendingPersistGet || _pendingPersistedState !== state) return;
         if (retryAttempt < MAX_DEFERRED_PERSIST_RETRIES) {
           schedulePersist(get, retryAttempt + 1);
           return;
@@ -210,12 +233,40 @@ export async function persistNow(get: () => AppStoreState) {
     _persistTimer = null;
   }
   const state = syncDesktopStateCacheNow(get);
+  _pendingPersistGet = null;
   await enqueuePersistedState(state);
+}
+
+/** Drain only existing work; an idle/loading store must never become a new save. */
+export async function flushPendingDesktopState(): Promise<void> {
+  while (true) {
+    if (_pendingPersistGet) {
+      await persistNow(_pendingPersistGet);
+      continue;
+    }
+    if (_pendingDesktopCacheGet) syncDesktopStateCacheNow(_pendingDesktopCacheGet);
+    if (_persistWriteTail) {
+      await _persistWriteTail;
+      continue;
+    }
+    if (_pendingPersistedState) {
+      await enqueuePersistedState(_pendingPersistedState);
+      continue;
+    }
+    return;
+  }
 }
 
 export const __internal = {
   buildPersistableThreads,
   resetPersistedStateCache: () => {
     _lastPersistedJson = null;
+    if (_persistTimer) clearTimeout(_persistTimer);
+    if (_desktopCacheTimer) clearTimeout(_desktopCacheTimer);
+    _persistTimer = null;
+    _desktopCacheTimer = null;
+    _pendingPersistGet = null;
+    _pendingDesktopCacheGet = null;
+    _pendingPersistedState = null;
   },
 };

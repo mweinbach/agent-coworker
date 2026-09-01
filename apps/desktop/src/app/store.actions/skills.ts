@@ -16,6 +16,8 @@ import {
 import { isOneOffChatWorkspace } from "../types";
 import {
   clearFailedMutationSend,
+  clearMutationPending,
+  createDetailRequestTracker,
   dismissMutationError,
   managementWorkspaceIdFor,
   mutationPendingKey,
@@ -46,6 +48,7 @@ export function createSkillActions(
   | "updateSkillInstallation"
   | "dismissSkillMutationError"
 > {
+  const beginDetailRequest = createDetailRequestTracker(get);
   const workspacePath = (workspaceId: string): string | undefined =>
     workspacePathFor(get, workspaceId);
   const managementWorkspaceId = (): string | null => managementWorkspaceIdFor(get);
@@ -71,14 +74,14 @@ export function createSkillActions(
     method: string;
     params: (cwd: string | undefined) => Record<string, unknown>;
     shouldRefreshShared?: (workspaceId: string) => boolean;
-  }) =>
-    await runAcknowledgedOperation(get, set, {
-      key: operationKey("skill", options.action, options.subjectId),
+  }) => {
+    const workspaceId = managementWorkspaceId();
+    return await runAcknowledgedOperation(get, set, {
+      key: operationKey("skill", options.action, options.subjectId, workspaceId),
       label: options.label,
       errorTitle: `${options.label} failed`,
       errorMessage: options.errorMessage,
       execute: async () => {
-        const workspaceId = managementWorkspaceId();
         if (!workspaceId) throw new Error("Select a workspace first.");
         const cwd = workspacePath(workspaceId);
         const key = mutationPendingKey(options.action, options.subjectId);
@@ -111,8 +114,10 @@ export function createSkillActions(
         if (refreshSharedAfterSuccess) {
           await refreshSharedWorkspaceState(workspaceId);
         }
+        clearMutationPending(set, workspaceId, "skill", key);
       },
     });
+  };
 
   return {
     openSkills: async () => {
@@ -213,6 +218,10 @@ export function createSkillActions(
     selectSkill: async (skillName: string) => {
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
+      const requestIsCurrent = beginDetailRequest(workspaceId);
+      const isCurrent = () =>
+        requestIsCurrent() &&
+        get().workspaceRuntimeById[workspaceId]?.selectedSkillName === skillName;
       const cwd = workspacePath(workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -227,11 +236,19 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/read", {
-        cwd,
-        skillName,
-      });
-      if (!ok) {
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/skills/read",
+        {
+          cwd,
+          skillName,
+        },
+        undefined,
+        { requiredEventType: "skill_content", shouldApplyEvent: isCurrent },
+      );
+      if (!ok && isCurrent()) {
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -247,6 +264,10 @@ export function createSkillActions(
     selectSkillInstallation: async (installationId: string | null) => {
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
+      const requestIsCurrent = beginDetailRequest(workspaceId);
+      const isCurrent = () =>
+        requestIsCurrent() &&
+        get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId === installationId;
       if (installationId === null) {
         set((s) => ({
           workspaceRuntimeById: {
@@ -283,8 +304,10 @@ export function createSkillActions(
         workspaceId,
         "cowork/skills/installation/read",
         { cwd, installationId },
+        undefined,
+        { requiredEventType: "skill_installation", shouldApplyEvent: isCurrent },
       );
-      if (!ok) {
+      if (!ok && isCurrent()) {
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -319,8 +342,9 @@ export function createSkillActions(
     },
 
     installSkills: async (sourceInput: string, targetScope: "project" | "global") => {
+      const workspaceId = managementWorkspaceId();
       return await runAcknowledgedOperation(get, set, {
-        key: operationKey("skill", "install"),
+        key: operationKey("skill", "install", workspaceId),
         label: "Install skill",
         errorTitle: "Skill not installed",
         errorMessage: "Unable to install skill.",
@@ -328,7 +352,6 @@ export function createSkillActions(
         execute: async () => {
           const normalizedSource = sourceInput.trim();
           if (!normalizedSource) throw new Error("Enter a skill source.");
-          const workspaceId = managementWorkspaceId();
           if (!workspaceId) throw new Error("Select a workspace first.");
           const cwd = workspacePath(workspaceId);
           const key = mutationPendingKey(`install:${targetScope}`);

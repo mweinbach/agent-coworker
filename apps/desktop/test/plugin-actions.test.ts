@@ -45,6 +45,54 @@ describe("plugin store actions", () => {
     resetSkillPluginActionRuntime();
   });
 
+  test.each([false, true])(
+    "stale plugin details cannot replace a newer selection (%s)",
+    async (fail) => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId] = {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://mock",
+      };
+      const { get, set } = createStoreHarness(state);
+      const gate = Promise.withResolvers<Record<string, unknown>>();
+      let reads = 0;
+      RUNTIME.jsonRpcSockets.set(workspaceId, {
+        readyPromise: Promise.resolve(),
+        request: async (_method: string, params: { pluginId: string }) => {
+          if (++reads === 1) return gate.promise;
+          return {
+            event: {
+              type: "plugin_detail",
+              sessionId: "control",
+              plugin: { id: params.pluginId, scope: "workspace", displayName: "Latest plugin" },
+            },
+          };
+        },
+        respond: () => true,
+        close: () => {},
+      } as never);
+      const actions = createPluginActions(set, get);
+      const old = actions.selectPlugin("alpha", "workspace");
+      await actions.selectPlugin("beta", "workspace");
+      await actions.selectPlugin("alpha", "workspace");
+      if (fail) gate.reject(new Error("Old request failed"));
+      else
+        gate.resolve({
+          event: {
+            type: "plugin_detail",
+            sessionId: "control",
+            plugin: { id: "alpha", scope: "workspace", displayName: "Old plugin" },
+          },
+        });
+      await old;
+
+      expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe(
+        "Latest plugin",
+      );
+      expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+    },
+  );
+
   test("refreshPluginsCatalog clears loading when sendControl fails", async () => {
     const state = createState();
     const { get, set } = createStoreHarness(state);

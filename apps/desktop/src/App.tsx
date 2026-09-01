@@ -1,13 +1,14 @@
 import type { CSSProperties } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "./app/store";
-import { type BootstrapStage, disposeAllJsonRpcState } from "./app/store.helpers";
+import { type BootstrapStage, disposeAllJsonRpcState, pushNotification } from "./app/store.helpers";
 import { operationKey } from "./app/store.helpers/operations";
+import { flushPendingDesktopState } from "./app/store.helpers/persistence";
 import { isOneOffChatWorkspace } from "./app/types";
 import { Spinner } from "./components/ui/spinner";
 import { resolveRightRailSizing } from "./lib/adaptiveLayout";
 import { getCanvasSurfaceKind } from "./lib/canvasAppearance";
-import { requestCanvasDocumentTransition } from "./lib/canvasDocumentLifecycle";
+import { requestCanvasDocumentCloseApproval } from "./lib/canvasDocumentLifecycle";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getPlatformChrome,
@@ -717,9 +718,36 @@ function AppContent() {
         void (async () => {
           let canClose = false;
           try {
-            canClose = await requestCanvasDocumentTransition(null);
-          } catch {
+            canClose = await requestCanvasDocumentCloseApproval();
+            if (canClose) {
+              await flushPendingDesktopState();
+              if (
+                useAppStore
+                  .getState()
+                  .notifications.some((entry) => entry.id === "desktop-close-save-failed")
+              ) {
+                useAppStore.setState((state) => ({
+                  notifications: state.notifications.filter(
+                    (entry) => entry.id !== "desktop-close-save-failed",
+                  ),
+                }));
+              }
+            }
+          } catch (error) {
             canClose = false;
+            const message = error instanceof Error ? error.message : String(error);
+            useAppStore.setState((state) => ({
+              notifications: pushNotification(
+                state.notifications.filter((entry) => entry.id !== "desktop-close-save-failed"),
+                {
+                  id: "desktop-close-save-failed",
+                  ts: new Date().toISOString(),
+                  kind: "error",
+                  title: "Could not save before closing",
+                  detail: `${message} Your changes are still open. Try closing again to retry.`,
+                },
+              ),
+            }));
           } finally {
             await resolveWindowCloseRequest({
               requestId: request.requestId,
@@ -753,7 +781,7 @@ function AppContent() {
   useEffect(() => {
     let disposed = false;
     const windowTarget = window;
-    const handleBeforeUnload = () => {
+    const handleUnload = () => {
       if (disposed) {
         return;
       }
@@ -761,10 +789,17 @@ function AppContent() {
       invalidateBootstrap();
       runJsonRpcShutdownDisposal();
     };
+    const handlePageHide = (event: PageTransitionEvent) => {
+      if (!event.persisted) handleUnload();
+    };
 
-    windowTarget.addEventListener("beforeunload", handleBeforeUnload);
+    // beforeunload can still be canceled by an editor or a native confirmation.
+    // A cached page also keeps its live state for a later return.
+    windowTarget.addEventListener("pagehide", handlePageHide);
+    windowTarget.addEventListener("unload", handleUnload);
     return () => {
-      windowTarget.removeEventListener("beforeunload", handleBeforeUnload);
+      windowTarget.removeEventListener("pagehide", handlePageHide);
+      windowTarget.removeEventListener("unload", handleUnload);
     };
   }, [invalidateBootstrap]);
 

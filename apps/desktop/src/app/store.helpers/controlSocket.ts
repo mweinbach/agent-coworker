@@ -74,6 +74,11 @@ type RequestJsonRpcControlEventOptions = {
   shouldApplyEvent?: (event: SessionEvent) => boolean;
 };
 
+type ControlEventRequest = {
+  method: string;
+  params: Record<string, unknown>;
+};
+
 const REQUEST_TIMEOUT_MS = 5_000;
 const MCP_OAUTH_REFRESH_POLL_INTERVAL_MS = 1_000;
 const MCP_OAUTH_REFRESH_POLL_TIMEOUT_MS = 10 * 60_000;
@@ -998,6 +1003,7 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
     evt: SessionEvent,
+    request?: ControlEventRequest,
   ) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -1473,19 +1479,35 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "plugin_detail") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedPluginId: evt.plugin?.id ?? null,
-            selectedPluginScope: evt.plugin?.scope ?? null,
-            selectedPlugin: evt.plugin,
-            pluginsLoading: false,
-            pluginsError: null,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        const requestedPlugin = request?.method === "cowork/plugins/read" ? request.params : null;
+        const pluginId = evt.plugin?.id ?? requestedPlugin?.pluginId;
+        const pluginScope = evt.plugin?.scope ?? requestedPlugin?.scope;
+        if (
+          !runtime ||
+          typeof pluginId !== "string" ||
+          runtime.selectedPluginId !== pluginId ||
+          (runtime.selectedPluginScope &&
+            pluginScope &&
+            runtime.selectedPluginScope !== pluginScope)
+        ) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedPluginId: evt.plugin?.id ?? null,
+              selectedPluginScope: evt.plugin?.scope ?? null,
+              selectedPlugin: evt.plugin,
+              pluginsLoading: false,
+              pluginsError: null,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
@@ -1553,39 +1575,52 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "skill_content") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedSkillName: evt.skill.name,
-            selectedSkillContent: evt.content,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        if (!runtime || runtime.selectedSkillName !== evt.skill.name) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedSkillContent: evt.content,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
     if (evt.type === "skill_installation") {
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            selectedSkillInstallationId:
-              evt.installation?.installationId ??
-              s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
-            selectedSkillInstallation: evt.installation,
-            selectedSkillContent:
-              typeof evt.content === "string"
-                ? evt.content
-                : evt.content === null
-                  ? null
-                  : s.workspaceRuntimeById[workspaceId].selectedSkillContent,
-            skillMutationError: null,
+      set((s) => {
+        const runtime = s.workspaceRuntimeById[workspaceId];
+        const installationId =
+          evt.installation?.installationId ??
+          (request?.method === "cowork/skills/installation/read"
+            ? request.params.installationId
+            : null);
+        if (
+          !runtime ||
+          typeof installationId !== "string" ||
+          runtime.selectedSkillInstallationId !== installationId
+        ) {
+          return s;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...runtime,
+              selectedSkillInstallation: evt.installation,
+              selectedSkillContent:
+                evt.content !== undefined ? evt.content : runtime.selectedSkillContent,
+              skillMutationError: null,
+            },
           },
-        },
-      }));
+        };
+      });
       return;
     }
 
@@ -1824,113 +1859,17 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "error") {
-      const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
-      const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
-      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
-      const hasPendingSkillStateBefore =
-        workspaceRuntimeBefore &&
-        (workspaceRuntimeBefore.skillCatalogLoading ||
-          Object.keys(workspaceRuntimeBefore.skillMutationPendingKeys).length > 0);
-      const shouldRejectInstall =
-        installWaiter &&
-        workspaceRuntimeBefore &&
-        hasPendingSkillStateBefore &&
-        workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
-      const shouldRejectPluginInstall =
-        pluginInstallWaiter != null &&
-        workspaceRuntimeBefore != null &&
-        workspaceRuntimeBefore.pluginMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
-
-      set((s) => {
-        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
-        const hasPendingMemories = workspaceRuntime.memoriesLoading;
-        const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
-        const hasPendingPluginMutation =
-          Object.keys(workspaceRuntime.pluginMutationPendingKeys).length > 0;
-        const hasPendingSkillMutation = pendingSkillMutationKeys.length > 0;
-        const hasPendingSkillState =
-          workspaceRuntime.skillCatalogLoading || hasPendingSkillMutation;
-        const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
-        const hasPendingBackupState =
-          workspaceRuntime.workspaceBackupsLoading ||
-          Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
-        const hasPendingBackupDelta = workspaceRuntime.workspaceBackupDeltaLoading;
-        return {
-          notifications: deps.pushNotification(s.notifications, {
-            id: deps.makeId(),
-            ts: deps.nowIso(),
-            kind: "error",
-            title: "Control session error",
-            detail: `${evt.source}/${evt.code}: ${evt.message}`,
-          }),
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...workspaceRuntime,
-              memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
-              ...(hasPendingAnyMutation
-                ? {
-                    ...(hasPendingSkillState
-                      ? {
-                          skillMutationPendingKeys: {},
-                          ...(hasPendingSkillMutation ? { skillMutationError: evt.message } : {}),
-                        }
-                      : {}),
-                    ...(hasPendingPluginMutation
-                      ? {
-                          pluginMutationPendingKeys: {},
-                          pluginMutationError: evt.message,
-                        }
-                      : {}),
-                  }
-                : {}),
-              ...(hasPendingSkillState
-                ? {
-                    skillCatalogLoading: false,
-                    skillCatalogError: evt.message,
-                  }
-                : {}),
-              ...(workspaceRuntime.pluginsLoading
-                ? {
-                    pluginsLoading: false,
-                    pluginsError: evt.message,
-                  }
-                : hasPendingPluginMutation
-                  ? {
-                      pluginsLoading: false,
-                    }
-                  : {}),
-              ...(hasPendingBackupState
-                ? {
-                    workspaceBackupsLoading: false,
-                    workspaceBackupsError: evt.message,
-                    workspaceBackupPendingActionKeys: {},
-                    workspaceBackupDeltaLoading: hasPendingBackupDelta
-                      ? false
-                      : workspaceRuntime.workspaceBackupDeltaLoading,
-                    workspaceBackupDeltaError: hasPendingBackupDelta
-                      ? evt.message
-                      : workspaceRuntime.workspaceBackupDeltaError,
-                  }
-                : hasPendingBackupDelta
-                  ? {
-                      workspaceBackupDeltaLoading: false,
-                      workspaceBackupDeltaError: evt.message,
-                    }
-                  : {}),
-            },
-          },
-        };
-      });
-
-      if (shouldRejectInstall && installWaiter) {
-        RUNTIME.skillInstallWaiters.delete(workspaceId);
-        installWaiter.reject(new Error(evt.message));
-      }
-      if (shouldRejectPluginInstall && pluginInstallWaiter) {
-        RUNTIME.pluginInstallWaiters.delete(workspaceId);
-        pluginInstallWaiter.reject(new Error(evt.message));
-      }
+      // The request owner receives the failed acknowledgement and clears its own
+      // pending state. A generic control error cannot identify unrelated work.
+      set((s) => ({
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: "error",
+          title: "Control session error",
+          detail: `${evt.source}/${evt.code}: ${evt.message}`,
+        }),
+      }));
       return;
     }
 
@@ -1998,11 +1937,6 @@ export function createControlSocketHelpers(
       }
       let ok = true;
       for (const nextEvent of normalizedEvents) {
-        if (options.shouldApplyEvent && !options.shouldApplyEvent(nextEvent)) {
-          continue;
-        }
-        options.beforeApplyEvent?.(nextEvent);
-        applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         const acknowledgement = decodeControlEventAcknowledgement(nextEvent);
         const operationAcknowledgement = options.decodeAcknowledgement?.(nextEvent) ?? null;
         const rejection = [acknowledgement, operationAcknowledgement].find(
@@ -2012,6 +1946,11 @@ export function createControlSocketHelpers(
           ok = false;
           setErrorDetail(rejection.message);
         }
+        if (options.shouldApplyEvent && !options.shouldApplyEvent(nextEvent)) {
+          continue;
+        }
+        options.beforeApplyEvent?.(nextEvent);
+        applyJsonRpcControlEvent(get, set, workspaceId, nextEvent, { method, params });
       }
       return ok;
     } catch (err) {

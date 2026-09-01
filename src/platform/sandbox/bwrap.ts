@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { isPathInside } from "../../utils/paths";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
@@ -127,6 +128,7 @@ export function buildBwrapCommand(
       return ca.localeCompare(cb);
     });
 
+    const bindRoots: Array<{ root: string; isDirectory: boolean }> = [];
     for (const root of writableRoots) {
       // bwrap bind mount sources must exist. Only create missing sources when
       // the policy carries an explicit kind hint; otherwise skip the root rather
@@ -140,8 +142,18 @@ export function buildBwrapCommand(
       // Bind the canonical path so a symlinked root can't smuggle write access
       // to an unexpected target through a different logical path.
       const realRoot = canonicalizeRoot(root);
+      bindRoots.push({ root: realRoot, isDirectory: isDirectory(realRoot) });
+    }
+    const nestedProtectedPaths = protectedMetadataPaths(
+      bindRoots
+        .filter((binding) => binding.isDirectory && explicitRoots.has(binding.root))
+        .map((binding) => binding.root),
+      { exists, isDirectory, platform: "linux" },
+    );
+
+    for (const { root: realRoot, isDirectory: directory } of bindRoots) {
       flags.push("--bind", realRoot, realRoot);
-      if (!isDirectory(realRoot)) continue;
+      if (!directory) continue;
       // Keep existing protected metadata read-only. Do not fabricate absent
       // `.git`/`.cowork` mountpoints under the host root: bwrap may create missing
       // destinations before mounting, which would mutate the user's workspace just
@@ -152,8 +164,8 @@ export function buildBwrapCommand(
         if (exists(direct)) protectedDirs.add(direct);
       }
       if (explicitRoots.has(realRoot)) {
-        for (const dir of protectedMetadataPaths([realRoot], { exists, isDirectory })) {
-          protectedDirs.add(dir);
+        for (const dir of nestedProtectedPaths) {
+          if (dir !== realRoot && isPathInside(realRoot, dir)) protectedDirs.add(dir);
         }
       }
       for (const sub of [...protectedDirs].sort((left, right) => left.length - right.length)) {
@@ -191,7 +203,7 @@ export function collectExistingProtectedMetadataPaths(
   exists: (p: string) => boolean,
   isDirectory: (p: string) => boolean,
 ): string[] {
-  return protectedMetadataPaths([root], { exists, isDirectory });
+  return protectedMetadataPaths([root], { exists, isDirectory, platform: "linux" });
 }
 
 export const collectExistingProtectedMetadataDirs = collectExistingProtectedMetadataPaths;

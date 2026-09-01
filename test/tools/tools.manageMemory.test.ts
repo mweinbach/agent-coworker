@@ -7,6 +7,7 @@ import {
   MEMORY_INDEX_FILE,
   resolveMemoryFolderName,
 } from "../../src/advancedMemory/store";
+import { pinHome } from "../helpers/platform";
 import {
   afterEach,
   beforeEach,
@@ -25,6 +26,7 @@ import {
 let dir: string;
 let memoriesDir: string;
 let store: AdvancedMemoryStore;
+let restoreHome: () => void;
 
 type ListResult = {
   activeFolder: string;
@@ -43,11 +45,13 @@ type ToolResult = Record<string, unknown>;
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "manage-memory-tool-"));
+  restoreHome = pinHome(dir);
   memoriesDir = path.join(dir, "memories");
   store = new AdvancedMemoryStore(memoriesDir);
 });
 
 afterEach(async () => {
+  restoreHome();
   await fs.rm(dir, { recursive: true, force: true });
 });
 

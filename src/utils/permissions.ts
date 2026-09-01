@@ -274,50 +274,55 @@ export async function assertWritePathAllowed(
   return resolved;
 }
 
+/** Snapshot allowed roots for one operation, but resolve each target and deny directory anew. */
+export async function createReadPathChecker(
+  config: AgentConfig,
+  action: "read" | "glob" | "grep",
+  targetPaths?: readonly string[] | null,
+): Promise<(filePath: string) => Promise<string>> {
+  const roots = [...new Set([...readRoots(config), ...(await pluginReadRoots(config))])];
+  const allowedRoots = await Promise.all(roots.map((root) => canonicalizeRoot(root)));
+
+  return async (filePath) => {
+    const resolved = path.resolve(filePath);
+    if (!isPathInsideAnyRoot(resolved, roots)) {
+      throw new Error(`${action} blocked: path is outside ${READ_ROOT_LABEL}: ${resolved}`);
+    }
+
+    // Resolve deny directories for every target: an auth directory or its
+    // workspace can be symlinked, including after this operation began.
+    const [canonicalTarget, ...canonicalDenyDirs] = await Promise.all([
+      canonicalizeExistingPrefix(resolved),
+      ...credentialReadDenyDirs(config).map((dir) => canonicalizeExistingPrefix(dir)),
+    ]);
+    if (
+      isInsideCredentialDir(resolved, config) ||
+      isInsideCredentialDir(canonicalTarget, config) ||
+      canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
+    ) {
+      throw new Error(`${action} blocked: credential directory is not readable: ${resolved}`);
+    }
+
+    if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
+      throw new Error(
+        `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
+      );
+    }
+
+    await assertInsideAgentTargetPaths(resolved, config, action, targetPaths, {
+      projectPathsOnly: true,
+    });
+
+    return resolved;
+  };
+}
+
 export async function assertReadPathAllowed(
   filePath: string,
   config: AgentConfig,
   action: "read" | "glob" | "grep",
   targetPaths?: readonly string[] | null,
 ): Promise<string> {
-  const resolved = path.resolve(filePath);
-  const roots = [...readRoots(config), ...(await pluginReadRoots(config))];
-  if (!isPathInsideAnyRoot(resolved, roots)) {
-    throw new Error(`${action} blocked: path is outside ${READ_ROOT_LABEL}: ${resolved}`);
-  }
-
-  const canonicalRoots = await Promise.all([
-    canonicalizeExistingPrefix(resolved),
-    ...roots.map((root) => canonicalizeRoot(root)),
-  ]);
-  const [canonicalTarget, ...allowedRoots] = canonicalRoots;
-
-  // Deny credential directories before the root check (the workspace is a read
-  // root, so .cowork/auth would otherwise pass). Check the logical path and the
-  // symlink-resolved canonical path so a workspace symlink into .cowork/auth is
-  // also blocked. The deny dirs are canonicalized too: when the workspace path
-  // itself contains a symlink (e.g. macOS /var -> /private/var), the logical deny
-  // dir would not prefix-match the canonical target, so compare both forms.
-  const canonicalDenyDirs = await Promise.all(
-    credentialReadDenyDirs(config).map((dir) => canonicalizeExistingPrefix(dir)),
-  );
-  if (
-    isInsideCredentialDir(resolved, config) ||
-    isInsideCredentialDir(canonicalTarget, config) ||
-    canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
-  ) {
-    throw new Error(`${action} blocked: credential directory is not readable: ${resolved}`);
-  }
-
-  if (!allowedRoots.some((root) => isPathInside(root, canonicalTarget))) {
-    throw new Error(
-      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`,
-    );
-  }
-
-  await assertInsideAgentTargetPaths(resolved, config, action, targetPaths, {
-    projectPathsOnly: true,
-  });
-
-  return resolved;
+  const assertAllowed = await createReadPathChecker(config, action, targetPaths);
+  return assertAllowed(filePath);
 }

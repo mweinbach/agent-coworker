@@ -5,6 +5,34 @@ import path from "node:path";
 
 import type { ToolContext } from "../src/tools/context";
 import { fetchExaContents, resolveExaApiKey } from "../src/tools/exa";
+import { fetchParallelContents } from "../src/tools/parallel";
+
+function streamedResponse(text: string, init?: ResponseInit, chunkSize = 16 * 1024) {
+  const bytes = new TextEncoder().encode(text);
+  let offset = 0;
+  let cancelled = false;
+  const response = new Response(
+    new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (offset === bytes.length) {
+            controller.close();
+            return;
+          }
+          const end = Math.min(offset + chunkSize, bytes.length);
+          controller.enqueue(bytes.subarray(offset, end));
+          offset = end;
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    init,
+  );
+  return { response, readBytes: () => offset, wasCancelled: () => cancelled };
+}
 
 function makeCtx(userCoworkDir: string): ToolContext {
   return {
@@ -128,12 +156,8 @@ describe("tools/exa", () => {
     const output = await fetchExaContents({
       apiKey: "key",
       url: "https://example.com",
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        text: async () => "",
-        json: async () => ({
+      fetchImpl: async () =>
+        Response.json({
           results: [
             {
               text: { text: "main text" },
@@ -147,7 +171,6 @@ describe("tools/exa", () => {
             },
           ],
         }),
-      }),
     });
 
     expect(output.text).toBe("main text");
@@ -161,19 +184,14 @@ describe("tools/exa", () => {
     const output = await fetchExaContents({
       apiKey: "key",
       url: "https://example.com",
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        text: async () => "",
-        json: async () => ({
+      fetchImpl: async () =>
+        Response.json({
           results: [
             {
               highlights: ["first highlight", "second highlight"],
             },
           ],
         }),
-      }),
     });
 
     expect(output.text).toBe("first highlight\n\nsecond highlight");
@@ -184,13 +202,7 @@ describe("tools/exa", () => {
       fetchExaContents({
         apiKey: "key",
         url: "https://example.com",
-        fetchImpl: async () => ({
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          text: async () => "",
-          json: async () => ({}),
-        }),
+        fetchImpl: async () => Response.json({}),
       }),
     ).rejects.toThrow("no result");
 
@@ -198,12 +210,8 @@ describe("tools/exa", () => {
       fetchExaContents({
         apiKey: "key",
         url: "https://example.com",
-        fetchImpl: async () => ({
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          text: async () => "",
-          json: async () => ({
+        fetchImpl: async () =>
+          Response.json({
             results: [
               {
                 text: "",
@@ -212,8 +220,105 @@ describe("tools/exa", () => {
               },
             ],
           }),
-        }),
       }),
     ).rejects.toThrow("no content");
   });
+});
+
+describe("web provider content response limits", () => {
+  for (const [provider, fetchContents] of [
+    ["Exa", fetchExaContents],
+    ["Parallel", fetchParallelContents],
+  ] as const) {
+    const payload = (text: string) => ({
+      results: [provider === "Exa" ? { text } : { excerpts: [text] }],
+    });
+
+    test(`${provider} rejects oversized decoded JSON and cancels the stream`, async () => {
+      const body = JSON.stringify(payload("é".repeat(1_100_000)));
+      const stream = streamedResponse(body, { headers: { "Content-Length": "1" } });
+      const outcome = await fetchContents({
+        apiKey: "test-key",
+        url: "https://example.com",
+        fetchImpl: async () => stream.response,
+      }).then(
+        () => "accepted oversized response",
+        (error: unknown) => String(error),
+      );
+
+      expect(outcome).toContain("response exceeded 2 MiB");
+      expect(stream.wasCancelled()).toBe(true);
+      expect(stream.readBytes()).toBeLessThan(new TextEncoder().encode(body).byteLength);
+      expect(stream.response.body?.locked).toBe(false);
+    });
+
+    test(`${provider} preserves HTTP diagnostics without draining an oversized error body`, async () => {
+      const body = `Upstream unavailable: ${"x".repeat(256 * 1024)}`;
+      const stream = streamedResponse(body, { status: 502, statusText: "Bad Gateway" });
+      const outcome = await fetchContents({
+        apiKey: "test-key",
+        url: "https://example.com",
+        fetchImpl: async () => stream.response,
+      }).then(
+        () => "accepted error response",
+        (error: unknown) => String(error),
+      );
+
+      expect(outcome).toContain("failed: 502 Bad Gateway:");
+      expect(outcome).toContain(body.slice(0, 500));
+      expect(stream.wasCancelled()).toBe(true);
+      expect(stream.readBytes()).toBeLessThan(64 * 1024);
+      expect(stream.response.body?.locked).toBe(false);
+    });
+
+    test(`${provider} accepts JSON at the decoded byte limit`, async () => {
+      const overhead = new TextEncoder().encode(JSON.stringify(payload(""))).byteLength;
+      const text = "x".repeat(2 * 1024 * 1024 - overhead);
+      const stream = streamedResponse(JSON.stringify(payload(text)));
+      const output = await fetchContents({
+        apiKey: "test-key",
+        url: "https://example.com",
+        fetchImpl: async () => stream.response,
+      });
+
+      expect(output.text.length).toBe(text.length);
+      expect(stream.wasCancelled()).toBe(false);
+      expect(stream.response.body?.locked).toBe(false);
+    });
+
+    test(`${provider} preserves the size error when stream cancellation fails`, async () => {
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1));
+          },
+          cancel() {
+            throw new Error("cancellation failed");
+          },
+        }),
+      );
+
+      await expect(
+        fetchContents({
+          apiKey: "test-key",
+          url: "https://example.com",
+          fetchImpl: async () => response,
+        }),
+      ).rejects.toThrow("response exceeded 2 MiB");
+      expect(response.body?.locked).toBe(false);
+    });
+
+    test(`${provider} preserves UTF-8 characters split across body chunks`, async () => {
+      const text = "Café and 🦊";
+      const stream = streamedResponse(JSON.stringify(payload(text)), undefined, 1);
+      const output = await fetchContents({
+        apiKey: "test-key",
+        url: "https://example.com",
+        fetchImpl: async () => stream.response,
+      });
+
+      expect(output.text).toBe(text);
+      expect(stream.response.body?.locked).toBe(false);
+    });
+  }
 });

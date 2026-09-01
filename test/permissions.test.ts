@@ -8,6 +8,7 @@ import type { AgentConfig } from "../src/types";
 import {
   assertReadPathAllowed,
   assertWritePathAllowed,
+  createReadPathChecker,
   isReadPathAllowed,
   isWritePathAllowed,
 } from "../src/utils/permissions";
@@ -571,6 +572,47 @@ describe("isReadPathAllowed", () => {
     await fs.symlink(authDir, link);
 
     expect(isReadPathAllowed(path.join(link, "token.json"), cfg)).toBe(false);
+  });
+});
+
+describe("read permission snapshots", () => {
+  test("rechecks a target when its symlink changes during an operation", async () => {
+    const root = await fs.mkdtemp(path.join(fixtureRoot, "read-snapshot-target-"));
+    const project = path.join(root, "project");
+    const allowed = path.join(project, "allowed");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(allowed, { recursive: true });
+    await fs.mkdir(outside);
+    const link = path.join(project, "link");
+    const symlinkType = hostPlatform() === "win32" ? "junction" : "dir";
+    await fs.symlink(allowed, link, symlinkType);
+    const target = path.join(link, "file.txt");
+    const assertAllowed = await createReadPathChecker(makeConfig(project), "glob");
+
+    await expect(assertAllowed(target)).resolves.toBe(target);
+    await fs.unlink(link);
+    await fs.symlink(outside, link, symlinkType);
+    await expect(assertAllowed(target)).rejects.toThrow(/canonical target resolves outside/i);
+  });
+
+  test("rechecks credential directories when their symlinks change during an operation", async () => {
+    const project = await fs.mkdtemp(path.join(fixtureRoot, "read-snapshot-auth-"));
+    const config = makeConfig(project);
+    const initialAuth = path.join(project, "initial-auth");
+    const replacementAuth = path.join(project, "replacement-auth");
+    await fs.mkdir(config.projectCoworkDir);
+    await fs.mkdir(initialAuth);
+    await fs.mkdir(replacementAuth);
+    const authLink = path.join(config.projectCoworkDir, "auth");
+    const symlinkType = hostPlatform() === "win32" ? "junction" : "dir";
+    await fs.symlink(initialAuth, authLink, symlinkType);
+    const target = path.join(replacementAuth, "credentials.json");
+    const assertAllowed = await createReadPathChecker(config, "read");
+
+    await expect(assertAllowed(target)).resolves.toBe(target);
+    await fs.unlink(authLink);
+    await fs.symlink(replacementAuth, authLink, symlinkType);
+    await expect(assertAllowed(target)).rejects.toThrow(/credential directory is not readable/i);
   });
 });
 

@@ -125,8 +125,6 @@ export function listSessionToolNames(
           "create_thread",
           "send_message_to_thread",
           "fork_thread",
-          "handoff_thread",
-          "get_handoff_status",
           "set_thread_title",
           "set_thread_pinned",
           "set_thread_archived",

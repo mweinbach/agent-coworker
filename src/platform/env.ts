@@ -89,6 +89,16 @@ export function splitPathValue(
   return entries;
 }
 
+/** Join unquoted PATH directories, preserving Windows entries containing semicolons. */
+export function joinPathValue(
+  dirs: readonly string[],
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  return dirs
+    .map((dir) => (platform === "win32" && dir.includes(";") ? `"${dir}"` : dir))
+    .join(pathDelimiter(platform));
+}
+
 /**
  * Deduplicate PATH directories preserving first occurrence and its original
  * spelling. win32: case-folded comparison (NTFS paths are case-insensitive);
@@ -113,7 +123,8 @@ export function dedupePathDirs(
 /**
  * Return a copy of `env` (string values only) with `dirs` merged into PATH at
  * the given position, deduplicated per platform case semantics. win32: writes
- * back to the inherited PATH key spelling (e.g. "Path"); POSIX: exact "PATH".
+ * back to the inherited PATH key spelling (e.g. "Path") and quotes directories
+ * containing semicolons; POSIX: exact "PATH".
  */
 export function mergePathDirs(
   env: EnvRecord,
@@ -127,7 +138,7 @@ export function mergePathDirs(
   }
   const existing = splitPathValue(readPathValue(env, platform), platform);
   const merged = opts.position === "prepend" ? [...dirs, ...existing] : [...existing, ...dirs];
-  const value = dedupePathDirs(merged, platform).join(pathDelimiter(platform));
+  const value = joinPathValue(dedupePathDirs(merged, platform), platform);
   setEnv(result, "PATH", value, platform);
   return result;
 }

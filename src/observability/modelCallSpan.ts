@@ -1,5 +1,8 @@
 import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 
+import { redactCredentialFields } from "../diagnostics/credentials";
+import { redactDiagnosticText } from "../diagnostics/redaction";
+import { redactCredentialText } from "../diagnostics/sensitiveText";
 import type { TelemetrySettings } from "../observability/runtime";
 import type { RuntimeRunTurnParams, RuntimeUsage } from "../runtime/types";
 import { asFiniteNumber, asNonEmptyString, asRecord, asString } from "../shared/recordParsing";
@@ -10,21 +13,6 @@ function safeJsonStringify(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function redactTelemetrySecrets(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null || typeof value !== "object") return value;
-  if (seen.has(value as object)) return "[Circular]";
-  seen.add(value as object);
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactTelemetrySecrets(entry, seen));
-  }
-  const out: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    const sensitive = /(?:api[_-]?key|token|secret|password|authorization)/i.test(key);
-    out[key] = sensitive ? "[REDACTED]" : redactTelemetrySecrets(raw, seen);
-  }
-  return out;
 }
 
 export function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefined {
@@ -84,7 +72,7 @@ function startModelCallSpan(
       attributes["llm.input.messages"] = safeJsonStringify(structured.messages);
       if (structured.options !== undefined) {
         attributes["llm.input.options"] = safeJsonStringify(
-          redactTelemetrySecrets(structured.options),
+          redactCredentialFields(structured.options),
         );
       }
     } else {
@@ -187,12 +175,50 @@ export function markModelCallSpanSuccessFromTextAndUsage(
   span.end();
 }
 
-export function markModelCallSpanError(span: Span | null, error: unknown): void {
-  if (!span) return;
-  const message = error instanceof Error ? error.message : String(error);
-  span.setStatus({ code: SpanStatusCode.ERROR, message });
-  if (error instanceof Error) {
-    span.recordException(error);
+function safeErrorMetadata(value: unknown): string | number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(value) &&
+    redactCredentialText(value) === value
+  ) {
+    return value;
   }
+  return undefined;
+}
+
+export function markModelCallSpanError(
+  span: Span | null,
+  error: unknown,
+  telemetry?: TelemetrySettings,
+): void {
+  if (!span) return;
+  const details = asRecord(error);
+  const safeName = safeErrorMetadata(details?.name);
+  const name = typeof safeName === "string" ? safeName : "Error";
+  const code = safeErrorMetadata(details?.code);
+  // Provider errors can contain both the request and response. Partial payload
+  // consent is insufficient, and exception objects must never bypass redaction.
+  const allowPayload =
+    telemetry?.isEnabled === true &&
+    telemetry.recordInputs === true &&
+    telemetry.recordOutputs === true;
+  const message = allowPayload
+    ? redactDiagnosticText(asString(details?.message) ?? String(error))
+    : undefined;
+  const stack =
+    allowPayload && typeof details?.stack === "string"
+      ? redactDiagnosticText(details.stack)
+      : undefined;
+
+  span.setAttribute("error.type", name);
+  if (code !== undefined) span.setAttribute("error.code", code);
+  span.setStatus({ code: SpanStatusCode.ERROR, ...(message !== undefined ? { message } : {}) });
+  span.recordException({
+    name,
+    ...(code !== undefined ? { code } : {}),
+    ...(message !== undefined ? { message } : {}),
+    ...(stack !== undefined ? { stack } : {}),
+  });
   span.end();
 }

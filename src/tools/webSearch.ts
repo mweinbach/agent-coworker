@@ -8,6 +8,7 @@ import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { EXA_MISSING_KEY_MESSAGE, postExaJson, resolveExaApiKey } from "./exa";
 import { PARALLEL_MISSING_KEY_MESSAGE, postParallelJson, resolveParallelApiKey } from "./parallel";
+import { readWebResponseJson } from "./webResponse";
 
 const stringSchema = z.string();
 const recordSchema = z.record(z.string(), z.unknown());
@@ -140,14 +141,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
         },
         abortSignal,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(
-          `Exa search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
-        );
-      }
-
-      const data = await response.json();
+      const data = await readWebResponseJson(response, "Exa search");
       const rawResponse = recordSchema.safeParse(data);
       const parsedData = exaResponseSchema.safeParse(data);
       const results = parsedData.success ? (parsedData.data.results ?? []) : [];
@@ -186,14 +180,7 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
         },
         abortSignal,
       });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(
-          `Parallel search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
-        );
-      }
-
-      const data = await response.json();
+      const data = await readWebResponseJson(response, "Parallel search");
       const rawResponse = recordSchema.safeParse(data);
       const parsedData = parallelResponseSchema.safeParse(data);
       const results = parsedData.success ? (parsedData.data.results ?? []) : [];

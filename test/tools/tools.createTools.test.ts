@@ -504,13 +504,17 @@ describe("createTools", () => {
       "create_thread",
       "send_message_to_thread",
       "fork_thread",
-      "handoff_thread",
-      "get_handoff_status",
       "set_thread_title",
       "set_thread_pinned",
       "set_thread_archived",
     ]) {
       expect(tools).toHaveProperty(name);
+    }
+
+    const advertised = listSessionToolNames(makeConfig(dir), { includeThreadControl: true });
+    for (const unavailable of ["handoff_thread", "get_handoff_status"]) {
+      expect(tools).not.toHaveProperty(unavailable);
+      expect(advertised).not.toContain(unavailable);
     }
 
     const titleTool = tools.set_thread_title as {

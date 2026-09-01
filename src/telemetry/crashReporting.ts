@@ -133,6 +133,7 @@ let activeSdk: CrashReportingSdk | null = null;
 let activeConfig: ResolvedCrashReportingConfig | null = null;
 let activeScrubContext: ScrubContext = { workspacePaths: [], homeDir: null };
 let initPromise: Promise<CrashReportingStatus> | null = null;
+let lifecycleGeneration = 0;
 let recentCrashReportIds: string[] = [];
 
 function normalizeEnvValue(value: string | null | undefined): string | null {
@@ -333,9 +334,14 @@ export async function initCrashReporting(
     return await initPromise;
   }
 
-  initPromise = (async () => {
+  const generation = ++lifecycleGeneration;
+  const canceledStatus = toStatus({ ...config, enabled: false }, false, "disabled");
+  const pending = (async () => {
     try {
       const sdk = await context.loadSdk?.();
+      if (generation !== lifecycleGeneration) {
+        return canceledStatus;
+      }
       if (!sdk) {
         return toStatus(config, false, "sdk_unavailable");
       }
@@ -347,15 +353,23 @@ export async function initCrashReporting(
       activeConfig = config;
       return toStatus(config, true, "enabled");
     } catch (error) {
+      if (generation !== lifecycleGeneration) {
+        return canceledStatus;
+      }
       activeSdk = null;
       activeConfig = null;
       return toStatus(config, false, "sdk_unavailable", errorDetail(error));
-    } finally {
-      initPromise = null;
     }
   })();
+  initPromise = pending;
 
-  return await initPromise;
+  try {
+    return await pending;
+  } finally {
+    if (initPromise === pending) {
+      initPromise = null;
+    }
+  }
 }
 
 export function captureError(error: unknown, context: CrashReportingCaptureContext = {}): void {
@@ -388,6 +402,7 @@ export async function setCrashReportingEnabled(enabled: boolean): Promise<void> 
 }
 
 export async function shutdownCrashReporting(): Promise<void> {
+  lifecycleGeneration += 1;
   const sdk = activeSdk;
   activeSdk = null;
   activeConfig = null;

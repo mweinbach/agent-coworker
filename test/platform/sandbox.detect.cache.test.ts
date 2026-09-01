@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +13,7 @@ import {
   resetSandboxProbeCachesForTests,
   WINDOWS_SANDBOX_PROBE_TTL_MS,
 } from "../../src/platform/sandbox/detect";
+import { SandboxManager } from "../../src/platform/sandbox/index";
 
 // Detection caches are process-global; never leak fabricated probe results
 // (fake clocks, injected probes) into other suites in the same bun process.
@@ -30,6 +32,99 @@ describe("probeWindowsSandboxBundle memoization", () => {
     fs.writeFileSync(helper, "helper-bytes");
     return { root, helper };
   }
+
+  function runVerifiedProbe(
+    response: Record<string, unknown>,
+    processResult: Partial<childProcess.SpawnSyncReturns<string>> = {},
+  ) {
+    const { root, helper } = makeHelper();
+    const setup = path.join(root, "codex-windows-sandbox-setup.exe");
+    const runner = path.join(root, "codex-command-runner.exe");
+    const stdout = JSON.stringify(response);
+    const spawn = spyOn(childProcess, "spawnSync").mockReturnValue({
+      pid: 1,
+      output: [null, stdout, ""],
+      stdout,
+      stderr: "",
+      status: 0,
+      signal: null,
+      ...processResult,
+    });
+    try {
+      fs.writeFileSync(setup, "setup-bytes");
+      fs.writeFileSync(runner, "runner-bytes");
+      const result = probeWindowsSandboxBundle(helper, {
+        COWORK_WIN_SANDBOX_HOME: path.join(root, "home"),
+        COWORK_WIN_SANDBOX_HELPER_SHA256: digest("helper-bytes"),
+        COWORK_WIN_SANDBOX_SETUP_SHA256: digest("setup-bytes"),
+        COWORK_WIN_SANDBOX_COMMAND_RUNNER_SHA256: digest("runner-bytes"),
+      });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      return result;
+    } finally {
+      spawn.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const readyResponse = {
+    ready: true,
+    filesystem: true,
+    network: true,
+    process: true,
+    integrity: true,
+  };
+
+  test("accepts a successful ready probe after verifying the bundle", () => {
+    const result = runVerifiedProbe(readyResponse);
+    expect(result.setupRequired).toBe(false);
+    expect(Object.values(result.enforcement).every(Boolean)).toBe(true);
+    expect(result.warning).toBeUndefined();
+  });
+
+  test.each([
+    { name: "nonzero exit", processResult: { status: 1 } },
+    { name: "missing exit status", processResult: { status: null } },
+    { name: "termination signal", processResult: { signal: "SIGTERM" as const } },
+    { name: "timeout error", processResult: { error: new Error("spawn ETIMEDOUT") } },
+  ])("rejects ready JSON after a $name", ({ processResult }) => {
+    const result = runVerifiedProbe(readyResponse, processResult);
+    expect(result.setupRequired).toBe(true);
+    expect(result.enforcement).toEqual({
+      filesystem: false,
+      network: false,
+      process: false,
+      integrity: true,
+    });
+    expect(result.warning).toContain("probe failed");
+  });
+
+  test.each([
+    { name: "not ready", response: { ...readyResponse, ready: false } },
+    { name: "setup required", response: { ...readyResponse, setup_required: true } },
+  ])("reports $name even when every enforcement flag is true", ({ response }) => {
+    const result = runVerifiedProbe(response);
+    expect(result.setupRequired).toBe(true);
+    expect(result.warning).toContain("setup");
+    const transformed = new SandboxManager().transform({
+      file: "cmd.exe",
+      args: ["/c", "echo ready"],
+      policy: { kind: "read-only", network: false },
+      cwd: result.sandboxHome,
+      platform: "win32",
+      capabilities: {
+        seatbelt: false,
+        bwrapPath: null,
+        windowsHelperPath: result.helperPath,
+        windowsSandboxHome: result.sandboxHome,
+        windowsEnforcement: result.enforcement,
+        windowsSetupRequired: result.setupRequired,
+        windowsWarning: result.warning,
+      },
+    });
+    expect(transformed.sandbox).toBe("none");
+    expect(transformed.warning).toBe(result.warning);
+  });
 
   test("caches per (helperPath, sandboxHome) and re-probes after the TTL", () => {
     const { root, helper } = makeHelper();

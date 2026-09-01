@@ -190,7 +190,12 @@ const settingsSnapshotSchema = z
 export function sanitizeCloudSyncPayload(value: unknown): CloudSyncPayload | null {
   const parsedSettings = settingsSnapshotSchema.safeParse(value);
   if (parsedSettings.success) {
-    const snapshot = buildCloudSyncSettingsSnapshot(parsedSettings.data);
+    const snapshot = buildCloudSyncSettingsSnapshot({
+      ...parsedSettings.data,
+      developerMode: parsedSettings.data.appPreferences?.developerMode,
+      showHiddenFiles: parsedSettings.data.appPreferences?.showHiddenFiles,
+      perWorkspaceSettings: parsedSettings.data.appPreferences?.perWorkspaceSettings,
+    });
     return containsUnsafePayload(snapshot) ? null : snapshot;
   }
   if (!isRecord(value) || value.version !== CLOUD_SYNC_PAYLOAD_VERSION) return null;

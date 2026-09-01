@@ -189,6 +189,38 @@ seatbeltDescribe("seatbelt enforcement (macOS — run before merge)", () => {
     }
   });
 
+  test("allows writes inside an existing dotted child scope", () => {
+    const ws = tmpDir("sbx-dotted-scope-");
+    try {
+      const target = path.join(ws, ".github");
+      fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+      const targetPaths = [".github"];
+      expect(runSeatbelt(ws, `printf ok > '${target}/workflow.yml'`, targetPaths)).toBe(0);
+      expect(fs.readFileSync(path.join(target, "workflow.yml"), "utf8")).toBe("ok");
+      expect(runSeatbelt(ws, `printf no > '${ws}/outside.txt'`, targetPaths)).not.toBe(0);
+      expect(runSeatbelt(ws, `printf no > '${target}/.git/config'`, targetPaths)).not.toBe(0);
+      expect(fs.existsSync(path.join(ws, "outside.txt"))).toBe(false);
+      expect(fs.existsSync(path.join(target, ".git", "config"))).toBe(false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test.each([".GIT", ".CoWoRk"])("keeps nested %s metadata read-only", (name) => {
+    const ws = tmpDir("sbx-metadata-case-");
+    try {
+      const nested = path.join(ws, "nested");
+      const metadataFile = path.join(nested, name, "config");
+      fs.mkdirSync(path.dirname(metadataFile), { recursive: true });
+      fs.writeFileSync(metadataFile, "original");
+      expect(runSeatbelt(ws, `printf changed > '${metadataFile}'`)).not.toBe(0);
+      expect(fs.readFileSync(metadataFile, "utf8")).toBe("original");
+      expect(runSeatbelt(ws, `printf allowed > '${nested}/work.txt'`)).toBe(0);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   test("allows writes in a workspace that lives under a .cowork ancestor", () => {
     // The workspace is itself under a `.cowork` ancestor (like ~/.cowork/chats/<id>).
     // The metadata exclusion must be relative to the root, so writes here are NOT

@@ -148,6 +148,71 @@ describe("webSearch tool", () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    for (const status of [200, 502]) {
+      test(`${provider} caps streamed ${status === 200 ? "JSON" : "error"} response bodies`, async () => {
+        const dir = await tmpDir();
+        const originalFetch = globalThis.fetch;
+        const text =
+          status === 200
+            ? JSON.stringify({ results: [], metadata: { padding: "é".repeat(1_100_000) } })
+            : `Upstream unavailable: ${"x".repeat(256 * 1024)}`;
+        const bytes = new TextEncoder().encode(text);
+        let offset = 0;
+        let cancelled = false;
+        const response = new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (offset === bytes.length) {
+                  controller.close();
+                  return;
+                }
+                const end = Math.min(offset + 16 * 1024, bytes.length);
+                controller.enqueue(bytes.subarray(offset, end));
+                offset = end;
+              },
+              cancel() {
+                cancelled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status, statusText: status === 200 ? "OK" : "Bad Gateway" },
+        );
+        globalThis.fetch = mock(async () => response) as typeof fetch;
+
+        try {
+          await withAuthHome(dir, async () =>
+            withEnv(
+              provider === "exa" ? "EXA_API_KEY" : "PARALLEL_API_KEY",
+              "test-key",
+              async () => {
+                const tool = createWebSearchTool(
+                  makeCtx(dir, {
+                    config: makeConfig(dir, {
+                      providerOptions: { "codex-cli": { webSearchBackend: provider } },
+                    }),
+                  }),
+                );
+                const output = await tool.execute({ query: "response body limit regression" });
+                expect(typeof output).toBe("string");
+                expect(output).toContain(
+                  status === 200 ? "response exceeded 2 MiB" : "failed: 502 Bad Gateway:",
+                );
+                if (status !== 200) expect(output).toContain(text.slice(0, 500));
+                expect(cancelled).toBe(true);
+                expect(offset).toBeLessThan(status === 200 ? bytes.length : 64 * 1024);
+                expect(response.body?.locked).toBe(false);
+              },
+            ),
+          );
+        } finally {
+          globalThis.fetch = originalFetch;
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      });
+    }
   }
 
   test("uses Exa-backed web search", async () => {

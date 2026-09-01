@@ -1,11 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { symlink } from "../src/platform/fs";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 import { loadAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
 import type { AgentConfig } from "../src/types";
+import { renderActiveWorkspaceContextSection } from "../src/workspace/context";
 import {
   buildDirectoryTreeLines,
   buildWorkspaceMapSection,
@@ -49,6 +53,38 @@ describe("sanitizeWorkspaceMapLabel", () => {
 });
 
 describe("buildDirectoryTreeLines", () => {
+  test("only resolves symlinks that can appear in the bounded listing", async () => {
+    const tmp = await fs.mkdtemp(path.join(scratchRoots()[0], "ws-map-stat-budget-"));
+    const target = path.join(tmp, "target");
+    try {
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(tmp, "README.md"), "# workspace");
+      await symlink(target, path.join(tmp, "dist"), { type: "dir" });
+      await Promise.all(
+        Array.from({ length: 64 }, (_, index) =>
+          symlink(target, path.join(tmp, `link-${String(index).padStart(2, "0")}`), {
+            type: "dir",
+          }),
+        ),
+      );
+
+      const statSpy = spyOn(fsSync, "statSync");
+      try {
+        expect(buildDirectoryTreeLines(tmp, "root")).toEqual([
+          "root/",
+          "  README.md",
+          ...Array.from({ length: 19 }, (_, index) => `  link-${String(index).padStart(2, "0")}/`),
+        ]);
+        // The ignored directory link is resolved but does not consume a display slot.
+        expect(statSpy).toHaveBeenCalledTimes(20);
+      } finally {
+        statSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("escapes malicious-looking file names in tree output", async () => {
     if (process.platform === "win32") {
       // Backticks and newlines are invalid in Windows file names
@@ -96,6 +132,43 @@ describe("buildDirectoryTreeLines", () => {
 });
 
 describe("buildWorkspaceMapSection", () => {
+  test("stops scanning subdirectories after the map character budget is exhausted", async () => {
+    const tmp = await fs.mkdtemp(path.join(scratchRoots()[0], "ws-map-tree-budget-"));
+    try {
+      await fs.mkdir(path.join(tmp, ".git"));
+      for (const name of ["a", "b", "z"]) {
+        await fs.mkdir(path.join(tmp, name));
+      }
+      await Promise.all(
+        ["a", "b"].flatMap((directory) =>
+          Array.from({ length: 20 }, (_, index) =>
+            fs.writeFile(
+              path.join(tmp, directory, `${String(index).padStart(2, "0")}-${"x".repeat(150)}`),
+              "",
+            ),
+          ),
+        ),
+      );
+
+      const readdirSpy = spyOn(fsSync, "readdirSync");
+      try {
+        const section = buildWorkspaceMapSection(
+          makeConfig({ workingDirectory: tmp, projectCoworkDir: path.join(tmp, ".cowork") }),
+        );
+        expect(section).toContain("… (truncated)");
+        expect(section.length).toBeLessThanOrEqual(4000);
+        expect(section.match(/^```$/gm)).toHaveLength(2);
+        expect(readdirSpy.mock.calls.map(([directory]) => String(directory))).not.toContain(
+          path.join(tmp, "z"),
+        );
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("omits node_modules but lists package.json, apps, and packages", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ws-map-deps-"));
     const agentDir = path.join(tmp, ".cowork");
@@ -168,6 +241,26 @@ describe("WORKSPACE_MAP_IGNORED_DIRS", () => {
 });
 
 describe("prompt integration", () => {
+  test("workspace path rules respect a shared project memory directory", () => {
+    const projectMemoryDir = path.join("/test", "shared-chats", ".cowork", "memory");
+    const config = makeConfig({ projectMemoryDir });
+    const section = renderActiveWorkspaceContextSection(config);
+
+    expect(section).toContain(`- Project memory: ${projectMemoryDir}`);
+    expect(section).not.toContain(
+      `- Path rule: project config, memory, and MCP overrides live under ${config.projectCoworkDir}.`,
+    );
+  });
+
+  test("workspace path rules retain the default project memory location", () => {
+    const config = makeConfig();
+    const section = renderActiveWorkspaceContextSection(config);
+
+    expect(section).toContain(
+      `- Path rule: project config, memory, and MCP overrides live under ${config.projectCoworkDir}.`,
+    );
+  });
+
   test("loadSystemPromptWithSkills and loadAgentPrompt include Workspace Map", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ws-map-prompt-"));
     const agentDir = path.join(tmp, ".cowork");

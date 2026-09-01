@@ -5,6 +5,7 @@ import path from "node:path";
 import TurndownService from "turndown";
 import { z } from "zod";
 import { getLocalWebSearchProviderFromProviderOptions } from "../shared/openaiCompatibleOptions";
+import { raceWithAbort } from "../utils/abortSignal";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
@@ -17,6 +18,7 @@ import { fetchParallelContents, resolveParallelApiKey } from "./parallel";
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 let responseTimeoutMs = 5_000;
+let requestTimeoutMs = 30_000;
 let maxDownloadBytes = DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES;
 let htmlToMarkdownOverrideForTests:
   | ((html: string, finalUrl: string, ctx: ToolContext) => Promise<string>)
@@ -282,19 +284,28 @@ async function finalizeDownloadedFile(
   );
 }
 
-/**
- * Read an inline (non-download) response body with a hard byte ceiling on the
- * DECODED stream. `fetch` transparently inflates Content-Encoding, so a small
- * compressed body can decode to gigabytes (a decompression bomb); counting
- * decoded bytes and aborting past the cap prevents an OOM before truncation.
- */
-async function readResponseTextCapped(response: Response, maxBytes: number): Promise<string> {
+async function cancelResponseStream(
+  stream: ReadableStream<Uint8Array> | ReadableStreamDefaultReader<Uint8Array> | null,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (!stream) return;
+  const cancellation = stream.cancel().catch(() => {});
+  await raceWithAbort(cancellation, abortSignal).catch(() => {});
+}
+
+/** Cap decoded bytes, including transparently decompressed response bodies. */
+async function readResponseTextCapped(
+  response: Response,
+  maxBytes: number,
+  abortSignal?: AbortSignal,
+): Promise<string> {
   const body = response.body;
   if (!body) {
     // A null body is normally a bodyless response (204/304/HEAD) that decodes to
     // "", but guard against a non-conforming runtime returning a large body here
     // so the cap can never be bypassed via this fallback.
-    const text = await response.text();
+    abortSignal?.throwIfAborted();
+    const text = await raceWithAbort(response.text(), abortSignal);
     if (Buffer.byteLength(text, "utf-8") > maxBytes) {
       throw new Error(
         `webFetch response exceeded ${formatByteLimit(maxBytes)}; aborting to avoid memory exhaustion.`,
@@ -311,7 +322,8 @@ async function readResponseTextCapped(response: Response, maxBytes: number): Pro
   let total = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      abortSignal?.throwIfAborted();
+      const { done, value } = await raceWithAbort(reader.read(), abortSignal);
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
@@ -326,7 +338,7 @@ async function readResponseTextCapped(response: Response, maxBytes: number): Pro
   } catch (error) {
     // Cancel the underlying stream so an over-cap (e.g. decompression-bomb)
     // response stops buffering into the runtime instead of staying live until GC.
-    await reader.cancel().catch(() => {});
+    await cancelResponseStream(reader, abortSignal);
     throw error;
   } finally {
     reader.releaseLock();
@@ -380,11 +392,12 @@ async function downloadResponseToFile(opts: {
   fileName: string;
   tempPath: string;
   maxBytes: number;
+  abortSignal?: AbortSignal;
   assertCanMutate?: () => Promise<void> | void;
 }): Promise<{ bytesWritten: number; finalPath: string }> {
   const declaredLength = parseContentLength(opts.response);
   if (declaredLength !== null && declaredLength > opts.maxBytes) {
-    await opts.response.body?.cancel().catch(() => {});
+    await cancelResponseStream(opts.response.body, opts.abortSignal);
     throw new DownloadSizeLimitError(opts.maxBytes);
   }
 
@@ -396,7 +409,8 @@ async function downloadResponseToFile(opts: {
         );
       }
 
-      const bytes = Buffer.from(await opts.response.arrayBuffer());
+      opts.abortSignal?.throwIfAborted();
+      const bytes = Buffer.from(await raceWithAbort(opts.response.arrayBuffer(), opts.abortSignal));
       if (bytes.length > opts.maxBytes) {
         throw new DownloadSizeLimitError(opts.maxBytes);
       }
@@ -418,7 +432,8 @@ async function downloadResponseToFile(opts: {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        opts.abortSignal?.throwIfAborted();
+        const { done, value } = await raceWithAbort(reader.read(), opts.abortSignal);
         if (done) break;
         if (!value?.byteLength) continue;
 
@@ -427,11 +442,19 @@ async function downloadResponseToFile(opts: {
           throw new DownloadSizeLimitError(opts.maxBytes);
         }
 
-        await opts.assertCanMutate?.();
-        await fileHandle.write(value);
+        let offset = 0;
+        while (offset < value.byteLength) {
+          opts.abortSignal?.throwIfAborted();
+          await opts.assertCanMutate?.();
+          const written = await fileHandle.write(value.subarray(offset));
+          if (written.bytesWritten === 0) {
+            throw new Error("webFetch download could not make progress writing the file");
+          }
+          offset += written.bytesWritten;
+        }
       }
     } catch (error) {
-      await reader.cancel().catch(() => {});
+      await cancelResponseStream(reader, opts.abortSignal);
       throw error;
     } finally {
       try {
@@ -545,38 +568,23 @@ async function fetchWithInitialResponseTimeout(
   abortSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutController = new AbortController();
-  let timedOut = false;
+  const signal = abortSignal
+    ? AbortSignal.any([abortSignal, timeoutController.signal])
+    : timeoutController.signal;
   const timeout = setTimeout(() => {
-    timedOut = true;
-    timeoutController.abort();
+    timeoutController.abort(
+      new Error(`webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`),
+    );
   }, responseTimeoutMs);
-  const onAbort = () => {
-    timeoutController.abort();
-  };
-
-  if (abortSignal) {
-    if (abortSignal.aborted) {
-      onAbort();
-    } else {
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
 
   try {
-    return await globalThis.fetch(input, {
-      ...init,
-      signal: timeoutController.signal,
-    });
+    signal.throwIfAborted();
+    return await raceWithAbort(globalThis.fetch(input, { ...init, signal }), signal);
   } catch (error) {
-    if (timedOut) {
-      throw new Error(
-        `webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`,
-      );
-    }
+    signal.throwIfAborted();
     throw error;
   } finally {
     clearTimeout(timeout);
-    abortSignal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -584,7 +592,8 @@ async function fetchWithSafeRedirects(
   url: string,
   abortSignal?: AbortSignal,
 ): Promise<{ response: Response; finalUrl: string }> {
-  let current = await resolveSafeWebUrl(url);
+  abortSignal?.throwIfAborted();
+  let current = await raceWithAbort(resolveSafeWebUrl(url), abortSignal);
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
@@ -609,12 +618,14 @@ async function fetchWithSafeRedirects(
     }
 
     const location = response.headers.get("location");
+    await cancelResponseStream(response.body, abortSignal);
     if (!location) {
       throw new Error(`Redirect missing location header: ${current.url.toString()}`);
     }
 
     const next = new URL(location, current.url).toString();
-    current = await resolveSafeWebUrl(next);
+    abortSignal?.throwIfAborted();
+    current = await raceWithAbort(resolveSafeWebUrl(next), abortSignal);
   }
 
   throw new Error(`Too many redirects while fetching URL: ${url}`);
@@ -722,6 +733,7 @@ type WebFetchEnrichment = {
 async function maybeFetchSearchEnrichment(
   ctx: ToolContext,
   finalUrl: string,
+  abortSignal: AbortSignal | undefined = ctx.abortSignal,
 ): Promise<WebFetchEnrichment | null> {
   const provider = getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions);
   if (provider === "parallel") {
@@ -733,9 +745,10 @@ async function maybeFetchSearchEnrichment(
         apiKey: parallelApiKey,
         url: finalUrl,
         objective: `Extract the most relevant content from ${finalUrl} for browsing and follow-up reading.`,
-        abortSignal: ctx.abortSignal,
+        abortSignal,
       });
     } catch (error) {
+      abortSignal?.throwIfAborted();
       ctx.log(
         `tool! webFetch parallel enrichment skipped ${JSON.stringify({ reason: String(error) })}`,
       );
@@ -750,9 +763,10 @@ async function maybeFetchSearchEnrichment(
     return await fetchExaContents({
       apiKey: exaApiKey,
       url: finalUrl,
-      abortSignal: ctx.abortSignal,
+      abortSignal,
     });
   } catch (error) {
+    abortSignal?.throwIfAborted();
     ctx.log(`tool! webFetch exa enrichment skipped ${JSON.stringify({ reason: String(error) })}`);
     return null;
   }
@@ -804,6 +818,7 @@ export const __internal = {
   finalizeDownloadedFile,
   getMaxDownloadBytes: () => maxDownloadBytes,
   getResponseTimeoutMs: () => responseTimeoutMs,
+  getRequestTimeoutMs: () => requestTimeoutMs,
   isDesktopBundleRuntime,
   setHtmlToMarkdownForTests(
     renderer: (html: string, finalUrl: string, ctx: ToolContext) => Promise<string>,
@@ -819,6 +834,9 @@ export const __internal = {
   setResponseTimeoutMs: (ms: number) => {
     responseTimeoutMs = ms;
   },
+  setRequestTimeoutMs: (ms: number) => {
+    requestTimeoutMs = ms;
+  },
 };
 
 export function createWebFetchTool(ctx: ToolContext) {
@@ -832,100 +850,131 @@ export function createWebFetchTool(ctx: ToolContext) {
     execute: async ({ url, maxLength }: { url: string; maxLength: number }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
-      const { response, finalUrl } = await fetchWithSafeRedirects(url, ctx.abortSignal);
-      if (!response.ok) {
-        throw new Error(`webFetch failed: ${response.status} ${response.statusText}`);
-      }
+      const deadline = new AbortController();
+      const abortSignal = ctx.abortSignal
+        ? AbortSignal.any([ctx.abortSignal, deadline.signal])
+        : deadline.signal;
+      const timeout = setTimeout(() => {
+        deadline.abort(new Error(`webFetch request timed out after ${requestTimeoutMs}ms`));
+      }, requestTimeoutMs);
+      let responseToClose: Response | undefined;
+      try {
+        abortSignal.throwIfAborted();
+        const { response, finalUrl } = await fetchWithSafeRedirects(url, abortSignal);
+        responseToClose = response;
+        if (!response.ok) {
+          throw new Error(`webFetch failed: ${response.status} ${response.statusText}`);
+        }
 
-      const contentKind = classifyResponseContent(
-        response.headers.get("content-type"),
-        finalUrl,
-        response.headers.get("content-disposition"),
-      );
+        const contentKind = classifyResponseContent(
+          response.headers.get("content-type"),
+          finalUrl,
+          response.headers.get("content-disposition"),
+        );
 
-      if (contentKind.kind === "download") {
-        if (
-          ctx.sandboxPolicy?.kind === "read-only" ||
-          ctx.sandboxPolicy?.kind === "no-project-write"
-        ) {
-          throw new Error(
-            `webFetch downloads are disabled when sandbox mode is ${ctx.sandboxPolicy.kind}`,
+        if (contentKind.kind === "download") {
+          if (
+            ctx.sandboxPolicy?.kind === "read-only" ||
+            ctx.sandboxPolicy?.kind === "no-project-write"
+          ) {
+            throw new Error(
+              `webFetch downloads are disabled when sandbox mode is ${ctx.sandboxPolicy.kind}`,
+            );
+          }
+          if (ctx.shellPolicy === "no_project_write") {
+            throw new Error("webFetch downloads are disabled for read-only roles");
+          }
+          const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
+          const targetPath = path.join(downloadDir, contentKind.fileName);
+          const allowedTargetPath = await assertWritePathAllowed(
+            targetPath,
+            ctx.config,
+            "write",
+            ctx.agentTargetPaths,
           );
-        }
-        if (ctx.shellPolicy === "no_project_write") {
-          throw new Error("webFetch downloads are disabled for read-only roles");
-        }
-        const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
-        const targetPath = path.join(downloadDir, contentKind.fileName);
-        const allowedTargetPath = await assertWritePathAllowed(
-          targetPath,
-          ctx.config,
-          "write",
-          ctx.agentTargetPaths,
-        );
-        const allowedDownloadDir = path.dirname(allowedTargetPath);
-        const allowedTempPath = await assertWritePathAllowed(
-          temporaryDownloadPath(allowedDownloadDir, path.basename(allowedTargetPath)),
-          ctx.config,
-          "write",
-          ctx.agentTargetPaths,
-        );
-        const createdDirs = await prepareMutationDirectory(ctx, "webFetch", allowedDownloadDir);
-        let bytesWritten: number;
-        let finalPath: string;
-        try {
-          const downloadResult = await downloadResponseToFile({
-            response,
-            downloadDir: allowedDownloadDir,
-            fileName: path.basename(allowedTargetPath),
-            tempPath: allowedTempPath,
-            maxBytes: maxDownloadBytes,
-            assertCanMutate: () => ctx.assertCanMutate?.("webFetch"),
-          });
-          bytesWritten = downloadResult.bytesWritten;
-          finalPath = downloadResult.finalPath;
-        } catch (error) {
-          await cleanupCreatedDirectories(createdDirs);
-          throw error;
+          const allowedDownloadDir = path.dirname(allowedTargetPath);
+          const allowedTempPath = await assertWritePathAllowed(
+            temporaryDownloadPath(allowedDownloadDir, path.basename(allowedTargetPath)),
+            ctx.config,
+            "write",
+            ctx.agentTargetPaths,
+          );
+          const createdDirs = await prepareMutationDirectory(ctx, "webFetch", allowedDownloadDir);
+          let bytesWritten: number;
+          let finalPath: string;
+          try {
+            const downloadResult = await downloadResponseToFile({
+              response,
+              downloadDir: allowedDownloadDir,
+              fileName: path.basename(allowedTargetPath),
+              tempPath: allowedTempPath,
+              maxBytes: maxDownloadBytes,
+              abortSignal,
+              assertCanMutate: async () => {
+                abortSignal.throwIfAborted();
+                await ctx.assertCanMutate?.("webFetch");
+              },
+            });
+            bytesWritten = downloadResult.bytesWritten;
+            finalPath = downloadResult.finalPath;
+          } catch (error) {
+            await cleanupCreatedDirectories(createdDirs);
+            throw error;
+          }
+
+          const out = `File downloaded ${finalPath}`;
+          ctx.log(
+            `tool< webFetch ${JSON.stringify({
+              download: true,
+              category: contentKind.category,
+              path: finalPath,
+              bytes: bytesWritten,
+            })}`,
+          );
+          return out;
         }
 
-        const out = `File downloaded ${finalPath}`;
+        const bodyText = await readResponseTextCapped(response, maxDownloadBytes, abortSignal);
+        const isHtml = shouldTreatAsHtml(response.headers.get("content-type"), finalUrl, bodyText);
+        const baseText = isHtml
+          ? await (htmlToMarkdownOverrideForTests ?? htmlToMarkdown)(bodyText, finalUrl, ctx)
+          : bodyText;
+        abortSignal.throwIfAborted();
+        const enrichment =
+          isHtml && !baseText.trim()
+            ? await raceWithAbort(
+                maybeFetchSearchEnrichment(ctx, finalUrl, abortSignal),
+                abortSignal,
+              )
+            : null;
+        abortSignal.throwIfAborted();
+        const fetchedText = formatFetchedText(baseText, enrichment);
+        if (isHtml && !fetchedText) {
+          throw new Error(`webFetch returned no readable content for ${finalUrl}`);
+        }
+        const out = wrapUntrustedWebContent(finalUrl, truncateText(fetchedText, maxLength));
+
         ctx.log(
           `tool< webFetch ${JSON.stringify({
-            download: true,
-            category: contentKind.category,
-            path: finalPath,
-            bytes: bytesWritten,
+            chars: out.length,
+            finalUrl,
+            kind: isHtml ? "html" : "text",
+            enrichmentProvider: isHtml
+              ? getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions)
+              : null,
+            enriched: Boolean(enrichment),
+            links: enrichment?.links.length ?? 0,
+            imageLinks: enrichment?.imageLinks.length ?? 0,
           })}`,
         );
         return out;
+      } catch (error) {
+        abortSignal.throwIfAborted();
+        throw error;
+      } finally {
+        if (responseToClose) await cancelResponseStream(responseToClose.body, abortSignal);
+        clearTimeout(timeout);
       }
-
-      const bodyText = await readResponseTextCapped(response, maxDownloadBytes);
-      const isHtml = shouldTreatAsHtml(response.headers.get("content-type"), finalUrl, bodyText);
-      const baseText = isHtml
-        ? await (htmlToMarkdownOverrideForTests ?? htmlToMarkdown)(bodyText, finalUrl, ctx)
-        : bodyText;
-      const enrichment = isHtml ? await maybeFetchSearchEnrichment(ctx, finalUrl) : null;
-      const out = wrapUntrustedWebContent(
-        finalUrl,
-        truncateText(formatFetchedText(baseText, enrichment), maxLength),
-      );
-
-      ctx.log(
-        `tool< webFetch ${JSON.stringify({
-          chars: out.length,
-          finalUrl,
-          kind: isHtml ? "html" : "text",
-          enrichmentProvider: isHtml
-            ? getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions)
-            : null,
-          enriched: Boolean(enrichment),
-          links: enrichment?.links.length ?? 0,
-          imageLinks: enrichment?.imageLinks.length ?? 0,
-        })}`,
-      );
-      return out;
     },
   });
 }

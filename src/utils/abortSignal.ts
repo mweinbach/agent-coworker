@@ -19,7 +19,12 @@ export async function raceWithAbort<T>(
   message = "Model turn aborted.",
 ): Promise<T> {
   if (!signal) return await operation;
-  if (signal.aborted) throw new Error(message);
+  if (signal.aborted) {
+    // The caller already started the operation; consume its eventual rejection
+    // even when there is no reason to keep waiting for it.
+    void operation.catch(() => {});
+    throw new Error(message);
+  }
 
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => {

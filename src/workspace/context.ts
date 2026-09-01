@@ -126,7 +126,9 @@ export function renderActiveWorkspaceContextSection(
 
   lines.push(`- Uploads directory: ${context.effectiveUploadsDirectory}`);
 
-  if (context.projectMemoryDir === path.join(context.projectCoworkDir, "memory")) {
+  const usesDefaultProjectMemory =
+    context.projectMemoryDir === path.join(context.projectCoworkDir, "memory");
+  if (usesDefaultProjectMemory) {
     lines.push(`- Project config, memory, and MCP overrides: ${context.projectCoworkDir}`);
   } else {
     lines.push(
@@ -137,7 +139,9 @@ export function renderActiveWorkspaceContextSection(
 
   lines.push(
     "- Path rule: `bash`, `read`, `write`, `glob`, and `grep` default to the execution working directory.",
-    `- Path rule: project config, memory, and MCP overrides live under ${context.projectCoworkDir}.`,
+    usesDefaultProjectMemory
+      ? `- Path rule: project config, memory, and MCP overrides live under ${context.projectCoworkDir}.`
+      : `- Path rule: project config and MCP overrides live under ${context.projectCoworkDir}; project memory lives under ${context.projectMemoryDir}.`,
   );
 
   return lines.join("\n");

@@ -40,7 +40,6 @@
   "scripts/releaseBuildUtils.ts": 3,
   "scripts/winSandboxPrebuilt.ts": 2,
   "src/cli/repl.ts": 3,
-  "src/config.ts": 1,
   "src/coworkRuntime/archive.ts": 8,
   "src/coworkRuntime/download.ts": 1,
   "src/coworkRuntime/ensureReady.ts": 4,

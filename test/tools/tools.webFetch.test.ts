@@ -52,11 +52,13 @@ describe("webFetch tool", () => {
     );
     webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
     webFetchInternal.setResponseTimeoutMs(5_000);
+    webFetchInternal.setRequestTimeoutMs(30_000);
     webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
   });
 
   afterEach(() => {
     webFetchInternal.resetHtmlToMarkdownForTests();
+    webFetchInternal.setRequestTimeoutMs(30_000);
     webSafetyInternal.resetDnsLookup();
   });
 
@@ -103,7 +105,237 @@ describe("webFetch tool", () => {
     return response;
   };
 
-  test("returns cleaned local HTML and appends Exa links when available", async () => {
+  const createPendingResponse = (init: ResponseInit) => {
+    const started = Promise.withResolvers<void>();
+    const cancelled = mock(() => {});
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          start(value) {
+            controller = value;
+          },
+          pull() {
+            started.resolve();
+          },
+          cancel: cancelled,
+        },
+        { highWaterMark: 0 },
+      ),
+      init,
+    );
+    return {
+      response,
+      started: started.promise,
+      cancelled,
+      close() {
+        try {
+          controller.close();
+        } catch {
+          // Cancellation may already have closed the stream.
+        }
+      },
+    };
+  };
+
+  test.each(["inline", "download"] as const)(
+    "cancels a stalled %s body after headers arrive",
+    async (kind) => {
+      const dir = await tmpDir();
+      const turn = new AbortController();
+      const pending = createPendingResponse({
+        headers: { "content-type": kind === "inline" ? "text/plain" : "application/pdf" },
+      });
+      const originalFetch = globalThis.fetch;
+      let requestSignal: AbortSignal | null | undefined;
+      globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+        requestSignal = init?.signal;
+        return pending.response;
+      }) as typeof fetch;
+      const operation = createWebFetchTool(makeCtx(dir, { abortSignal: turn.signal })).execute({
+        url: "https://example.com/stalled",
+        maxLength: 50000,
+      });
+      const outcome = Promise.resolve(operation).then(
+        () => "completed",
+        (error: unknown) => error,
+      );
+      try {
+        await pending.started;
+        turn.abort(new Error("Fetch cancelled by user"));
+        const result = await Promise.race([outcome, Bun.sleep(100).then(() => "still pending")]);
+        expect(result).toBeInstanceOf(Error);
+        expect(String(result)).toMatch(/cancel|abort/i);
+        expect(requestSignal?.aborted).toBe(true);
+        expect(pending.cancelled).toHaveBeenCalledTimes(1);
+        if (kind === "download") {
+          expect(await fs.readdir(dir)).not.toContain("Downloads");
+        }
+      } finally {
+        pending.close();
+        await outcome;
+        globalThis.fetch = originalFetch;
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("bounds body reads with the whole-request deadline", async () => {
+    const dir = await tmpDir();
+    webFetchInternal.setRequestTimeoutMs(25);
+    const pending = createPendingResponse({ headers: { "content-type": "text/plain" } });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => pending.response) as typeof fetch;
+    const outcome = Promise.resolve(
+      createWebFetchTool(makeCtx(dir)).execute({
+        url: "https://example.com/stalled-body",
+        maxLength: 50000,
+      }),
+    ).then(
+      () => "completed",
+      (error: unknown) => error,
+    );
+    try {
+      await pending.started;
+      const result = await Promise.race([outcome, Bun.sleep(100).then(() => "still pending")]);
+      expect(result).toBeInstanceOf(Error);
+      expect(String(result)).toMatch(/timed out/i);
+      expect(pending.cancelled).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.close();
+      await outcome;
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels while waiting for DNS without starting a fetch", async () => {
+    const dir = await tmpDir();
+    const resolving = Promise.withResolvers<{ address: string; family: number }[]>();
+    const started = Promise.withResolvers<void>();
+    webSafetyInternal.setDnsLookup(async () => {
+      started.resolve();
+      return resolving.promise;
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("late response"));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const turn = new AbortController();
+    const outcome = Promise.resolve(
+      createWebFetchTool(makeCtx(dir, { abortSignal: turn.signal })).execute({
+        url: "https://example.com/dns",
+        maxLength: 50000,
+      }),
+    ).then(
+      () => "completed",
+      (error: unknown) => error,
+    );
+    try {
+      await started.promise;
+      turn.abort(new Error("DNS cancelled by user"));
+      const result = await Promise.race([outcome, Bun.sleep(100).then(() => "still pending")]);
+      expect(result).toBeInstanceOf(Error);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      resolving.resolve([{ address: "93.184.216.34", family: 4 }]);
+      await outcome;
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { name: "HTTP failure", status: 503, contentType: "text/plain", error: /503/ },
+    { name: "unsupported MIME", status: 200, contentType: "application/zip", error: /non-text/ },
+    { name: "read-only download", status: 200, contentType: "application/pdf", error: /read-only/ },
+  ])("cancels the discarded body on $name", async ({ status, contentType, error }) => {
+    const dir = await tmpDir();
+    const pending = createPendingResponse({ status, headers: { "content-type": contentType } });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => pending.response) as typeof fetch;
+    try {
+      await expect(
+        createWebFetchTool(makeCtx(dir, { shellPolicy: "no_project_write" })).execute({
+          url: "https://example.com/rejected",
+          maxLength: 50000,
+        }),
+      ).rejects.toThrow(error);
+      expect(pending.cancelled).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.close();
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels redirect bodies before following their location", async () => {
+    const dir = await tmpDir();
+    const pending = createPendingResponse({ status: 302, headers: { location: "/next" } });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      if (calls === 1) return pending.response;
+      expect(pending.cancelled).toHaveBeenCalledTimes(1);
+      return new Response("final text");
+    }) as typeof fetch;
+    try {
+      await expect(
+        createWebFetchTool(makeCtx(dir)).execute({
+          url: "https://example.com/redirect",
+          maxLength: 50000,
+        }),
+      ).resolves.toContain("final text");
+      expect(calls).toBe(2);
+    } finally {
+      pending.close();
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["exa", "parallel"] as const)(
+    "keeps usable local HTML and links without requesting %s enrichment",
+    async (provider) => {
+      const dir = await tmpDir();
+      webFetchInternal.resetHtmlToMarkdownForTests();
+      const originalFetch = globalThis.fetch;
+      const fetchMock = mock(
+        async () =>
+          new Response(
+            '<html><body><main><p>Usable article text.</p><a href="https://example.com/about">About</a><img src="https://example.com/hero.png" alt="Hero"></main></body></html>',
+            { headers: { "content-type": "text/html" } },
+          ),
+      );
+      globalThis.fetch = fetchMock as typeof fetch;
+      try {
+        await withEnv(
+          provider === "exa" ? "EXA_API_KEY" : "PARALLEL_API_KEY",
+          "test-key",
+          async () => {
+            await withEnv("COWORK_DESKTOP_BUNDLE", "1", async () => {
+              const output = await createWebFetchTool(
+                makeCtx(dir, {
+                  config: makeConfig(dir, {
+                    providerOptions: { "codex-cli": { webSearchBackend: provider } },
+                  }),
+                }),
+              ).execute({ url: "https://example.com/article", maxLength: 50000 });
+              expect(output).toContain("Usable article text.");
+              expect(output).toContain("[About](https://example.com/about)");
+              expect(output).toContain("![Hero](https://example.com/hero.png)");
+              expect(fetchMock).toHaveBeenCalledTimes(1);
+            });
+          },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("uses Exa text and links when local HTML has no readable content", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -134,23 +366,17 @@ describe("webFetch tool", () => {
         );
       }
 
-      return new Response(
-        "<!doctype html><html><head><style>.bad{display:none}</style><script>window.hacked = true</script></head><body><main><article><h1>Hello world</h1><p>Local HTML should win.</p></article></main></body></html>",
-        {
-          status: 200,
-          headers: { "Content-Type": "text/html" },
-        },
-      );
+      return new Response("<!doctype html><html><body><script>renderApp()</script></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
-      expect(out).toContain("Hello world");
-      expect(out).toContain("Local HTML should win.");
-      expect(out).not.toContain("Hello from Exa");
-      // Script/style stripping is covered by the real-pipeline suite below;
-      // here htmlToMarkdown is stubbed, so asserting cleaning would be circular.
+      expect(out).toContain("Hello from Exa");
+      expect(out).toContain("Fetched remotely.");
       expect(out).toContain("Links:");
       expect(out).toContain("https://example.com/about");
       expect(out).toContain("Image Links:");
@@ -162,7 +388,7 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("returns cleaned local HTML and appends Parallel extract links when configured", async () => {
+  test("uses Parallel text and links when local HTML has no readable content", async () => {
     const dir = await tmpDir();
     const oldParallel = process.env.PARALLEL_API_KEY;
     process.env.PARALLEL_API_KEY = "parallel_test_key";
@@ -196,13 +422,10 @@ describe("webFetch tool", () => {
         );
       }
 
-      return new Response(
-        "<!doctype html><html><body><main><article><h1>Hello world</h1><p>Local HTML should win.</p></article></main></body></html>",
-        {
-          status: 200,
-          headers: { "Content-Type": "text/html" },
-        },
-      );
+      return new Response("<!doctype html><html><body><script>renderApp()</script></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
@@ -218,9 +441,8 @@ describe("webFetch tool", () => {
         }),
       );
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
-      expect(out).toContain("Hello world");
-      expect(out).toContain("Local HTML should win.");
-      expect(out).not.toContain("Hello from Parallel");
+      expect(out).toContain("Hello from Parallel");
+      expect(out).toContain("Fetched remotely.");
       expect(out).toContain("Links:");
       expect(out).toContain("https://example.com/about");
       expect(out).toContain("Image Links:");
@@ -271,7 +493,7 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("falls back to local HTML when Exa enrichment fails", async () => {
+  test("reports unreadable HTML when provider fallback also fails", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -287,20 +509,17 @@ describe("webFetch tool", () => {
         });
       }
 
-      return new Response(
-        "<html><body><article><h1>Fallback page</h1><p>Use local content.</p></article></body></html>",
-        {
-          status: 200,
-          headers: { "Content-Type": "text/html" },
-        },
-      );
+      return new Response("<html><body><script>renderApp()</script></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/page", maxLength: 50000 });
-      expect(out).toContain("Fallback page");
-      expect(out).toContain("Use local content.");
+      await expect(
+        t.execute({ url: "https://example.com/page", maxLength: 50000 }),
+      ).rejects.toThrow(/no readable content/i);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1028,6 +1247,42 @@ describe("webFetch tool", () => {
     }
   });
 
+  test.each([2, 0])("handles file writes accepting %i bytes at a time", async (writeLimit) => {
+    const dir = await tmpDir();
+    const originalFetch = globalThis.fetch;
+    const originalOpen = fs.open;
+    const content = Buffer.from("complete document payload");
+    globalThis.fetch = mock(async () =>
+      createStreamingResponse(content, { headers: { "content-type": "application/pdf" } }, 8),
+    ) as typeof fetch;
+    fs.open = mock(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await originalOpen(...args);
+      const write = handle.write.bind(handle);
+      handle.write = (async (buffer: Uint8Array) =>
+        write(buffer.subarray(0, writeLimit))) as typeof handle.write;
+      return handle;
+    }) as typeof fs.open;
+    try {
+      const operation = createWebFetchTool(makeCtx(dir)).execute({
+        url: "https://example.com/document.pdf",
+        maxLength: 50000,
+      });
+      if (writeLimit === 0) {
+        await expect(operation).rejects.toThrow(/writing the file/i);
+        expect(await fs.readdir(dir)).not.toContain("Downloads");
+      } else {
+        await expect(operation).resolves.toBe(
+          `File downloaded ${path.join(dir, "Downloads", "document.pdf")}`,
+        );
+        expect(await fs.readFile(path.join(dir, "Downloads", "document.pdf"))).toEqual(content);
+      }
+    } finally {
+      fs.open = originalOpen;
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("avoids overwriting an existing download by suffixing the filename", async () => {
     const dir = await tmpDir();
     let requestCount = 0;
@@ -1285,7 +1540,7 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("uses the canonical redirected URL for Exa enrichment", async () => {
+  test("uses the canonical redirected URL for Exa fallback", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -1313,20 +1568,17 @@ describe("webFetch tool", () => {
         });
       }
 
-      return new Response(
-        "<html><body><article><h1>Redirected page</h1><p>Final local HTML.</p></article></body></html>",
-        {
-          status: 200,
-          headers: { "Content-Type": "text/html" },
-        },
-      );
+      return new Response("<html><body><script>renderApp()</script></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
         t.execute({ url: "https://example.com/start", maxLength: 50000 }),
-      ).resolves.toContain("Redirected page");
+      ).resolves.toContain("Redirected content");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;

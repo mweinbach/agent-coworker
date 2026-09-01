@@ -1,3 +1,4 @@
+import { hostPlatform } from "../../src/platform/host";
 import {
   afterEach,
   bashInternal,
@@ -36,6 +37,69 @@ import {
 } from "./tools.harness";
 
 describe("edit tool", () => {
+  test("serializes concurrent edits to different parts of one file", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "shared.txt");
+    await fs.writeFile(filePath, "alpha old\nbeta old\n");
+    const ready = Promise.withResolvers<void>();
+    let arrivals = 0;
+    const tool = createEditTool(
+      makeCtx(dir, {
+        assertCanMutate: async () => {
+          arrivals += 1;
+          if (arrivals === 2) ready.resolve();
+          if (arrivals <= 2) await ready.promise;
+        },
+      }),
+    );
+
+    await Promise.all([
+      tool.execute({ filePath, oldString: "alpha old", newString: "alpha new" }),
+      tool.execute({ filePath, oldString: "beta old", newString: "beta new" }),
+    ]);
+
+    expect(await fs.readFile(filePath, "utf8")).toBe("alpha new\nbeta new\n");
+  });
+
+  test("does not overwrite an external change made while an edit is being committed", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "external.txt");
+    await fs.writeFile(filePath, "original");
+    let changed = false;
+    const tool = createEditTool(
+      makeCtx(dir, {
+        assertCanMutate: async () => {
+          // A real concurrent writer can run during any asynchronous gate. The
+          // existing implementation only calls the gate after reading the file.
+          if (!changed) {
+            changed = true;
+            await fs.writeFile(filePath, "external");
+          }
+        },
+      }),
+    );
+
+    await expect(
+      tool.execute({ filePath, oldString: "original", newString: "replacement" }),
+    ).rejects.toThrow(/changed|not found/i);
+    expect(await fs.readFile(filePath, "utf8")).toBe("external");
+  });
+
+  test.skipIf(hostPlatform() === "win32")("preserves executable permissions", async () => {
+    const dir = await tmpDir();
+    const filePath = path.join(dir, "script.sh");
+    await fs.writeFile(filePath, "echo original\n");
+    await fs.chmod(filePath, 0o777);
+
+    await createEditTool(makeCtx(dir)).execute({
+      filePath,
+      oldString: "original",
+      newString: "updated",
+    });
+
+    expect((await fs.stat(filePath)).mode & 0o777).toBe(0o777);
+  });
+
   test("replaces single occurrence", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");

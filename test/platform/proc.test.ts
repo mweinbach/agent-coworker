@@ -1,31 +1,17 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import vm from "node:vm";
 
 import { UnsafeShimArgumentError } from "../../src/platform/exec";
 import { hostPlatform } from "../../src/platform/host";
-import {
-  __internal,
-  type ChildHandle,
-  type CloseInfo,
-  isAlive,
-  killTree,
-  onShutdownRequest,
-  registerShutdownSignals,
-  run,
-  spawnStreaming,
-  type TerminableHandle,
-  terminateGracefully,
-} from "../../src/platform/proc";
+import { __internal, isAlive, killTree, run, spawnStreaming } from "../../src/platform/proc";
 import { execFileCompat } from "../../src/utils/execFileCompat";
 
 const IS_WIN = hostPlatform() === "win32";
 const BUN = process.execPath;
-const PROC_MODULE_URL = pathToFileURL(
-  path.resolve(import.meta.dir, "../../src/platform/proc.ts"),
-).href;
 
 let scratch: string;
 
@@ -166,15 +152,22 @@ describe("proc.run — execFileCompat contract parity", () => {
     expect(result.errorCode).toBe("ABORT_ERR");
   }, 15000);
 
-  test("pre-aborted signal terminates immediately with ABORT_ERR", async () => {
+  test("pre-aborted signal returns ABORT_ERR without spawning a process", async () => {
     const controller = new AbortController();
     controller.abort();
-    const result = await run(BUN, ["-e", "await new Promise(() => {});"], {
-      signal: controller.signal,
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("A pre-aborted command must not spawn");
     });
-    expect(result.exitCode).toBe(130);
-    expect(result.errorCode).toBe("ABORT_ERR");
-  }, 15000);
+    try {
+      const result = await run(BUN, ["-e", "await new Promise(() => {});"], {
+        signal: controller.signal,
+      });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result).toEqual({ stdout: "", stderr: "", exitCode: 130, errorCode: "ABORT_ERR" });
+    } finally {
+      spawn.mockRestore();
+    }
+  });
 
   test("maxBuffer overflow → errorCode ERR_CHILD_PROCESS_STDIO_MAXBUFFER, exit 1", async () => {
     const result = await run(BUN, ["-e", 'process.stdout.write("x".repeat(4096));'], {
@@ -410,6 +403,92 @@ describe("proc.killTree — posix branch (unit, injected kill)", () => {
   });
 });
 
+describe("proc.killTree — win32 Node compatibility", () => {
+  test("uses bounded taskkill without a Bun global", async () => {
+    const bundle = await Bun.build({
+      entrypoints: [path.resolve(import.meta.dir, "../../src/platform/processTree.ts")],
+      target: "node",
+      format: "cjs",
+    });
+    const output = bundle.outputs[0];
+    if (!bundle.success || !output) throw new Error("Could not bundle the Node process helper");
+    const nodeModule = { exports: {} as typeof import("../../src/platform/processTree") };
+    const context = vm.createContext({
+      module: nodeModule,
+      exports: nodeModule.exports,
+      require: createRequire(import.meta.url),
+      process,
+    });
+    expect(vm.runInContext("typeof Bun", context)).toBe("undefined");
+    vm.runInContext(await output.text(), context);
+    const directKill = spyOn(process, "kill").mockReturnValue(true);
+    const calls: unknown[] = [];
+    try {
+      await nodeModule.exports.killTree(1234, {
+        platform: "win32",
+        execFile: (file, args, options, callback) => {
+          calls.push([file, args, options]);
+          callback(null);
+        },
+      });
+      expect(calls).toEqual([
+        [
+          "taskkill",
+          ["/PID", "1234", "/T", "/F"],
+          { windowsHide: true, timeout: 5000, killSignal: "SIGKILL" },
+        ],
+      ]);
+      expect(directKill).not.toHaveBeenCalled();
+    } finally {
+      directKill.mockRestore();
+    }
+  });
+
+  test.each([
+    Object.assign(new Error("taskkill unavailable"), { code: "ENOENT" }),
+    Object.assign(new Error("taskkill failed"), { code: 1 }),
+    Object.assign(new Error("taskkill timed out"), { killed: true, signal: "SIGKILL" }),
+  ])("falls back to a direct kill when %s", async (error) => {
+    const bunSpawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("Bun spawning is unavailable in Node");
+    });
+    const directKill = spyOn(process, "kill").mockReturnValue(true);
+    try {
+      await killTree(1234, {
+        platform: "win32",
+        execFile: (_file, _args, _options, callback) => callback(error),
+      });
+      expect(directKill).toHaveBeenCalledWith(1234, "SIGKILL");
+    } finally {
+      directKill.mockRestore();
+      bunSpawn.mockRestore();
+    }
+  });
+
+  test("swallows spawn and fallback failures for an already-gone process", async () => {
+    const bunSpawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("Bun spawning is unavailable in Node");
+    });
+    const directKill = spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    try {
+      await expect(
+        killTree(1234, {
+          platform: "win32",
+          execFile: () => {
+            throw new Error("spawn failed");
+          },
+        }),
+      ).resolves.toBeUndefined();
+      expect(directKill).toHaveBeenCalledWith(1234, "SIGKILL");
+    } finally {
+      directKill.mockRestore();
+      bunSpawn.mockRestore();
+    }
+  });
+});
+
 describe("proc.isAlive", () => {
   test("policy matrix: ESRCH → dead; EPERM → alive; any other error → alive", () => {
     const throwing = (code: string) => () => {
@@ -440,347 +519,3 @@ describe("proc.isAlive", () => {
     expect(await waitFor(() => !isAlive(handle.pid), 5000, 50)).toBe(true);
   }, 15000);
 });
-
-type FakeHandleEvents = {
-  handle: TerminableHandle;
-  events: string[];
-  resolveExit: (close: CloseInfo) => void;
-};
-
-function makeFakeHandle(
-  opts: { piped?: boolean; exitOn?: "kill" | "killTree" | "endStdin" | "never" } = {},
-): FakeHandleEvents {
-  const events: string[] = [];
-  let resolveExit!: (close: CloseInfo) => void;
-  const exited = new Promise<CloseInfo>((resolve) => {
-    resolveExit = resolve;
-  });
-  const handle: TerminableHandle = {
-    exited,
-    kill(signal) {
-      events.push(`kill:${String(signal)}`);
-      if (opts.exitOn === "kill") resolveExit({ reason: "exited", code: 0 });
-    },
-    async killTree() {
-      events.push("killTree");
-      if (opts.exitOn === "killTree") resolveExit({ reason: "terminated", code: 1 });
-    },
-  };
-  if (opts.piped) {
-    handle.endStdin = () => {
-      events.push("endStdin");
-      if (opts.exitOn === "endStdin") resolveExit({ reason: "exited", code: 0 });
-    };
-  }
-  return { handle, events, resolveExit };
-}
-
-describe("proc.terminateGracefully — unit (fake handles, every branch on every host)", () => {
-  test("posix: SIGTERM, child exits within grace → reason 'exited', no killTree", async () => {
-    const { handle, events } = makeFakeHandle({ exitOn: "kill" });
-    const close = await terminateGracefully(handle, { platform: "linux", graceMs: 2000 });
-    expect(close).toEqual({ reason: "exited", code: 0 });
-    expect(events).toEqual(["kill:SIGTERM"]);
-  });
-
-  test("posix: child ignores SIGTERM → killTree after graceMs → reason 'terminated'", async () => {
-    const { handle, events } = makeFakeHandle({ exitOn: "killTree" });
-    const started = Date.now();
-    const close = await terminateGracefully(handle, { platform: "darwin", graceMs: 60 });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(50);
-    expect(close).toEqual({ reason: "terminated", code: 1 });
-    expect(events).toEqual(["kill:SIGTERM", "killTree"]);
-  });
-
-  test("win32: requestShutdown is called and takes precedence over the stdin sentinel", async () => {
-    const { handle, events, resolveExit } = makeFakeHandle({ piped: true });
-    const order: string[] = [];
-    const close = await terminateGracefully(handle, {
-      platform: "win32",
-      graceMs: 2000,
-      requestShutdown: async () => {
-        order.push("requestShutdown");
-        resolveExit({ reason: "exited", code: 0 });
-      },
-    });
-    expect(order).toEqual(["requestShutdown"]);
-    expect(close).toEqual({ reason: "exited", code: 0 });
-    expect(events).toEqual([]); // no SIGTERM, no endStdin, no killTree
-  });
-
-  test("win32: requestShutdown failure still gets a grace window before killTree", async () => {
-    const { handle, events } = makeFakeHandle({ exitOn: "killTree" });
-    const started = Date.now();
-    const close = await terminateGracefully(handle, {
-      platform: "win32",
-      graceMs: 60,
-      requestShutdown: async () => {
-        throw new Error("rpc transport already closed");
-      },
-    });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(50);
-    expect(close).toEqual({ reason: "terminated", code: 1 });
-    expect(events).toEqual(["killTree"]);
-  });
-
-  test("win32: piped stdin → endStdin is the graceful channel", async () => {
-    const { handle, events } = makeFakeHandle({ piped: true, exitOn: "endStdin" });
-    const close = await terminateGracefully(handle, { platform: "win32", graceMs: 2000 });
-    expect(close).toEqual({ reason: "exited", code: 0 });
-    expect(events).toEqual(["endStdin"]);
-  });
-
-  test("win32: NO channel (stdin ignored, no requestShutdown) → immediate killTree, no grace wait", async () => {
-    const { handle, events } = makeFakeHandle({ exitOn: "killTree" });
-    const started = Date.now();
-    const close = await terminateGracefully(handle, { platform: "win32", graceMs: 5000 });
-    expect(Date.now() - started).toBeLessThan(2000);
-    expect(close).toEqual({ reason: "terminated", code: 1 });
-    expect(events).toEqual(["killTree"]);
-  });
-});
-
-describe("proc.terminateGracefully — live children (win32 mechanisms, portable)", () => {
-  test("piped stdin EOF: child exits GRACEFULLY (marker written) → reason 'exited', code 0", async () => {
-    const marker = scratchFile("graceful-stdin-eof.txt");
-    const child = `
-      const fs = require("node:fs");
-      (async () => {
-        for await (const _ of Bun.stdin.stream()) {}
-        fs.writeFileSync(${JSON.stringify(marker)}, "graceful");
-        process.exit(0);
-      })();
-    `;
-    const handle = spawnStreaming(BUN, ["-e", child], { stdin: "pipe", platform: "win32" });
-    const close = await handle.terminateGracefully({ graceMs: 8000 });
-    expect(close).toEqual({ reason: "exited", code: 0 });
-    expect(fs.readFileSync(marker, "utf8")).toBe("graceful");
-  }, 20000);
-
-  test("requestShutdown: caller-wired channel makes the child exit → reason 'exited'", async () => {
-    const sentinel = scratchFile("graceful-request-shutdown.txt");
-    const child = `
-      const fs = require("node:fs");
-      const timer = setInterval(() => {
-        if (fs.existsSync(${JSON.stringify(sentinel)})) { clearInterval(timer); process.exit(0); }
-      }, 25);
-    `;
-    const handle = spawnStreaming(BUN, ["-e", child], { platform: "win32" });
-    const close = await handle.terminateGracefully({
-      graceMs: 8000,
-      requestShutdown: async () => {
-        fs.writeFileSync(sentinel, "1");
-      },
-    });
-    expect(close).toEqual({ reason: "exited", code: 0 });
-  }, 20000);
-
-  test("unresponsive child escalates to the hard tree kill → reason 'terminated'", async () => {
-    const handle = spawnStreaming(BUN, ["-e", "setInterval(() => {}, 1000);"], {
-      platform: "win32",
-    });
-    const close = await handle.terminateGracefully({
-      graceMs: 250,
-      requestShutdown: async () => {}, // channel exists but the child ignores it
-    });
-    expect(close.reason).toBe("terminated");
-  }, 20000);
-
-  test.if(!IS_WIN)(
-    "posix live: SIGTERM handler runs → reason 'exited'",
-    async () => {
-      const marker = scratchFile("graceful-sigterm.txt");
-      const child = `
-      const fs = require("node:fs");
-      process.on("SIGTERM", () => {
-        fs.writeFileSync(${JSON.stringify(marker)}, "graceful");
-        process.exit(0);
-      });
-      setInterval(() => {}, 1000);
-    `;
-      const handle = spawnStreaming(BUN, ["-e", child]);
-      // Give the child a beat to install its handler.
-      await sleep(400);
-      const close = await handle.terminateGracefully({ graceMs: 8000 });
-      expect(close).toEqual({ reason: "exited", code: 0 });
-      expect(fs.readFileSync(marker, "utf8")).toBe("graceful");
-    },
-    20000,
-  );
-});
-
-describe("proc.registerShutdownSignals — signal wiring (in-process, every platform branch)", () => {
-  test("posix: SIGINT/SIGTERM/SIGHUP registered; handler fires at most once", () => {
-    const before = {
-      int: process.listenerCount("SIGINT"),
-      term: process.listenerCount("SIGTERM"),
-      hup: process.listenerCount("SIGHUP"),
-    };
-    let calls = 0;
-    const unregister = registerShutdownSignals(
-      () => {
-        calls += 1;
-      },
-      { platform: "linux" },
-    );
-    expect(process.listenerCount("SIGINT")).toBe(before.int + 1);
-    expect(process.listenerCount("SIGTERM")).toBe(before.term + 1);
-    expect(process.listenerCount("SIGHUP")).toBe(before.hup + 1);
-
-    process.emit("SIGTERM");
-    expect(calls).toBe(1);
-    process.emit("SIGHUP");
-    process.emit("SIGINT");
-    expect(calls).toBe(1); // at most once
-
-    unregister();
-    expect(process.listenerCount("SIGINT")).toBe(before.int);
-    expect(process.listenerCount("SIGTERM")).toBe(before.term);
-    expect(process.listenerCount("SIGHUP")).toBe(before.hup);
-    process.emit("SIGTERM");
-    expect(calls).toBe(1); // unregistered
-  });
-
-  test("win32: only SIGINT is registered; SIGTERM does not reach the handler", () => {
-    const beforeTerm = process.listenerCount("SIGTERM");
-    let calls = 0;
-    const unregister = registerShutdownSignals(
-      () => {
-        calls += 1;
-      },
-      { platform: "win32" },
-    );
-    expect(process.listenerCount("SIGTERM")).toBe(beforeTerm);
-    process.emit("SIGTERM");
-    expect(calls).toBe(0);
-    process.emit("SIGINT");
-    expect(calls).toBe(1);
-    unregister();
-  });
-
-  test("onShutdownRequest is the child-side alias with identical wiring", () => {
-    let calls = 0;
-    const unregister = onShutdownRequest(
-      () => {
-        calls += 1;
-      },
-      { platform: "win32" },
-    );
-    process.emit("SIGINT");
-    expect(calls).toBe(1);
-    unregister();
-  });
-});
-
-describe("proc.registerShutdownSignals — stdin-EOF opt-in gating", () => {
-  test("stdinEof: true fires the handler when the (injected) stdin stream ends", async () => {
-    let calls = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("ignored input\n"));
-        controller.close();
-      },
-    });
-    const unregister = registerShutdownSignals(
-      () => {
-        calls += 1;
-      },
-      { platform: "win32", stdinEof: true, stdinStream: stream },
-    );
-    expect(await waitFor(() => calls === 1, 2000)).toBe(true);
-    unregister();
-  });
-
-  test("without stdinEof the stdin stream is never consumed and the handler never fires", async () => {
-    let calls = 0;
-    let pulled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.close();
-      },
-      pull() {
-        pulled = true;
-      },
-    });
-    const unregister = registerShutdownSignals(
-      () => {
-        calls += 1;
-      },
-      { platform: "win32", stdinStream: stream },
-    );
-    await sleep(150);
-    expect(calls).toBe(0);
-    expect(pulled).toBe(false);
-    unregister();
-  });
-
-  test("unregister cancels the stdin watcher before EOF fires the handler", async () => {
-    let calls = 0;
-    let controller!: ReadableStreamDefaultController<Uint8Array>;
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) {
-        controller = c;
-      },
-    });
-    const unregister = registerShutdownSignals(
-      () => {
-        calls += 1;
-      },
-      { platform: "linux", stdinEof: true, stdinStream: stream },
-    );
-    unregister();
-    try {
-      controller.close();
-    } catch {
-      // Already cancelled by unregister.
-    }
-    await sleep(150);
-    expect(calls).toBe(0);
-  });
-});
-
-describe("proc.registerShutdownSignals — live children (NIT 8 headless gating)", () => {
-  test("opted-in child exits gracefully when the parent closes its stdin", async () => {
-    const marker = scratchFile("shutdown-optin.txt");
-    const child = `
-      import(${JSON.stringify(PROC_MODULE_URL)}).then(({ onShutdownRequest }) => {
-        onShutdownRequest(() => {
-          require("node:fs").writeFileSync(${JSON.stringify(marker)}, "eof");
-          process.exit(0);
-        }, { stdinEof: true });
-      });
-      setInterval(() => {}, 1000);
-    `;
-    const handle = spawnStreaming(BUN, ["-e", child], { stdin: "pipe" });
-    // Let the child import the module and register before signaling EOF.
-    await sleep(700);
-    handle.endStdin?.();
-    const close = await handle.exited;
-    expect(close.code).toBe(0);
-    expect(fs.readFileSync(marker, "utf8")).toBe("eof");
-  }, 20000);
-
-  test("non-opted child with a closed stdin does NOT exit at boot (headless server case)", async () => {
-    const marker = scratchFile("shutdown-not-opted.txt");
-    const child = `
-      import(${JSON.stringify(PROC_MODULE_URL)}).then(({ onShutdownRequest }) => {
-        onShutdownRequest(() => {
-          require("node:fs").writeFileSync(${JSON.stringify(marker)}, "eof");
-          process.exit(0);
-        });
-      });
-      setInterval(() => {}, 1000);
-    `;
-    // stdin: "ignore" ≈ `bun run serve < /dev/null` — stdin is at EOF from boot.
-    const handle = spawnStreaming(BUN, ["-e", child]);
-    await sleep(900);
-    expect(isAlive(handle.pid)).toBe(true);
-    expect(fs.existsSync(marker)).toBe(false);
-    await handle.killTree();
-    await handle.exited;
-  }, 20000);
-});
-
-// Type-level check: a real handle satisfies the structural TerminableHandle.
-const _typeCheck = (h: ChildHandle): TerminableHandle => h;
-void _typeCheck;

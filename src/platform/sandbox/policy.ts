@@ -9,6 +9,7 @@ import {
   pathCrossesProtectedMetadata,
 } from "../../utils/paths";
 import { hostPlatform } from "../host";
+import { crossesProtectedMetadata } from "../paths";
 
 /**
  * High-level sandbox policy, modeled on OpenAI Codex's `SandboxPolicy`
@@ -71,6 +72,8 @@ export function scratchRoots(platform: NodeJS.Platform = hostPlatform()): string
 
 /** Injectable filesystem predicates for {@link protectedMetadataPaths}. */
 export interface ProtectedMetadataScanOptions {
+  /** Target backend platform; controls metadata-name case sensitivity. */
+  platform?: NodeJS.Platform;
   /** Existence predicate; injectable for deterministic tests. */
   exists?: (p: string) => boolean;
   /** Directory predicate; injectable for deterministic tests. */
@@ -82,14 +85,15 @@ export interface ProtectedMetadataScanOptions {
  * (submodules, nested worktrees, …) so a backend can re-protect them. Symlinks
  * are never followed (see the loop), so a `vendor` -> `/` link can't make the
  * scan traverse out of the tree or loop forever. Results are deduplicated
- * across overlapping roots. Identical walk on every platform; shared by the
- * bwrap, Seatbelt, and (via the orchestrator) Windows backends — promoted here
- * from `bwrap.ts` so all backends track one implementation.
+ * across overlapping roots, and each directory is read once per invocation.
+ * Metadata names use the shared path-boundary case policy: case-folded on
+ * macOS/Windows, exact on Linux. Each backend supplies its target platform.
  */
 export function protectedMetadataPaths(
   roots: string[],
   opts: ProtectedMetadataScanOptions = {},
 ): string[] {
+  const platform = opts.platform ?? hostPlatform();
   const exists = opts.exists ?? ((p: string) => fs.existsSync(p));
   const isDirectory =
     opts.isDirectory ??
@@ -101,18 +105,20 @@ export function protectedMetadataPaths(
       }
     });
   const found = new Set<string>();
+  const visited = new Set<string>();
   for (const root of roots) {
     if (!exists(root) || !isDirectory(root)) continue;
     const pending = [root];
     while (pending.length > 0) {
       const current = pending.pop();
-      if (!current) continue;
+      if (!current || visited.has(current)) continue;
       let entries: string[];
       try {
         entries = fs.readdirSync(current);
       } catch {
         continue;
       }
+      visited.add(current);
       for (const entry of entries) {
         const full = path.join(current, entry);
         // Never follow symlinks while scanning: a symlinked directory (e.g.
@@ -126,7 +132,7 @@ export function protectedMetadataPaths(
           continue;
         }
         if (stats.isSymbolicLink()) continue;
-        if ((PROTECTED_SUBPATH_NAMES as readonly string[]).includes(entry)) {
+        if (crossesProtectedMetadata(current, full, platform)) {
           found.add(full);
           continue;
         }
@@ -225,7 +231,8 @@ function deriveWritableRootInfo(input: ResolveSandboxPolicyInput): {
       const real = resolveUsableTargetPath(base, containRoot, realContainRoot, p);
       if (real === null) continue;
       roots.add(real);
-      const kind = targetPathWritableRootKind(p);
+      // Existing paths have an on-disk type; creation hints only describe missing roots.
+      const kind = fs.existsSync(real) ? undefined : targetPathWritableRootKind(p);
       if (kind) rootKinds.set(real, kind);
     }
     const writableRoots = [...roots];

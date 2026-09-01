@@ -1,8 +1,7 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
-import { type Readable, Transform, type TransformCallback } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 import { z } from "zod";
 import { modelSupportsImageInputSync } from "../models/metadata";
@@ -27,41 +26,6 @@ type ReadStreamFactory = (
   filePath: string,
   options?: { encoding?: BufferEncoding; start?: number },
 ) => ReturnType<typeof createReadStream>;
-
-class Utf16BeToLeTransform extends Transform {
-  private pendingByte: number | undefined;
-
-  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    const input =
-      this.pendingByte === undefined
-        ? chunk
-        : Buffer.concat([Buffer.from([this.pendingByte]), chunk]);
-    const evenLength = input.length - (input.length % 2);
-    const swapped = Buffer.allocUnsafe(evenLength);
-    for (let i = 0; i < evenLength; i += 2) {
-      swapped[i] = input[i + 1] as number;
-      swapped[i + 1] = input[i] as number;
-    }
-    this.pendingByte = evenLength < input.length ? input[evenLength] : undefined;
-    if (swapped.length > 0) this.push(swapped);
-    callback();
-  }
-}
-
-function createUtf16DecodedStream(
-  abs: string,
-  encoding: "utf-16le" | "utf-16be",
-  createStream: ReadStreamFactory,
-): { source: ReturnType<typeof createReadStream>; input: Readable } {
-  const source = createStream(abs, { start: 2 });
-  if (encoding === "utf-16le") {
-    source.setEncoding("utf16le");
-    return { source, input: source };
-  }
-  const swapped = source.pipe(new Utf16BeToLeTransform());
-  swapped.setEncoding("utf16le");
-  return { source, input: swapped };
-}
 
 async function sniffBom(abs: string): Promise<SniffedBom> {
   const fh = await fs.open(abs, "r");
@@ -89,15 +53,116 @@ function binaryMediaGuardMessage(filePath: string, mimeType: string): string {
   ].join(" ");
 }
 
-function renderTextLine(lineNo: number, line: string, columnOffset: number): string {
-  const start = Math.min(line.length, columnOffset - 1);
-  const segment = line.slice(start, start + MAX_READ_LINE_CHARS);
-  const nextStart = start + segment.length;
-  const continuation =
-    nextStart < line.length
-      ? `... [line ${lineNo} continues; read offset=${lineNo} columnOffset=${nextStart + 1} limit=1]`
-      : "";
-  return `${lineNo}\t${segment}${continuation}`;
+function createFileTextDecoder(encoding: SniffedBom) {
+  const decoder = new StringDecoder(
+    encoding === "utf-16le" || encoding === "utf-16be" ? "utf16le" : "utf8",
+  );
+  let firstText = true;
+  let pendingByte: number | undefined;
+  const withoutBom = (text: string) => {
+    if (!firstText || text.length === 0) return text;
+    firstText = false;
+    return encoding && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  };
+  return {
+    write: (chunk: Uint8Array) => {
+      let bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (encoding === "utf-16be") {
+        if (pendingByte !== undefined) bytes = Buffer.concat([Buffer.from([pendingByte]), bytes]);
+        const evenLength = bytes.length - (bytes.length % 2);
+        pendingByte = evenLength < bytes.length ? bytes[evenLength] : undefined;
+        bytes = Buffer.from(bytes.subarray(0, evenLength)).swap16();
+      }
+      return withoutBom(decoder.write(bytes));
+    },
+    // Keep the existing read/edit decoding contract for dangling UTF-16 bytes
+    // and unpaired surrogates instead of silently replacing them with U+FFFD.
+    end: () => withoutBom(decoder.end()),
+  };
+}
+
+/** Keep only the requested character window, never a whole unbounded source line. */
+async function readTextRange(
+  source: ReturnType<typeof createReadStream>,
+  encoding: SniffedBom,
+  opts: { offset: number; columnOffset: number; limit: number; signal?: AbortSignal },
+): Promise<string> {
+  const decoder = createFileTextDecoder(encoding);
+  const lastLine = opts.offset + opts.limit - 1;
+  const numbered: string[] = [];
+  const lineBreak = /[\r\n]/g;
+  let lineNo = 1;
+  let lineLength = 0;
+  let window = "";
+  let skipLeadingLf = false;
+  let sawText = false;
+  const columnStart = () => (lineNo === opts.offset ? opts.columnOffset - 1 : 0);
+  const emitLine = () => {
+    if (lineNo < opts.offset || lineNo > lastLine) return;
+    const nextColumn = columnStart() + window.length + 1;
+    const continuation =
+      lineLength >= nextColumn
+        ? `... [line ${lineNo} continues; read offset=${lineNo} columnOffset=${nextColumn} limit=1]`
+        : "";
+    numbered.push(`${lineNo}\t${window}${continuation}`);
+  };
+  const consume = (text: string): boolean => {
+    if (text.length === 0) return false;
+    sawText = true;
+    let cursor = skipLeadingLf && text[0] === "\n" ? 1 : 0;
+    skipLeadingLf = false;
+    lineBreak.lastIndex = cursor;
+    while (cursor < text.length) {
+      const separator = lineBreak.exec(text);
+      const end = separator?.index ?? text.length;
+      if (lineNo >= opts.offset && lineNo <= lastLine) {
+        const start = Math.max(cursor, cursor + columnStart() - lineLength);
+        const stop = Math.min(end, cursor + columnStart() + MAX_READ_LINE_CHARS - lineLength);
+        if (start < stop) window += text.slice(start, stop);
+      }
+      lineLength += end - cursor;
+      // Once the last requested line has a continuation, nothing after this
+      // window can affect the result. Close even if that line spans gigabytes.
+      if (lineNo === lastLine && lineLength > columnStart() + MAX_READ_LINE_CHARS) {
+        emitLine();
+        return true;
+      }
+      if (!separator) return false;
+      emitLine();
+      if (lineNo === lastLine) return true;
+      lineNo += 1;
+      lineLength = 0;
+      window = "";
+      cursor = end + 1;
+      if (separator[0] === "\r") {
+        if (cursor === text.length) skipLeadingLf = true;
+        else if (text[cursor] === "\n") cursor += 1;
+      }
+      lineBreak.lastIndex = cursor;
+    }
+    return false;
+  };
+
+  const close = () => source.destroy();
+  opts.signal?.addEventListener("abort", close, { once: true });
+  try {
+    opts.signal?.throwIfAborted();
+    for await (const chunk of source) {
+      opts.signal?.throwIfAborted();
+      if (consume(decoder.write(chunk))) return numbered.join("\n");
+    }
+    opts.signal?.throwIfAborted();
+    if (!consume(decoder.end()) && (lineLength > 0 || (lineNo === 1 && !sawText))) {
+      emitLine();
+    }
+    return numbered.join("\n");
+  } catch (error) {
+    opts.signal?.throwIfAborted();
+    throw error;
+  } finally {
+    opts.signal?.removeEventListener("abort", close);
+    close();
+  }
 }
 
 export function createReadTool(
@@ -133,6 +198,7 @@ export function createReadTool(
       limit: number;
     }) => {
       ctx.log(`tool> read ${JSON.stringify({ filePath, offset, columnOffset, limit })}`);
+      ctx.abortSignal?.throwIfAborted();
 
       const abs = await assertReadPathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
@@ -149,6 +215,9 @@ export function createReadTool(
         ].join(" ");
         ctx.log(`tool< read ${JSON.stringify({ directoryGuard: true })}`);
         return message;
+      }
+      if (!stat.isFile()) {
+        throw new Error(`Cannot read ${path.basename(abs) || abs}: not a regular file.`);
       }
 
       const mimeType = mimeTypeFromPath(abs);
@@ -169,7 +238,7 @@ export function createReadTool(
         if (preReadSizeMessage) {
           throw new Error(preReadSizeMessage);
         }
-        const buffer = Buffer.from(await Bun.file(abs).arrayBuffer());
+        const buffer = await fs.readFile(abs, { signal: ctx.abortSignal });
         const sizeMessage = getAttachmentByteLengthValidationMessage([buffer.length]);
         if (sizeMessage) {
           throw new Error(sizeMessage);
@@ -206,64 +275,19 @@ export function createReadTool(
         return message;
       }
 
-      const start = (offset || 1) - 1;
-      const end = start + limit;
-      const firstReturnedLine = start + 1;
-      const numbered: string[] = [];
-
       // The documented canonical view: LF-normalized lines regardless of the
       // file's true EOL bytes; edit round-trips the real EOL (platform/text).
       // BOMs are decoded, never leaked into line 1 where a model would copy
       // them into an edit oldString. UTF-16 (a common PowerShell redirection
       // artifact on Windows) is decoded instead of mojibaked.
-      let lineNo = 0;
       const bom = await sniffBom(abs);
-      if (bom === "utf-16le" || bom === "utf-16be") {
-        const { source, input } = createUtf16DecodedStream(abs, bom, createStream);
-        const rl = readline.createInterface({ input, crlfDelay: Infinity });
-        try {
-          for await (const line of rl) {
-            lineNo += 1;
-            if (lineNo <= start) continue;
-            if (lineNo > end) break;
-            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-            numbered.push(
-              renderTextLine(lineNo, line, lineNo === firstReturnedLine ? columnOffset : 1),
-            );
-          }
-        } finally {
-          rl.close();
-          input.destroy();
-          source.destroy();
-        }
-      } else {
-        const stream = createStream(abs, { encoding: "utf-8" });
-        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-        try {
-          for await (let line of rl) {
-            lineNo += 1;
-            if (lineNo === 1 && bom === "utf-8" && line.charCodeAt(0) === 0xfeff) {
-              line = line.slice(1);
-            }
-            if (lineNo <= start) continue;
-            if (lineNo > end) break;
-            if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-            numbered.push(
-              renderTextLine(lineNo, line, lineNo === firstReturnedLine ? columnOffset : 1),
-            );
-          }
-        } finally {
-          rl.close();
-          stream.destroy();
-        }
-      }
-
-      if (lineNo === 0 && start === 0) {
-        // Preserve existing behavior for empty files.
-        numbered.push("1\t");
-      }
-
-      const res = numbered.join("\n");
+      ctx.abortSignal?.throwIfAborted();
+      const res = await readTextRange(createStream(abs), bom, {
+        offset: offset || 1,
+        columnOffset,
+        limit,
+        signal: ctx.abortSignal,
+      });
 
       ctx.log(`tool< read ${JSON.stringify({ chars: res.length })}`);
       return res;

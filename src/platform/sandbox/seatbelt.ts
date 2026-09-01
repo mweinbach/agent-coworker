@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { isPathInside } from "../../utils/paths";
 import {
   canonicalizeRoot,
   PROTECTED_SUBPATH_NAMES,
@@ -201,6 +202,10 @@ function buildWritePolicy(
       return false;
     }
   };
+  const nestedProtectedPaths = protectedMetadataPaths(
+    [...metadataScanRoots].filter((root) => !explicitFileRoots.has(root)),
+    { exists: fsExists, isDirectory: fsIsDirectory, platform: "darwin" },
+  );
 
   let excludedIndex = 0;
   const components: string[] = [];
@@ -225,11 +230,8 @@ function buildWritePolicy(
     // /tmp scratch family (recursively scanning all of /tmp would be slow and
     // pointless), mirroring the bwrap backend.
     if (metadataScanRoots.has(root)) {
-      for (const dir of protectedMetadataPaths([root], {
-        exists: fsExists,
-        isDirectory: fsIsDirectory,
-      })) {
-        protectedDirs.add(dir);
+      for (const dir of nestedProtectedPaths) {
+        if (dir !== root && isPathInside(root, dir)) protectedDirs.add(dir);
       }
     }
     const excluded: string[] = [];

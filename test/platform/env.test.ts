@@ -196,6 +196,24 @@ describe("mergePathDirs", () => {
     expect(result.Path).toBe("C:\\a;C:\\z");
   });
 
+  for (const position of ["prepend", "append"] as const) {
+    test(`win32: ${position} preserves semicolon-containing PATH entries across repeated merges`, () => {
+      const inherited = ["C:\\tools;stable", "C:\\Windows"];
+      const added = "C:\\runtime;next";
+      const expected = position === "prepend" ? [added, ...inherited] : [...inherited, added];
+      const result = mergePathDirs({ Path: '"C:\\tools;stable";C:\\Windows' }, [added], {
+        position,
+        platform: "win32",
+      });
+      expect(splitPathValue(result.Path ?? "", "win32")).toEqual(expected);
+      const repeated = mergePathDirs(result, [added.toLowerCase()], {
+        position: "append",
+        platform: "win32",
+      });
+      expect(splitPathValue(repeated.Path ?? "", "win32")).toEqual(expected);
+    });
+  }
+
   for (const platform of POSIX_PLATFORMS) {
     test(`${platform}: prepend and append with ':' delimiter under exact 'PATH'`, () => {
       const pre = mergePathDirs({ PATH: "/old" }, ["/new"], { position: "prepend", platform });

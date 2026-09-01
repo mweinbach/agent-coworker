@@ -3,7 +3,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
+import { which } from "../src/platform/exec";
 import { hostPlatform } from "../src/platform/host";
 import { canonicalizeSync } from "../src/platform/paths";
 import { lockDatabasePathFor, withFileLock } from "../src/utils/fileLock";
@@ -12,6 +14,61 @@ import { symlinkOrJunction } from "./helpers/platform";
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 const tempDirs: string[] = [];
 const childProcesses: Array<ReturnType<typeof Bun.spawn>> = [];
+const electronRelativePath = await fs
+  .readFile(path.join(REPO_ROOT, "node_modules/electron/path.txt"), "utf-8")
+  .then((value) => value.trim())
+  .catch(() => null);
+const electronPath = electronRelativePath
+  ? path.join(REPO_ROOT, "node_modules/electron/dist", electronRelativePath)
+  : null;
+const externalRuntimes = [
+  { name: "Node", executable: which("node") },
+  {
+    name: "Electron",
+    executable:
+      electronPath && (await fs.stat(electronPath).catch(() => null)) ? electronPath : null,
+  },
+];
+
+async function buildNodeLockModule(dir: string): Promise<string> {
+  const bundle = await Bun.build({
+    entrypoints: [path.join(REPO_ROOT, "src/utils/fileLock.ts")],
+    outdir: dir,
+    naming: "file-lock.mjs",
+    target: "node",
+    format: "esm",
+    external: ["bun:sqlite", "node:sqlite"],
+  });
+  if (!bundle.success || !bundle.outputs[0]) {
+    throw new Error(`Could not bundle the Node lock module: ${bundle.logs.join("\n")}`);
+  }
+  return bundle.outputs[0].path;
+}
+
+async function runExternalLockScript(
+  executable: string,
+  script: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn({
+    cmd: [executable, "--input-type=module", "--eval", script],
+    cwd: REPO_ROOT,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  childProcesses.push(child);
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 3_000);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function makeTempTarget(): Promise<{
   dir: string;
@@ -27,31 +84,51 @@ async function makeTempTarget(): Promise<{
   };
 }
 
-async function spawnLockHolder(input: {
-  dir: string;
-  lockRoot: string;
-  target: string;
-}): Promise<ReturnType<typeof Bun.spawn>> {
-  const scriptPath = path.join(input.dir, "lock-holder.ts");
+async function spawnLockHolder(
+  input: { dir: string; lockRoot: string; target: string },
+  externalExecutable?: string,
+): Promise<ReturnType<typeof Bun.spawn>> {
+  const scriptPath = path.join(
+    input.dir,
+    externalExecutable ? "lock-holder.mjs" : "lock-holder.ts",
+  );
+  const modulePath = externalExecutable
+    ? pathToFileURL(await buildNodeLockModule(input.dir)).href
+    : path.join(REPO_ROOT, "src/utils/fileLock.ts");
   const readyPath = path.join(input.dir, "holder-ready");
   await fs.writeFile(
     scriptPath,
     [
       'import fs from "node:fs/promises";',
-      `import { withFileLock } from ${JSON.stringify(path.join(REPO_ROOT, "src/utils/fileLock.ts"))};`,
+      `import { withFileLock } from ${JSON.stringify(modulePath)};`,
       "const [target, lockRoot, readyPath] = process.argv.slice(2);",
       "if (!target || !lockRoot || !readyPath) throw new Error('missing lock-holder argument');",
+      // Node needs an active handle while the deliberately unresolved callback
+      // holds the lock. The timer also bounds orphaned test children.
+      "const failSafe = setTimeout(() => process.exit(124), 10_000);",
+      "try {",
       "await withFileLock(target, async () => {",
-      '  await fs.writeFile(readyPath, "ready");',
+      // The parent uses existence as readiness, so publish only complete JSON.
+      "  const pendingReadyPath = readyPath + '.pending';",
+      "  await fs.writeFile(pendingReadyPath, JSON.stringify({ bun: typeof Bun, node: process.versions.node, electron: process.versions.electron ?? null }));",
+      "  await fs.rename(pendingReadyPath, readyPath);",
       "  await new Promise(() => {});",
       "}, { lockRoot });",
+      "} finally { clearTimeout(failSafe); }",
     ].join("\n"),
     "utf-8",
   );
 
   const child = Bun.spawn({
-    cmd: [process.execPath, "run", scriptPath, input.target, input.lockRoot, readyPath],
+    cmd: [
+      ...(externalExecutable ? [externalExecutable] : [process.execPath, "run"]),
+      scriptPath,
+      input.target,
+      input.lockRoot,
+      readyPath,
+    ],
     cwd: REPO_ROOT,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdout: "ignore",
     stderr: "pipe",
   });
@@ -70,13 +147,113 @@ async function spawnLockHolder(input: {
 
 afterEach(async () => {
   for (const child of childProcesses.splice(0)) {
-    child.kill();
+    child.kill("SIGKILL");
     await child.exited.catch(() => {});
   }
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("withFileLock", () => {
+  for (const runtime of externalRuntimes) {
+    test.skipIf(!runtime.executable)(
+      `${runtime.name} imports the bundled lock module without a Bun global (requires installed runtime)`,
+      async () => {
+        if (!runtime.executable) throw new Error(`${runtime.name} is not installed`);
+        const { dir, lockRoot, target } = await makeTempTarget();
+        const modulePath = await buildNodeLockModule(dir);
+        const result = await runExternalLockScript(
+          runtime.executable,
+          [
+            `import { withFileLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};`,
+            "if (typeof Bun !== 'undefined' || process.versions.bun) throw new Error('unexpected Bun runtime');",
+            `const value = await withFileLock(${JSON.stringify(target)}, async () => "acquired", { lockRoot: ${JSON.stringify(lockRoot)} });`,
+            "console.log(JSON.stringify({ value, bun: typeof Bun, node: process.versions.node, electron: process.versions.electron ?? null }));",
+          ].join("\n"),
+        );
+        expect({ exitCode: result.exitCode, stderr: result.stderr }).toMatchObject({ exitCode: 0 });
+        const evidence = JSON.parse(result.stdout);
+        expect(evidence).toMatchObject({ value: "acquired", bun: "undefined" });
+        expect(evidence.node).toBeString();
+        if (runtime.name === "Electron") expect(evidence.electron).toBeString();
+        else expect(evidence.electron).toBeNull();
+      },
+      10_000,
+    );
+
+    test.skipIf(!runtime.executable)(
+      `${runtime.name} holds the same SQLite lock against Bun until process exit (requires installed runtime)`,
+      async () => {
+        if (!runtime.executable) throw new Error(`${runtime.name} is not installed`);
+        const input = await makeTempTarget();
+        const child = await spawnLockHolder(input, runtime.executable);
+        const evidence = JSON.parse(
+          await fs.readFile(path.join(input.dir, "holder-ready"), "utf-8"),
+        );
+        expect(evidence.bun).toBe("undefined");
+        expect(evidence.node).toBeString();
+        if (runtime.name === "Electron") expect(evidence.electron).toBeString();
+
+        await expect(
+          withFileLock(input.target, async () => "must not enter", {
+            acquireTimeoutMs: 100,
+            lockRoot: input.lockRoot,
+            retryDelayMs: 5,
+          }),
+        ).rejects.toThrow("Timed out acquiring file lock");
+
+        child.kill("SIGKILL");
+        await child.exited;
+        childProcesses.splice(childProcesses.indexOf(child), 1);
+        await expect(
+          withFileLock(input.target, async () => "recovered", {
+            acquireTimeoutMs: 1_000,
+            lockRoot: input.lockRoot,
+            retryDelayMs: 5,
+          }),
+        ).resolves.toBe("recovered");
+      },
+      10_000,
+    );
+
+    test.skipIf(!runtime.executable)(
+      `Bun holds the same SQLite lock against ${runtime.name}, which recovers after exit (requires installed runtime)`,
+      async () => {
+        if (!runtime.executable) throw new Error(`${runtime.name} is not installed`);
+        const input = await makeTempTarget();
+        const child = await spawnLockHolder(input);
+        const modulePath = await buildNodeLockModule(input.dir);
+        const script = [
+          `import { withFileLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};`,
+          "if (typeof Bun !== 'undefined' || process.versions.bun) throw new Error('unexpected Bun runtime');",
+          "let value;",
+          "try {",
+          `  value = await withFileLock(${JSON.stringify(input.target)}, async () => "acquired", { lockRoot: ${JSON.stringify(input.lockRoot)}, acquireTimeoutMs: 100, retryDelayMs: 5 });`,
+          "} catch (error) { value = error instanceof Error ? error.message : String(error); }",
+          "console.log(JSON.stringify({ value, bun: typeof Bun, node: process.versions.node, electron: process.versions.electron ?? null }));",
+        ].join("\n");
+
+        const blocked = await runExternalLockScript(runtime.executable, script);
+        expect({ exitCode: blocked.exitCode, stderr: blocked.stderr }).toMatchObject({
+          exitCode: 0,
+        });
+        const evidence = JSON.parse(blocked.stdout);
+        expect(evidence.value).toStartWith("Timed out acquiring file lock");
+        expect(evidence.bun).toBe("undefined");
+        if (runtime.name === "Electron") expect(evidence.electron).toBeString();
+
+        child.kill("SIGKILL");
+        await child.exited;
+        childProcesses.splice(childProcesses.indexOf(child), 1);
+        const recovered = await runExternalLockScript(runtime.executable, script);
+        expect({ exitCode: recovered.exitCode, stderr: recovered.stderr }).toMatchObject({
+          exitCode: 0,
+        });
+        expect(JSON.parse(recovered.stdout)).toMatchObject({ value: "acquired", bun: "undefined" });
+      },
+      10_000,
+    );
+  }
+
   test("serializes concurrent critical sections in one process", async () => {
     const { lockRoot, target } = await makeTempTarget();
     let inside = 0;
@@ -267,6 +444,36 @@ describe("withFileLock", () => {
     await expect(withFileLock(target, async () => "reacquired", { lockRoot })).resolves.toBe(
       "reacquired",
     );
+  });
+
+  test("shares transaction locks with native Bun SQLite and recovers after rollback", async () => {
+    const { lockRoot, target } = await makeTempTarget();
+    const lockPath = lockDatabasePathFor(target, lockRoot);
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    const database = new Database(lockPath, { create: true, strict: false });
+    try {
+      database.exec("PRAGMA busy_timeout = 0");
+      database.exec("BEGIN IMMEDIATE");
+      await expect(
+        withFileLock(target, async () => "must not enter", {
+          acquireTimeoutMs: 100,
+          lockRoot,
+          retryDelayMs: 5,
+        }),
+      ).rejects.toThrow("Timed out acquiring file lock");
+
+      database.exec("ROLLBACK");
+      // Keep the native connection open: rollback alone must release the lock.
+      await expect(
+        withFileLock(target, async () => "recovered", {
+          acquireTimeoutMs: 1_000,
+          lockRoot,
+          retryDelayMs: 5,
+        }),
+      ).resolves.toBe("recovered");
+    } finally {
+      database.close(true);
+    }
   });
 
   test("releases the transaction after the callback throws", async () => {

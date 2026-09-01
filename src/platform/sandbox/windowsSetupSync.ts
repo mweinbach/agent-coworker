@@ -114,9 +114,11 @@ async function readSetupState(home: string): Promise<SetupState | null> {
 }
 
 async function writeSetupState(home: string, state: SetupState): Promise<void> {
+  // Publish the marker last so an interrupted copy keeps its previous freshness
+  // and is retried instead of advertising credentials that were never written.
   const targets: Array<[string, string]> = [
-    [path.join(home, SETUP_MARKER_RELATIVE), state.markerContents],
     [path.join(home, SANDBOX_USERS_RELATIVE), state.usersContents],
+    [path.join(home, SETUP_MARKER_RELATIVE), state.markerContents],
   ];
   for (const [target, contents] of targets) {
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -196,7 +198,13 @@ export async function syncCodexWindowsSandboxSetupState(
 
   for (const participant of participants) {
     if (participant === winner) continue;
-    if (participant.state && participant.state.freshness >= winner.state.freshness) continue;
+    // Matching timestamps alone can hide a previously interrupted pair update.
+    if (
+      participant.state?.markerContents === winner.state.markerContents &&
+      participant.state?.usersContents === winner.state.usersContents
+    ) {
+      continue;
+    }
     try {
       await writeSetupState(participant.home, winner.state);
       result.updatedHomes.push(participant.home);

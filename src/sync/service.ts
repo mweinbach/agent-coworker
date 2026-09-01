@@ -67,6 +67,8 @@ export class CloudSyncService {
   private readonly log?: CloudSyncServiceOptions["log"];
   private readonly providerFactory: NonNullable<CloudSyncServiceOptions["providerFactory"]>;
   private timer: unknown = null;
+  private scheduledAt: number | null = null;
+  private stopped = false;
   private provider: CloudSyncProvider | null = null;
   private providerKey = "";
   private flushing = false;
@@ -123,24 +125,20 @@ export class CloudSyncService {
         this.env,
       );
       this.effectiveConfig = config;
-      if (!config.enabled) {
+      if (this.stopped || !config.enabled || !config.syncSettings) {
+        this.cancelScheduledFlush();
         return this.rememberStatus({
           status: "disabled",
           queued: (await this.queue.read()).length,
         });
       }
       if (config.provider !== "custom" || !config.endpoint) {
+        this.cancelScheduledFlush();
         return this.rememberStatus({
           status: "not_configured",
           queued: (await this.queue.read()).length,
         });
       }
-      if (!config.syncSettings)
-        return this.rememberStatus({
-          status: "disabled",
-          queued: (await this.queue.read()).length,
-        });
-
       const payload = buildCloudSyncSettingsSnapshot(state);
       if (containsForbiddenCloudSyncData(payload)) {
         return this.rememberStatus({
@@ -168,20 +166,38 @@ export class CloudSyncService {
     }
   }
 
-  private scheduleFlush(): void {
-    if (this.timer) return;
-    this.timer = this.setTimer(() => {
+  private cancelScheduledFlush(): void {
+    if (this.timer !== null) this.clearTimer(this.timer);
+    this.timer = null;
+    this.scheduledAt = null;
+  }
+
+  private scheduleFlush(delayMs = 0): void {
+    if (this.stopped) return;
+    const scheduledAt = this.now().getTime() + delayMs;
+    if (this.scheduledAt !== null && this.scheduledAt <= scheduledAt) return;
+    this.cancelScheduledFlush();
+    this.scheduledAt = scheduledAt;
+    this.timer = this.setTimer(async () => {
       this.timer = null;
-      void this.flushNow();
-    }, 0);
+      this.scheduledAt = null;
+      try {
+        await this.flushNow();
+      } catch (error) {
+        this.log?.("warn", "cloud sync scheduled flush failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, delayMs);
   }
 
   async flushNow(): Promise<CloudSyncStatus> {
     if (this.flushing) {
       return this.rememberStatus({ status: "queued", queued: (await this.queue.read()).length });
     }
+    this.cancelScheduledFlush();
     const config = this.effectiveConfig ?? resolveEffectiveCloudSyncConfig(undefined, this.env);
-    if (!config.enabled) {
+    if (this.stopped || !config.enabled || !config.syncSettings) {
       return this.rememberStatus({
         status: "disabled",
         queued: (await this.queue.read()).length,
@@ -199,6 +215,8 @@ export class CloudSyncService {
     try {
       const due = await this.queue.due();
       for (const entry of due) {
+        const currentConfig = this.effectiveConfig ?? config;
+        if (this.stopped || !currentConfig.enabled || !currentConfig.syncSettings) break;
         try {
           const unsupportedPatch = unsupportedQueuedPatchReason(entry.patch);
           if (unsupportedPatch) {
@@ -215,7 +233,18 @@ export class CloudSyncService {
           });
         }
       }
-      const queued = (await this.queue.read()).length;
+      const remaining = await this.queue.read();
+      const queued = remaining.length;
+      const currentConfig = this.effectiveConfig ?? config;
+      if (this.stopped || !currentConfig.enabled || !currentConfig.syncSettings) {
+        return this.rememberStatus({ status: "disabled", queued });
+      }
+      if (queued > 0) {
+        const nextAttemptAt = Math.min(
+          ...remaining.map((entry) => Date.parse(entry.nextAttemptAt)),
+        );
+        this.scheduleFlush(Math.max(0, nextAttemptAt - this.now().getTime()));
+      }
       return this.rememberStatus({ status: queued > 0 ? "queued" : "connected", queued });
     } catch (error) {
       this.log?.("warn", "cloud sync flush failed", {
@@ -232,15 +261,14 @@ export class CloudSyncService {
   }
 
   async clearLocalQueue(): Promise<CloudSyncStatus> {
+    this.cancelScheduledFlush();
     await this.queue.clear();
     return this.rememberStatus({ status: "disabled", queued: 0 });
   }
 
   async shutdown(): Promise<void> {
-    if (this.timer) {
-      this.clearTimer(this.timer);
-      this.timer = null;
-    }
+    this.stopped = true;
+    this.cancelScheduledFlush();
     await this.provider?.shutdown();
     this.provider = null;
     this.providerKey = "";

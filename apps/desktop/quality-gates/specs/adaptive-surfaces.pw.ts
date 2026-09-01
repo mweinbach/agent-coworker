@@ -166,6 +166,36 @@ for (const mode of ["light", "dark", "forced-colors"] satisfies QualityMode[]) {
         expect(colors.detail).toBe(colors.foreground);
       }
       await captureSurface(page, testInfo, `error-notification-${mode}`);
+
+      if (mode === "light" || mode === "forced-colors") {
+        if (mode === "light") {
+          await page.emulateMedia({ forcedColors: "active" });
+          await settleQualityPage(page);
+        }
+        const models = navigation.getByRole("button", { name: "Models", exact: true });
+        await expect(models).toHaveAttribute("aria-current", "page");
+        await expect(models).toHaveScreenshot("settings-navigation-models-forced-colors.png");
+      }
+
+      if (mode === "light") {
+        await captureSurface(page, testInfo, "settings-navigation-media-transition");
+      }
+      if (mode === "forced-colors") {
+        for (const { label, snapshot } of [
+          { label: "Profile & Memory", snapshot: "profile-memory" },
+          { label: "Models", snapshot: "models" },
+        ]) {
+          await navigation.getByRole("button", { name: label, exact: true }).click();
+          await expect(page.getByRole("heading", { name: label, exact: true })).toBeVisible();
+          await page.getByRole("button", { name: "Open settings navigation", exact: true }).click();
+          const selectedPage = navigation.getByRole("button", { name: label, exact: true });
+          await expect(selectedPage).toHaveAttribute("aria-current", "page");
+          await expect(selectedPage).toHaveScreenshot(
+            `settings-navigation-${snapshot}-forced-colors.png`,
+          );
+        }
+        await captureSurface(page, testInfo, "settings-navigation-round-trip");
+      }
     });
   });
 }

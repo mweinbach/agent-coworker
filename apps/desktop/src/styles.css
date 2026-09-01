@@ -665,6 +665,14 @@ samp {
   box-shadow: none;
 }
 
+@media (forced-colors: active) {
+  .settings-shell__nav-button[aria-current="page"] > span {
+    /* Suppress Chromium's text backplate without replacing the user's system palette. */
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}
+
 .settings-shell__main {
   border-left-width: 0;
   background: var(--surface-settings-main);

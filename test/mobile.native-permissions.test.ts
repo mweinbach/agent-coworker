@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
+
+import { hostPlatform } from "../src/platform/host";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 
 const require = createRequire(import.meta.url);
 const androidManifestPath = new URL(
@@ -17,6 +19,19 @@ const iosProjectPath = new URL(
 const mobileAppJsonPath = new URL("../apps/mobile/app.json", import.meta.url);
 const minimalPermissionsPlugin = require("../apps/mobile/plugins/with-minimal-native-permissions.js");
 const { __internal } = minimalPermissionsPlugin;
+
+function readBonjourReleaseScript(): string {
+  const projectSource = readFileSync(iosProjectPath, "utf8");
+  const scripts = Array.from(
+    projectSource.matchAll(/shellScript = ("(?:\\.|[^"\\])*");/g),
+    (match) => JSON.parse(match[1]) as string,
+  );
+  const script = scripts.find(
+    (value) => value.includes("NSBonjourServices") && value.includes("_expo._tcp"),
+  );
+  expect(script).toBeDefined();
+  return script!;
+}
 
 function readAndroidPermissionNames(manifestSource: string): string[] {
   return Array.from(
@@ -68,7 +83,9 @@ describe("mobile native permissions", () => {
       new URL("../apps/mobile/plugins/with-minimal-native-permissions.js", import.meta.url),
       "utf8",
     );
-    const isolatedDir = mkdtempSync(path.join(tmpdir(), "cowork-mobile-permissions-plugin-"));
+    const isolatedDir = mkdtempSync(
+      path.join(scratchRoots()[0], "cowork-mobile-permissions-plugin-"),
+    );
     const isolatedPluginPath = path.join(isolatedDir, "with-minimal-native-permissions.js");
     writeFileSync(isolatedPluginPath, pluginSource);
 
@@ -85,12 +102,24 @@ describe("mobile native permissions", () => {
 
     expect(config.expo.android.permissions).toEqual(["android.permission.CAMERA"]);
     expect(config.expo.ios.infoPlist).toMatchObject({
+      NSAppTransportSecurity: {
+        NSAllowsArbitraryLoads: false,
+        NSAllowsLocalNetworking: true,
+      },
       NSCameraUsageDescription:
         "Cowork Mobile uses the camera to scan remote access pairing QR codes.",
       NSLocalNetworkUsageDescription:
         "Cowork Mobile uses the local network to connect to your paired desktop after scanning its QR code.",
     });
     expect(config.expo.plugins).toContain("./plugins/with-minimal-native-permissions");
+    expect(config.expo.plugins).toContainEqual([
+      "expo-camera",
+      { microphonePermission: false, recordAudioAndroid: false },
+    ]);
+    expect(config.expo.plugins).toContainEqual([
+      "expo-secure-store",
+      { faceIDPermission: false, configureAndroidBackup: false },
+    ]);
   });
 
   test("prunes generated Android permissions while preserving network and QR scanning", () => {
@@ -184,14 +213,49 @@ describe("mobile native permissions", () => {
     expect(hasPlistKey(infoPlistSource, "NSMicrophoneUsageDescription")).toBe(false);
   });
 
-  test("strips Expo Bonjour from non-Debug iOS builds", () => {
-    const projectSource = readFileSync(iosProjectPath, "utf8");
-
-    expect(projectSource).toContain("[Expo Dev Launcher] Strip Expo Bonjour for Release");
-    expect(projectSource).toContain("*Debug*) exit 0");
-    expect(projectSource).toContain("PlistBuddy");
-    expect(projectSource).toContain("NSBonjourServices");
-    expect(projectSource).toContain(__internal.EXPO_DEV_CLIENT_BONJOUR_SERVICE);
-    expect(projectSource).toContain("INFOPLIST_FILE = CoworkMobile/Info.plist");
+  test("includes the Expo Bonjour release cleanup build phase", () => {
+    expect(readBonjourReleaseScript()).toContain("CONFIGURATION");
   });
+
+  test.skipIf(hostPlatform() !== "darwin").each(["Debug", "Release"])(
+    "runs the generated Bonjour cleanup correctly for %s builds",
+    (configuration) => {
+      const directory = mkdtempSync(path.join(scratchRoots()[0], "cowork-bonjour-test-"));
+      try {
+        const scriptPath = path.join(directory, "strip-bonjour.sh");
+        const plistPath = path.join(directory, "Info.plist");
+        writeFileSync(scriptPath, readBonjourReleaseScript());
+        writeFileSync(
+          plistPath,
+          `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>NSBonjourServices</key>
+  <array><string>_expo._tcp</string><string>_cowork._tcp</string></array>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>${__internal.LOCAL_NETWORK_USAGE_DESCRIPTION}</string>
+</dict></plist>`,
+        );
+        const result = Bun.spawnSync(["/bin/sh", scriptPath], {
+          env: {
+            ...process.env,
+            CONFIGURATION: configuration,
+            TARGET_BUILD_DIR: directory,
+            INFOPLIST_PATH: "Info.plist",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        const resultPlist = readFileSync(plistPath, "utf8");
+        expect(readPlistStringArray(resultPlist, "NSBonjourServices")).toEqual(
+          configuration === "Debug" ? ["_expo._tcp", "_cowork._tcp"] : ["_cowork._tcp"],
+        );
+        expect(readPlistString(resultPlist, "NSLocalNetworkUsageDescription")).toBe(
+          __internal.LOCAL_NETWORK_USAGE_DESCRIPTION,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });

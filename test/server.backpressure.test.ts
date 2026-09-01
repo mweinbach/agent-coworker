@@ -15,6 +15,68 @@ function fakeSocket(sendImpl: (serialized: string) => number): StartServerSocket
 }
 
 describe("WebSocket backpressure queue", () => {
+  test("does not resend a message Bun accepted under backpressure", () => {
+    const delivered: number[] = [];
+    let sendStatus = -1;
+    const q = new SocketSendQueue();
+    const ws = fakeSocket((serialized) => {
+      delivered.push((JSON.parse(serialized) as { seq: number }).seq);
+      return sendStatus;
+    });
+
+    q.send(ws, { seq: 1 });
+    q.send(ws, { seq: 2 });
+    expect(delivered).toEqual([1]);
+
+    sendStatus = 1;
+    q.flush(ws);
+    expect(delivered).toEqual([1, 2]);
+    expect(q.getStats().queueDepthByConnection["conn-1"]).toBeUndefined();
+  });
+
+  test("removes an accepted queued message before pausing for another drain", () => {
+    const delivered: number[] = [];
+    let sendStatus = 0;
+    const q = new SocketSendQueue();
+    const ws = fakeSocket((serialized) => {
+      if (sendStatus !== 0) delivered.push((JSON.parse(serialized) as { seq: number }).seq);
+      return sendStatus;
+    });
+
+    q.send(ws, { seq: 1 });
+    q.send(ws, { seq: 2 });
+    sendStatus = -1;
+    q.flush(ws);
+    expect(delivered).toEqual([1]);
+    expect(q.getStats().queueDepthByConnection["conn-1"]).toBe(1);
+
+    sendStatus = 1;
+    q.send(ws, { seq: 3 });
+    expect(delivered).toEqual([1]);
+    q.flush(ws);
+    expect(delivered).toEqual([1, 2, 3]);
+  });
+
+  test("holds later sends until drain when the last queued message creates backpressure", () => {
+    const delivered: number[] = [];
+    let sendStatus = 0;
+    const q = new SocketSendQueue();
+    const ws = fakeSocket((serialized) => {
+      if (sendStatus !== 0) delivered.push((JSON.parse(serialized) as { seq: number }).seq);
+      return sendStatus;
+    });
+
+    q.send(ws, { seq: 1 });
+    sendStatus = -1;
+    q.flush(ws);
+    q.send(ws, { seq: 2 });
+    expect(delivered).toEqual([1]);
+
+    sendStatus = 1;
+    q.flush(ws);
+    expect(delivered).toEqual([1, 2]);
+  });
+
   test("queues messages when send returns backpressure", () => {
     const q = new SocketSendQueue(500);
     q.send(

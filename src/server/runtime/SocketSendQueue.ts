@@ -30,6 +30,7 @@ function evictLeastCriticalSend(queue: QueuedSendItem[]): "delta" | "important" 
 
 export class SocketSendQueue {
   private readonly pendingSends = new Map<string, QueuedSendItem[]>();
+  private readonly backpressuredConnections = new Set<string>();
   private readonly externalSinks = new Map<string, (serialized: string) => boolean>();
   private readonly stats: Omit<SocketSendQueueStats, "queueDepthByConnection"> = {
     queuedSends: 0,
@@ -65,7 +66,10 @@ export class SocketSendQueue {
     }
 
     const connectionId = ws.data.connectionId;
-    if (connectionId && this.pendingSends.has(connectionId)) {
+    if (
+      connectionId &&
+      (this.pendingSends.has(connectionId) || this.backpressuredConnections.has(connectionId))
+    ) {
       this.enqueue(connectionId, { payload: serialized, isDelta });
       return;
     }
@@ -84,8 +88,11 @@ export class SocketSendQueue {
 
     try {
       const status = ws.send(serialized);
-      if (status === 0 || status === -1) {
-        if (!connectionId) return;
+      if (!connectionId) return;
+      if (status === -1) {
+        // Bun accepted this message into its own buffer; only later sends must wait.
+        this.backpressuredConnections.add(connectionId);
+      } else if (status === 0) {
         this.enqueue(connectionId, { payload: serialized, isDelta });
       }
     } catch {
@@ -117,15 +124,20 @@ export class SocketSendQueue {
   flush(ws: StartServerSocket): void {
     const connectionId = ws.data.connectionId;
     if (!connectionId) return;
+    this.backpressuredConnections.delete(connectionId);
     const queue = this.pendingSends.get(connectionId);
     if (!queue) return;
     while (queue.length > 0) {
       try {
         const status = ws.send(queue[0].payload);
-        if (status <= 0) {
+        if (status === 0) {
           break;
         }
         queue.shift();
+        if (status === -1) {
+          this.backpressuredConnections.add(connectionId);
+          break;
+        }
       } catch {
         queue.shift();
       }
@@ -138,6 +150,7 @@ export class SocketSendQueue {
   deleteConnection(connectionId: string | undefined): void {
     if (!connectionId) return;
     this.pendingSends.delete(connectionId);
+    this.backpressuredConnections.delete(connectionId);
     this.externalSinks.delete(connectionId);
   }
 

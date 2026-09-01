@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { clearLegacyOfflineCache } from "../cowork/offlineCacheStorage";
+import { flushThreadOfflineCache, forgetDesktopOfflineCache } from "../cowork/threadStore";
 import type { RelayTrustedDesktop } from "../relay/relayTypes";
 import {
   defaultSecureTransportClient,
@@ -31,12 +33,17 @@ const INITIAL_CONNECTION_STATE: SecureTransportSnapshot = {
   lastError: null,
 };
 
+let pairingOperation = 0;
+
 export const usePairingStore = create<PairingStoreState>((set, get) => ({
   trustedMacs: [],
   connectionState: INITIAL_CONNECTION_STATE,
   listenerCleanup: [],
   async bootstrap() {
+    const before = get().connectionState;
+    const operation = pairingOperation;
     const connectionState = await defaultSecureTransportClient.getSnapshot();
+    if (get().connectionState !== before || operation !== pairingOperation) return;
     set({
       trustedMacs: connectionState.trustedDesktops,
       connectionState,
@@ -71,35 +78,51 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
     set({ listenerCleanup: [] });
   },
   async connectWithQr(payload) {
+    const operation = ++pairingOperation;
     const connectionState = await defaultSecureTransportClient.connectFromQrPayload(payload);
-    set({
-      trustedMacs: connectionState.trustedDesktops,
-      connectionState,
-    });
+    if (operation !== pairingOperation) return;
+    if (get().listenerCleanup.length === 0)
+      set({
+        trustedMacs: connectionState.trustedDesktops,
+        connectionState,
+      });
 
     if (connectionState.status === "error") {
       throw new Error(connectionState.lastError || "Failed to pair with desktop.");
     }
   },
   async reconnectTrusted(macDeviceId) {
+    const operation = ++pairingOperation;
     const connectionState = await defaultSecureTransportClient.reconnectTrustedDesktop(macDeviceId);
-    set({
-      trustedMacs: connectionState.trustedDesktops,
-      connectionState,
-    });
+    if (operation !== pairingOperation) return;
+    if (get().listenerCleanup.length === 0)
+      set({
+        trustedMacs: connectionState.trustedDesktops,
+        connectionState,
+      });
   },
   async disconnect() {
+    const operation = ++pairingOperation;
     const connectionState = await defaultSecureTransportClient.disconnect();
-    set({
-      trustedMacs: connectionState.trustedDesktops,
-      connectionState,
-    });
+    if (operation !== pairingOperation) return;
+    if (get().listenerCleanup.length === 0)
+      set({
+        trustedMacs: connectionState.trustedDesktops,
+        connectionState,
+      });
   },
   async forgetTrustedMac(macDeviceId) {
+    const operation = ++pairingOperation;
+    await flushThreadOfflineCache();
+    await clearLegacyOfflineCache(macDeviceId);
+    if (operation !== pairingOperation) return;
     const connectionState = await defaultSecureTransportClient.forgetTrustedDesktop(macDeviceId);
-    set({
-      trustedMacs: connectionState.trustedDesktops,
-      connectionState,
-    });
+    await forgetDesktopOfflineCache(macDeviceId);
+    if (operation !== pairingOperation) return;
+    if (get().listenerCleanup.length === 0)
+      set({
+        trustedMacs: connectionState.trustedDesktops,
+        connectionState,
+      });
   },
 }));

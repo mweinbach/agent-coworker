@@ -28,16 +28,17 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   let sessionRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let sessionBootstrapGeneration = 0;
   let transportReady = false;
+  let disposed = false;
 
   const clearSessionRetry = () => {
-    if (sessionRetryTimeout) {
+    if (sessionRetryTimeout !== null) {
       clearTimeout(sessionRetryTimeout);
       sessionRetryTimeout = null;
     }
   };
 
   const scheduleSessionRetry = () => {
-    if (sessionRetryTimeout) {
+    if (disposed || sessionRetryTimeout !== null) {
       return;
     }
     sessionRetryTimeout = setTimeout(() => {
@@ -45,7 +46,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
       void options
         .getTransportSnapshot()
         .then((snapshot) => {
-          if (options.isTransportReady(snapshot)) {
+          if (!disposed && options.isTransportReady(snapshot)) {
             void ensureConnectedSession();
           }
         })
@@ -65,7 +66,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   };
 
   const ensureConnectedSession = async () => {
-    if (sessionReady || sessionBootstrapInFlight) {
+    if (disposed || sessionReady || sessionBootstrapInFlight) {
       return;
     }
     const bootstrapGeneration = sessionBootstrapGeneration;
@@ -81,7 +82,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
       }
       sessionReady = true;
       clearSessionRetry();
-      void options.hydrateWorkspaceContext();
+      void options.hydrateWorkspaceContext().catch(() => {});
     } catch {
       if (bootstrapGeneration !== sessionBootstrapGeneration) {
         return;
@@ -96,6 +97,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   };
 
   const handleTransportState = (snapshot: TransportSnapshot) => {
+    if (disposed) return;
     if (!options.isTransportReady(snapshot)) {
       if (transportReady || sessionReady || sessionBootstrapInFlight) {
         resetClientSession();
@@ -111,6 +113,10 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     ensureConnectedSession,
     handleTransportState,
     resetClientSession,
-    dispose: clearSessionRetry,
+    dispose() {
+      disposed = true;
+      sessionBootstrapGeneration += 1;
+      clearSessionRetry();
+    },
   };
 }

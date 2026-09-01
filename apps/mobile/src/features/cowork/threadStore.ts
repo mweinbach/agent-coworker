@@ -7,6 +7,11 @@ import {
   hasComposerContent,
   sameComposerAttachments,
 } from "./composer-policy";
+import {
+  clearAllOfflineWorkspaceCache,
+  getOfflineCacheScope,
+  retireOfflineCacheDesktop,
+} from "./offlineCacheStorage";
 import type {
   CoworkThread,
   ProjectedItem,
@@ -150,9 +155,10 @@ type ThreadStoreState = {
   }): void;
 };
 
-let threadCachePersistQueued = false;
-let threadCachePersistInFlight = false;
-let threadCachePersistDirty = false;
+const THREAD_CACHE_PERSIST_INTERVAL_MS = 250;
+const pendingThreadCacheWrites = new Map<string | null, ThreadStoreState>();
+let threadCachePersistTimer: ReturnType<typeof setTimeout> | null = null;
+let threadCachePersistInFlight: Promise<void> = Promise.resolve();
 
 function recordFeedMutation(
   state: ThreadStoreState,
@@ -169,39 +175,54 @@ function recordFeedMutation(
 }
 
 function scheduleThreadCachePersist(getState: () => ThreadStoreState): void {
-  threadCachePersistDirty = true;
-  if (threadCachePersistQueued || threadCachePersistInFlight) {
-    return;
+  pendingThreadCacheWrites.set(getOfflineCacheScope().desktopId, getState());
+  if (threadCachePersistTimer !== null) return;
+  threadCachePersistTimer = setTimeout(() => {
+    threadCachePersistTimer = null;
+    void flushThreadOfflineCache();
+  }, THREAD_CACHE_PERSIST_INTERVAL_MS);
+  (threadCachePersistTimer as { unref?: () => void }).unref?.();
+}
+
+export function flushThreadOfflineCache(): Promise<void> {
+  if (threadCachePersistTimer !== null) {
+    clearTimeout(threadCachePersistTimer);
+    threadCachePersistTimer = null;
   }
-  threadCachePersistQueued = true;
-  queueMicrotask(() => {
-    threadCachePersistQueued = false;
-    if (threadCachePersistInFlight || !threadCachePersistDirty) return;
-    threadCachePersistDirty = false;
-    threadCachePersistInFlight = true;
-    const state = getState();
-    void saveThreadOfflineCache({
-      threads: state.threads,
-      snapshots: state.snapshots,
-      expandedWorkspaceIds: state.expandedWorkspaceIds,
-      sectionOrder: state.sectionOrder,
-      sectionsOpen: state.sectionsOpen,
-      showAllChats: state.showAllChats,
-      expandedProjectThreadLists: state.expandedProjectThreadLists,
-      projectThreadFetchLimits: state.projectThreadFetchLimits,
-      projectThreadTotals: state.projectThreadTotals,
-      oneOffChatWorkspaceLoadLimit: state.oneOffChatWorkspaceLoadLimit,
-    })
-      .catch((error: unknown) => {
-        console.warn("[threadStore] Failed to persist offline conversations.", error);
-      })
-      .finally(() => {
-        threadCachePersistInFlight = false;
-        if (threadCachePersistDirty) {
-          scheduleThreadCachePersist(getState);
-        }
-      });
+  const pending = Array.from(pendingThreadCacheWrites.entries());
+  pendingThreadCacheWrites.clear();
+  if (pending.length === 0) return threadCachePersistInFlight;
+  threadCachePersistInFlight = threadCachePersistInFlight.then(async () => {
+    await Promise.all(
+      pending.map(async ([desktopId, state]) => {
+        await saveThreadOfflineCache(
+          {
+            threads: state.threads,
+            snapshots: state.snapshots,
+            expandedWorkspaceIds: state.expandedWorkspaceIds,
+            sectionOrder: state.sectionOrder,
+            sectionsOpen: state.sectionsOpen,
+            showAllChats: state.showAllChats,
+            expandedProjectThreadLists: state.expandedProjectThreadLists,
+            projectThreadFetchLimits: state.projectThreadFetchLimits,
+            projectThreadTotals: state.projectThreadTotals,
+            oneOffChatWorkspaceLoadLimit: state.oneOffChatWorkspaceLoadLimit,
+          },
+          desktopId,
+        ).catch((error: unknown) => {
+          console.warn("[threadStore] Failed to persist offline conversations.", error);
+        });
+      }),
+    );
   });
+  return threadCachePersistInFlight;
+}
+
+export async function forgetDesktopOfflineCache(desktopId: string): Promise<void> {
+  retireOfflineCacheDesktop(desktopId);
+  pendingThreadCacheWrites.delete(desktopId);
+  await threadCachePersistInFlight;
+  await clearAllOfflineWorkspaceCache(desktopId);
 }
 
 function ensureThreadSnapshot(
@@ -214,7 +235,7 @@ function ensureThreadSnapshot(
       title: "Thread",
       titleSource: "manual",
       provider: "opencode",
-      model: "mobile-scaffold",
+      model: "unknown",
       sessionKind: "primary",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -545,16 +566,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     const snapshot = ensureThreadSnapshot(threadId);
     const nextSnapshot: SessionSnapshotLike = {
       ...snapshot,
-      title: "New mobile draft",
-      feed: [
-        {
-          id: `${threadId}:welcome`,
-          kind: "system",
-          ts: new Date().toISOString(),
-          line: "Draft thread created on mobile scaffold.",
-        },
-      ],
-      messageCount: 1,
+      title: "New chat",
+      feed: [],
+      messageCount: 0,
       updatedAt: new Date().toISOString(),
     };
     set((state) => ({
@@ -964,32 +978,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
     scheduleThreadCachePersist(get);
   },
   interruptThread(threadId) {
-    set((state) => {
-      const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
-      const nextSnapshot = {
-        ...snapshot,
-        feed: [
-          ...snapshot.feed,
-          {
-            id: `${threadId}:interrupt:${Date.now()}`,
-            kind: "system",
-            ts: new Date().toISOString(),
-            line: "Interrupt requested from the mobile scaffold.",
-          } satisfies SessionFeedItem,
-        ],
-      };
-      return {
-        snapshots: {
-          ...state.snapshots,
-          [threadId]: nextSnapshot,
-        },
-        threads: updateThreadList(state, threadId, nextSnapshot),
-        activeTurnStartedAt: {
-          ...state.activeTurnStartedAt,
-          [threadId]: null,
-        },
-      };
-    });
+    set((state) => ({
+      activeTurnStartedAt: { ...state.activeTurnStartedAt, [threadId]: null },
+    }));
   },
   clearAll() {
     set((state) => {

@@ -4,8 +4,8 @@ import type {
   JsonRpcControlResult,
   WorkspaceBackupEntry,
 } from "@/cowork-shared/jsonrpcControlSchemas";
-import { callParsedControlMethod } from "./controlRpc";
-import { saveToOfflineCache } from "./offlineCache";
+import { callParsedControlMethod, isStaleWorkspaceRequestError } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCacheStorage";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -35,6 +35,12 @@ function getClientAndCwd() {
   return { client, cwd };
 }
 
+function applyBackupsEvent(event: JsonRpcControlResult<"cowork/backups/workspace/read">["event"]) {
+  void saveToOfflineCache("backups", event.backups);
+  void saveToOfflineCache("workspacePath", event.workspacePath);
+  return { backups: event.backups, workspacePath: event.workspacePath };
+}
+
 export const useBackupStore = create<BackupStoreState>((set, get) => ({
   backups: [],
   workspacePath: null,
@@ -43,44 +49,42 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
   error: null,
 
   async fetchBackups() {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/backups/workspace/read", {
         cwd,
       });
       set({
-        backups: result.event.backups,
-        workspacePath: result.event.workspacePath,
+        ...applyBackupsEvent(result.event),
         loading: false,
       });
-      void saveToOfflineCache("backups", result.event.backups);
-      void saveToOfflineCache("workspacePath", result.event.workspacePath);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async createCheckpoint(targetSessionId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/backups/workspace/checkpoint", {
         cwd,
         targetSessionId,
       });
       set({
-        backups: result.event.backups,
-        workspacePath: result.event.workspacePath,
+        ...applyBackupsEvent(result.event),
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async fetchDelta(targetSessionId: string, checkpointId: string) {
-    const { client, cwd } = getClientAndCwd();
     const checkpointKey = `${targetSessionId}:${checkpointId}`;
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/backups/workspace/delta/read", {
         cwd,
         targetSessionId,
@@ -93,30 +97,31 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
         },
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async restoreBackup(targetSessionId: string, checkpointId?: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/backups/workspace/restore", {
         cwd,
         targetSessionId,
         ...(checkpointId ? { checkpointId } : {}),
       });
       set({
-        backups: result.event.backups,
-        workspacePath: result.event.workspacePath,
+        ...applyBackupsEvent(result.event),
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async deleteCheckpoint(targetSessionId: string, checkpointId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(
         client,
         "cowork/backups/workspace/deleteCheckpoint",
@@ -129,18 +134,18 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
       const nextDeltas = { ...get().deltasByCheckpointKey };
       delete nextDeltas[`${targetSessionId}:${checkpointId}`];
       set({
-        backups: result.event.backups,
-        workspacePath: result.event.workspacePath,
+        ...applyBackupsEvent(result.event),
         deltasByCheckpointKey: nextDeltas,
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async deleteEntry(targetSessionId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/backups/workspace/deleteEntry", {
         cwd,
         targetSessionId,
@@ -151,11 +156,11 @@ export const useBackupStore = create<BackupStoreState>((set, get) => ({
         ),
       );
       set({
-        backups: result.event.backups,
-        workspacePath: result.event.workspacePath,
+        ...applyBackupsEvent(result.event),
         deltasByCheckpointKey: nextDeltas,
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },

@@ -284,6 +284,9 @@ const reactNativeMockFactory = () => ({
     setAccessibilityFocus: () => undefined,
   },
   Alert: { alert: () => undefined },
+  AppState: {
+    addEventListener: () => ({ remove: () => undefined }),
+  },
   LayoutAnimation: {
     configureNext: () => {
       layoutAnimationCount += 1;
@@ -293,6 +296,7 @@ const reactNativeMockFactory = () => ({
   Linking: {
     canOpenURL: async () => true,
     openURL: async () => undefined,
+    openSettings: async () => undefined,
   },
   Platform: { OS: platform },
   Pressable: NativePressable,
@@ -405,7 +409,11 @@ mockMobileModule("expo-camera", () => ({
     createElement("div", {
       ...accessibilityAttributes("image", accessibilityLabel, undefined, undefined, undefined),
     }),
-  useCameraPermissions: () => [{ granted: true }, async () => ({ granted: true })],
+  useCameraPermissions: () => [
+    { granted: true, canAskAgain: true },
+    async () => ({ granted: true, canAskAgain: true }),
+    async () => ({ granted: true, canAskAgain: true }),
+  ],
 }));
 
 mockMobileModule("expo-glass-effect", () => ({

@@ -5,8 +5,8 @@ import type {
   JsonRpcControlResult,
   McpServerEntry,
 } from "@/cowork-shared/jsonrpcControlSchemas";
-import { callParsedControlMethod } from "./controlRpc";
-import { saveToOfflineCache } from "./offlineCache";
+import { callParsedControlMethod, isStaleWorkspaceRequestError } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCacheStorage";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -43,12 +43,12 @@ type McpStoreState = {
   upsertServer(
     server: JsonRpcControlRequest<"cowork/mcp/server/upsert">["server"],
     previousName?: string,
-  ): Promise<void>;
+  ): Promise<boolean>;
   validateServer(name: string): Promise<void>;
   deleteServer(name: string): Promise<void>;
   authorizeServer(name: string): Promise<void>;
-  callbackServer(name: string, code?: string): Promise<void>;
-  setServerApiKey(name: string, apiKey: string): Promise<void>;
+  callbackServer(name: string, code?: string): Promise<boolean>;
+  setServerApiKey(name: string, apiKey: string): Promise<boolean>;
   clear(): void;
 };
 
@@ -61,6 +61,9 @@ function getClientAndCwd() {
 }
 
 function applyServersEvent(event: McpServersEvent) {
+  void saveToOfflineCache("mcpServers", event.servers);
+  void saveToOfflineCache("mcpFiles", event.files);
+  void saveToOfflineCache("mcpWarnings", event.warnings ?? []);
   return {
     servers: event.servers,
     files: event.files,
@@ -79,23 +82,21 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
   lastAuthResult: null,
 
   async fetchServers() {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/servers/read", { cwd });
       set({ ...applyServersEvent(result.event), loading: false });
-      void saveToOfflineCache("mcpServers", result.event.servers);
-      void saveToOfflineCache("mcpFiles", result.event.files);
-      void saveToOfflineCache("mcpWarnings", result.event.warnings ?? []);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async upsertServer(server, previousName) {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/upsert", {
         cwd,
         server,
@@ -106,17 +107,20 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         loading: false,
         lastAuthChallenge: null,
       });
+      return true;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({
         loading: false,
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   },
 
   async validateServer(name: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/validate", {
         cwd,
         name,
@@ -128,6 +132,7 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         },
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({
         validationByName: {
           ...get().validationByName,
@@ -144,8 +149,8 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
   },
 
   async deleteServer(name: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/delete", {
         cwd,
         name,
@@ -157,13 +162,14 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
         ),
       });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async authorizeServer(name: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/authorize", {
         cwd,
         name,
@@ -193,20 +199,23 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
       });
       await get().fetchServers();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async callbackServer(name: string, code?: string) {
-    const { client, cwd } = getClientAndCwd();
+    set({ error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/callback", {
         cwd,
         name,
         ...(code?.trim() ? { code: code.trim() } : {}),
       });
       set({
-        lastAuthChallenge: null,
+        ...(result.event.ok ? { lastAuthChallenge: null } : {}),
+        error: result.event.ok ? null : result.event.message,
         lastAuthResult: {
           name: result.event.name,
           ok: result.event.ok,
@@ -214,22 +223,27 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
           message: result.event.message,
         },
       });
-      await get().fetchServers();
+      if (result.event.ok) await get().fetchServers();
+      return result.event.ok;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
 
   async setServerApiKey(name: string, apiKey: string) {
-    const { client, cwd } = getClientAndCwd();
+    set({ error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/setApiKey", {
         cwd,
         name,
         apiKey,
       });
       set({
-        lastAuthChallenge: null,
+        ...(result.event.ok ? { lastAuthChallenge: null } : {}),
+        error: result.event.ok ? null : result.event.message,
         lastAuthResult: {
           name: result.event.name,
           ok: result.event.ok,
@@ -237,9 +251,12 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
           message: result.event.message,
         },
       });
-      await get().fetchServers();
+      if (result.event.ok) await get().fetchServers();
+      return result.event.ok;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
 

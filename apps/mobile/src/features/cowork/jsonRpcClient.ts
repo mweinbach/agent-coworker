@@ -353,6 +353,10 @@ export class CoworkJsonRpcClient {
     return this.serverSupportsToolRetryLineage;
   }
 
+  get transportSessionGeneration(): number {
+    return this.transportGeneration;
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;

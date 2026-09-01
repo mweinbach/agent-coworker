@@ -110,7 +110,7 @@ const mobileSessionFeedItemCompatibilitySchema = z.discriminatedUnion("kind", [
     .passthrough(),
 ]);
 
-const sessionFeedItemSchema = canonicalSessionFeedItemSchema.or(
+export const sessionFeedItemSchema = canonicalSessionFeedItemSchema.or(
   mobileSessionFeedItemCompatibilitySchema,
 );
 
@@ -159,7 +159,7 @@ const mobileSessionSnapshotCompatibilitySchema = z
   })
   .passthrough();
 
-const sessionSnapshotSchema = canonicalSessionSnapshotSchema.or(
+export const sessionSnapshotSchema = canonicalSessionSnapshotSchema.or(
   mobileSessionSnapshotCompatibilitySchema,
 );
 

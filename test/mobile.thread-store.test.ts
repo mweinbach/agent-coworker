@@ -1,19 +1,22 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { clearAllOfflineWorkspaceCache } from "../apps/mobile/src/features/cowork/offlineCache";
+import * as offlineCacheStorage from "../apps/mobile/src/features/cowork/offlineCacheStorage";
 import type { SessionSnapshotLike } from "../apps/mobile/src/features/cowork/protocolTypes";
 import { loadThreadOfflineCache } from "../apps/mobile/src/features/cowork/threadOfflineCache";
 import {
   createThreadSummarySnapshot,
+  flushThreadOfflineCache,
+  forgetDesktopOfflineCache,
   useThreadStore,
 } from "../apps/mobile/src/features/cowork/threadStore";
 
 async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
+  await flushThreadOfflineCache();
 }
 
 describe("mobile thread store offline draft preservation", () => {
   beforeEach(async () => {
+    await flushThreadOfflineCache();
     await clearAllOfflineWorkspaceCache();
     // Manually force reset state since clearAll now preserves drafts
     useThreadStore.setState({
@@ -102,6 +105,46 @@ describe("mobile thread store offline draft preservation", () => {
       text: "keep this draft after the app restarts",
       status: "submitting",
     });
+  });
+
+  test("coalesces separated streaming ticks instead of rewriting all history for each delta", async () => {
+    const save = spyOn(offlineCacheStorage, "saveToOfflineCache");
+    try {
+      const store = useThreadStore.getState();
+      store.seedThread();
+      const threadId = useThreadStore.getState().selectedThreadId!;
+      for (let index = 0; index < 12; index += 1) {
+        store.appendAgentDelta(threadId, "streamed-message", "token ", new Date().toISOString());
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      expect(
+        save.mock.calls.filter(([key]) => key === "threadSnapshots").length,
+      ).toBeLessThanOrEqual(1);
+      await flushThreadOfflineCache();
+      expect(save.mock.calls.filter(([key]) => key === "threadSnapshots")).toHaveLength(1);
+      const cached = await loadThreadOfflineCache();
+      expect(cached?.snapshots[threadId]?.feed.at(-1)).toMatchObject({ text: "token ".repeat(12) });
+    } finally {
+      save.mockRestore();
+    }
+  });
+
+  test("forgetting a desktop drains old writes and prevents queued updates from recreating its cache", async () => {
+    const initialDesktop = offlineCacheStorage.getOfflineCacheScope().desktopId;
+    offlineCacheStorage.setOfflineCacheDesktop("forgotten-desktop");
+    try {
+      const store = useThreadStore.getState();
+      store.seedThread();
+      const threadId = useThreadStore.getState().selectedThreadId!;
+      store.setComposerDraft(threadId, "Private draft");
+      await flushThreadOfflineCache();
+      await forgetDesktopOfflineCache("forgotten-desktop");
+      store.setComposerDraft(threadId, "Late old-view update");
+      await flushThreadOfflineCache();
+      expect(await loadThreadOfflineCache("forgotten-desktop")).toBeNull();
+    } finally {
+      offlineCacheStorage.setOfflineCacheDesktop(initialDesktop);
+    }
   });
 
   test("never lets late offline hydration overwrite live conversations or pending approvals", async () => {

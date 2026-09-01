@@ -5,7 +5,7 @@ import { bootstrapWorkspaceSwitchSession } from "../apps/mobile/src/features/cow
 describe("mobile workspace switch bootstrap", () => {
   test("clears stale threads before rehydrating the new workspace session", async () => {
     const clearThreads = mock(() => {});
-    const hydrateThread = mock(() => {});
+    const hydrateThreads = mock(() => {});
     const refreshWorkspaceBoundStores = mock(async () => {});
     const initialize = mock(async () => {});
     const requestThreadList = mock(async () => ({
@@ -29,21 +29,20 @@ describe("mobile workspace switch bootstrap", () => {
     await bootstrapWorkspaceSwitchSession({
       client: { initialize, requestThreadList },
       clearThreads,
-      hydrateThread,
+      hydrateThreads,
       refreshWorkspaceBoundStores,
-      waitForInitializedMs: 0,
     });
 
     expect(clearThreads).toHaveBeenCalledTimes(1);
     expect(initialize).toHaveBeenCalledTimes(1);
     expect(requestThreadList).toHaveBeenCalledTimes(1);
-    expect(hydrateThread).toHaveBeenCalledTimes(1);
+    expect(hydrateThreads).toHaveBeenCalledTimes(1);
     expect(refreshWorkspaceBoundStores).toHaveBeenCalledTimes(1);
   });
 
   test("rethrows bootstrap failures after clearing stale threads", async () => {
     const clearThreads = mock(() => {});
-    const hydrateThread = mock(() => {});
+    const hydrateThreads = mock(() => {});
     const refreshWorkspaceBoundStores = mock(async () => {});
     const initialize = mock(async () => {
       throw new Error("Not initialized");
@@ -54,15 +53,14 @@ describe("mobile workspace switch bootstrap", () => {
       bootstrapWorkspaceSwitchSession({
         client: { initialize, requestThreadList },
         clearThreads,
-        hydrateThread,
+        hydrateThreads,
         refreshWorkspaceBoundStores,
-        waitForInitializedMs: 0,
       }),
     ).rejects.toThrow("Not initialized");
 
     expect(clearThreads).toHaveBeenCalledTimes(1);
     expect(requestThreadList).not.toHaveBeenCalled();
-    expect(hydrateThread).not.toHaveBeenCalled();
+    expect(hydrateThreads).not.toHaveBeenCalled();
     expect(refreshWorkspaceBoundStores).not.toHaveBeenCalled();
   });
 });

@@ -5,8 +5,8 @@ import type {
   ProviderCatalogEntry,
   ProviderStatusEntry,
 } from "@/cowork-shared/jsonrpcControlSchemas";
-import { callParsedControlMethod } from "./controlRpc";
-import { saveToOfflineCache } from "./offlineCache";
+import { callParsedControlMethod, isStaleWorkspaceRequestError } from "./controlRpc";
+import { saveToOfflineCache } from "./offlineCacheStorage";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
 
@@ -59,9 +59,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   lastAuthResult: null,
 
   async fetchCatalog(opts: { refresh?: boolean } = {}) {
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/catalog/read", {
         cwd,
         ...(opts.refresh ? { refresh: true } : {}),
@@ -69,26 +69,28 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       set({ catalog: result.event.all, loading: false });
       void saveToOfflineCache("providerCatalog", result.event.all);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async fetchAuthMethods() {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/authMethods/read", {
         cwd,
       });
       set({ authMethodsByProvider: result.event.methods });
       void saveToOfflineCache("providerAuthMethods", result.event.methods);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async fetchStatus() {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/status/refresh", {
         cwd,
       });
@@ -96,6 +98,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       set({ statusByProvider });
       void saveToOfflineCache("providerStatus", statusByProvider);
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -110,6 +113,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       ]);
       set({ loading: false });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -120,9 +124,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       set({ error: "Model is required." });
       return;
     }
-    const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
+      const { client, cwd } = getClientAndCwd();
       await callParsedControlMethod(client, "cowork/session/defaults/apply", {
         cwd,
         provider,
@@ -131,6 +135,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       await useWorkspaceStore.getState().fetchControlState();
       set({ loading: false });
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -161,14 +166,15 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       await get().refresh();
       return true;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   },
 
   async copyApiKey(provider: string, sourceProvider: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/auth/copyApiKey", {
         cwd,
         provider: provider as ProviderCatalogEntry["id"],
@@ -185,13 +191,14 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       });
       await get().refresh();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async authorize(provider: string, methodId: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/auth/authorize", {
         cwd,
         provider: provider as any,
@@ -220,13 +227,14 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       });
       await get().refresh();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
   async logout(provider: string) {
-    const { client, cwd } = getClientAndCwd();
     try {
+      const { client, cwd } = getClientAndCwd();
       const result = await callParsedControlMethod(client, "cowork/provider/auth/logout", {
         cwd,
         provider: provider as any,
@@ -242,6 +250,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       });
       await get().refresh();
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return;
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -272,6 +281,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
       await get().refresh();
       return true;
     } catch (error) {
+      if (isStaleWorkspaceRequestError(error)) return false;
       set({ error: error instanceof Error ? error.message : String(error) });
       return false;
     }

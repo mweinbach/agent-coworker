@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { useBackupStore } from "../apps/mobile/src/features/cowork/backupStore";
 import { useMcpStore } from "../apps/mobile/src/features/cowork/mcpStore";
+import { useMemoryStore } from "../apps/mobile/src/features/cowork/memoryStore";
 import { useProviderStore } from "../apps/mobile/src/features/cowork/providerStore";
 import { setActiveCoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/runtimeClient";
 import { useWorkspaceStore } from "../apps/mobile/src/features/cowork/workspaceStore";
@@ -74,10 +75,116 @@ beforeEach(() => {
   useProviderStore.getState().clear();
   useBackupStore.getState().clear();
   useMcpStore.getState().clear();
+  useMemoryStore.getState().clear();
   useWorkspaceStore.setState({ activeWorkspaceCwd: workspaceCwd });
 });
 
 describe("mobile control stores", () => {
+  test.each(["workspace", "desktop", "failure"])(
+    "ignores a late %s response after its context changes",
+    async (change) => {
+      let resolve!: (value: unknown) => void;
+      let reject!: (reason: unknown) => void;
+      const response = new Promise((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
+      const { client } = createFakeClient(() => response);
+      setActiveCoworkJsonRpcClient(client);
+      const pending = useMemoryStore.getState().fetchMemories();
+      if (change === "desktop") setActiveCoworkJsonRpcClient(null);
+      else useWorkspaceStore.setState({ activeWorkspaceCwd: "/new-workspace" });
+      const currentEntries = [{ id: "current", content: "Current workspace" }] as never[];
+      useMemoryStore.setState({ entries: currentEntries, loading: false, error: null });
+      if (change === "failure") reject(new Error("Old request failed"));
+      else resolve({ event: { type: "memory_list", memories: [] } });
+      await pending;
+      expect(useMemoryStore.getState().entries).toBe(currentEntries);
+      expect(useMemoryStore.getState().error).toBeNull();
+    },
+  );
+
+  test("a workspace-bound refresh before hydration reports an error instead of rejecting unhandled", async () => {
+    setActiveCoworkJsonRpcClient(null);
+    await expect(useMemoryStore.getState().fetchMemories()).resolves.toBeUndefined();
+    expect(useMemoryStore.getState().loading).toBe(false);
+    expect(useMemoryStore.getState().error).toBe("No active JSON-RPC client.");
+  });
+
+  test.each([
+    {
+      name: "memory",
+      mutate: () => useMemoryStore.getState().upsertMemory("workspace", "hot", "Keep my draft"),
+      error: () => useMemoryStore.getState().error,
+    },
+    {
+      name: "MCP configuration",
+      mutate: () =>
+        useMcpStore
+          .getState()
+          .upsertServer({ name: "docs", transport: { type: "stdio", command: "uvx" } }),
+      error: () => useMcpStore.getState().error,
+    },
+    {
+      name: "MCP API key",
+      mutate: () => useMcpStore.getState().setServerApiKey("docs", "fixture-key"),
+      error: () => useMcpStore.getState().error,
+    },
+    {
+      name: "MCP OAuth code",
+      mutate: () => useMcpStore.getState().callbackServer("docs", "fixture-code"),
+      error: () => useMcpStore.getState().error,
+    },
+  ])("$name reports failed saves without rejecting the UI handler", async ({ mutate, error }) => {
+    const { client } = createFakeClient(() => {
+      throw new Error("Desktop disconnected");
+    });
+    setActiveCoworkJsonRpcClient(client);
+
+    await expect(mutate()).resolves.toBe(false);
+    expect(error()).toBe("Desktop disconnected");
+
+    setActiveCoworkJsonRpcClient(null);
+    await expect(mutate()).resolves.toBe(false);
+    expect(error()).toBe("No active JSON-RPC client.");
+  });
+
+  test("memory acknowledges a saved draft and clears its previous error", async () => {
+    const { client } = createFakeClient(() => ({ event: { type: "memory_list", memories: [] } }));
+    setActiveCoworkJsonRpcClient(client);
+    useMemoryStore.setState({ error: "Previous failure" });
+
+    await expect(useMemoryStore.getState().upsertMemory("workspace", "hot", "Saved")).resolves.toBe(
+      true,
+    );
+    expect(useMemoryStore.getState().error).toBeNull();
+  });
+
+  test.each(["callback", "api-key"])(
+    "MCP %s preserves a rejected auth challenge for retry",
+    async (method) => {
+      const { client } = createFakeClient(() => ({
+        event: {
+          type: "mcp_server_auth_result",
+          name: "docs",
+          ok: false,
+          message: "Invalid credentials",
+        },
+      }));
+      setActiveCoworkJsonRpcClient(client);
+      useMcpStore.setState({ lastAuthChallenge: { name: "docs", instructions: "Enter a code" } });
+
+      const saved =
+        method === "callback"
+          ? await useMcpStore.getState().callbackServer("docs", "fixture-code")
+          : await useMcpStore.getState().setServerApiKey("docs", "fixture-key");
+
+      expect(saved).toBe(false);
+      expect(useMcpStore.getState().lastAuthChallenge?.name).toBe("docs");
+      expect(useMcpStore.getState().lastAuthResult?.message).toBe("Invalid credentials");
+    },
+  );
+
   test("workspace store reads parsed control state and applies workspace defaults through the shared endpoints", async () => {
     const { client, calls } = createFakeClient((method) => {
       if (method === "cowork/session/state/read") {

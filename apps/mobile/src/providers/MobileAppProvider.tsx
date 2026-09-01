@@ -4,17 +4,31 @@ import { AppState } from "react-native";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
 import { loadAllOfflineWorkspaceCache } from "../features/cowork/offlineCache";
+import {
+  getOfflineCacheScope,
+  type OfflineCacheScope,
+  resolveOfflineCacheDesktop,
+  setOfflineCacheDesktop,
+} from "../features/cowork/offlineCacheStorage";
 import type { CoworkThread } from "../features/cowork/protocolTypes";
 import {
   buildWorkspaceLookup,
   loadBoundedRemoteThreads,
 } from "../features/cowork/remoteThreadBootstrap";
-import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
+import {
+  invalidateWorkspaceRequests,
+  setActiveCoworkJsonRpcClient,
+} from "../features/cowork/runtimeClient";
 import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { loadThreadOfflineCache } from "../features/cowork/threadOfflineCache";
-import { createThreadSummarySnapshot, useThreadStore } from "../features/cowork/threadStore";
+import {
+  createThreadSummarySnapshot,
+  flushThreadOfflineCache,
+  useThreadStore,
+} from "../features/cowork/threadStore";
 import {
   clearWorkspaceBoundStores,
+  clearWorkspaceDataStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
 import { useWorkspaceStore } from "../features/cowork/workspaceStore";
@@ -22,7 +36,10 @@ import { usePairingStore } from "../features/pairing/pairingStore";
 import { useDisplayPreferencesStore } from "../features/preferences/displayPreferencesStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { createForegroundRecoveryController } from "../features/relay/foregroundRecovery";
-import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
+import {
+  defaultSecureTransportClient,
+  type SecureTransportSnapshot,
+} from "../features/relay/secureTransportClient";
 
 export function MobileAppProvider({ children }: PropsWithChildren) {
   const bootstrapPairing = usePairingStore((state) => state.bootstrap);
@@ -31,21 +48,16 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
   const seedThread = useThreadStore((state) => state.seedThread);
 
   useEffect(() => {
-    void bootstrapPairing().catch(() => {});
+    let disposed = false;
+    let cacheHydratedOwner: OfflineCacheScope | null = null;
     void useDisplayPreferencesStore.getState().hydrate();
     attachPairingListeners();
-    void (async () => {
-      await loadAllOfflineWorkspaceCache();
-      const cachedThreads = await loadThreadOfflineCache();
-      if (cachedThreads) {
-        useThreadStore.getState().hydrateOfflineCache(cachedThreads);
-      }
-      if (useThreadStore.getState().threads.length === 0) {
-        seedThread();
-      }
-    })().catch(() => {
-      if (useThreadStore.getState().threads.length === 0) {
-        seedThread();
+    const unsubscribeWorkspace = useWorkspaceStore.subscribe((state, previous) => {
+      if (
+        previous.activeWorkspaceCwd !== null &&
+        state.activeWorkspaceCwd !== previous.activeWorkspaceCwd
+      ) {
+        clearWorkspaceDataStores();
       }
     });
 
@@ -59,6 +71,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         await defaultSecureTransportClient.sendPlaintext(text);
       },
       onNotification(notification) {
+        if (disposed) return;
         const threadStore = useThreadStore.getState();
         switch (notification.method) {
           case "thread/started":
@@ -124,6 +137,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         }
       },
       onServerRequest(request) {
+        if (disposed) return;
         const threadStore = useThreadStore.getState();
         if (request.method === "item/tool/requestUserInput") {
           threadStore.setPendingRequest({
@@ -158,12 +172,19 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     setActiveCoworkJsonRpcClient(client);
 
     const hydrateRemoteThreads = async () => {
+      const owner = getOfflineCacheScope();
+      const generation = client.transportSessionGeneration;
+      const isCurrent = () =>
+        !disposed &&
+        owner === getOfflineCacheScope() &&
+        generation === client.transportSessionGeneration;
       const workspaceStore = useWorkspaceStore.getState();
       try {
         await workspaceStore.fetchWorkspaces();
       } catch {
         // Best-effort — fall through to a single-workspace thread fetch below.
       }
+      if (!isCurrent()) return;
 
       const workspaces = useWorkspaceStore.getState().workspaces;
       const workspaceByPath = buildWorkspaceLookup(workspaces);
@@ -174,19 +195,21 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
           oneOffChatWorkspaceLimit: useThreadStore.getState().oneOffChatWorkspaceLoadLimit,
           projectThreadLimitsByWorkspaceId: useThreadStore.getState().projectThreadFetchLimits,
         });
+        if (!isCurrent()) return;
         remoteThreads = loaded.threads;
         useThreadStore.getState().setProjectThreadTotals(loaded.totalsByWorkspaceId);
       } else {
         const fallback = await client.requestThreadList();
         remoteThreads = fallback.threads;
       }
-
+      if (!isCurrent()) return;
       useThreadStore.getState().syncRemoteThreads(remoteThreads, workspaceByPath);
     };
 
     let remoteHydrationInFlight: Promise<void> | null = null;
     let remoteHydrationQueued = false;
     scheduleRemoteHydration = () => {
+      if (disposed || cacheHydratedOwner !== getOfflineCacheScope()) return Promise.resolve();
       if (remoteHydrationInFlight) {
         remoteHydrationQueued = true;
         return remoteHydrationInFlight;
@@ -197,7 +220,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         })
         .finally(() => {
           remoteHydrationInFlight = null;
-          if (remoteHydrationQueued) {
+          if (!disposed && remoteHydrationQueued) {
             remoteHydrationQueued = false;
             void scheduleRemoteHydration();
           }
@@ -218,19 +241,63 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       clearThreads: () => {
         useThreadStore.getState().clearPendingRequestsOnDisconnect();
       },
-      clearWorkspaceBoundStores,
+      clearWorkspaceBoundStores: invalidateWorkspaceRequests,
       hydrateRemoteThreads,
       hydrateWorkspaceContext,
       getTransportSnapshot: () => defaultSecureTransportClient.getSnapshot(),
       isTransportReady: isWorkspaceConnectionReady,
     });
 
+    let transportStateGeneration = 0;
+    let transportStateWork = Promise.resolve();
+    const handleTransportState = (snapshot: SecureTransportSnapshot) => {
+      if (disposed) return;
+      const generation = ++transportStateGeneration;
+      if (!isWorkspaceConnectionReady(snapshot)) sessionBootstrap.handleTransportState(snapshot);
+      const isCurrent = () => !disposed && generation === transportStateGeneration;
+      transportStateWork = transportStateWork
+        .then(async () => {
+          if (!isCurrent()) return;
+          const desktopId = await resolveOfflineCacheDesktop(
+            snapshot.connectedMacDeviceId,
+            snapshot.trustedDesktops.map((desktop) => desktop.macDeviceId),
+          );
+          if (!isCurrent()) return;
+          if (getOfflineCacheScope().desktopId !== desktopId) {
+            sessionBootstrap.resetClientSession();
+            const flushing = flushThreadOfflineCache();
+            clearWorkspaceBoundStores();
+            useThreadStore.setState(useThreadStore.getInitialState(), true);
+            setOfflineCacheDesktop(desktopId);
+            cacheHydratedOwner = null;
+            await flushing;
+          }
+          const owner = getOfflineCacheScope();
+          if (cacheHydratedOwner !== owner) {
+            await loadAllOfflineWorkspaceCache();
+            const cachedThreads = await loadThreadOfflineCache(owner.desktopId);
+            if (!isCurrent() || owner !== getOfflineCacheScope()) return;
+            if (cachedThreads) useThreadStore.getState().hydrateOfflineCache(cachedThreads);
+            if (useThreadStore.getState().threads.length === 0) seedThread();
+            cacheHydratedOwner = owner;
+          }
+          if (isCurrent()) sessionBootstrap.handleTransportState(snapshot);
+        })
+        .catch((error: unknown) => {
+          if (!isCurrent()) return;
+          console.warn("[MobileAppProvider] Could not restore offline data.", error);
+          if (useThreadStore.getState().threads.length === 0) seedThread();
+          cacheHydratedOwner = getOfflineCacheScope();
+          sessionBootstrap.handleTransportState(snapshot);
+        });
+    };
+
     const unsubscribeTransport = defaultSecureTransportClient.subscribe({
       onPlaintextMessage(text) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
-        sessionBootstrap.handleTransportState(state);
+        handleTransportState(state);
       },
     });
 
@@ -239,26 +306,33 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       recover: async () => await defaultSecureTransportClient.recoverForegroundSession(),
     });
     const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") void flushThreadOfflineCache();
       void foregroundRecovery.handleAppStateChange(state).catch((error: unknown) => {
         console.warn("[MobileAppProvider] Failed to recover the desktop connection.", error);
       });
     });
 
-    void defaultSecureTransportClient
-      .getSnapshot()
-      .then((snapshot) => {
-        sessionBootstrap.handleTransportState(snapshot);
+    void bootstrapPairing()
+      .then(() => {
+        handleTransportState(usePairingStore.getState().connectionState);
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (disposed) return;
+        console.warn("[MobileAppProvider] Could not restore the desktop connection.", error);
+        if (useThreadStore.getState().threads.length === 0) seedThread();
+      });
 
     return () => {
+      disposed = true;
       appStateSubscription.remove();
       foregroundRecovery.dispose();
       unsubscribeTransport();
+      unsubscribeWorkspace();
       sessionBootstrap.dispose();
       sessionBootstrap.resetClientSession();
       resetPairingListeners();
       setActiveCoworkJsonRpcClient(null);
+      void flushThreadOfflineCache();
     };
   }, [attachPairingListeners, bootstrapPairing, resetPairingListeners, seedThread]);
 

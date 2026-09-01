@@ -207,6 +207,171 @@ function createController(overrides: Partial<ControllerOptions> = {}) {
   });
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe("quick chat window ownership", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
+  for (const surface of ["quick-chat", "utility"] as const) {
+    test(`shares concurrent ${surface} creation and owns every created window`, async () => {
+      const gate = deferred();
+      const windows: FakeWindow[] = [];
+      const createWindow = mock(async () => {
+        await gate.promise;
+        const window = new FakeWindow();
+        windows.push(window);
+        return window as never;
+      });
+      const controller = createController(
+        surface === "quick-chat"
+          ? { createQuickChatWindow: createWindow }
+          : { createUtilityWindow: createWindow },
+      );
+      const show = () =>
+        surface === "quick-chat"
+          ? controller.showQuickChatWindow()
+          : controller.showUtilityWindow();
+      const first = show();
+      const second = show();
+      gate.resolve();
+      await Promise.all([first, second]);
+      controller.dispose();
+
+      expect(createWindow).toHaveBeenCalledTimes(1);
+      expect(windows.every((window) => window.destroyed)).toBe(true);
+    });
+
+    test(`disposes ${surface} creation that finishes after shutdown`, async () => {
+      const gate = deferred();
+      const window = new FakeWindow();
+      const createWindow = async () => {
+        await gate.promise;
+        return window as never;
+      };
+      const controller = createController(
+        surface === "quick-chat"
+          ? { createQuickChatWindow: createWindow }
+          : { createUtilityWindow: createWindow },
+      );
+      const showing =
+        surface === "quick-chat"
+          ? controller.showQuickChatWindow()
+          : controller.showUtilityWindow();
+      await Promise.resolve();
+      controller.dispose();
+      gate.resolve();
+      await showing;
+
+      expect(window.destroyed).toBe(true);
+      expect(window.visible).toBe(false);
+    });
+  }
+
+  test("does not reopen a slow quick chat over a newer main-window request", async () => {
+    const gate = deferred();
+    const quickChatWindow = new FakeWindow();
+    const mainWindow = new FakeWindow();
+    const controller = createController({
+      getMainWindow: () => mainWindow as never,
+      createQuickChatWindow: async () => {
+        await gate.promise;
+        return quickChatWindow as never;
+      },
+    });
+
+    const showing = controller.showQuickChatWindow();
+    await controller.showMainWindow();
+    gate.resolve();
+    await showing;
+
+    expect(mainWindow.visible).toBe(true);
+    expect(quickChatWindow.visible).toBe(false);
+    expect(quickChatWindow.destroyed).toBe(true);
+    controller.dispose();
+  });
+
+  test("retires a slow utility popup superseded by main without a tray", async () => {
+    const gate = deferred();
+    const utilityWindow = new FakeWindow();
+    const mainWindow = new FakeWindow();
+    const controller = createController({
+      platform: "win32",
+      getMainWindow: () => mainWindow as never,
+      createUtilityWindow: async () => {
+        await gate.promise;
+        return utilityWindow as never;
+      },
+    });
+
+    const showing = controller.showUtilityWindow();
+    await controller.showMainWindow();
+    gate.resolve();
+    await showing;
+
+    expect(utilityWindow.destroyed).toBe(true);
+    expect(mainWindow.visible).toBe(true);
+    controller.dispose();
+  });
+
+  test("shares main-window creation before the window becomes available", async () => {
+    const gate = deferred();
+    const window = new FakeWindow();
+    const createMainWindow = mock(async () => {
+      await gate.promise;
+      return window as never;
+    });
+    const controller = createController({ createMainWindow });
+
+    const first = controller.showMainWindow();
+    const second = controller.showMainWindow();
+    gate.resolve();
+    await Promise.all([first, second]);
+
+    expect(createMainWindow).toHaveBeenCalledTimes(1);
+    expect(window.visible).toBe(true);
+    controller.dispose();
+  });
+
+  test("serializes quick-chat retargets and remains usable after a failed request", async () => {
+    const gate = deferred();
+    const window = new FakeWindow();
+    const retarget = mock(async (_window: unknown, opts?: { threadId?: string }) => {
+      if (opts?.threadId === "first") {
+        await gate.promise;
+        throw new Error("renderer load failed");
+      }
+    });
+    const controller = createController({
+      createQuickChatWindow: async () => window as never,
+      retargetQuickChatWindow: retarget,
+    });
+    await controller.showQuickChatWindow();
+
+    const first = controller
+      .showQuickChatWindow({ threadId: "first" })
+      .catch((error: unknown) => error);
+    const second = controller.showQuickChatWindow({ threadId: "second" });
+    await Promise.resolve();
+    const callsBeforeRelease = retarget.mock.calls.length;
+    gate.resolve();
+    expect(await first).toBeInstanceOf(Error);
+    await second;
+
+    expect(callsBeforeRelease).toBe(1);
+    expect(retarget.mock.calls.map((call) => call[1]?.threadId)).toEqual(["first", "second"]);
+    expect(window.visible).toBe(true);
+    controller.dispose();
+  });
+});
+
 describe("resolveTrayIconPath", () => {
   beforeEach(() => {
     createdTrays.length = 0;

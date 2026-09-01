@@ -144,6 +144,24 @@ describe("desktop smoke JSON-RPC helper", () => {
     expect(ws.closeCalls).toBe(1);
   });
 
+  test("closes the socket when opening the connection times out", async () => {
+    const manualTimers = createManualTimers();
+    const connectPromise = connectDesktopSmokeJsonRpc(createSocketOptions(manualTimers.timers));
+    const ws = FakeWebSocket.instances[0]!;
+    const timeout = manualTimers.timeoutCallbacks[0]?.[1];
+    if (!timeout) {
+      throw new Error("expected connection open to register a timeout");
+    }
+
+    timeout();
+
+    await expect(connectPromise).rejects.toThrow(
+      "Timed out waiting for desktop smoke websocket open",
+    );
+    expect(ws.closeCalls).toBe(1);
+    expect(manualTimers.timeoutCallbacks).toHaveLength(0);
+  });
+
   test("closes the socket when initialize responds with a JSON-RPC error", async () => {
     const connectPromise = connectDesktopSmokeJsonRpc(createSocketOptions());
     const ws = FakeWebSocket.instances[0]!;

@@ -69,6 +69,7 @@ import {
   safeJsonStringify,
   safePathComponent,
   safeStamp,
+  serializeRawLoopTrace,
 } from "./rawLoopUtils";
 import {
   buildPathArtifactAssertions,
@@ -917,7 +918,7 @@ async function ensureDir(p: string) {
 }
 
 async function writeTraceFile(filePath: string, trace: RunTrace) {
-  await fs.writeFile(filePath, safeJsonStringify(trace), "utf-8");
+  await fs.writeFile(filePath, serializeRawLoopTrace(trace), "utf-8");
 }
 
 async function sleep(ms: number) {

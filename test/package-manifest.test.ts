@@ -55,7 +55,7 @@ function dryRunPackPaths(): string[] {
 }
 
 describe("package manifest", () => {
-  test("packs runtime assets and excludes repo-only baggage", { timeout: 20_000 }, () => {
+  test("packs runtime assets and excludes repo-only baggage", () => {
     const paths = dryRunPackPaths();
 
     expect(paths).toContain("src/index.ts");
@@ -82,7 +82,6 @@ describe("package manifest", () => {
     expect(paths).not.toContain("src/server/jsonrpc/schema.misc.ts");
     expect(paths).not.toContain("src/server/agents/DelegateRunner.ts");
     expect(paths).not.toContain("packages/harness/src/rawLoopValidation.ts");
-    expect(paths).not.toContain("src/client/modelStreamReplay.ts");
     expect(paths).not.toContain("src/shared/displayCitationMarkers.ts");
     expect(paths).not.toContain("src/shared/askPrompt.ts");
     expect(paths).not.toContain("CHANGELOG.md");
@@ -99,6 +98,8 @@ describe("package manifest", () => {
     expect(paths).toContain("scripts/build_cowork_server_binary.ts");
     expect(paths).not.toContain("scripts/postinstall.ts");
     expect(paths).toContain("scripts/releaseBuildUtils.ts");
+    expect(paths).toContain("scripts/windowsSandboxBundle.ts");
+    expect(paths).toContain("scripts/winSandboxPrebuilt.ts");
     expect(paths).toContain("scripts/setup_cowork_runtime.ts");
     expect(paths).not.toContain("scripts/setup_codex_primary_runtime.ts");
     expect(paths).not.toContain("scripts/setup_artifact_runtime.ts");
@@ -117,5 +118,5 @@ describe("package manifest", () => {
     expect(paths).not.toContain("docs/session-storage-architecture.md");
     expect(paths).not.toContain("packages/harness/src/check_docs.ts");
     expect(paths).not.toContain("packages/harness/src/run_raw_agent_loops.ts");
-  });
+  }, 20_000);
 });

@@ -5,7 +5,7 @@ import {
   createModelStreamReplayRuntime,
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
-} from "../src/client/modelStreamReplay";
+} from "../src/shared/modelStreamReplay";
 
 describe("modelStreamReplay", () => {
   test("keeps normalized chunks when a raw event produces no replay updates", () => {

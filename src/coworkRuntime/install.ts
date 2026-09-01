@@ -147,6 +147,7 @@ export async function installRuntimeArchive(opts: {
   let backup: string | null = null;
   let destination: string | null = null;
   let promoted = false;
+  let result: { runtimeDir: string; version: string; activated: boolean };
   try {
     const stagedVerification = await verifyRuntime({
       runtimeDir: staging,
@@ -200,16 +201,7 @@ export async function installRuntimeArchive(opts: {
 
     const activate = opts.activate !== false;
     if (activate) await activateInstalledRuntime(manifest.version, home, true);
-    if (backup) {
-      await fs.rm(backup, { recursive: true, force: true });
-      backup = null;
-    }
-    const removed = await pruneInstalledRuntimes(home, 2);
-    for (const runtime of removed) {
-      opts.log?.(`Removed expired Cowork runtime ${runtime.version} from ${runtime.path}`);
-    }
-    opts.log?.(`Installed Cowork runtime ${manifest.version} at ${destination}`);
-    return { runtimeDir: destination, version: manifest.version, activated: activate };
+    result = { runtimeDir: destination, version: manifest.version, activated: activate };
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
     if (destination && promoted) {
@@ -223,9 +215,24 @@ export async function installRuntimeArchive(opts: {
     }
     throw error;
   } finally {
-    if (backup) await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
     // The staging tree is verified before promotion, which leaves an attestation
     // beside a directory that no longer exists once it is renamed or discarded.
     await clearRuntimeAttestation(staging);
   }
+
+  // The verified installation is committed. Retention is housekeeping and must
+  // never remove the active runtime if an older executable is still in use.
+  try {
+    if (backup) await fs.rm(backup, { recursive: true, force: true });
+    const removed = await pruneInstalledRuntimes(home, 2);
+    for (const runtime of removed) {
+      opts.log?.(`Removed expired Cowork runtime ${runtime.version} from ${runtime.path}`);
+    }
+  } catch (error) {
+    opts.log?.(
+      `Cowork runtime ${result.version} is installed, but cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  opts.log?.(`Installed Cowork runtime ${result.version} at ${result.runtimeDir}`);
+  return result;
 }

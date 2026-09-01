@@ -15,12 +15,7 @@ import {
   shouldBundleWindowsAiElectronPackage,
   WINDOWS_AI_ELECTRON_DIR_NAME,
 } from "../apps/desktop/electron/services/sidecar";
-import {
-  WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-  WINDOWS_SANDBOX_HASH_MANIFEST_NAME,
-  WINDOWS_SANDBOX_HELPER_NAME,
-  WINDOWS_SANDBOX_SETUP_NAME,
-} from "../src/platform/sandbox/windows";
+import { WINDOWS_SANDBOX_HELPER_NAME } from "../src/platform/sandbox/windows";
 import {
   copyDir,
   pathExists,
@@ -29,9 +24,9 @@ import {
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";
-import { tryDownloadPrebuiltHelpers } from "./winSandboxPrebuilt";
+import { syncWindowsSandboxHelper } from "./windowsSandboxBundle";
 
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 13;
 
 type DesktopResourcesCache = {
   version: number;
@@ -47,7 +42,6 @@ type DesktopResourcesCache = {
   windowsAiElectronFingerprint: string | null;
   windowsSandboxHelperFingerprint: string | null;
   docsFingerprint: string | null;
-  bundledBunRuntimeVersion: string | null;
 };
 
 async function walkForFingerprint(
@@ -86,11 +80,18 @@ async function walkForFingerprint(
   }
 
   const relative = path.relative(relativeTo, target);
-  acc.push(`${relative}:${stat.size}:${Math.floor(stat.mtimeMs)}`);
+  const contentHash = createHash("sha256")
+    .update(await fs.readFile(target))
+    .digest("hex");
+  acc.push(`${relative}:${contentHash}`);
 }
 
-async function fingerprintInputs(targets: string[], root: string): Promise<string> {
-  const acc: string[] = [];
+async function fingerprintInputs(
+  targets: string[],
+  root: string,
+  compilerIdentity = "",
+): Promise<string> {
+  const acc: string[] = compilerIdentity ? [`compiler:${compilerIdentity}`] : [];
   for (const target of targets) {
     if (!(await pathExists(target))) {
       acc.push(`${path.relative(root, target)}:missing`);
@@ -125,9 +126,7 @@ async function loadCache(cachePath: string): Promise<DesktopResourcesCache | nul
         typeof parsed.windowsAiElectronFingerprint !== "string") ||
       (parsed.windowsSandboxHelperFingerprint !== null &&
         typeof parsed.windowsSandboxHelperFingerprint !== "string") ||
-      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string") ||
-      (parsed.bundledBunRuntimeVersion !== null &&
-        typeof parsed.bundledBunRuntimeVersion !== "string")
+      (parsed.docsFingerprint !== null && typeof parsed.docsFingerprint !== "string")
     ) {
       return null;
     }
@@ -194,164 +193,6 @@ async function clearDesktopSidecarArtifacts(desktopBinariesDir: string): Promise
       await rmrf(path.join(desktopBinariesDir, entry.name));
     }
   }
-}
-
-async function syncWindowsSandboxHelper(opts: {
-  root: string;
-  dest: string;
-  previousFingerprint: string | null;
-  nextFingerprint: string | null;
-  platform: NodeJS.Platform;
-  arch: string;
-  commandRunner?: typeof runCommand;
-  forceBuild?: boolean;
-  fetchImpl?: typeof fetch;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const destinationDir = path.dirname(opts.dest);
-  const binaryNames = [
-    WINDOWS_SANDBOX_HELPER_NAME,
-    WINDOWS_SANDBOX_SETUP_NAME,
-    WINDOWS_SANDBOX_COMMAND_RUNNER_NAME,
-  ];
-  const manifestDest = path.join(destinationDir, WINDOWS_SANDBOX_HASH_MANIFEST_NAME);
-  if (opts.platform !== "win32" || opts.nextFingerprint === null) {
-    await Promise.all([
-      ...binaryNames.map((name) => fs.rm(path.join(destinationDir, name), { force: true })),
-      fs.rm(manifestDest, { force: true }),
-    ]);
-    console.log("[resources] Windows sandbox helpers: disabled");
-    return;
-  }
-
-  const cachedBundleIsValid = await (async () => {
-    try {
-      const manifest = JSON.parse(await fs.readFile(manifestDest, "utf8")) as {
-        schemaVersion?: unknown;
-        rustTarget?: unknown;
-        files?: Record<string, unknown>;
-      };
-      if (
-        manifest.schemaVersion !== 1 ||
-        manifest.rustTarget !== resolveWindowsRustTarget(opts.arch)
-      ) {
-        return false;
-      }
-      for (const name of binaryNames) {
-        const expected = manifest.files?.[name];
-        if (typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) return false;
-        const actual = createHash("sha256")
-          .update(await fs.readFile(path.join(destinationDir, name)))
-          .digest("hex");
-        if (actual !== expected) return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  const needsBuild =
-    opts.forceBuild === true ||
-    opts.previousFingerprint !== opts.nextFingerprint ||
-    !cachedBundleIsValid;
-  if (!needsBuild) {
-    console.log("[resources] Windows sandbox helpers: cached");
-    return;
-  }
-
-  const crateDir = path.join(opts.root, "crates", "cowork-win-sandbox");
-  const rustTarget = resolveWindowsRustTarget(opts.arch);
-
-  // Fast path: download prebuilt helpers published by win-sandbox-release.yml when
-  // the checked-in lock matches the local crate source. Any soft miss (no lock,
-  // fingerprint drift, unavailable asset) falls back to the cargo source build;
-  // hash mismatches inside tryDownloadPrebuiltHelpers throw instead of falling back.
-  if (opts.forceBuild !== true) {
-    const prebuilt = await tryDownloadPrebuiltHelpers({
-      crateDir,
-      destinationDir,
-      rustTarget,
-      binaryNames,
-      fetchImpl: opts.fetchImpl,
-      env: opts.env,
-      logger: (message) => console.log(`[resources] Windows sandbox helpers: ${message}`),
-    });
-    if (prebuilt.ok) {
-      await fs.writeFile(
-        manifestDest,
-        `${JSON.stringify({ schemaVersion: 1, rustTarget, files: prebuilt.files }, null, 2)}\n`,
-        "utf8",
-      );
-      console.log(
-        `[resources] Windows sandbox helpers: prebuilt ${path.relative(opts.root, destinationDir)}`,
-      );
-      return;
-    }
-    console.log(
-      `[resources] Windows sandbox helpers: prebuilt unavailable (${prebuilt.reason}); building from source`,
-    );
-  }
-
-  const manifestPath = path.join(crateDir, "Cargo.toml");
-  const runner = opts.commandRunner ?? runCommand;
-  await runner(["rustup", "target", "add", rustTarget], {
-    cwd: opts.root,
-  });
-  await runner(
-    [
-      "cargo",
-      "build",
-      "--release",
-      "--bins",
-      "--manifest-path",
-      manifestPath,
-      "--target",
-      rustTarget,
-    ],
-    {
-      cwd: opts.root,
-      ...(opts.forceBuild
-        ? {
-            env: {
-              ...process.env,
-              COWORK_SANDBOX_BUILD_NONCE: `${Date.now()}-${process.pid}`,
-            },
-          }
-        : {}),
-    },
-  );
-
-  const releaseDir = path.join(crateDir, "target", rustTarget, "release");
-  const builtBinaries = binaryNames.map((name) => ({ name, path: path.join(releaseDir, name) }));
-  for (const binary of builtBinaries) {
-    if (!(await pathExists(binary.path))) {
-      throw new Error(`Windows sandbox build did not produce ${binary.path}`);
-    }
-  }
-
-  await fs.mkdir(destinationDir, { recursive: true });
-  const files: Record<string, string> = {};
-  for (const binary of builtBinaries) {
-    const destination = path.join(destinationDir, binary.name);
-    await fs.copyFile(binary.path, destination);
-    files[binary.name] = createHash("sha256")
-      .update(await fs.readFile(destination))
-      .digest("hex");
-  }
-  await fs.writeFile(
-    manifestDest,
-    `${JSON.stringify({ schemaVersion: 1, rustTarget, files }, null, 2)}\n`,
-    "utf8",
-  );
-  console.log(
-    `[resources] Windows sandbox helpers: updated ${path.relative(opts.root, destinationDir)}`,
-  );
-}
-
-function resolveWindowsRustTarget(arch: string): string {
-  if (arch === "x64") return "x86_64-pc-windows-msvc";
-  if (arch === "arm64") return "aarch64-pc-windows-msvc";
-  throw new Error(`Unsupported Windows sandbox helper architecture: ${arch}`);
 }
 
 async function ensureFoundationModelsSdkInputs(root: string): Promise<{
@@ -577,6 +418,7 @@ async function main() {
     path.join(root, "scripts", "releaseBuildUtils.ts"),
     path.join(root, "package.json"),
     path.join(root, "bun.lock"),
+    path.join(root, ".bun-version"),
     path.join(root, "tsconfig.json"),
   ];
   const promptsSrc = path.join(root, "prompts");
@@ -615,7 +457,11 @@ async function main() {
     ? await fingerprintInputs(windowsSandboxHelperInputs, root)
     : null;
   const docsFingerprint = includeDocs ? await fingerprintInputs([docsSrc], root) : null;
-  const sidecarFingerprint = await fingerprintInputs(sidecarInputs, root);
+  const sidecarFingerprint = await fingerprintInputs(
+    sidecarInputs,
+    root,
+    `${Bun.version}:${Bun.revision}`,
+  );
 
   const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
   const sidecarOutfile = path.join(
@@ -626,13 +472,11 @@ async function main() {
   const foundationModelsSdkDest = path.join(desktopBinariesDir, FOUNDATION_MODELS_SDK_DIR_NAME);
   const windowsAiElectronDest = path.join(desktopBinariesDir, WINDOWS_AI_ELECTRON_DIR_NAME);
   const windowsSandboxHelperDest = path.join(desktopBinariesDir, WINDOWS_SANDBOX_HELPER_NAME);
-  const bundledBunRuntimeVersion = null;
   const sidecarNeedsBuild =
     cache?.platform !== platform ||
     cache?.arch !== arch ||
     cache?.includeDocs !== includeDocs ||
     cache?.sidecarFingerprint !== sidecarFingerprint ||
-    cache?.bundledBunRuntimeVersion !== bundledBunRuntimeVersion ||
     !(await pathExists(sidecarManifestPath)) ||
     !(await pathExists(sidecarOutfile));
 
@@ -643,7 +487,7 @@ async function main() {
 
     const manifest = buildSidecarManifest(platform, arch);
     const compileArgs = [
-      "bun",
+      process.execPath,
       "build",
       entry,
       "--compile",
@@ -767,7 +611,6 @@ async function main() {
     windowsAiElectronFingerprint,
     windowsSandboxHelperFingerprint,
     docsFingerprint,
-    bundledBunRuntimeVersion,
   });
 
   console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
@@ -822,6 +665,7 @@ if (import.meta.main) {
 }
 
 export const __internal = {
+  fingerprintInputs,
   clearDesktopSidecarArtifacts,
   ensureFoundationModelsSdkInputs,
   syncFoundationModelsSdk,

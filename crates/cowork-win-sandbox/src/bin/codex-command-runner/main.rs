@@ -1,3 +1,6 @@
+#[cfg(any(target_os = "windows", test))]
+mod job;
+
 #[cfg(target_os = "windows")]
 mod win;
 

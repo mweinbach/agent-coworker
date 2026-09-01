@@ -30,6 +30,29 @@ function createState(): ReplSessionEventState {
 }
 
 describe("CLI notification handler", () => {
+  test("clears a resolved active request before activating the next prompt", () => {
+    const state = createState();
+    state.activeAsk = { requestId: "ask-1", question: "Continue?" };
+    state.promptMode = "ask";
+    state.pendingAsk = [{ requestId: "ask-2", question: "Where?" }];
+    const activateNextPrompt = mock(() => {});
+    const handler = createNotificationHandler({
+      state,
+      streamState: new CliStreamState(),
+      activateNextPrompt,
+      resetModelStreamState: mock(() => {}),
+    });
+
+    handler(
+      { method: "serverRequest/resolved", params: { threadId: "t1", requestId: "ask-1" } },
+      {} as any,
+    );
+
+    expect(state.activeAsk).toBeNull();
+    expect(state.pendingAsk.map((request) => request.requestId)).toEqual(["ask-2"]);
+    expect(activateNextPrompt).toHaveBeenCalledTimes(1);
+  });
+
   test("turn/started sets busy=true and resets stream state", () => {
     const state = createState();
     const resetModelStreamState = mock(() => {});

@@ -28,6 +28,15 @@ describe("desktop release workflow", () => {
     expect(validateJob).not.toContain("run: bun run test:stable");
   });
 
+  test("installs locked mobile dependencies before running the full release test suite", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
+    const install = validateJob.indexOf("bun install --cwd apps/mobile --frozen-lockfile");
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(validateJob.indexOf("run: bun run test"));
+    expect(validateJob).toContain("apps/mobile/bun.lock");
+    expect(validateJob).toContain("apps/mobile/package.json");
+  });
+
   test("restores package dependencies without saving post-job caches", () => {
     const validateJob = workflow.match(/validate:[\s\S]*?\n {2}package:/)?.[0] ?? "";
     const packageJob = workflow.match(/package:[\s\S]*?\n {2}publish:/)?.[0] ?? "";

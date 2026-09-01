@@ -586,9 +586,8 @@ function startRuntimeWatcher(root: string, state: RuntimeTrustState): void {
   } catch {
     // The watcher only invalidates trust early. Cross-launch correctness never
     // depended on it (the first use in a process re-collects the tree
-    // fingerprint before trusting the cache), but within a process the
-    // in-process memo does: with no watcher, mid-process tree edits go
-    // unnoticed until an explicit invalidation.
+    // fingerprint before trusting the cache). Without a watcher, each use
+    // must also re-collect that fingerprint instead of trusting the memo.
     state.watcherAvailable = false;
   }
 }
@@ -645,6 +644,8 @@ export async function verifyRuntimeIntegrityForUse(opts: {
   // invalidation clears it (fail closed).
   if (
     !isFullVerifyForced(process.env) &&
+    state.watcherAvailable &&
+    state.watcher !== null &&
     state.verifiedBundleSignatureSha256 === bundle.signatureSha256
   ) {
     return { keyId: bundle.keyId };

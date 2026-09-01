@@ -269,10 +269,13 @@ export async function validateFinalContract(opts: {
     issues.push(...semanticResult.issues);
     warnings.push(...semanticResult.warnings);
     semanticOk = semanticResult.ok;
+    if (!semanticOk && semanticResult.issues.length === 0) {
+      issues.push(issue("semantic_failed", "Semantic validation rejected the final output."));
+    }
   }
 
   return {
-    ok: issues.length === 0,
+    ok: artifactOk && semanticOk && issues.length === 0,
     schemaOk: true,
     artifactOk,
     semanticOk,

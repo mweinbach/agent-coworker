@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { serializeRawLoopTrace } from "../packages/harness/src/rawLoopUtils";
 import {
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
@@ -12,7 +13,7 @@ import {
   createRawLoopAgentControl,
   createToolsWithTracing,
 } from "../packages/harness/src/run_raw_agent_loops";
-import type { AgentConfig, ModelMessage } from "../src/types";
+import type { AgentConfig, ModelMessage, TodoItem } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/raw-loop-agent-control";
@@ -42,6 +43,60 @@ function makeDelegateRunResult(text: string) {
     responseMessages: [{ role: "assistant", content: text }] as ModelMessage[],
   };
 }
+
+describe("raw loop trace serialization", () => {
+  test("omits configuration credentials while preserving intentional trace payloads", () => {
+    const config = makeConfig({
+      observabilityEnabled: true,
+      observability: {
+        provider: "langfuse",
+        baseUrl: "https://telemetry.example.test",
+        otelEndpoint: "https://telemetry.example.test/api/public/otel/v1/traces",
+        publicKey: "dummy-public-key",
+        secretKey: "dummy-langfuse-secret",
+        recordInputs: true,
+        recordOutputs: true,
+      },
+      providerOptions: {
+        vendor: {
+          apiKey: "dummy-provider-secret",
+          headers: {
+            Authorization: "Bearer dummy-authorization-secret",
+            Cookie: "session=dummy-cookie-secret",
+            "x-custom": "Bearer dummy-custom-secret",
+          },
+          nested: [{ credentials: { password: "dummy-password-secret" } }],
+          endpoint: "https://demo:dummy-url-password@provider.example.test",
+          maxOutputTokens: 1024,
+        },
+      },
+    });
+    const serialized = serializeRawLoopTrace({
+      config,
+      userPrompt: "Intentional research prompt",
+      result: { text: "Intentional raw response" },
+    });
+
+    for (const secret of [
+      "dummy-langfuse-secret",
+      "dummy-provider-secret",
+      "dummy-authorization-secret",
+      "dummy-cookie-secret",
+      "dummy-custom-secret",
+      "dummy-password-secret",
+      "dummy-url-password",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+    const parsed = JSON.parse(serialized);
+    expect(parsed.userPrompt).toBe("Intentional research prompt");
+    expect(parsed.result.text).toBe("Intentional raw response");
+    expect(parsed.config.model).toBe(config.model);
+    expect(parsed.config.observability.recordInputs).toBe(true);
+    expect(config.observability?.secretKey).toBe("dummy-langfuse-secret");
+    expect(config.providerOptions?.vendor.apiKey).toBe("dummy-provider-secret");
+  });
+});
 
 describe("raw loop child-agent control", () => {
   test("uses connected providers for cross-provider child routing", async () => {
@@ -249,7 +304,7 @@ describe("raw loop child-agent control", () => {
   });
 
   test("seeds parent todos into raw-loop child runs when requested", async () => {
-    const seededTodos = [
+    const seededTodos: TodoItem[] = [
       {
         content: "Reuse the parent checklist",
         status: "in_progress",
@@ -388,8 +443,16 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(gctRun).toBeDefined();
     expect(mixedRun).toBeDefined();
 
-    const gctPrompt = gctRun!.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
-    const mixedPrompt = mixedRun!.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
+    const gctPrompt = gctRun!.prompt({
+      runId: gctRun!.id,
+      runDir: "/tmp/raw-loop",
+      repoDir: "/tmp/repo",
+    });
+    const mixedPrompt = mixedRun!.prompt({
+      runId: mixedRun!.id,
+      runDir: "/tmp/raw-loop",
+      repoDir: "/tmp/repo",
+    });
 
     expect(gctRun!.requiredToolCalls).toEqual(
       expect.arrayContaining(["spawnAgent", "waitForAgent"]),
@@ -427,10 +490,26 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(workbookRun).toBeDefined();
     expect(quickRefRun).toBeDefined();
 
-    const gctPrompt = gctRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
-    const notesPrompt = notesRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
-    const workbookPrompt = workbookRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
-    const quickRefPrompt = quickRefRun!.prompt({ runDir: "C:/raw-loop", repoDir: "C:/repo" });
+    const gctPrompt = gctRun!.prompt({
+      runId: gctRun!.id,
+      runDir: "C:/raw-loop",
+      repoDir: "C:/repo",
+    });
+    const notesPrompt = notesRun!.prompt({
+      runId: notesRun!.id,
+      runDir: "C:/raw-loop",
+      repoDir: "C:/repo",
+    });
+    const workbookPrompt = workbookRun!.prompt({
+      runId: workbookRun!.id,
+      runDir: "C:/raw-loop",
+      repoDir: "C:/repo",
+    });
+    const quickRefPrompt = quickRefRun!.prompt({
+      runId: quickRefRun!.id,
+      runDir: "C:/raw-loop",
+      repoDir: "C:/repo",
+    });
 
     expect(gctPrompt).toContain("Use bash to run command: (Get-Location).Path");
     expect(notesPrompt).toContain("Use bash to run: (Get-Location).Path");
@@ -453,7 +532,7 @@ describe("raw loop scripted spawnAgent prompts", () => {
     const runs = [...buildGoogleCustomtoolsToolCoverageRuns(), ...buildMixedRuns()];
 
     for (const run of runs) {
-      const prompt = run.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
+      const prompt = run.prompt({ runId: run.id, runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
       expect(run.finalContract?.format).toBe("json");
       expect(prompt).toContain('"end": "<<END_RUN>>"');
       expect(prompt).not.toContain("Final response must be exactly");

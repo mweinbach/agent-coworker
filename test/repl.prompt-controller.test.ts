@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { activateNextPrompt, type ReplPromptStateAdapter } from "../src/cli/repl/promptController";
+import {
+  activateNextPrompt,
+  type ReplPromptStateAdapter,
+  resolvePrompt,
+} from "../src/cli/repl/promptController";
 import type { ApprovalPrompt, AskPrompt } from "../src/cli/repl/serverEventHandler";
 
 class FakeReadline {
@@ -65,13 +69,45 @@ describe("REPL prompt controller", () => {
 
     activateNextPrompt(state, rl as any);
     expect(state.promptMode).toBe("approval");
+    resolvePrompt(state, approval.requestId);
     activateNextPrompt(state, rl as any);
     expect(state.promptMode).toBe("ask");
     expect(state.activeAsk).toEqual(ask);
     expect(rl.lastPrompt).toBe("answer> ");
+    resolvePrompt(state, ask.requestId);
     activateNextPrompt(state, rl as any);
     expect(state.promptMode).toBe("user");
     expect(rl.lastPrompt).toBe("you> ");
+  });
+
+  test("does not replace an unanswered question with a newly queued approval", () => {
+    const rl = new FakeReadline();
+    const state = makeState({ activeAsk: ask, promptMode: "ask", pendingApproval: [approval] });
+
+    activateNextPrompt(state, rl as any);
+
+    expect(state.activeAsk).toEqual(ask);
+    expect(state.activeApproval).toBeNull();
+    expect(state.pendingApproval).toEqual([approval]);
+    expect(rl.lastPrompt).toBe("answer> ");
+  });
+
+  test("does not replace an unanswered approval when another request arrives", () => {
+    const rl = new FakeReadline();
+    const nextApproval = { ...approval, requestId: "approval-2", command: "/other-command" };
+    const state = makeState({
+      activeApproval: approval,
+      promptMode: "approval",
+      pendingApproval: [nextApproval],
+      pendingAsk: [ask],
+    });
+
+    activateNextPrompt(state, rl as any);
+
+    expect(state.activeApproval).toEqual(approval);
+    expect(state.pendingApproval).toEqual([nextApproval]);
+    expect(state.pendingAsk).toEqual([ask]);
+    expect(rl.lastPrompt).toBe("approve (y/n)> ");
   });
 
   test("empty queues reset prompt mode to user", () => {

@@ -41,7 +41,8 @@ light/dark navigation, top-bar, task, and file-panel contrast debt; issue #235 a
 without changing shipping theme tokens. Axe's generated target is resolved back to its DOM element
 and matched against those selectors, so harmless generated-selector ordering changes do not expand
 the baseline. Only `color-contrast` results on matching elements are filtered after analysis, so
-every other rule still evaluates those elements and any new contrast target fails. The dedicated
+every other rule still evaluates those elements and any new contrast target fails. Utility classes
+and document-wide positional selectors are not accepted as contrast exceptions. The dedicated
 assertion test injects an unbaselined low-contrast label and proves the gate rejects it. Axe also has
 one narrow mainline exclusion for `.sidebar-symbol-slot`: the existing custom animated workspace
 disclosure uses a Radix trigger without a Radix content node, so Radix emits a dangling generated
@@ -52,12 +53,15 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
 - First launch, theme-correct slow bootstrap, onboarding, keyboard focus, and Axe.
 - Project and Quick Chat; streaming reasoning/tool/approval state; Stop, steer, cancellation, and
   completion.
-- Disconnect/reconnect, drafts, tool-failure history, and attachment-only transcript semantics.
+- Socket disconnect/reconnect, preserved drafts and transcript identity, tool-failure history, and
+  attachment-only transcript semantics. Recovery closes the real loopback sockets, holds the new
+  handshake, then requires a replacement connection and successful thread resume before checking UI.
 - File Explorer, Markdown preview, Canvas popout, and all three desktop resizers.
 - Actual color-scheme, reduced-motion, and forced-colors media queries on the
   initial window and a Canvas popup across all five quality modes. `openWindow`
   applies the requested media settings before returning a secondary page.
-- Settings persistence through the production preload/state bridge.
+- Settings reload round-trip through the production preload bridge. The main-process fixture keeps
+  settings in memory; this does not verify disk persistence, migrations, or an Electron restart.
 - Active Task blocking questions, artifact review, and cancellation controls.
 - Mention geometry at 100%, 150%, and 200% zoom.
 - Approved screenshots and Axe/focus/clipping checks for the complete 16-case Cartesian matrix:
@@ -67,7 +71,7 @@ disclosure uses a Radix trigger without a Radix content node, so Radix emits a d
   `react-dom/client` to React's profiling build while leaving `react-dom` available to the profiling
   bundle's internal shared-state import. Every sample must record positive React commits and store
   publications (plus filesystem requests for the file-tree probe), then remain below the reviewed
-  upper budgets in `budgets.json`. Composer input, thread navigation, and tree expansion also
+upper budgets in `budgets.json`. Composer input, thread navigation, and tree expansion also
   enforce responsiveness budgets.
 
 The delta-burst probe also budgets content publications, feed and row renders, streaming/full
@@ -76,6 +80,10 @@ probe budgets both derivation size and mounted rows. Completion is released by a
 handshake after the live-stream state is observed, so slower hosts cannot skip the streaming phase.
 The checked limits retain CI scheduling headroom without allowing a zero-value or inactive probe to
 pass.
+
+Unsupported JSON-RPC requests and desktop IPC calls fail explicitly. The main fixture contains
+small, explicit no-op allowlists for known background calls outside these renderer scenarios;
+new workflows must implement their fixture response instead of inheriting a silent success.
 
 ## Failure diagnostics
 

@@ -27,6 +27,15 @@ describe("cowork-server release workflow", () => {
     expect(workflow).toContain("- name: Docs consistency check");
   });
 
+  test("installs locked mobile dependencies before running the full release test suite", () => {
+    const validateJob = workflow.match(/validate:[\s\S]*?\n {2}build:/)?.[0] ?? "";
+    const install = validateJob.indexOf("bun install --cwd apps/mobile --frozen-lockfile");
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(validateJob.indexOf("run: bun run test"));
+    expect(validateJob).toContain("apps/mobile/bun.lock");
+    expect(validateJob).toContain("apps/mobile/package.json");
+  });
+
   test("builds separate Windows x64 and ARM64 server bundles", () => {
     expect(workflow).toContain("label: Windows x64");
     expect(workflow).toContain("artifact_name: cowork-server-windows-x64");
@@ -66,6 +75,18 @@ describe("cowork-server release workflow", () => {
     expect(workflow).toContain("$machine -ne 0xAA64");
     expect(workflow).toContain("--json");
     expect(workflow).toContain("server_listening");
+  });
+
+  test("checks sandbox hashes and native enforcement from the extracted standalone bundle", () => {
+    const smokeJob = workflow.match(/smoke-windows-arm64:[\s\S]*?\n {2}publish:/)?.[0] ?? "";
+    expect(smokeJob).toContain("$bundleDir = $launcher.Directory.FullName");
+    expect(smokeJob).toContain('Join-Path $bundleDir "cowork-win-sandbox.sha256.json"');
+    expect(smokeJob).toContain("Get-FileHash -Algorithm SHA256 -LiteralPath $helperPath");
+    expect(smokeJob).toContain("$sandboxHelper setup --sandbox-home");
+    expect(smokeJob).toContain("failed the native sandbox setup and enforcement probe");
+    expect(smokeJob.indexOf("$sandboxHelper setup")).toBeLessThan(
+      smokeJob.indexOf("Start-Process -FilePath $launcher.FullName"),
+    );
   });
 
   test("blocks prerelease publishing on the ARM64 smoke job", () => {

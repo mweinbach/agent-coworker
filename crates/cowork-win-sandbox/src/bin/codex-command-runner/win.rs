@@ -11,6 +11,7 @@
 
 mod cwd_junction;
 
+use super::job::spawn_in_job;
 use anyhow::Context;
 use anyhow::Result;
 use codex_windows_sandbox::ErrorPayload;
@@ -77,6 +78,8 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
+const TERMINATION_WAIT_MS: u32 = 5_000;
+const WAIT_OBJECT_0: u32 = 0;
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
 struct IpcSpawnedProcess {
@@ -125,10 +128,13 @@ impl Drop for OwnedWinHandle {
     }
 }
 
-unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
+unsafe fn create_job_kill_on_close() -> Result<OwnedWinHandle> {
     let h_job = OwnedWinHandle::new(CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()));
     if h_job.raw() == 0 {
-        return Err(anyhow::anyhow!("CreateJobObjectW failed"));
+        return Err(anyhow::anyhow!(
+            "CreateJobObjectW failed: {}",
+            GetLastError()
+        ));
     }
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -139,9 +145,38 @@ unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
         std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
     );
     if ok == 0 {
-        return Err(anyhow::anyhow!("SetInformationJobObject failed"));
+        return Err(anyhow::anyhow!(
+            "SetInformationJobObject failed: {}",
+            GetLastError()
+        ));
     }
-    Ok(h_job.into_raw())
+    Ok(h_job)
+}
+
+fn discard_failed_process(spawned: IpcSpawnedProcess, mut error: anyhow::Error) -> anyhow::Error {
+    let process = OwnedWinHandle::new(spawned.pi.hProcess);
+    let _thread = OwnedWinHandle::new(spawned.pi.hThread);
+    let stdin = spawned.stdin_handle.map(OwnedWinHandle::new);
+    let stdout = OwnedWinHandle::new(spawned.stdout_handle);
+    let stderr = OwnedWinHandle::new(spawned.stderr_handle);
+    let terminate_error = if unsafe { TerminateProcess(process.raw(), 1) } == 0 {
+        Some(unsafe { GetLastError() })
+    } else {
+        None
+    };
+    let wait = unsafe { WaitForSingleObject(process.raw(), TERMINATION_WAIT_MS) };
+    if wait != WAIT_OBJECT_0 {
+        error = error.context(format!(
+            "Sandbox child cleanup did not finish (TerminateProcess error: {terminate_error:?}, wait result: {wait})"
+        ));
+    }
+    // These handles were transferred out of the pinned pipe/ConPTY owners. Close
+    // the pipe ends before the console owner so its shutdown cannot wait on them.
+    drop(stdin);
+    drop(stdout);
+    drop(stderr);
+    drop(spawned.conpty_owner);
+    error
 }
 
 /// Open a named pipe created by the parent process.
@@ -533,13 +568,46 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let ipc_spawn = match spawn_ipc_process(&req) {
+    let (h_job, ipc_spawn) = match spawn_in_job(
+        || unsafe { create_job_kill_on_close() },
+        || spawn_ipc_process(&req),
+        |job, child| {
+            if unsafe { AssignProcessToJobObject(job.raw(), child.pi.hProcess) } == 0 {
+                anyhow::bail!("AssignProcessToJobObject failed: {}", unsafe {
+                    GetLastError()
+                });
+            }
+            Ok(())
+        },
+        discard_failed_process,
+    ) {
         Ok(value) => value,
         Err(err) => {
-            let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
+            let _ = send_error(&pipe_write, "spawn_failed", format!("{err:#}"));
             return Err(err);
         }
     };
+
+    let msg = FramedMessage {
+        version: IPC_PROTOCOL_VERSION,
+        message: Message::SpawnReady {
+            payload: SpawnReady {
+                process_id: unsafe { GetProcessId(ipc_spawn.pi.hProcess) },
+            },
+        },
+    };
+    let ready_result = match pipe_write.lock() {
+        Ok(mut guard) => write_frame(&mut *guard, &msg),
+        Err(_) => Err(anyhow::anyhow!(
+            "runner spawn_ready write failed: pipe_write lock poisoned"
+        )),
+    };
+    if let Err(err) = ready_result {
+        drop(h_job);
+        let err = discard_failed_process(ipc_spawn, err);
+        let _ = send_error(&pipe_write, "spawn_failed", format!("{err:#}"));
+        return Err(err);
+    }
     let log_dir = Some(ipc_spawn.log_dir.as_path());
     let pi = ipc_spawn.pi;
     let stdout_handle = ipc_spawn.stdout_handle;
@@ -547,32 +615,7 @@ pub fn main() -> Result<()> {
     let mut conpty_owner = ipc_spawn.conpty_owner;
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
-
-    let h_job = unsafe { create_job_kill_on_close().ok() };
-    if let Some(job) = h_job {
-        unsafe {
-            let _ = AssignProcessToJobObject(job, pi.hProcess);
-        }
-    }
-
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
-
-    let msg = FramedMessage {
-        version: IPC_PROTOCOL_VERSION,
-        message: Message::SpawnReady {
-            payload: SpawnReady {
-                process_id: unsafe { GetProcessId(pi.hProcess) },
-            },
-        },
-    };
-    if let Err(err) = if let Ok(mut guard) = pipe_write.lock() {
-        write_frame(&mut *guard, &msg)
-    } else {
-        anyhow::bail!("runner spawn_ready write failed: pipe_write lock poisoned");
-    } {
-        let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
-        return Err(err);
-    }
     let log_dir_owned = log_dir.map(Path::to_path_buf);
     let out_thread = spawn_output_reader(
         Arc::clone(&pipe_write),
@@ -616,13 +659,14 @@ pub fn main() -> Result<()> {
         if pi.hThread != 0 {
             CloseHandle(pi.hThread);
         }
-        if pi.hProcess != 0 {
-            CloseHandle(pi.hProcess);
-        }
-        if let Some(job) = h_job {
-            CloseHandle(job);
+        let mut shared_process = process_handle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(handle) = shared_process.take() {
+            CloseHandle(handle);
         }
     }
+    drop(h_job);
 
     if let Ok(mut guard) = hpc_handle.lock() {
         let _ = guard.take();

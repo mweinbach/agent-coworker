@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { setStoredSessionForCwd } from "../src/cli/repl/stateStore";
 import { scratchRoots } from "../src/platform/sandbox";
 import { pinHome } from "./helpers/platform";
 import { createFailureDiagnostics } from "./shared/failureDiagnostics";
@@ -139,7 +140,7 @@ class FakeWebSocket {
           id: parsed.id,
           result: {
             thread: {
-              id: "thread-test",
+              id: parsed.params.threadId,
               title: "",
               preview: "",
               modelProvider: "openai",
@@ -155,6 +156,11 @@ class FakeWebSocket {
         };
         activeDiagnostics?.log("fake-socket.emit-thread-resume-response", response);
         this.onmessage?.({ data: JSON.stringify(response) });
+      });
+    }
+    if (parsed?.method === "turn/start" && parsed?.id != null) {
+      queueMicrotask(() => {
+        this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result: {} }) });
       });
     }
     if (
@@ -283,7 +289,7 @@ const fastTimers = {
 };
 
 describe("CLI REPL auto-reconnect", () => {
-  test("successfully reconnects and resumes thread session when websocket drops", async () => {
+  test("reconnects to the current thread after replacing a restored session", async () => {
     await withReplDiagnostics(
       "successfully reconnects and resumes thread session when websocket drops",
       async (diagnostics) => {
@@ -299,6 +305,7 @@ describe("CLI REPL auto-reconnect", () => {
         const realErr = console.error;
 
         try {
+          await setStoredSessionForCwd(process.cwd(), "thread-saved");
           console.log = (...args: any[]) => {
             const line = args.join(" ");
             logs.push(line);
@@ -335,6 +342,8 @@ describe("CLI REPL auto-reconnect", () => {
           const firstSocket = FakeWebSocket.instances[0];
           expect(firstSocket.readyState).toBe(FakeWebSocket.OPEN);
 
+          await rlRef!.emitLine("/new");
+
           diagnostics.log("simulating connection drop");
           // Simulate connection drop by calling close() on the current socket
           firstSocket.close();
@@ -349,6 +358,16 @@ describe("CLI REPL auto-reconnect", () => {
 
           // The logs should contain the reconnection message
           expect(logs.join("\n")).toContain("Connection lost, reconnected to server.");
+
+          const resumed = secondSocket.sent.map((message) => JSON.parse(message));
+          expect(resumed.find((message) => message.method === "thread/resume")?.params).toEqual({
+            threadId: "thread-test",
+          });
+          await rlRef!.emitLine("continue in the new conversation");
+          const sent = secondSocket.sent.map((message) => JSON.parse(message));
+          expect(sent.find((message) => message.method === "turn/start")?.params.threadId).toBe(
+            "thread-test",
+          );
 
           rlRef!.close();
           await replPromise;

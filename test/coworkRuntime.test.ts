@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { loadConfig } from "../src/config";
 import {
@@ -11,6 +12,7 @@ import {
   installRuntimeArchive,
   invalidateRuntimeTrust,
   listInstalledRuntimes,
+  prepareCoworkRuntimeToolEnv,
   releaseAllRuntimeTrust,
   resolveCurrentRuntime,
   resolveRuntimeAssetForHost,
@@ -382,6 +384,84 @@ describe("Cowork unified runtime", () => {
     expect(afterReplace.runtimeVersion).toBe("2026-06-21");
   });
 
+  test("keeps the activated runtime when pruning an older version fails", async () => {
+    const root = await tempRoot("retention-failure");
+    const home = path.join(root, "home");
+    for (const version of ["2026-06-19", "2026-06-20"]) {
+      const archive = await runtimeArchive(path.join(root, "archives"), version);
+      await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+    }
+    const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+    const expiredDir = path.join(home, ".cowork", "runtime", "2026-06-19");
+    const originalRm = fs.rm.bind(fs);
+    const remove = spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === expiredDir) throw new Error("expired runtime is in use");
+      await originalRm(target, options);
+    });
+    try {
+      const installed = await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+      expect(await resolveCurrentRuntime(home)).toBe(installed.runtimeDir);
+      expect((await verifyRuntime({ runtimeDir: installed.runtimeDir, trustedKeys })).ok).toBe(
+        true,
+      );
+    } finally {
+      remove.mockRestore();
+    }
+  });
+
+  test.each(["rejected", "disabled"] as const)(
+    "removes %s runtime executable wiring without changing unrelated tool options",
+    async (runtimeState) => {
+      const root = await tempRoot("rejected-tool-env");
+      const home = path.join(root, "home");
+      const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
+      const installed = await installRuntimeArchive({
+        archivePath: archive.archivePath,
+        expectedSha256: archive.sha256,
+        home,
+        execute: false,
+        trustedKeys,
+      });
+      const baseEnv = {
+        PATH: path.join(root, "host-bin"),
+        NODE_PATH: path.join(root, "host-modules"),
+        NODE_OPTIONS: `--import=${pathToFileURL(path.join(root, "host-loader.mjs")).href} --trace-warnings`,
+      };
+      const wired = await buildRuntimeEnv(
+        installed.runtimeDir,
+        baseEnv,
+        hostPlatform(),
+        trustedKeys,
+      );
+      if (runtimeState === "rejected") await fs.rm(path.join(installed.runtimeDir, "runtime.json"));
+
+      const env = await prepareCoworkRuntimeToolEnv({
+        homedir: home,
+        env: {
+          ...wired,
+          ...(runtimeState === "disabled" ? { COWORK_DISABLE_RUNTIME: "1" } : {}),
+        },
+      });
+
+      expect(env.PATH).toBe(baseEnv.PATH);
+      expect(env.NODE_PATH).toBe(baseEnv.NODE_PATH);
+      expect(env.NODE_OPTIONS).toBe(baseEnv.NODE_OPTIONS);
+      expect(Object.keys(env).some((key) => key.startsWith("COWORK_RUNTIME_"))).toBe(false);
+    },
+  );
+
   test("serializes concurrent runtime bootstrap attempts", async () => {
     const root = await tempRoot("concurrent-bootstrap");
     const home = path.join(root, "home");
@@ -579,7 +659,7 @@ describe("Cowork unified runtime", () => {
     ).rejects.toThrow(/mismatch/i);
   });
 
-  test("reuses the in-process verification until trust is invalidated", async () => {
+  test("rechecks runtime files on every use when the integrity watcher is unavailable", async () => {
     const root = await tempRoot("process-trust");
     const home = path.join(root, "home");
     const archive = await runtimeArchive(path.join(root, "archives"), "2026-06-21");
@@ -604,14 +684,9 @@ describe("Cowork unified runtime", () => {
     invalidateRuntimeTrust(installed.runtimeDir, false);
     await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
 
-    // The tree verified earlier in this process, so repeat uses skip the
-    // fingerprint walk entirely: this edit goes unnoticed until invalidation.
+    // Without a functioning watcher, no future event can invalidate the memo.
+    // Every use must check the fingerprint even after a successful verification.
     await fs.writeFile(nodePath, "replaced node");
-    await buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys);
-
-    // This is what a watcher event does: trust is cleared, the fingerprint is
-    // re-collected, and the full hash catches the mutation.
-    invalidateRuntimeTrust(installed.runtimeDir, false);
     await expect(
       buildRuntimeEnv(installed.runtimeDir, {}, hostPlatform(), trustedKeys),
     ).rejects.toThrow(/runtime file (size|SHA-256) mismatch/i);

@@ -1,6 +1,6 @@
 import { type ProfilerOnRenderCallback, useEffect, useState } from "react";
 import type { SessionFeedItem } from "../../../src/shared/sessionSnapshot";
-import { useAppStore } from "../src/app/store";
+import { publishForegroundNotification, useAppStore } from "../src/app/store";
 import { defaultThreadRuntime } from "../src/app/store.helpers";
 import type { SettingsPageId } from "../src/app/types";
 import {
@@ -31,6 +31,7 @@ export type QualityGateMetrics = {
 
 export type QualityGateRuntime = {
   getFileCount(): number;
+  getFeedItemIds(): string[];
   getFeedText(itemId: string): string | null;
   getFeedTextByPrefix(prefix: string): string | null;
   getMetrics(): QualityGateMetrics;
@@ -39,13 +40,12 @@ export type QualityGateRuntime = {
   refreshFileTree(): Promise<void>;
   resetFeed(): void;
   resetMetrics(): void;
-  showDisconnect(): void;
   showCrashFallback(): void;
   showChat(): void;
+  showErrorNotification(): void;
   showFilePreview(): void;
   showPresentationPreview(): void;
-  showNewChat(): Promise<void>;
-  showReconnect(): void;
+  showNewChat(options?: { readinessBlocked?: boolean }): Promise<void>;
   showTaskReview(): void;
   showToolFailureHistory(): void;
 };
@@ -176,6 +176,9 @@ export function installQualityGateRuntime(): void {
   window.__coworkQualityGate = {
     getFileCount: () =>
       useAppStore.getState().workspaceExplorerById[PROJECT_WORKSPACE_ID]?.entries.length ?? 0,
+    getFeedItemIds: () =>
+      useAppStore.getState().threadRuntimeById[selectedThreadId()]?.feed.map((item) => item.id) ??
+      [],
     getFeedText: (itemId) => {
       const runtime = useAppStore.getState().threadRuntimeById[selectedThreadId()];
       const item = runtime?.feed.find((entry) => entry.id === itemId);
@@ -246,41 +249,6 @@ export function installQualityGateRuntime(): void {
         listener();
       }
     },
-    showDisconnect: () => {
-      const threadId = selectedThreadId();
-      useAppStore.setState((state) => ({
-        threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "disconnected" as const } : thread,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...(state.threadRuntimeById[threadId] ?? defaultThreadRuntime()),
-            connected: false,
-            busy: false,
-            activeTurnId: null,
-            hydrating: false,
-            sessionId: threadId,
-            transcriptOnly: false,
-          },
-        },
-      }));
-    },
-    showReconnect: () => {
-      const threadId = selectedThreadId();
-      useAppStore.setState((state) => ({
-        threads: state.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, status: "active" as const } : thread,
-        ),
-        threadRuntimeById: {
-          ...state.threadRuntimeById,
-          [threadId]: {
-            ...(state.threadRuntimeById[threadId] ?? defaultThreadRuntime()),
-            connected: true,
-          },
-        },
-      }));
-    },
     showChat: () => {
       useAppStore.setState({
         filePreview: null,
@@ -288,6 +256,13 @@ export function installQualityGateRuntime(): void {
         selectedTaskId: null,
         selectedThreadId: PROJECT_THREAD_ID,
         view: "chat",
+      });
+    },
+    showErrorNotification: () => {
+      publishForegroundNotification({
+        kind: "error",
+        title: "Changes were not saved",
+        detail: "Your work is still open. Check the connection and try again.",
       });
     },
     showFilePreview: () => {
@@ -300,7 +275,23 @@ export function installQualityGateRuntime(): void {
         path: "/quality/project/quality-gate-presentation.pptx",
       });
     },
-    showNewChat: async () => {
+    showNewChat: async (options) => {
+      if (options?.readinessBlocked) {
+        useAppStore.setState({
+          preflightCreation: async () => ({
+            ready: false,
+            checks: [
+              {
+                id: "credentials",
+                status: "blocked",
+                message:
+                  "Connect the selected provider before starting this chat. Your message and attached files will stay here while you finish setup.",
+                repairAction: { type: "openProviderSettings", provider: "google" },
+              },
+            ],
+          }),
+        });
+      }
       await useAppStore.getState().openNewChatLanding({
         target: { kind: "project", workspaceId: PROJECT_WORKSPACE_ID },
       });

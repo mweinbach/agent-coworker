@@ -44,6 +44,26 @@ describe("raw-loop harness config resolution", () => {
 });
 
 describe("raw-loop final contract validation", () => {
+  test("fails semantic rejection even when the validator supplies no issue details", async () => {
+    const result = await validateFinalContract({
+      finalText: '{"end":"<<END_RUN>>"}',
+      runDir: "/tmp/run",
+      trace: {},
+      contract: {
+        format: "json",
+        schema: z.object({ end: z.literal("<<END_RUN>>") }),
+        validateSemantics: async () => ({ ok: false, issues: [], warnings: [] }),
+      },
+    });
+
+    expect(result.schemaOk).toBe(true);
+    expect(result.semanticOk).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      { code: "semantic_failed", message: "Semantic validation rejected the final output." },
+    ]);
+  });
+
   test("fails malformed JSON final output", async () => {
     const result = await validateFinalContract({
       finalText: "{not-json",

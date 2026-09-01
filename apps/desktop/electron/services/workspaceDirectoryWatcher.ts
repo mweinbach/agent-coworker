@@ -143,7 +143,10 @@ export class WorkspaceDirectoryWatcher {
     eventType: "rename" | "change",
     filename: string | Buffer | null,
   ): void {
-    const relativePath = filename?.toString().trim() ?? "";
+    if (active.subscribers.size === 0) {
+      return;
+    }
+    const relativePath = filename?.toString() ?? "";
     const changedPath = relativePath
       ? path.resolve(active.rootPath, relativePath)
       : active.rootPath;
@@ -217,8 +220,11 @@ export class WorkspaceDirectoryWatcher {
   private closeWatch(key: string, active: ActiveWatch): void {
     if (active.debounceTimer) {
       clearTimeout(active.debounceTimer);
+      active.debounceTimer = null;
     }
-    active.watcher.close();
+    active.subscribers.clear();
+    active.pendingByPath.clear();
     this.activeByScope.delete(key);
+    active.watcher.close();
   }
 }

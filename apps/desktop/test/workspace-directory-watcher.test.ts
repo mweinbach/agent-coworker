@@ -144,4 +144,88 @@ describe("WorkspaceDirectoryWatcher", () => {
 
     expect(events).toEqual([]);
   });
+
+  test("stops an in-flight rename flush when disposed", async () => {
+    let callback: WatchCallback | null = null;
+    const events: WorkspaceFileChangeEvent[] = [];
+    const started = Promise.withResolvers<void>();
+    const existence = Promise.withResolvers<boolean>();
+    const watcher = new WorkspaceDirectoryWatcher({
+      debounceMs: 0,
+      pathExists: () => {
+        started.resolve();
+        return existence.promise;
+      },
+      watch: (_rootPath, listener) => {
+        callback = listener;
+        return { close() {} };
+      },
+    });
+    watcher.watch({ workspaceId: "workspace-a", rootPath: "/repo" }, "renderer", (event) => {
+      events.push(event);
+    });
+
+    callback?.("rename", "src/index.ts");
+    await started.promise;
+    watcher.dispose();
+    existence.resolve(true);
+    await settleWatcher();
+
+    expect(events).toEqual([]);
+  });
+
+  test("ignores late filesystem callbacks after disposal", async () => {
+    let callback: WatchCallback | null = null;
+    const events: WorkspaceFileChangeEvent[] = [];
+    const watcher = new WorkspaceDirectoryWatcher({
+      debounceMs: 0,
+      watch: (_rootPath, listener) => {
+        callback = listener;
+        return { close() {} };
+      },
+    });
+    watcher.watch({ workspaceId: "workspace-a", rootPath: "/repo" }, "renderer", (event) => {
+      events.push(event);
+    });
+
+    watcher.dispose();
+    callback?.("change", "src/index.ts");
+    await settleWatcher();
+
+    expect(events).toEqual([]);
+  });
+
+  test("preserves whitespace in filesystem names", async () => {
+    let callback: WatchCallback | null = null;
+    const events: WorkspaceFileChangeEvent[] = [];
+    const checkedPaths: string[] = [];
+    const watcher = new WorkspaceDirectoryWatcher({
+      debounceMs: 0,
+      pathExists: async (candidatePath) => {
+        checkedPaths.push(candidatePath);
+        return true;
+      },
+      watch: (_rootPath, listener) => {
+        callback = listener;
+        return { close() {} };
+      },
+    });
+    watcher.watch({ workspaceId: "workspace-a", rootPath: "/repo" }, "renderer", (event) => {
+      events.push(event);
+    });
+
+    try {
+      callback?.("change", " report.md ");
+      callback?.("rename", Buffer.from(" renamed.md "));
+      await settleWatcher();
+
+      expect(events.map((event) => event.changedPaths)).toEqual([
+        [path.resolve("/repo/ report.md ").replace(/\\/g, "/")],
+        [path.resolve("/repo/ renamed.md ").replace(/\\/g, "/")],
+      ]);
+      expect(checkedPaths).toEqual([path.resolve("/repo/ renamed.md ")]);
+    } finally {
+      watcher.dispose();
+    }
+  });
 });

@@ -271,7 +271,11 @@ export class DesktopUpdaterService {
       return;
     }
 
-    if (this.state.phase === "checking" || this.state.phase === "downloading") {
+    if (
+      this.state.phase === "checking" ||
+      this.state.phase === "downloading" ||
+      this.state.phase === "downloaded"
+    ) {
       return;
     }
 

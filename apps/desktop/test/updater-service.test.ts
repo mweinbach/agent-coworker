@@ -156,6 +156,30 @@ describe("desktop updater service", () => {
     expect(updater.disableDifferentialDownload).toBe(true);
   });
 
+  test("keeps a downloaded update installable when another check is requested", async () => {
+    const updater = new FakeUpdater();
+    updater.checkForUpdates = mock(async () => {
+      throw new Error("Network is offline");
+    });
+    updater.quitAndInstall = mock(() => {});
+    const service = new DesktopUpdaterService({
+      currentVersion: "0.1.9",
+      isPackaged: true,
+      updater,
+    });
+    updater.emit("update-downloaded", { version: "0.2.0" });
+
+    await service.checkForUpdates();
+    service.quitAndInstall();
+
+    expect(service.getState()).toMatchObject({
+      phase: "downloaded",
+      release: { version: "0.2.0" },
+      error: null,
+    });
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
   test("leaves differential downloads unchanged on non-mac packaged builds", () => {
     const updater = new FakeUpdater();
 

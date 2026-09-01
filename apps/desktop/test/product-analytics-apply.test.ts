@@ -87,10 +87,55 @@ describe("DesktopProductAnalyticsService.applyPersistedState", () => {
     const { service } = makeService();
 
     const first = await service.applyPersistedState(makeState());
-    const second = await service.applyPersistedState(makeState());
+    const second = await service.applyPersistedState(first.state);
 
     expect(first.state).toBeDefined();
     expect(second.state).toBeDefined();
     expect(second.changed).toBe(false);
+  });
+
+  test("preserves the known installation identity when a caller omits analytics state", async () => {
+    const { service } = makeService();
+    const consented = makeState({
+      privacyTelemetrySettings: { productAnalyticsEnabled: true },
+    });
+    const first = await service.applyPersistedState(consented);
+    const second = await service.applyPersistedState(consented);
+
+    expect(second.state.productAnalytics).toEqual(first.state.productAnalytics);
+    expect(second.changed).toBe(true);
+  });
+
+  test("does not treat its own environment output as consent after a local opt-out", async () => {
+    const env = {
+      COWORK_POSTHOG_KEY: "phc_test",
+      COWORK_TELEMETRY_MODE: "local-dev",
+    };
+    const enabledCalls: boolean[] = [];
+    const service = new DesktopProductAnalyticsService({
+      env,
+      appVersion: () => "1.2.23",
+      isPackaged: () => false,
+      generateAnonymousId: () => "anon_0123456789abcdef0123456789abcdef",
+      initProductAnalyticsImpl: async (context) => {
+        enabledCalls.push(context.enabled);
+        return {
+          initialized: false,
+          reason: "disabled",
+          enabled: context.enabled,
+          keyConfigured: true,
+        } as never;
+      },
+    });
+    const consented = await service.applyPersistedState(
+      makeState({ privacyTelemetrySettings: { productAnalyticsEnabled: true } }),
+    );
+    await service.applyPersistedState({
+      ...consented.state,
+      privacyTelemetrySettings: { productAnalyticsEnabled: false },
+    });
+    await service.applyPersistedState(consented.state);
+
+    expect(enabledCalls).toEqual([true, false, true]);
   });
 });

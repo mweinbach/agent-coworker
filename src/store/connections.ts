@@ -5,6 +5,7 @@ import { z } from "zod";
 import { home as resolveCoworkHomeDirectory } from "../platform/paths";
 import { type ProviderName, resolveProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 
 export type ConnectService = ProviderName;
 export const TOOL_API_KEY_NAMES = ["exa", "parallel"] as const;
@@ -136,8 +137,10 @@ export function parseConnectionStoreJson(raw: string, filePath: string): Connect
   return parseConnectionStore(parsed);
 }
 
-export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
-  const home = opts.homedir ?? resolveCoworkHomeDirectory();
+export function getAiCoworkerPaths(
+  opts: { homedir?: string; env?: NodeJS.ProcessEnv } = {},
+): AiCoworkerPaths {
+  const home = opts.homedir ?? resolveCoworkHomeDirectory(opts.env);
   const rootDir = path.join(home, ".cowork");
   const authDir = path.join(rootDir, "auth");
   const configDir = path.join(rootDir, "config");
@@ -219,4 +222,24 @@ export async function writeConnectionStore(
   } catch {
     // best effort only
   }
+}
+
+export async function updateConnectionStore(
+  paths: AiCoworkerPaths,
+  update: (store: ConnectionStore) => void | Promise<void>,
+  deps: {
+    readStore?: typeof readConnectionStore;
+    writeStore?: typeof writeConnectionStore;
+  } = {},
+): Promise<void> {
+  await withFileLock(
+    paths.connectionsFile,
+    async () => {
+      const store = await (deps.readStore ?? readConnectionStore)(paths);
+      store.updatedAt = new Date().toISOString();
+      await update(store);
+      await (deps.writeStore ?? writeConnectionStore)(paths, store);
+    },
+    { lockRoot: fileLockRootForCoworkHome(paths.rootDir) },
+  );
 }

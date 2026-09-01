@@ -60,6 +60,43 @@ describe("custom model store", () => {
     );
   });
 
+  test("malformed entries do not discard valid models on read or the next update", async () => {
+    const paths = await makeTempPaths();
+    const updatedAt = new Date().toISOString();
+    await fs.mkdir(paths.configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(paths.configDir, "custom-models.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt,
+        providers: {
+          openai: [
+            { id: "keep-openai", updatedAt },
+            { id: "bad-timestamp", updatedAt: "invalid-date" },
+            { id: 42, updatedAt },
+            null,
+          ],
+          together: [{ id: "org/keep-together", updatedAt }],
+          fireworks: "invalid-provider-bucket",
+          unknown: { invalid: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const initial = await readCustomModelStore(paths);
+    expect(initial.providers.openai?.map((entry) => entry.id)).toEqual(["keep-openai"]);
+    expect(initial.providers.together?.map((entry) => entry.id)).toEqual(["org/keep-together"]);
+
+    await upsertCustomModel(paths, "openai", "added-openai");
+    const updated = await readCustomModelStore(paths);
+    expect(updated.providers.openai?.map((entry) => entry.id)).toEqual([
+      "added-openai",
+      "keep-openai",
+    ]);
+    expect(updated.providers.together?.map((entry) => entry.id)).toEqual(["org/keep-together"]);
+  });
+
   test("concurrent upserts within one process all survive", async () => {
     const paths = await makeTempPaths();
     const ids = Array.from({ length: 12 }, (_, index) => `model-${index}`);

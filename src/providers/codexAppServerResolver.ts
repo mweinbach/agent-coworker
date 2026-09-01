@@ -6,6 +6,7 @@ import { hostArch, hostPlatform } from "../platform/host";
 import { scratchRoots } from "../platform/sandbox/policy";
 import { resolveAuthHomeDir } from "../utils/authHome";
 import { execFileCompat } from "../utils/execFileCompat";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import { sha256FileHex } from "../utils/hash";
 import { type StreamingSubprocess, spawnStreamingSubprocess } from "../utils/subprocess";
 
@@ -859,20 +860,27 @@ async function promoteManagedInstallBestEffort(
   overrides: CodexAppServerResolverOverrides,
 ): Promise<void> {
   const promote = overrides.promoteManagedInstall ?? promoteManagedInstall;
-  try {
-    await promote(executablePath, currentPath, version, target);
-  } catch (error) {
-    if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
-    await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
-    await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
-    for (const companion of companionsForTarget(target)) {
-      await fs
-        .rm(`${companionSiblingPath(currentPath, companion.basename, target)}.tmp`, {
-          force: true,
-        })
-        .catch(() => {});
-    }
-  }
+  const homeDir = overrides.homeDir ?? resolveAuthHomeDir();
+  await withFileLock(
+    currentPath,
+    async () => {
+      try {
+        await promote(executablePath, currentPath, version, target);
+      } catch (error) {
+        if (target.platform !== "win32" || !isWindowsPromotionLockError(error)) throw error;
+        await fs.rm(`${currentPath}.tmp`, { force: true }).catch(() => {});
+        await fs.rm(`${currentPath}.version.tmp`, { force: true }).catch(() => {});
+        for (const companion of companionsForTarget(target)) {
+          await fs
+            .rm(`${companionSiblingPath(currentPath, companion.basename, target)}.tmp`, {
+              force: true,
+            })
+            .catch(() => {});
+        }
+      }
+    },
+    { lockRoot: fileLockRootForCoworkHome(path.join(homeDir, ".cowork")) },
+  );
 }
 
 async function installCodexAppServer(

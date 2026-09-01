@@ -1,3 +1,4 @@
+import type { CatalogReasoningEffort } from "../shared/openaiCompatibleOptions";
 import type { ProviderName } from "../types";
 
 type ModelMetadataSource = "static" | "dynamic";
@@ -10,6 +11,7 @@ export type ResolvedModelMetadata = {
   supportsImageInput: boolean;
   promptTemplate: string;
   providerOptionsDefaults: Record<string, unknown>;
+  supportedReasoningEfforts?: readonly CatalogReasoningEffort[];
   source: ModelMetadataSource;
   maxContextLength?: number;
   effectiveContextLength?: number;

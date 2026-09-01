@@ -6,6 +6,7 @@ import {
   isCatalogReasoningEffort,
 } from "../shared/openaiCompatibleOptions";
 import { asArray, asRecord, asString } from "../shared/recordParsing";
+import { raceWithAbort } from "../utils/abortSignal";
 import { openExternalUrl, type UrlOpener } from "../utils/browser";
 import {
   type CodexAppServerClient,
@@ -95,6 +96,7 @@ type LoginOptions = {
 type ListModelsOptions = {
   codexHome?: string;
   log?: (line: string) => void;
+  signal?: AbortSignal;
 };
 
 type ListAppsOptions = {
@@ -127,8 +129,15 @@ async function withClient<T>(
   fn: (client: CodexAppServerClient) => Promise<T>,
   log?: (line: string) => void,
   codexHome?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
-  return await fn(await getPooledCodexAppServerClient({ log, codexHome }));
+  const client = await raceWithAbort(
+    getPooledCodexAppServerClient({ log, codexHome }),
+    signal,
+    "Codex request cancelled.",
+  );
+  signal?.throwIfAborted();
+  return await fn(client);
 }
 
 function normalizeAccount(value: unknown): CodexAppServerAccount | null {
@@ -473,22 +482,35 @@ async function listCodexAppServerAppsViaLegacyAppList(
 export async function listCodexAppServerModels(
   opts: ListModelsOptions = {},
 ): Promise<CodexAppServerModel[]> {
-  if (appServerAuthOverrides.listModels) return await appServerAuthOverrides.listModels(opts);
+  opts.signal?.throwIfAborted();
+  if (appServerAuthOverrides.listModels) {
+    return await raceWithAbort(
+      appServerAuthOverrides.listModels(opts),
+      opts.signal,
+      "Codex model discovery cancelled.",
+    );
+  }
   return await withClient(
     async (client) => {
       const models: CodexAppServerModel[] = [];
       let cursor: string | undefined;
       do {
+        opts.signal?.throwIfAborted();
         const result = asRecord(
-          await client.request(
-            "model/list",
-            {
-              limit: 100,
-              cursor: cursor ?? null,
-            },
-            CODEX_STATUS_RPC_TIMEOUT_MS,
+          await raceWithAbort(
+            client.request(
+              "model/list",
+              {
+                limit: 100,
+                cursor: cursor ?? null,
+              },
+              CODEX_STATUS_RPC_TIMEOUT_MS,
+            ),
+            opts.signal,
+            "Codex model discovery cancelled.",
           ),
         );
+        opts.signal?.throwIfAborted();
         const items = Array.isArray(result?.data)
           ? result.data
           : Array.isArray(result?.items)
@@ -504,6 +526,7 @@ export async function listCodexAppServerModels(
     },
     opts.log,
     opts.codexHome,
+    opts.signal,
   );
 }
 
@@ -604,7 +627,7 @@ export async function loginCodexAppServerChatGpt(
 ): Promise<{ account: CodexAppServerAccount | null }> {
   if (appServerAuthOverrides.login) return await appServerAuthOverrides.login(opts);
   const codexHome = opts.codexHome ?? clientInternal.resolveCodexHome();
-  const login = await withClient(
+  return await withClient(
     async (client) => {
       const started = asRecord(
         await client.request("account/login/start", { type: "chatgpt" }, CODEX_AUTH_RPC_TIMEOUT_MS),
@@ -615,37 +638,39 @@ export async function loginCodexAppServerChatGpt(
         throw new Error("codex app-server did not return a ChatGPT login URL.");
       }
       const loginAbort = new AbortController();
-      const loginPromise = waitForLogin(client, loginId, { signal: loginAbort.signal });
+      let authenticated = false;
+      const loginPromise = waitForLogin(client, loginId, { signal: loginAbort.signal }).then(() => {
+        authenticated = true;
+      });
       void loginPromise.catch(() => {});
-      opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
-      let opened = false;
       try {
-        opened = await (opts.openUrl ?? openExternalUrl)(authUrl);
-      } catch (error) {
-        loginAbort.abort();
-        await loginPromise.catch(() => {});
-        throw error;
-      }
-      if (!opened) {
-        loginAbort.abort();
-        await loginPromise.catch(() => {});
-        throw new Error(
-          "Unable to open the Codex app-server ChatGPT login URL. Open a browser and try again.",
+        opts.log?.("[auth] opening Codex app-server ChatGPT login URL.");
+        const opening = (opts.openUrl ?? openExternalUrl)(authUrl).then((opened) => {
+          if (!opened) {
+            throw new Error(
+              "Unable to open the Codex app-server ChatGPT login URL. Open a browser and try again.",
+            );
+          }
+          return loginPromise;
+        });
+        // Browser launchers may stay alive after handing off the URL. The login
+        // result and its deadline must settle independently of the opener.
+        await Promise.race([loginPromise, opening]);
+        const result = asRecord(
+          await client.request("account/read", { refreshToken: true }, CODEX_AUTH_RPC_TIMEOUT_MS),
         );
+        return {
+          account: normalizeAccount(result?.account),
+        };
+      } finally {
+        loginAbort.abort();
+        await loginPromise.catch(() => {});
+        if (authenticated) await closePooledCodexAppServerClientsForHome(codexHome);
       }
-      await loginPromise;
-      const result = asRecord(
-        await client.request("account/read", { refreshToken: true }, CODEX_AUTH_RPC_TIMEOUT_MS),
-      );
-      return {
-        account: normalizeAccount(result?.account),
-      };
     },
     opts.log,
     codexHome,
   );
-  await closePooledCodexAppServerClientsForHome(codexHome);
-  return login;
 }
 
 export async function logoutCodexAppServer(

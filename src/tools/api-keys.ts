@@ -3,7 +3,8 @@ import {
   getAiCoworkerPaths,
   readConnectionStore,
   type ToolApiKeyName,
-  writeConnectionStore,
+  updateConnectionStore,
+  type writeConnectionStore,
 } from "../store/connections";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
@@ -29,18 +30,19 @@ export async function writeToolApiKey(opts: {
   writeStore?: typeof writeConnectionStore;
 }): Promise<{ storageFile: string; maskedApiKey: string; message: string }> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
-  const readStore = opts.readStore ?? readConnectionStore;
-  const writeStore = opts.writeStore ?? writeConnectionStore;
   const apiKey = opts.apiKey.trim();
   if (!apiKey) throw new Error("API key is required.");
 
-  const store = await readStore(paths);
-  store.toolApiKeys = {
-    ...(store.toolApiKeys ?? {}),
-    [opts.name]: apiKey,
-  };
-  store.updatedAt = new Date().toISOString();
-  await writeStore(paths, store);
+  await updateConnectionStore(
+    paths,
+    (store) => {
+      store.toolApiKeys = {
+        ...(store.toolApiKeys ?? {}),
+        [opts.name]: apiKey,
+      };
+    },
+    { readStore: opts.readStore, writeStore: opts.writeStore },
+  );
 
   return {
     storageFile: paths.connectionsFile,

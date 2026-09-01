@@ -14,6 +14,11 @@ import {
   isAntigravitySupportedPlatform,
 } from "./providers/antigravitySupport";
 import {
+  isApiKeyProvider,
+  resolveAntigravityApiKey,
+  resolveProviderApiKey,
+} from "./providers/apiKeyAuth";
+import {
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
   refreshBedrockDiscoveryCache,
@@ -23,16 +28,8 @@ import {
   readCodexAppServerAccount,
   readCodexAppServerRateLimits,
 } from "./providers/codexAppServerAuth";
-import {
-  listLmStudioLlms,
-  mapLmStudioModelToResolvedMetadata,
-  selectDefaultLmStudioModel,
-} from "./providers/lmstudio/catalog";
-import {
-  isLmStudioError,
-  listLmStudioModels,
-  resolveLmStudioProviderOptions,
-} from "./providers/lmstudio/client";
+import { isLmStudioError, resolveLmStudioProviderOptions } from "./providers/lmstudio/client";
+import { createLmStudioModelDiscoveryAdapter } from "./providers/modelDiscoveryAdapters";
 import { writeModelDiscoveryCache } from "./providers/modelDiscoveryCache";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
@@ -153,10 +150,28 @@ function statusFromConnectionStore(opts: {
   provider: ProviderName;
   store: ConnectionStore;
   checkedAt: string;
+  env?: NodeJS.ProcessEnv;
 }): ProviderStatus {
   const entry = opts.store.services[opts.provider];
   const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: opts.provider, store: opts.store });
   const savedFieldMasks = buildSavedFieldMasks({ provider: opts.provider, store: opts.store });
+  if (
+    isApiKeyProvider(opts.provider) &&
+    !storedProviderApiKey(opts.store, opts.provider) &&
+    resolveProviderApiKey(opts.provider, { env: opts.env })
+  ) {
+    return {
+      provider: opts.provider,
+      authorized: true,
+      verified: false,
+      mode: "api_key",
+      account: null,
+      message: "Using an environment API key.",
+      checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
+    };
+  }
   if (!entry) {
     return {
       provider: opts.provider,
@@ -174,11 +189,11 @@ function statusFromConnectionStore(opts: {
   if (entry.mode === "api_key") {
     return {
       provider: opts.provider,
-      authorized: Boolean(entry.apiKey),
+      authorized: Boolean(entry.apiKey?.trim()),
       verified: false,
       mode: "api_key",
       account: null,
-      message: entry.apiKey ? "API key saved." : "API key missing.",
+      message: entry.apiKey?.trim() ? "API key saved." : "API key missing.",
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
       ...(savedFieldMasks ? { savedFieldMasks } : {}),
@@ -460,43 +475,14 @@ async function getLmStudioStatus(opts: {
   const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: "lmstudio", store: opts.store });
 
   try {
-    const models = (
-      await listLmStudioModels({
-        baseUrl: providerConfig.baseUrl,
-        apiKey: providerConfig.apiKey ?? storedProviderApiKey(opts.store, "lmstudio"),
-        fetchImpl: opts.fetchImpl,
-      })
-    ).models;
-    const llms = listLmStudioLlms(models);
-    const llmCount = llms.length;
-    const defaultModel =
-      llmCount > 0 ? selectDefaultLmStudioModel(models, providerConfig.baseUrl) : null;
-    await writeModelDiscoveryCache(opts.paths, "lmstudio", {
-      provider: "lmstudio",
-      source: "local-http",
-      models: llms.map((model) => {
-        const metadata = mapLmStudioModelToResolvedMetadata(model);
-        return {
-          id: metadata.id,
-          displayName: metadata.displayName,
-          ...(model.description ? { description: model.description } : {}),
-          knowledgeCutoff: metadata.knowledgeCutoff,
-          supportsImageInput: metadata.supportsImageInput,
-          ...(defaultModel?.key === model.key ? { isDefault: true } : {}),
-          runtimeOptions: {
-            ...(metadata.maxContextLength ? { maxContextLength: metadata.maxContextLength } : {}),
-            ...(metadata.effectiveContextLength
-              ? { effectiveContextLength: metadata.effectiveContextLength }
-              : {}),
-            ...(metadata.trainedForToolUse !== undefined
-              ? { trainedForToolUse: metadata.trainedForToolUse }
-              : {}),
-            ...(metadata.architecture ? { architecture: metadata.architecture } : {}),
-            ...(metadata.format ? { format: metadata.format } : {}),
-          },
-        };
-      }),
+    const adapter = createLmStudioModelDiscoveryAdapter({
+      baseUrl: providerConfig.baseUrl,
+      apiKey: providerConfig.apiKey ?? storedProviderApiKey(opts.store, "lmstudio"),
+      fetchImpl: opts.fetchImpl,
     });
+    const discovery = await adapter.discover({ reason: "status-refresh" });
+    const llmCount = discovery.models.length;
+    await writeModelDiscoveryCache(opts.paths, "lmstudio", discovery, adapter.cache);
     return {
       provider: "lmstudio",
       authorized: true,
@@ -546,72 +532,62 @@ export async function getProviderStatuses(
   const checkedAt = now().toISOString();
   const store = await readConnectionStore(paths);
 
-  const out: ProviderStatus[] = [];
-  for (const provider of PROVIDER_NAMES) {
-    if (provider === "codex-cli") {
-      out.push(await getCodexCliStatus({ paths, store, checkedAt }));
-      continue;
-    }
-    if (provider === "bedrock") {
-      out.push(
-        await getBedrockStatus({
+  return await Promise.all(
+    PROVIDER_NAMES.map(async (provider): Promise<ProviderStatus> => {
+      if (provider === "codex-cli") {
+        return await getCodexCliStatus({ paths, store, checkedAt });
+      }
+      if (provider === "bedrock") {
+        return await getBedrockStatus({
           paths,
           store,
           checkedAt,
           env: opts.env,
           refreshDiscovery: opts.refreshBedrockDiscovery,
-        }),
-      );
-      continue;
-    }
-    if (provider === "lmstudio") {
-      out.push(
-        await getLmStudioStatus({
+        });
+      }
+      if (provider === "lmstudio") {
+        return await getLmStudioStatus({
           paths,
           store,
           checkedAt,
           providerOptions: opts.providerOptions,
           env: opts.env,
           fetchImpl,
-        }),
-      );
-      continue;
-    }
-    if (provider === "antigravity") {
-      if (!isAntigravitySupportedPlatform(opts.platform)) {
-        out.push({
-          provider,
-          authorized: false,
-          verified: false,
-          mode: "error",
-          account: null,
-          message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
-          checkedAt,
         });
-        continue;
       }
+      if (provider === "antigravity") {
+        if (!isAntigravitySupportedPlatform(opts.platform)) {
+          return {
+            provider,
+            authorized: false,
+            verified: false,
+            mode: "error",
+            account: null,
+            message: ANTIGRAVITY_UNSUPPORTED_PLATFORM_MESSAGE,
+            checkedAt,
+          };
+        }
 
-      const base = statusFromConnectionStore({ provider, store, checkedAt });
-      const googleEntry = store.services.google;
-      const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";
-      const envKey = (opts.env ?? process.env).GEMINI_API_KEY?.trim();
-      const fallbackKey = googleKey || envKey;
+        const base = statusFromConnectionStore({ provider, store, checkedAt });
+        const googleEntry = store.services.google;
+        const googleKey = googleEntry?.mode === "api_key" ? googleEntry.apiKey?.trim() : "";
+        const env = opts.env ?? process.env;
+        const fallbackKey = resolveAntigravityApiKey({ googleKey, env });
 
-      if (!base.authorized && fallbackKey) {
-        base.authorized = true;
-        base.mode = "api_key";
-        base.message = googleKey
-          ? "Using saved Google API key."
-          : "Using GEMINI_API_KEY environment variable.";
-        base.savedApiKeyMasks = {
-          api_key: maskApiKey(fallbackKey),
-        };
+        if (!base.authorized && fallbackKey) {
+          base.authorized = true;
+          base.mode = "api_key";
+          base.message = googleKey
+            ? "Using saved Google API key."
+            : `Using ${env.GEMINI_API_KEY?.trim() ? "GEMINI_API_KEY" : "GOOGLE_API_KEY"} environment variable.`;
+          base.savedApiKeyMasks = {
+            api_key: maskApiKey(fallbackKey),
+          };
+        }
+        return base;
       }
-      out.push(base);
-      continue;
-    }
-    out.push(statusFromConnectionStore({ provider, store, checkedAt }));
-  }
-
-  return out;
+      return statusFromConnectionStore({ provider, store, checkedAt, env: opts.env });
+    }),
+  );
 }

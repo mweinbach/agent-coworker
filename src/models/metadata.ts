@@ -63,6 +63,9 @@ function toResolvedStaticModel(
     supportsImageInput: model.supportsImageInput,
     promptTemplate: model.promptTemplate,
     providerOptionsDefaults: { ...model.providerOptionsDefaults },
+    ...(model.supportedReasoningEfforts
+      ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
+      : {}),
     source: "static",
   };
 }
@@ -240,23 +243,27 @@ function buildDiscoveredModelMetadata(
   const base = buildProviderPlaceholderMetadata(provider, cached.id, {
     supportsReasoning: cacheHasReasoning,
   });
-  // When the cache advertises a specific default effort, honor it in the resolved
-  // defaults instead of the provider fallback (e.g. OpenAI `reasoningEffort:
-  // "high"`). Config loading and child routing consume `providerOptionsDefaults`,
-  // so without this a reopened/routed discovered model would send the fallback
-  // effort even though the catalog advertised another — potentially an
-  // unsupported/too-high reasoning payload. Only OpenAI-compatible providers key
-  // reasoning by `reasoningEffort`; anthropic/google use their own keys and are
-  // not populated with a generic effort from the discovery cache.
-  const cachedDefaultEffort = cached.reasoning?.defaultEffort;
+  // Prefer the advertised default, then a compatible provider fallback, then
+  // the first advertised choice. Neither a stale default nor the fallback may
+  // introduce an effort outside the model's declared choices. Other providers
+  // keep their own reasoning keys instead of receiving a generic effort.
+  const availableEfforts = cached.reasoning?.availableEfforts;
+  const defaultEffort =
+    [cached.reasoning?.defaultEffort, base.providerOptionsDefaults.reasoningEffort].find(
+      (effort) =>
+        isOpenAiReasoningEffort(effort) &&
+        (!availableEfforts?.length || availableEfforts.includes(effort)),
+    ) ?? availableEfforts?.find(isOpenAiReasoningEffort);
   const providerOptionsDefaults =
-    isOpenAiReasoningEffort(cachedDefaultEffort) &&
-    "reasoningEffort" in base.providerOptionsDefaults
-      ? { ...base.providerOptionsDefaults, reasoningEffort: cachedDefaultEffort }
+    isOpenAiReasoningEffort(defaultEffort) && "reasoningEffort" in base.providerOptionsDefaults
+      ? { ...base.providerOptionsDefaults, reasoningEffort: defaultEffort }
       : base.providerOptionsDefaults;
   return {
     ...base,
     providerOptionsDefaults,
+    ...(cached.reasoning?.availableEfforts
+      ? { supportedReasoningEfforts: [...cached.reasoning.availableEfforts] }
+      : {}),
     displayName: cached.displayName || cached.id,
     ...(cached.knowledgeCutoff ? { knowledgeCutoff: cached.knowledgeCutoff } : {}),
     ...(typeof cached.supportsImageInput === "boolean"
@@ -397,6 +404,9 @@ export function getResolvedModelMetadataSync(
         supportsImageInput: supported.supportsImageInput,
         promptTemplate: supported.promptTemplate,
         providerOptionsDefaults: { ...supported.providerOptionsDefaults },
+        ...(supported.supportedReasoningEfforts
+          ? { supportedReasoningEfforts: [...supported.supportedReasoningEfforts] }
+          : {}),
         source: "static",
       };
     }
@@ -416,6 +426,9 @@ export function getResolvedModelMetadataSync(
         supportsImageInput: supported.supportsImageInput,
         promptTemplate: supported.promptTemplate,
         providerOptionsDefaults: { ...supported.providerOptionsDefaults },
+        ...(supported.supportedReasoningEfforts
+          ? { supportedReasoningEfforts: [...supported.supportedReasoningEfforts] }
+          : {}),
         source: "static",
       };
     }
@@ -643,6 +656,9 @@ export async function resolveDefaultModelMetadata(
     supportsImageInput: model.supportsImageInput,
     promptTemplate: model.promptTemplate,
     providerOptionsDefaults: { ...model.providerOptionsDefaults },
+    ...(model.supportedReasoningEfforts
+      ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
+      : {}),
     source: "static",
   };
 }
@@ -702,6 +718,9 @@ export function getKnownResolvedModelMetadata(
     supportsImageInput: model.supportsImageInput,
     promptTemplate: model.promptTemplate,
     providerOptionsDefaults: { ...model.providerOptionsDefaults },
+    ...(model.supportedReasoningEfforts
+      ? { supportedReasoningEfforts: [...model.supportedReasoningEfforts] }
+      : {}),
     source: "static",
   };
 }

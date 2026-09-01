@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 
 import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig, PluginScope } from "../../types";
+import { writeTextFileAtomic } from "../../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../../utils/fileLock";
 import { resolveMcpConfigPaths } from "../configPaths";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
@@ -18,21 +19,6 @@ export type EditableMCPServerConfigSource = Extract<MCPServerConfigSource, "work
 
 function sortServersByName(servers: MCPServerConfig[]): MCPServerConfig[] {
   return [...servers].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function atomicWriteFile(filePath: string, payload: string, mode: number): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, { encoding: "utf-8", mode });
-  await fs.rename(tempPath, filePath);
-  try {
-    await fs.chmod(filePath, mode);
-  } catch {
-    // best effort
-  }
 }
 
 export async function readWorkspaceMCPServersDocument(config: AgentConfig): Promise<{
@@ -77,7 +63,7 @@ async function writeMCPServersDocumentFile(
   servers: MCPServerConfig[],
 ): Promise<void> {
   const payload = `${JSON.stringify({ servers: sortServersByName(servers) }, null, 2)}\n`;
-  await atomicWriteFile(filePath, payload, 0o600);
+  await writeTextFileAtomic(filePath, payload, { mode: 0o600 });
 }
 
 export async function writeWorkspaceMCPServersDocument(
@@ -86,46 +72,19 @@ export async function writeWorkspaceMCPServersDocument(
 ): Promise<void> {
   parseMCPServersDocument(rawJson);
   const paths = resolveMcpConfigPaths(config);
-  await fs.mkdir(paths.workspaceCoworkDir, { recursive: true });
   const payload = rawJson.endsWith("\n") ? rawJson : `${rawJson}\n`;
-  await atomicWriteFile(paths.workspaceConfigFile, payload, 0o600);
+  await withFileLock(
+    paths.workspaceConfigFile,
+    async () => {
+      await writeTextFileAtomic(paths.workspaceConfigFile, payload, { mode: 0o600 });
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
-async function readEditableWorkspaceServers(config: AgentConfig): Promise<MCPServerConfig[]> {
-  const { rawJson } = await readWorkspaceMCPServersDocument(config);
-  return parseMCPServersDocument(rawJson).servers;
-}
-
-async function readEditableServers(
-  config: AgentConfig,
-  source: EditableMCPServerConfigSource,
-): Promise<MCPServerConfig[]> {
-  if (source === "workspace") return await readEditableWorkspaceServers(config);
+function editableConfigFile(config: AgentConfig, source: EditableMCPServerConfigSource): string {
   const paths = resolveMcpConfigPaths(config);
-  return await readMCPServersDocumentFile(paths.userConfigFile);
-}
-
-async function writeWorkspaceServers(
-  config: AgentConfig,
-  servers: MCPServerConfig[],
-): Promise<void> {
-  const payload = `${JSON.stringify({ servers: sortServersByName(servers) }, null, 2)}\n`;
-  const paths = resolveMcpConfigPaths(config);
-  await fs.mkdir(paths.workspaceCoworkDir, { recursive: true });
-  await atomicWriteFile(paths.workspaceConfigFile, payload, 0o600);
-}
-
-async function writeEditableServers(
-  config: AgentConfig,
-  source: EditableMCPServerConfigSource,
-  servers: MCPServerConfig[],
-): Promise<void> {
-  if (source === "workspace") {
-    await writeWorkspaceServers(config, servers);
-    return;
-  }
-  const paths = resolveMcpConfigPaths(config);
-  await writeMCPServersDocumentFile(paths.userConfigFile, servers);
+  return source === "workspace" ? paths.workspaceConfigFile : paths.userConfigFile;
 }
 
 export async function upsertWorkspaceMCPServer(
@@ -143,36 +102,36 @@ export async function upsertMCPServer(
   previousName?: string,
 ): Promise<void> {
   const validated = parseMCPServerConfig(server);
-  const servers = await readEditableServers(config, source);
+  const filePath = editableConfigFile(config, source);
+  await withFileLock(
+    filePath,
+    async () => {
+      const servers = await readMCPServersDocumentFile(filePath);
+      const trimmedPrevious = previousName?.trim();
+      const isRename = trimmedPrevious && trimmedPrevious !== validated.name;
+      if (isRename && servers.some((entry) => entry.name === validated.name)) {
+        throw new Error(
+          `mcp-servers.json: cannot rename "${trimmedPrevious}" to "${validated.name}" because "${validated.name}" already exists`,
+        );
+      }
+      const nextServers = servers.filter(
+        (entry) => entry.name !== (trimmedPrevious || validated.name),
+      );
+      nextServers.push(validated);
+      await writeMCPServersDocumentFile(filePath, nextServers);
 
-  const trimmedPrevious = previousName?.trim();
-  const isRename =
-    trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name;
-
-  if (isRename && servers.some((entry) => entry.name === validated.name)) {
-    throw new Error(
-      `mcp-servers.json: cannot rename "${trimmedPrevious}" to "${validated.name}" because "${validated.name}" already exists`,
-    );
-  }
-
-  const nextServers = servers.filter((entry) => {
-    if (trimmedPrevious && trimmedPrevious.length > 0) {
-      return entry.name !== trimmedPrevious;
-    }
-    return entry.name !== validated.name;
-  });
-  nextServers.push(validated);
-  await writeEditableServers(config, source, nextServers);
-
-  if (trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name) {
-    const { renameMCPServerCredentials } = await import("../authStore");
-    await renameMCPServerCredentials({
-      config,
-      source,
-      previousName: trimmedPrevious,
-      nextName: validated.name,
-    });
-  }
+      if (isRename) {
+        const { renameMCPServerCredentials } = await import("../authStore");
+        await renameMCPServerCredentials({
+          config,
+          source,
+          previousName: trimmedPrevious,
+          nextName: validated.name,
+        });
+      }
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
 export async function deleteWorkspaceMCPServer(
@@ -192,9 +151,18 @@ export async function deleteMCPServer(
     throw new Error("mcp-servers.json: server name is required");
   }
 
-  const servers = await readEditableServers(config, source);
-  const nextServers = servers.filter((entry) => entry.name !== name);
-  await writeEditableServers(config, source, nextServers);
+  const filePath = editableConfigFile(config, source);
+  await withFileLock(
+    filePath,
+    async () => {
+      const servers = await readMCPServersDocumentFile(filePath);
+      await writeMCPServersDocumentFile(
+        filePath,
+        servers.filter((entry) => entry.name !== name),
+      );
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
 export async function setMCPServerEnabled(opts: {
@@ -229,25 +197,30 @@ export async function setMCPServerEnabled(opts: {
     return;
   }
 
-  const paths = resolveMcpConfigPaths(opts.config);
-  const filePath = opts.source === "workspace" ? paths.workspaceConfigFile : paths.userConfigFile;
-  const servers = await readMCPServersDocumentFile(filePath);
-  let found = false;
-  const nextServers = servers.map((server) => {
-    if (server.name !== name) {
-      return server;
-    }
-    found = true;
-    const next = { ...server };
-    if (opts.enabled) {
-      delete next.enabled;
-    } else {
-      next.enabled = false;
-    }
-    return next;
-  });
-  if (!found) {
-    throw new Error(`mcp-servers.json: server "${name}" was not found in ${opts.source} config`);
-  }
-  await writeMCPServersDocumentFile(filePath, nextServers);
+  const filePath = editableConfigFile(opts.config, opts.source);
+  await withFileLock(
+    filePath,
+    async () => {
+      const servers = await readMCPServersDocumentFile(filePath);
+      let found = false;
+      const nextServers = servers.map((server) => {
+        if (server.name !== name) return server;
+        found = true;
+        const next = { ...server };
+        if (opts.enabled) {
+          delete next.enabled;
+        } else {
+          next.enabled = false;
+        }
+        return next;
+      });
+      if (!found) {
+        throw new Error(
+          `mcp-servers.json: server "${name}" was not found in ${opts.source} config`,
+        );
+      }
+      await writeMCPServersDocumentFile(filePath, nextServers);
+    },
+    { lockRoot: fileLockRootForCoworkHome(opts.config.userCoworkDir) },
+  );
 }

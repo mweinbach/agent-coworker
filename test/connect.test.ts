@@ -7,6 +7,7 @@ import { OAUTH_LOOPBACK_HOST } from "../src/auth/oauth-server";
 import { __internal as connectInternal } from "../src/connect";
 import { parseConnectionStoreJson } from "../src/store/connections";
 import { resolveAuthHomeDir } from "../src/utils/authHome";
+import { pinHome } from "./helpers/platform";
 
 const mockedAuthorizeUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=${encodeURIComponent(`http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`)}&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&code_challenge=mock-challenge&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=mock-state&originator=codex_cli_rs`;
 
@@ -37,6 +38,9 @@ const {
   isOauthCliProvider,
   maskApiKey,
   readConnectionStore,
+  saveProviderConnectionConfig,
+  writeConnectionStore,
+  writeToolApiKey,
 } = await import("../src/connect");
 
 async function makeTmpHome(): Promise<string> {
@@ -58,6 +62,48 @@ function makeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("connect helpers", () => {
+  for (const explicitHomedir of [false, true]) {
+    test(`resolves supplied home overrides with explicit homedir=${explicitHomedir}`, () => {
+      const explicitHome = path.join(process.cwd(), "explicit-home");
+      const overrideHome = path.join(process.cwd(), "override-home");
+      const paths = getAiCoworkerPaths({
+        homedir: explicitHomedir ? explicitHome : undefined,
+        env: { COWORK_HOME_OVERRIDE: ` ${overrideHome} `, HOME: "/ignored-home" },
+      });
+      expect(paths.rootDir).toBe(
+        path.join(explicitHomedir ? explicitHome : overrideHome, ".cowork"),
+      );
+    });
+  }
+
+  test("connection mutations use the canonical home resolver without an explicit override", async () => {
+    const testHome = await makeTmpHome();
+    const restoreHome = pinHome(testHome);
+    delete process.env.COWORK_HOME_OVERRIDE;
+    process.env.HOME = path.relative(process.cwd(), testHome);
+    try {
+      const expectedPaths = getAiCoworkerPaths();
+      expect(expectedPaths.rootDir).toBe(path.join(testHome, ".cowork"));
+      for (const action of [
+        () => connectProvider({ provider: "openai", apiKey: "test-home-key" }),
+        () =>
+          saveProviderConnectionConfig({
+            provider: "openai",
+            methodId: "api_key",
+            values: { apiKey: "test-home-key" },
+          }),
+        () => disconnectProvider({ provider: "openai" }),
+      ]) {
+        const result = await action();
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.storageFile).toBe(expectedPaths.connectionsFile);
+      }
+    } finally {
+      restoreHome();
+      await fs.rm(testHome, { recursive: true, force: true });
+    }
+  });
+
   test("keeps credentials and sessions inside the configured Cowork home", () => {
     const configuredHome = path.join(process.cwd(), "configured-cowork-home");
     const previousOverride = process.env.COWORK_HOME_OVERRIDE;
@@ -190,6 +236,70 @@ describe("connectProvider", () => {
     expect(entry).toBeDefined();
     expect(entry?.mode).toBe("api_key");
     expect(entry?.apiKey).toBe("sk-openai-test-1234");
+  });
+
+  test("preserves provider and tool credentials saved concurrently", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    try {
+      await writeConnectionStore(paths, {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        services: {},
+      });
+
+      await Promise.all([
+        connectProvider({ provider: "openai", apiKey: "openai-key", paths }),
+        connectProvider({ provider: "anthropic", apiKey: "anthropic-key", paths }),
+        saveProviderConnectionConfig({
+          provider: "bedrock",
+          methodId: "aws_profile",
+          values: { profile: "work", region: "us-east-1" },
+          paths,
+        }),
+        writeToolApiKey({ name: "exa", apiKey: "exa-key", paths }),
+        writeToolApiKey({ name: "parallel", apiKey: "parallel-key", paths }),
+      ]);
+
+      const store = await readConnectionStore(paths);
+      expect(store.services.openai?.apiKey).toBe("openai-key");
+      expect(store.services.anthropic?.apiKey).toBe("anthropic-key");
+      expect(store.services.bedrock?.values).toEqual({ profile: "work", region: "us-east-1" });
+      expect(store.toolApiKeys).toEqual({ exa: "exa-key", parallel: "parallel-key" });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("does not restore disconnected providers when other credentials save concurrently", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    try {
+      const updatedAt = new Date().toISOString();
+      await writeConnectionStore(paths, {
+        version: 1,
+        updatedAt,
+        services: {
+          openai: { service: "openai", mode: "api_key", apiKey: "old-key", updatedAt },
+          "codex-cli": { service: "codex-cli", mode: "oauth", updatedAt },
+        },
+      });
+
+      await Promise.all([
+        disconnectProvider({ provider: "openai", paths }),
+        disconnectProvider({ provider: "codex-cli", paths }),
+        connectProvider({ provider: "anthropic", apiKey: "anthropic-key", paths }),
+        writeToolApiKey({ name: "exa", apiKey: "exa-key", paths }),
+      ]);
+
+      const store = await readConnectionStore(paths);
+      expect(store.services.openai).toBeUndefined();
+      expect(store.services["codex-cli"]).toBeUndefined();
+      expect(store.services.anthropic?.apiKey).toBe("anthropic-key");
+      expect(store.toolApiKeys?.exa).toBe("exa-key");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 
   test("stores oauth_pending for non-oauth provider when key is missing", async () => {

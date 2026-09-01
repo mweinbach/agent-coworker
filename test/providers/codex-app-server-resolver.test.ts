@@ -539,6 +539,67 @@ describe("codex app-server resolver", () => {
     expect(managed.version).toBe(CODEX_APP_SERVER_MANAGED_VERSION);
   });
 
+  test.each(["darwin", "linux", "win32"] as const)(
+    "resolves an installed %s runtime concurrently without losing promotion files",
+    async (platform) => {
+      const homeDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-promotion-race-"));
+      const target = { platform, arch: "x64" };
+      const version = CODEX_APP_SERVER_MANAGED_VERSION;
+      const versionedPath = __internal.managedExecutablePath(homeDir, version, target);
+      const currentPath = __internal.managedCurrentPath(homeDir, target);
+      const companions = __internal.codexCompanionBinaries.filter(
+        (companion) => !companion.platforms || companion.platforms.includes(platform),
+      );
+      try {
+        await fs.mkdir(path.dirname(versionedPath), { recursive: true });
+        await fs.writeFile(versionedPath, "installed app-server", "utf8");
+        await fs.writeFile(`${versionedPath}.version`, `${version}\n`, "utf8");
+        for (const companion of companions) {
+          await fs.writeFile(
+            __internal.companionSiblingPath(versionedPath, companion.basename, target),
+            `installed ${companion.basename}`,
+            "utf8",
+          );
+        }
+
+        const resolutions = await Promise.allSettled(
+          Array.from({ length: 6 }, () =>
+            __internal.resolvePinnedManagedCommand(version, {
+              homeDir,
+              ...target,
+              fetchImpl: async () => {
+                throw new Error("An installed runtime must not require a download");
+              },
+            }),
+          ),
+        );
+
+        expect(resolutions.filter((result) => result.status === "rejected")).toEqual([]);
+        for (const result of resolutions) {
+          if (result.status !== "fulfilled") continue;
+          expect(result.value).toEqual({
+            command: platform === "win32" ? versionedPath : currentPath,
+            args: [],
+            source: "managed",
+            version,
+          });
+        }
+        expect(await fs.readFile(currentPath, "utf8")).toBe("installed app-server");
+        expect(await fs.readFile(`${currentPath}.version`, "utf8")).toBe(`${version}\n`);
+        for (const companion of companions) {
+          expect(
+            await fs.readFile(
+              __internal.companionSiblingPath(currentPath, companion.basename, target),
+              "utf8",
+            ),
+          ).toBe(`installed ${companion.basename}`);
+        }
+      } finally {
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.serial("system helper skips repo-local node_modules codex binaries", async () => {
     const rootDir = await fs.mkdtemp(path.join(testTempRoot(), "cowork-codex-shadow-root-"));
     const localBinDir = path.join(rootDir, "node_modules", ".bin");

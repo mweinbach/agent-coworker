@@ -1,4 +1,5 @@
 import type { AgentConfig } from "../types";
+import { resolveAntigravityApiKey } from "./apiKeyAuth";
 import {
   FIREWORKS_INFERENCE_BASE_URL,
   type FireworksInferenceProvider,
@@ -262,7 +263,7 @@ export function createAntigravityModelAdapter(
   savedKey?: string,
 ): ProviderModelAdapter {
   return createModelAdapter(modelId, "antigravity", async () => {
-    const key = firstNonEmpty(savedKey, envKey("GEMINI_API_KEY", "GOOGLE_API_KEY"));
+    const key = resolveAntigravityApiKey({ savedKey });
     const headers: HeaderMap = {};
     if (key) {
       headers["x-goog-api-key"] = key;

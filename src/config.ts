@@ -1,5 +1,4 @@
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -22,6 +21,7 @@ import {
   describeModelProviderMismatch,
   getSupportedModel,
 } from "./models/registry";
+import { home as resolveCoworkHomeDirectory } from "./platform/paths";
 import {
   DEFAULT_SANDBOX_CONFIG,
   type SandboxConfig,
@@ -505,8 +505,8 @@ export function getSavedProviderApiKey(
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
   const cwd = options.cwd ?? process.cwd();
-  const homedir = options.homedir ?? os.homedir();
   const env = options.env ?? process.env;
+  const homedir = options.homedir ?? resolveCoworkHomeDirectory(env);
   const builtInDir = options.builtInDir ?? resolveBuiltInDir(env);
 
   const projectCoworkDir = path.join(cwd, ".cowork");
@@ -846,45 +846,61 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.backupsEnabled) ??
     false;
 
-  const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
+  // A workspace cannot redirect inherited credentials or grant permission to
+  // export telemetry. It may only reduce user-level collection and add labels.
+  const inheritedObservability = parseLayer(
+    observabilityLayerSchema,
+    inheritedMerged.observability,
+    {},
+  );
+  const projectObservability = isPlainObject(projectConfig.observability)
+    ? projectConfig.observability
+    : {};
   const networkTelemetryDisabled = isNetworkTelemetryGloballyDisabled(env);
   const requestedObservabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
-    asBoolean(projectConfig.observabilityEnabled) ??
-    asBoolean(userConfig.observabilityEnabled) ??
-    asBoolean(builtInDefaults.observabilityEnabled) ??
-    false;
+    (asBoolean(projectConfig.observabilityEnabled) === false
+      ? false
+      : (asBoolean(userConfig.observabilityEnabled) ??
+        asBoolean(builtInDefaults.observabilityEnabled) ??
+        false));
   const observabilityEnabled = networkTelemetryDisabled ? false : requestedObservabilityEnabled;
   const observabilityRecordPayloads = asBoolean(env.AGENT_OBSERVABILITY_RECORD_PAYLOADS);
   const observabilityRecordInputs = networkTelemetryDisabled
     ? false
     : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_INPUTS) ??
       observabilityRecordPayloads ??
-      asBoolean(mergedObservability.recordInputs) ??
-      false);
+      (asBoolean(projectObservability.recordInputs) === false
+        ? false
+        : (inheritedObservability.recordInputs ?? false)));
   const observabilityRecordOutputs = networkTelemetryDisabled
     ? false
     : (asBoolean(env.AGENT_OBSERVABILITY_RECORD_OUTPUTS) ??
       observabilityRecordPayloads ??
-      asBoolean(mergedObservability.recordOutputs) ??
-      false);
+      (asBoolean(projectObservability.recordOutputs) === false
+        ? false
+        : (inheritedObservability.recordOutputs ?? false)));
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
-    mergedObservability.baseUrl ||
+    inheritedObservability.baseUrl ||
     "https://cloud.langfuse.com"
   ).replace(/\/+$/, "");
   const langfusePublicKey = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
+    : env.LANGFUSE_PUBLIC_KEY || inheritedObservability.publicKey;
   const langfuseSecretKey = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
+    : env.LANGFUSE_SECRET_KEY || inheritedObservability.secretKey;
   const langfuseTracingEnvironment = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
+    : env.LANGFUSE_TRACING_ENVIRONMENT ||
+      asNonEmptyString(projectObservability.tracingEnvironment) ||
+      inheritedObservability.tracingEnvironment;
   const langfuseRelease = networkTelemetryDisabled
     ? undefined
-    : env.LANGFUSE_RELEASE || mergedObservability.release;
+    : env.LANGFUSE_RELEASE ||
+      asNonEmptyString(projectObservability.release) ||
+      inheritedObservability.release;
 
   const observability: AgentConfig["observability"] = {
     provider: "langfuse",

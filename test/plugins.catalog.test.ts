@@ -21,7 +21,12 @@ import {
   previewPluginInstall,
   updatePluginInstallation,
 } from "../src/plugins/operations";
-import { setPluginMcpServerEnabled } from "../src/plugins/overrides";
+import {
+  readPluginOverrides,
+  setPluginEnabled,
+  setPluginMcpServerEnabled,
+  setPluginSkillEnabled,
+} from "../src/plugins/overrides";
 import { discoverSkillsForConfig } from "../src/skills";
 import type {
   AgentConfig,
@@ -29,6 +34,38 @@ import type {
   PluginCatalogEntry,
   PluginCatalogSnapshot,
 } from "../src/types";
+import { makeTmpProject } from "./helpers/wsHarness";
+
+test("concurrent plugin, skill, and server toggles preserve every override", async () => {
+  const root = await makeTmpProject("plugin-overrides-concurrent-");
+  const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+  try {
+    await Promise.all([
+      setPluginEnabled({ config, scope: "user", pluginId: "alpha", enabled: false }),
+      setPluginEnabled({ config, scope: "user", pluginId: "beta", enabled: false }),
+      setPluginSkillEnabled({
+        config,
+        scope: "user",
+        pluginId: "alpha",
+        rawSkillName: "notes",
+        enabled: false,
+      }),
+      setPluginMcpServerEnabled({
+        config,
+        scope: "user",
+        pluginId: "beta",
+        serverName: "search",
+        enabled: false,
+      }),
+    ]);
+    const { user } = await readPluginOverrides(config);
+    expect(user.plugins).toEqual({ alpha: false, beta: false });
+    expect(user.skills).toEqual({ "alpha:notes": false });
+    expect(user.mcpServers).toEqual({ "beta:search": false });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 const OLD_SOURCE_HASH = `sha256:${"1".repeat(64)}`;
 const NEW_SOURCE_HASH = `sha256:${"2".repeat(64)}`;

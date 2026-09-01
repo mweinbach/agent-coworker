@@ -15,7 +15,7 @@ import {
   mapLmStudioModelToResolvedMetadata,
   selectDefaultLmStudioModel,
 } from "./lmstudio/catalog";
-import { listLmStudioModels } from "./lmstudio/client";
+import { listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import type {
   CachedModelDiscoveryModel,
   ModelDiscoveryAdapter,
@@ -76,7 +76,7 @@ async function discoverCodexAppServerModels(opts: {
 }): Promise<ModelDiscoveryResult> {
   opts.signal?.throwIfAborted();
   const listModels = opts.listCodexAppServerModelsImpl ?? listCodexAppServerModels;
-  const models = await listModels({ codexHome: opts.codexHome });
+  const models = await listModels({ codexHome: opts.codexHome, signal: opts.signal });
   opts.signal?.throwIfAborted();
   return {
     provider: "codex-cli",
@@ -112,6 +112,7 @@ async function discoverLmStudioModels(opts: {
     baseUrl: opts.baseUrl,
     apiKey: opts.apiKey,
     fetchImpl: opts.fetchImpl,
+    signal: opts.signal,
   });
   opts.signal?.throwIfAborted();
   const llms = listLmStudioLlms(response.models);
@@ -150,12 +151,21 @@ export function createLmStudioModelDiscoveryAdapter(opts: {
   apiKey?: string;
   fetchImpl?: typeof fetch;
 }): ModelDiscoveryAdapter {
+  const baseUrl = resolveLmStudioProviderOptions(
+    { lmstudio: { baseUrl: opts.baseUrl } },
+    {},
+  ).baseUrl;
   return {
     provider: "lmstudio",
     source: "local-http",
+    cache: {
+      scope: JSON.stringify([baseUrl, opts.apiKey?.trim() ?? ""]),
+      ttlMs: 0,
+      allowEmpty: true,
+    },
     discover: async ({ signal }) =>
       await discoverLmStudioModels({
-        baseUrl: opts.baseUrl,
+        baseUrl,
         apiKey: opts.apiKey,
         fetchImpl: opts.fetchImpl,
         signal,
@@ -623,7 +633,7 @@ export async function discoverBedrockModels(opts: {
 }): Promise<ModelDiscoveryResult> {
   opts.signal?.throwIfAborted();
   const snapshot = opts.force
-    ? await refreshBedrockDiscoveryCache({ paths: opts.paths, env: opts.env })
+    ? await refreshBedrockDiscoveryCache({ paths: opts.paths, env: opts.env, signal: opts.signal })
     : await readBedrockCatalogSnapshot({ paths: opts.paths, env: opts.env });
   opts.signal?.throwIfAborted();
   const source: ModelDiscoverySource =

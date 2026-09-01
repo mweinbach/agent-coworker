@@ -1,3 +1,4 @@
+import { raceWithAbort, withRequestTimeout } from "../../utils/abortSignal";
 import type {
   LmStudioListModelsResponse,
   LmStudioLoadResponse,
@@ -6,6 +7,13 @@ import type {
 } from "./types";
 
 export const DEFAULT_LM_STUDIO_BASE_URL = "http://localhost:1234";
+const MODEL_LIST_TIMEOUT_MS = 2_000;
+const MODEL_MUTATION_TIMEOUT_MS = 120_000;
+
+type LmStudioRequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
 
 export type LmStudioErrorCode =
   | "unreachable"
@@ -152,25 +160,35 @@ async function readErrorBody(response: Response): Promise<string> {
   }
 }
 
-async function requestJson<T>(opts: {
-  baseUrl: string;
-  apiKey?: string;
-  fetchImpl?: typeof fetch;
-  pathname: string;
-  method?: "GET" | "POST";
-  body?: Record<string, unknown>;
-}): Promise<T> {
+async function requestJson<T>(
+  opts: {
+    baseUrl: string;
+    apiKey?: string;
+    fetchImpl?: typeof fetch;
+    pathname: string;
+    method?: "GET" | "POST";
+    body?: Record<string, unknown>;
+  } & LmStudioRequestOptions,
+): Promise<T> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = normalizeLmStudioBaseUrl(opts.baseUrl);
   const url = nativeEndpoint(baseUrl, opts.pathname);
+  const timeoutMs = opts.timeoutMs ?? MODEL_LIST_TIMEOUT_MS;
+  const signal = withRequestTimeout(opts.signal, timeoutMs);
+  signal.throwIfAborted();
 
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: opts.method ?? "GET",
-      headers: requestHeaders(baseUrl, opts.apiKey, true),
-      ...(opts.body ? { body: JSON.stringify(opts.body) } : {}),
-    });
+    response = await raceWithAbort(
+      fetchImpl(url, {
+        method: opts.method ?? "GET",
+        headers: requestHeaders(baseUrl, opts.apiKey, true),
+        ...(opts.body ? { body: JSON.stringify(opts.body) } : {}),
+        signal,
+      }),
+      signal,
+      `LM Studio request timed out or was cancelled at ${baseUrl}.`,
+    );
   } catch (error) {
     throw new LmStudioError({
       code: "unreachable",
@@ -181,7 +199,7 @@ async function requestJson<T>(opts: {
   }
 
   if (!response.ok) {
-    const body = await readErrorBody(response);
+    const body = await raceWithAbort(readErrorBody(response), signal);
     throw new LmStudioError({
       code: "http_error",
       baseUrl,
@@ -194,7 +212,7 @@ async function requestJson<T>(opts: {
 
   let json: unknown;
   try {
-    json = await response.json();
+    json = await raceWithAbort(response.json(), signal);
   } catch (error) {
     throw new LmStudioError({
       code: "invalid_response",
@@ -207,31 +225,39 @@ async function requestJson<T>(opts: {
   return json as T;
 }
 
-export async function listLmStudioModels(opts: {
-  baseUrl: string;
-  apiKey?: string;
-  fetchImpl?: typeof fetch;
-}): Promise<LmStudioListModelsResponse> {
+export async function listLmStudioModels(
+  opts: {
+    baseUrl: string;
+    apiKey?: string;
+    fetchImpl?: typeof fetch;
+  } & LmStudioRequestOptions,
+): Promise<LmStudioListModelsResponse> {
   return await requestJson<LmStudioListModelsResponse>({
     baseUrl: opts.baseUrl,
     apiKey: opts.apiKey,
     fetchImpl: opts.fetchImpl,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
     pathname: "/models",
   });
 }
 
-export async function loadLmStudioModel(opts: {
-  baseUrl: string;
-  apiKey?: string;
-  fetchImpl?: typeof fetch;
-  modelKey: string;
-  contextLength?: number;
-}): Promise<LmStudioLoadResponse> {
+export async function loadLmStudioModel(
+  opts: {
+    baseUrl: string;
+    apiKey?: string;
+    fetchImpl?: typeof fetch;
+    modelKey: string;
+    contextLength?: number;
+  } & LmStudioRequestOptions,
+): Promise<LmStudioLoadResponse> {
   try {
     return await requestJson<LmStudioLoadResponse>({
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
       fetchImpl: opts.fetchImpl,
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs ?? MODEL_MUTATION_TIMEOUT_MS,
       pathname: "/models/load",
       method: "POST",
       body: {
@@ -254,17 +280,21 @@ export async function loadLmStudioModel(opts: {
   }
 }
 
-export async function unloadLmStudioModel(opts: {
-  baseUrl: string;
-  apiKey?: string;
-  fetchImpl?: typeof fetch;
-  instanceId: string;
-}): Promise<LmStudioUnloadResponse> {
+export async function unloadLmStudioModel(
+  opts: {
+    baseUrl: string;
+    apiKey?: string;
+    fetchImpl?: typeof fetch;
+    instanceId: string;
+  } & LmStudioRequestOptions,
+): Promise<LmStudioUnloadResponse> {
   try {
     return await requestJson<LmStudioUnloadResponse>({
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
       fetchImpl: opts.fetchImpl,
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs ?? MODEL_MUTATION_TIMEOUT_MS,
       pathname: "/models/unload",
       method: "POST",
       body: {

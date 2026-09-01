@@ -111,11 +111,21 @@ export async function completeMCPServerOAuth(opts: {
   server: MCPRegistryServer;
   tokens: Omit<MCPServerOAuthTokens, "updatedAt">;
   clearPending?: boolean;
+  /** Interactive callbacks may commit only the challenge they actually exchanged. */
+  expectedChallengeId?: string;
 }): Promise<{ storageFile: string; scope: MCPAuthScope }> {
   const scope = resolvePrimaryScope(opts.server);
   const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
     const name = normalizeServerName(opts.server.name);
     const existing = doc.servers[name] ?? {};
+    if (
+      opts.expectedChallengeId !== undefined &&
+      existing.oauth?.pending?.challengeId !== opts.expectedChallengeId
+    ) {
+      throw new Error(
+        "MCP OAuth authorization was superseded or already completed. Use the latest sign-in attempt.",
+      );
+    }
     const nextTokens: MCPServerOAuthTokens = {
       accessToken: opts.tokens.accessToken,
       ...(opts.tokens.tokenType ? { tokenType: opts.tokens.tokenType } : {}),
@@ -129,6 +139,9 @@ export async function completeMCPServerOAuth(opts: {
     doc.servers[name] = {
       ...existing,
       oauth: {
+        ...(existing.oauth?.clientInformation
+          ? { clientInformation: existing.oauth.clientInformation }
+          : {}),
         ...(pending ? { pending } : {}),
         tokens: nextTokens,
       },

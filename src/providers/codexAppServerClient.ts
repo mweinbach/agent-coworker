@@ -19,6 +19,7 @@ type PendingRequest = {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  onJsonRpcMessage?: (message: CodexAppServerJsonRpcRawMessage) => void;
 };
 
 type CodexAppServerJsonRpcDirection =
@@ -32,6 +33,11 @@ type CodexAppServerJsonRpcDirection =
 export type CodexAppServerJsonRpcRawMessage = {
   direction: CodexAppServerJsonRpcDirection;
   message: Record<string, unknown>;
+};
+
+export type CodexAppServerRequestOptions = {
+  /** Observes only this request and its response, including on a pooled client. */
+  onJsonRpcMessage?: (message: CodexAppServerJsonRpcRawMessage) => void;
 };
 
 export type CodexAppServerJsonRpcNotification = {
@@ -56,9 +62,17 @@ export type CodexAppServerClient = {
   command: CodexAppServerCommand;
   isClosed: () => boolean;
   getLastCloseInfo?: () => CodexAppServerCloseInfo | null;
-  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
+  request: (
+    method: string,
+    params?: unknown,
+    timeoutMs?: number,
+    options?: CodexAppServerRequestOptions,
+  ) => Promise<unknown>;
   notify: (method: string, params?: unknown) => void;
-  interruptTurn: (params: { threadId: string; turnId?: string }) => Promise<void>;
+  interruptTurn: (
+    params: { threadId: string; turnId?: string },
+    options?: CodexAppServerRequestOptions,
+  ) => Promise<void>;
   onNotification: (
     listener: (notification: CodexAppServerJsonRpcNotification) => void,
   ) => () => void;
@@ -176,6 +190,16 @@ export async function startCodexAppServerClient(
     opts.onJsonRpcMessage?.(message);
     for (const listener of jsonRpcMessageListeners) listener(message);
   };
+  const notifyRequestObserver = (
+    observer: CodexAppServerRequestOptions["onJsonRpcMessage"],
+    message: CodexAppServerJsonRpcRawMessage,
+  ) => {
+    try {
+      observer?.(message);
+    } catch (error) {
+      opts.log?.(`[codex-app-server] raw request observer failed: ${String(error)}`);
+    }
+  };
 
   const rejectAll = (error: Error) => {
     for (const request of pending.values()) request.reject(error);
@@ -229,11 +253,13 @@ export async function startCodexAppServerClient(
     const record = asRecord(parsed);
     if (!record) return;
     if ("id" in record && ("result" in record || "error" in record)) {
-      emitJsonRpcMessage({ direction: "server_response", message: record });
+      const rawMessage = { direction: "server_response", message: record } as const;
+      emitJsonRpcMessage(rawMessage);
       const id = record.id as number | string;
       const request = pending.get(id);
       if (!request) return;
       pending.delete(id);
+      notifyRequestObserver(request.onJsonRpcMessage, rawMessage);
       const error = asRecord(record.error);
       if (error) {
         const rpcError = new Error(asString(error.message) ?? "codex app-server request failed");
@@ -264,9 +290,15 @@ export async function startCodexAppServerClient(
     for (const listener of listeners) listener(notification);
   });
 
-  const write = (payload: Record<string, unknown>, direction: CodexAppServerJsonRpcDirection) => {
+  const write = (
+    payload: Record<string, unknown>,
+    direction: CodexAppServerJsonRpcDirection,
+    onJsonRpcMessage?: CodexAppServerRequestOptions["onJsonRpcMessage"],
+  ) => {
     if (closed || !child.writeStdin) throw new Error("codex app-server is not running.");
-    emitJsonRpcMessage({ direction, message: payload });
+    const rawMessage = { direction, message: payload };
+    emitJsonRpcMessage(rawMessage);
+    notifyRequestObserver(onJsonRpcMessage, rawMessage);
     try {
       child.writeStdin(`${JSON.stringify(payload)}\n`);
     } catch (error) {
@@ -277,12 +309,16 @@ export async function startCodexAppServerClient(
     }
   };
 
-  const request = (method: string, params?: unknown, timeoutMs?: number): Promise<unknown> => {
+  const request: CodexAppServerClient["request"] = (method, params, timeoutMs, options) => {
     const id = nextId++;
     const requestPromise = new Promise<unknown>((resolve, reject) => {
-      pending.set(id, { method, resolve, reject });
+      pending.set(id, { method, resolve, reject, onJsonRpcMessage: options?.onJsonRpcMessage });
       try {
-        write({ id, method, ...(params !== undefined ? { params } : {}) }, "client_request");
+        write(
+          { id, method, ...(params !== undefined ? { params } : {}) },
+          "client_request",
+          options?.onJsonRpcMessage,
+        );
       } catch (error) {
         pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -314,16 +350,16 @@ export async function startCodexAppServerClient(
     notify: (method, params) => {
       write({ method, ...(params !== undefined ? { params } : {}) }, "client_notification");
     },
-    interruptTurn: async (params) => {
+    interruptTurn: async (params, options) => {
       const payload = {
         threadId: params.threadId,
         ...(params.turnId ? { turnId: params.turnId } : {}),
       };
       try {
-        await request("turn/cancel", payload);
+        await request("turn/cancel", payload, undefined, options);
       } catch (firstError) {
         try {
-          await request("turn/interrupt", payload);
+          await request("turn/interrupt", payload, undefined, options);
         } catch {
           throw firstError instanceof Error ? firstError : new Error(String(firstError));
         }

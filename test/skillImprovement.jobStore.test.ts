@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -184,5 +184,100 @@ describe("SkillImprovementJobStore", () => {
     ]);
     const state = await store.read();
     expect(Object.keys(state.pendingJobs).sort()).toEqual(["alpha", "beta"]);
+  });
+
+  test("an old lock age does not let another store steal a live writer", async () => {
+    const store = await makeStore();
+    const other = new SkillImprovementJobStore(store.rootDir);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const read = store.read.bind(store);
+    const readSpy = spyOn(store, "read").mockImplementationOnce(async () => {
+      const state = await read();
+      entered.resolve();
+      await release.promise;
+      return state;
+    });
+    const otherRead = spyOn(other, "read");
+    const first = store.enqueueCompletedTurn(completedTurn("alpha", "turn-a"));
+    let second: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      // Simulate a slow live holder without a multi-second test sleep. The
+      // replacement mutex has no reusable owner file to age or steal.
+      await fs.utimes(path.join(store.rootDir, "state.lock"), 0, 0).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+      second = other.enqueueCompletedTurn(completedTurn("beta", "turn-b"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(otherRead).not.toHaveBeenCalled();
+      release.resolve();
+      await Promise.all([first, second]);
+      expect(Object.keys((await store.read()).pendingJobs).sort()).toEqual(["alpha", "beta"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+      readSpy.mockRestore();
+      otherRead.mockRestore();
+      await fs.rm(store.rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("releasing the previous writer cannot unlock its successor", async () => {
+    const store = await makeStore();
+    const successor = new SkillImprovementJobStore(store.rootDir);
+    const last = new SkillImprovementJobStore(store.rootDir);
+    const firstEntered = Promise.withResolvers<void>();
+    const firstRelease = Promise.withResolvers<void>();
+    const secondEntered = Promise.withResolvers<void>();
+    const secondRelease = Promise.withResolvers<void>();
+    const firstRead = store.read.bind(store);
+    const secondRead = successor.read.bind(successor);
+    const firstSpy = spyOn(store, "read").mockImplementationOnce(async () => {
+      const state = await firstRead();
+      firstEntered.resolve();
+      await firstRelease.promise;
+      return state;
+    });
+    const secondSpy = spyOn(successor, "read").mockImplementationOnce(async () => {
+      const state = await secondRead();
+      secondEntered.resolve();
+      await secondRelease.promise;
+      return state;
+    });
+    const lastRead = spyOn(last, "read");
+    const first = store.enqueueCompletedTurn(completedTurn("alpha", "turn-a"));
+    let second: Promise<void> | undefined;
+    let third: Promise<void> | undefined;
+    try {
+      await firstEntered.promise;
+      await fs.utimes(path.join(store.rootDir, "state.lock"), 0, 0).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+      second = successor.enqueueCompletedTurn(completedTurn("beta", "turn-b"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      firstRelease.resolve();
+      await first;
+      await secondEntered.promise;
+
+      third = last.enqueueCompletedTurn(completedTurn("gamma", "turn-c"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(lastRead).not.toHaveBeenCalled();
+      secondRelease.resolve();
+      await Promise.all([second, third]);
+      expect(Object.keys((await store.read()).pendingJobs).sort()).toEqual([
+        "alpha",
+        "beta",
+        "gamma",
+      ]);
+    } finally {
+      firstRelease.resolve();
+      secondRelease.resolve();
+      await Promise.allSettled([first, ...(second ? [second] : []), ...(third ? [third] : [])]);
+      firstSpy.mockRestore();
+      secondSpy.mockRestore();
+      lastRead.mockRestore();
+      await fs.rm(store.rootDir, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readMCPServerOAuthPending, setMCPServerOAuthPending } from "../src/mcp/authStore";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
+import { scratchRoots } from "../src/platform/sandbox/policy";
 import type { SessionEvent } from "../src/server/protocol";
 import { McpAuthFlow } from "../src/server/session/mcp/McpAuthFlow";
 import type { AgentConfig } from "../src/types";
@@ -62,7 +64,12 @@ async function waitForCondition(
   throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
 
-function createHarness(config: AgentConfig, server: MCPRegistryServer) {
+function createHarness(
+  config: AgentConfig,
+  server: MCPRegistryServer,
+  resolveByName = async (nameRaw: string): Promise<MCPRegistryServer | null> =>
+    nameRaw.trim() === server.name ? server : null,
+) {
   const events: SessionEvent[] = [];
   const state = {
     config,
@@ -80,9 +87,7 @@ function createHarness(config: AgentConfig, server: MCPRegistryServer) {
   let emitMcpServersCalls = 0;
   const flow = new McpAuthFlow(
     context,
-    {
-      resolveByName: async (nameRaw: string) => (nameRaw.trim() === server.name ? server : null),
-    } as any,
+    { resolveByName } as any,
     async () => {
       emitMcpServersCalls += 1;
     },
@@ -95,6 +100,7 @@ function createHarness(config: AgentConfig, server: MCPRegistryServer) {
   return {
     flow,
     events,
+    state,
     getEmitMcpServersCalls: () => emitMcpServersCalls,
   };
 }
@@ -105,6 +111,51 @@ describe("McpAuthFlow", () => {
     mockConsumeCapturedOAuthCode.mockReset();
     mockExchangeMcpServerOAuthCode.mockReset();
   });
+
+  test.each(["authorize", "callback", "setApiKey"] as const)(
+    "%s reserves connection state before lookup and releases it on lookup exits",
+    async (method) => {
+      const lookupReady = Promise.withResolvers<void>();
+      const lookup = mock(async () => {
+        await lookupReady.promise;
+        return null;
+      });
+      const { flow, state, events } = createHarness(
+        makeConfig("/unused-workspace", "/unused-home", "/unused-builtin"),
+        inheritedOauthServer("probe"),
+        lookup,
+      );
+      const invoke = () =>
+        method === "setApiKey" ? flow.setApiKey("probe", "test-key") : flow[method]("probe");
+      const first = invoke();
+      const second = invoke();
+      const completed = Promise.all([first, second]);
+      try {
+        expect(lookup).toHaveBeenCalledTimes(1);
+        expect(state.connecting).toBe(true);
+        lookupReady.resolve();
+        await completed;
+        expect(state.connecting).toBe(false);
+
+        lookup.mockRejectedValueOnce(new Error("Lookup failed"));
+        await invoke();
+        expect(state.connecting).toBe(false);
+        expect(
+          events.some(
+            (event) =>
+              event.type === "mcp_server_auth_result" &&
+              !event.ok &&
+              event.message?.includes("Lookup failed"),
+          ),
+        ).toBe(true);
+      } finally {
+        lookupReady.resolve();
+        await completed;
+        flow.close();
+      }
+    },
+  );
+
   test("auto OAuth completes from the captured callback and writes the user auth file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-flow-home-"));
@@ -190,6 +241,70 @@ describe("McpAuthFlow", () => {
       expect(mockExchangeMcpServerOAuthCode).toHaveBeenCalledTimes(1);
       expect(getEmitMcpServersCalls()).toBe(2);
     } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an older token exchange cannot clear a newer authorization challenge", async () => {
+    const scratchRoot = scratchRoots()[0];
+    const workspace = await fs.mkdtemp(path.join(scratchRoot, "mcp-auth-flow-stale-workspace-"));
+    const home = await fs.mkdtemp(path.join(scratchRoot, "mcp-auth-flow-stale-home-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(scratchRoot, "mcp-auth-flow-stale-builtin-"),
+    );
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = inheritedOauthServer("quartr");
+    const older = createHarness(config, server);
+    const newer = createHarness(config, server);
+    const pending = {
+      challengeId: "older-challenge",
+      state: "older-state",
+      codeVerifier: "older-verifier",
+      redirectUri: "http://127.0.0.1:1455/oauth/callback",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      authorizationServerUrl: "https://mcp.quartr.com",
+    };
+    const exchangeStarted = Promise.withResolvers<void>();
+    const releaseExchange = Promise.withResolvers<void>();
+    let completion: ReturnType<McpAuthFlow["callback"]> | undefined;
+    try {
+      await setMCPServerOAuthPending({ config, server, pending });
+      mockExchangeMcpServerOAuthCode.mockImplementation(async () => {
+        exchangeStarted.resolve();
+        await releaseExchange.promise;
+        return { tokens: { accessToken: "older-token" }, message: "Token exchange successful." };
+      });
+      completion = older.flow.callback(server.name, "older-code");
+      await exchangeStarted.promise;
+
+      mockAuthorizeMcpServerOAuth.mockResolvedValue({
+        challenge: {
+          method: "code",
+          instructions: "Complete the newer sign-in.",
+          url: "https://mcp.quartr.com/oauth/authorize",
+          expiresAt: pending.expiresAt,
+        },
+        pending: { ...pending, challengeId: "newer-challenge", state: "newer-state" },
+        openedBrowser: false,
+      });
+      await newer.flow.authorize(server.name);
+      releaseExchange.resolve();
+
+      await expect(completion).resolves.toBeNull();
+      await expect(readMCPServerOAuthPending({ config, server })).resolves.toMatchObject({
+        pending: { challengeId: "newer-challenge" },
+      });
+      expect(
+        older.events.some((event) => event.type === "mcp_server_auth_result" && event.ok),
+      ).toBe(false);
+    } finally {
+      releaseExchange.resolve();
+      await completion;
+      older.flow.close();
+      newer.flow.close();
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(builtInConfigDir, { recursive: true, force: true });

@@ -1,13 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { fetchWithGitHubAuth } from "../src/extensions/github";
 import {
   __internal,
   type CredentialCommandResult,
   type CredentialCommandRunner,
+  invalidateGitHubToken,
   isGitHubTokenHost,
   resolveGitHubToken,
 } from "../src/extensions/githubToken";
+import type { ChildHandle } from "../src/platform/proc";
+import { createManualTimers } from "./helpers/chaos";
 
 type RecordedCall = {
   file: string;
@@ -97,6 +100,146 @@ describe("resolveGitHubToken", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("refreshes a negative lookup after signing in without restarting", async () => {
+    let now = 0;
+    let token = "";
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const { runner, calls } = createRunner((call) =>
+      call.file === "gh" && token ? { stdout: token, exitCode: 0 } : { stdout: "", exitCode: 1 },
+    );
+    __internal.setForTests({ runner, subprocessLookupEnabled: true });
+    try {
+      expect(await resolveGitHubToken()).toBeNull();
+      token = "gho_signed_in";
+      expect(await resolveGitHubToken()).toBeNull();
+      now = 10_001;
+      expect(await resolveGitHubToken()).toBe(token);
+      expect(calls).toHaveLength(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("refreshes a positive lookup after token rotation without restarting", async () => {
+    let now = 0;
+    let token = "gho_initial";
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const { runner, calls } = createRunner(() => ({ stdout: token, exitCode: 0 }));
+    __internal.setForTests({ runner, subprocessLookupEnabled: true });
+    try {
+      expect(await resolveGitHubToken()).toBe("gho_initial");
+      token = "gho_rotated";
+      expect(await resolveGitHubToken()).toBe("gho_initial");
+      now = 60_001;
+      expect(await resolveGitHubToken()).toBe("gho_rotated");
+      expect(calls).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("coalesces concurrent lookups and ignores rejection of an older token", async () => {
+    let now = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const initial = Promise.withResolvers<CredentialCommandResult>();
+    let calls = 0;
+    __internal.setForTests({
+      subprocessLookupEnabled: true,
+      runner: async () => {
+        calls += 1;
+        return calls === 1 ? await initial.promise : { stdout: "gho_new", exitCode: 0 };
+      },
+    });
+    try {
+      const first = resolveGitHubToken();
+      const second = resolveGitHubToken();
+      expect(calls).toBe(1);
+      initial.resolve({ stdout: "gho_old", exitCode: 0 });
+      expect(await Promise.all([first, second])).toEqual(["gho_old", "gho_old"]);
+      now = 60_001;
+      expect(await resolveGitHubToken()).toBe("gho_new");
+      invalidateGitHubToken("gho_old");
+      expect(await resolveGitHubToken()).toBe("gho_new");
+      expect(calls).toBe(2);
+    } finally {
+      initial.resolve({ stdout: "", exitCode: 1 });
+      clock.mockRestore();
+    }
+  });
+
+  test("bounds an uncooperative credential helper and falls back without leaking stdin", async () => {
+    const timers = createManualTimers();
+    const set = spyOn(globalThis, "setTimeout").mockImplementation(
+      timers.scheduler.setTimeout as typeof setTimeout,
+    );
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(
+      timers.scheduler.clearTimeout as typeof clearTimeout,
+    );
+    const started = Promise.withResolvers<void>();
+    let killed = 0;
+    let stdin = "";
+    let stdinEnded = false;
+    const empty = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+    __internal.setForTests({
+      subprocessLookupEnabled: true,
+      spawn: (file, _args, options) => {
+        const isGh = file === "gh";
+        if (!isGh)
+          expect(options?.env).toMatchObject({
+            GIT_TERMINAL_PROMPT: "0",
+            GCM_INTERACTIVE: "never",
+          });
+        const child: ChildHandle = {
+          pid: 123,
+          exitCode: isGh ? null : 0,
+          signalCode: null,
+          stdout: isGh
+            ? new ReadableStream({ cancel: () => new Promise(() => {}) })
+            : new ReadableStream({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode("password=gho_git_fallback\n"));
+                  controller.close();
+                },
+              }),
+          stderr: empty(),
+          exited: isGh ? new Promise(() => {}) : Promise.resolve({ reason: "exited", code: 0 }),
+          kill() {},
+          killTree() {
+            killed += 1;
+            return new Promise(() => {});
+          },
+          writeStdin(data) {
+            stdin += data;
+          },
+          endStdin() {
+            stdinEnded = true;
+          },
+        };
+        started.resolve();
+        return child;
+      },
+    });
+    try {
+      const pending = resolveGitHubToken();
+      await started.promise;
+      expect(timers.timeoutCallbacks).toHaveLength(1);
+      timers.timeoutCallbacks[0]?.();
+      expect(await pending).toBe("gho_git_fallback");
+      expect(killed).toBe(1);
+      expect(stdin).toBe("protocol=https\nhost=github.com\n\n");
+      expect(stdinEnded).toBe(true);
+      expect(timers.timeoutCallbacks).toHaveLength(0);
+    } finally {
+      set.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
   test("returns null when subprocess lookup is disabled and env is unset", async () => {
     const { runner, calls } = createRunner(() => ({ stdout: "ghp_should_not_run\n", exitCode: 0 }));
     __internal.setForTests({ runner, subprocessLookupEnabled: false });
@@ -174,6 +317,30 @@ describe("fetchWithGitHubAuth", () => {
     expect(seenHeaders).toHaveLength(2);
     expect(seenHeaders[0]?.Authorization).toBe("Bearer ghp_stale");
     expect(seenHeaders[1]?.Authorization).toBeUndefined();
+  });
+
+  test("evicts a rejected subprocess token while retaining anonymous fallback", async () => {
+    let token = "gho_stale";
+    const { runner } = createRunner(() => ({ stdout: token, exitCode: 0 }));
+    __internal.setForTests({ runner, subprocessLookupEnabled: true });
+    const seen: Array<string | undefined> = [];
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      seen.push(auth);
+      if (auth === "Bearer gho_stale") {
+        token = "gho_refreshed";
+        return new Response("bad credentials", { status: 401 });
+      }
+      return new Response("{}");
+    }) as typeof fetch;
+
+    expect((await fetchWithGitHubAuth(fetchImpl, "https://api.github.com/repos/a/b")).ok).toBe(
+      true,
+    );
+    expect((await fetchWithGitHubAuth(fetchImpl, "https://api.github.com/repos/a/b")).ok).toBe(
+      true,
+    );
+    expect(seen).toEqual(["Bearer gho_stale", undefined, "Bearer gho_refreshed"]);
   });
 
   test("keeps caller header overrides such as User-Agent", async () => {

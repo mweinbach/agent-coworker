@@ -15,6 +15,7 @@ import {
 } from "../src/mcp/authStore";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
 import type { AgentConfig } from "../src/types";
+import { makeTmpProject } from "./helpers/wsHarness";
 
 function makeConfig(
   workspaceRoot: string,
@@ -76,6 +77,126 @@ function pluginServer(name: string, pluginScope: "workspace" | "user"): MCPRegis
 }
 
 describe("mcp auth store", () => {
+  test("a superseded OAuth completion preserves the newer pending challenge and credentials", async () => {
+    const root = await makeTmpProject("mcp-auth-superseded-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const server = pluginServer("oauth-server", "user");
+    try {
+      await completeMCPServerOAuth({ config, server, tokens: { accessToken: "existing-token" } });
+      await setMCPServerOAuthPending({
+        config,
+        server,
+        pending: {
+          challengeId: "new-challenge",
+          state: "new-state",
+          codeVerifier: "new-verifier",
+          redirectUri: "http://127.0.0.1:1455/oauth/callback",
+          createdAt: "2026-09-01T12:00:00.000Z",
+          expiresAt: "2026-09-01T12:10:00.000Z",
+        },
+      });
+      const before = (await readMCPAuthFiles(config)).user.doc.servers[server.name];
+      await expect(
+        completeMCPServerOAuth({
+          config,
+          server,
+          expectedChallengeId: "old-challenge",
+          tokens: { accessToken: "stale-token" },
+        }),
+      ).rejects.toThrow("superseded");
+      expect((await readMCPAuthFiles(config)).user.doc.servers[server.name]).toEqual(before);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent OAuth callbacks can consume a pending challenge only once", async () => {
+    const root = await makeTmpProject("mcp-auth-callback-race-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const server = pluginServer("oauth-server", "user");
+    try {
+      await setMCPServerOAuthPending({
+        config,
+        server,
+        pending: {
+          challengeId: "shared-challenge",
+          state: "shared-state",
+          codeVerifier: "shared-verifier",
+          redirectUri: "http://127.0.0.1:1455/oauth/callback",
+          createdAt: "2026-09-01T12:00:00.000Z",
+          expiresAt: "2026-09-01T12:10:00.000Z",
+        },
+      });
+      const results = await Promise.allSettled(
+        ["first-token", "second-token"].map((accessToken) =>
+          completeMCPServerOAuth({
+            config,
+            server,
+            expectedChallengeId: "shared-challenge",
+            tokens: { accessToken },
+          }),
+        ),
+      );
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+      const oauth = (await readMCPAuthFiles(config)).user.doc.servers[server.name]?.oauth;
+      expect(oauth?.pending).toBeUndefined();
+      expect(["first-token", "second-token"]).toContain(oauth?.tokens?.accessToken);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent credential saves preserve every server", async () => {
+    const root = await makeTmpProject("mcp-auth-concurrent-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const names = Array.from({ length: 8 }, (_, index) => `server-${index}`);
+    try {
+      await Promise.all(
+        names.map((name) =>
+          setMCPServerApiKeyCredential({
+            config,
+            server: inheritedServer(name),
+            apiKey: `test-key-${name}`,
+          }),
+        ),
+      );
+      const { user } = await readMCPAuthFiles(config);
+      expect(Object.keys(user.doc.servers).sort()).toEqual(names);
+      for (const name of names) {
+        expect(user.doc.servers[name]?.apiKey?.value).toBe(`test-key-${name}`);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("OAuth completion preserves the registration needed for token refresh", async () => {
+    const root = await makeTmpProject("mcp-auth-registration-");
+    const config = makeConfig(root, path.join(root, "home"), path.join(root, "built-in"));
+    const server = pluginServer("registered-server", "user");
+    const clientInformation = {
+      clientId: "registered-client",
+      clientSecret: "test-client-secret",
+      tokenEndpointAuthMethod: "client_secret_basic" as const,
+      redirectUris: ["http://127.0.0.1:1455/oauth/callback"],
+    };
+    try {
+      await setMCPServerOAuthClientInformation({ config, server, clientInformation });
+      await completeMCPServerOAuth({
+        config,
+        server,
+        tokens: { accessToken: "test-access-token", refreshToken: "test-refresh-token" },
+      });
+      const { user } = await readMCPAuthFiles(config);
+      expect(user.doc.servers[server.name]?.oauth?.clientInformation).toMatchObject(
+        clientInformation,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("workspace server credentials write to workspace auth file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-home-"));

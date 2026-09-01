@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { __internal, closeMcpServersForSession, getOrLoadMCPToolsCached } from "../src/mcp";
+import { WorkspaceMcpToolCache } from "../src/mcp/toolCache";
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
 describe("MCP Caching and Lifecycle", () => {
@@ -17,6 +18,192 @@ describe("MCP Caching and Lifecycle", () => {
       model: "gpt-4o",
       enableMcp: true,
     }) as unknown as AgentConfig;
+
+  test("transient failures are retried after backoff instead of cached for the session lifetime", async () => {
+    let now = 0;
+    let recovered = false;
+    const loadMCPTools = mock(async () => ({
+      tools: recovered ? { available: {} } : {},
+      errors: recovered ? [] : ["temporarily unavailable"],
+      close: async () => {},
+    }));
+    const cache = new WorkspaceMcpToolCache(
+      {
+        loadMCPServers: async () => [
+          { name: "flaky", transport: { type: "stdio", command: "bun" } },
+        ],
+        loadMCPTools,
+      },
+      () => now,
+    );
+    const config = makeConfig(workspaceA);
+    await cache.load(config, "session-1");
+    recovered = true;
+    await cache.load(config, "session-1");
+    expect(loadMCPTools).toHaveBeenCalledTimes(1);
+    now = 60_000;
+    const result = await cache.load(config, "session-1");
+    expect(loadMCPTools).toHaveBeenCalledTimes(2);
+    expect(result.errors).toEqual([]);
+    expect(result.tools).toEqual({ available: {} });
+    await cache.closeSession("session-1");
+  });
+
+  test("concurrent first loads share one connection and retain both session owners", async () => {
+    const config = makeConfig(workspaceA);
+    let releaseLoad!: () => void;
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const close = mock(async () => {});
+    const deps = {
+      loadMCPServers: async () => [
+        { name: "shared", transport: { type: "stdio" as const, command: "bun" } },
+      ],
+      loadMCPTools: mock(async () => {
+        signalStarted();
+        await loadGate;
+        return { tools: { shared: {} }, errors: [], close };
+      }),
+    };
+    const first = getOrLoadMCPToolsCached(config, "session-1", deps);
+    const second = getOrLoadMCPToolsCached(config, "session-2", deps);
+    await started;
+    releaseLoad();
+    await Promise.all([first, second]);
+    expect(deps.loadMCPTools).toHaveBeenCalledTimes(1);
+    expect(__internal.workspaceMcpCache.get(workspaceA)?.sessionIds).toEqual(
+      new Set(["session-1", "session-2"]),
+    );
+    await closeMcpServersForSession("session-1");
+    expect(close).not.toHaveBeenCalled();
+    await closeMcpServersForSession("session-2");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test("closing a session during discovery releases its eventual connection", async () => {
+    const config = makeConfig(workspaceA);
+    let releaseLoad!: () => void;
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const close = mock(async () => {});
+    const loading = getOrLoadMCPToolsCached(config, "session-1", {
+      loadMCPServers: async () => [
+        { name: "shared", transport: { type: "stdio", command: "bun" } },
+      ],
+      loadMCPTools: async () => {
+        signalStarted();
+        await loadGate;
+        return { tools: {}, errors: [], close };
+      },
+    });
+    await started;
+    const closing = closeMcpServersForSession("session-1");
+    releaseLoad();
+    await Promise.all([loading, closing]);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(__internal.workspaceMcpCache.has(workspaceA)).toBe(false);
+  });
+
+  test("configuration replacement keeps old clients alive for sessions still using them", async () => {
+    const config = makeConfig(workspaceA);
+    let command = "old";
+    const oldClose = mock(async () => {});
+    const newClose = mock(async () => {});
+    const deps = {
+      loadMCPServers: async () => [
+        { name: "shared", transport: { type: "stdio" as const, command } },
+      ],
+      loadMCPTools: async () => ({
+        tools: { [command]: {} },
+        errors: [],
+        close: command === "old" ? oldClose : newClose,
+      }),
+    };
+    await getOrLoadMCPToolsCached(config, "session-1", deps);
+    await getOrLoadMCPToolsCached(config, "session-2", deps);
+    command = "new";
+    await getOrLoadMCPToolsCached(config, "session-1", deps);
+    expect(oldClose).not.toHaveBeenCalled();
+    await closeMcpServersForSession("session-2");
+    expect(oldClose).toHaveBeenCalledTimes(1);
+    expect(newClose).not.toHaveBeenCalled();
+    await closeMcpServersForSession("session-1");
+    expect(newClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("a session joining during teardown gets a live replacement", async () => {
+    const config = makeConfig(workspaceA);
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let signalClosing!: () => void;
+    const closingStarted = new Promise<void>((resolve) => {
+      signalClosing = resolve;
+    });
+    let loads = 0;
+    const deps = {
+      loadMCPServers: async () => [
+        { name: "shared", transport: { type: "stdio" as const, command: "bun" } },
+      ],
+      loadMCPTools: async () => {
+        const generation = ++loads;
+        return {
+          tools: { [generation]: {} },
+          errors: [],
+          close: async () => {
+            if (generation === 1) {
+              signalClosing();
+              await closeGate;
+            }
+          },
+        };
+      },
+    };
+    await getOrLoadMCPToolsCached(config, "session-1", deps);
+    const closing = closeMcpServersForSession("session-1");
+    await closingStarted;
+    const joining = getOrLoadMCPToolsCached(config, "session-2", deps);
+    releaseClose();
+    const [, result] = await Promise.all([closing, joining]);
+    expect(loads).toBe(2);
+    expect(result.tools).toEqual({ 2: {} });
+    expect(__internal.workspaceMcpCache.get(workspaceA)?.sessionIds.has("session-2")).toBe(true);
+    await closeMcpServersForSession("session-2");
+  });
+
+  test("a failed replacement does not tear down the working cached client", async () => {
+    const config = makeConfig(workspaceA);
+    let command = "working";
+    const close = mock(async () => {});
+    const deps = {
+      loadMCPServers: async () => [
+        { name: "shared", transport: { type: "stdio" as const, command } },
+      ],
+      loadMCPTools: async () => {
+        if (command === "broken") throw new Error("replacement failed");
+        return { tools: { working: {} }, errors: [], close };
+      },
+    };
+    await getOrLoadMCPToolsCached(config, "session-1", deps);
+    command = "broken";
+    await expect(getOrLoadMCPToolsCached(config, "session-2", deps)).rejects.toThrow(
+      "replacement failed",
+    );
+    expect(close).not.toHaveBeenCalled();
+    await closeMcpServersForSession("session-1");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 
   test("should cache connections and only spawn once for same config and workspace", async () => {
     const config = makeConfig("/path/to/workspace-a");

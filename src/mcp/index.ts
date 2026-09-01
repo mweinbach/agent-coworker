@@ -32,6 +32,7 @@ import {
   writeWorkspaceMCPServersDocument,
 } from "./configRegistry";
 import { buildMcpToolName } from "./names";
+import { type WorkspaceMcpLoadOptions, WorkspaceMcpToolCache } from "./toolCache";
 
 export {
   DEFAULT_MCP_SERVERS_DOCUMENT,
@@ -267,13 +268,40 @@ async function createRuntimeMcpClient(opts: {
             ...(opts.transport.authProvider ? { authProvider: opts.transport.authProvider } : {}),
           });
 
-  await client.connect(transport);
+  const close = async () => {
+    try {
+      await client.close();
+    } finally {
+      await transport.close();
+    }
+  };
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    // The factory has not returned a client yet, so its caller cannot clean up
+    // a spawned stdio process or partially opened HTTP/SSE transport.
+    await close().catch(() => {});
+    throw error;
+  }
 
   return {
     tools: async () => {
-      const listed = await client.listTools();
+      const listedTools: Awaited<ReturnType<typeof client.listTools>>["tools"] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+        listedTools.push(...page.tools);
+        cursor = page.nextCursor;
+        if (cursor !== undefined) {
+          if (seenCursors.has(cursor)) {
+            throw new Error(`MCP server "${opts.name}" returned a repeated tools cursor.`);
+          }
+          seenCursors.add(cursor);
+        }
+      } while (cursor !== undefined);
       const discovered: Record<string, unknown> = {};
-      for (const entry of listed.tools ?? []) {
+      for (const entry of listedTools) {
         const rawEntry = entry as typeof entry & Record<string, unknown>;
         const name = typeof entry.name === "string" ? entry.name : "";
         if (!name) continue;
@@ -311,13 +339,7 @@ async function createRuntimeMcpClient(opts: {
       }
       return discovered;
     },
-    close: async () => {
-      try {
-        await client.close();
-      } finally {
-        await transport.close();
-      }
-    },
+    close,
   };
 }
 
@@ -805,107 +827,21 @@ function reserveMcpToolName(
   return candidate;
 }
 
-interface CachedWorkspaceMcp {
-  serversConfigJson: string;
-  tools: Record<string, unknown>;
-  errors: string[];
-  close: () => Promise<void>;
-  sessionIds: Set<string>;
-}
-
-const workspaceMcpCache = new Map<string, CachedWorkspaceMcp>();
-
-function serializeServerConfigs(servers: MCPServerConfig[]): string {
-  try {
-    const cloned = JSON.parse(
-      JSON.stringify(servers, (_key, value) => {
-        if (typeof value === "function") return undefined;
-        return value;
-      }),
-    );
-    return JSON.stringify(cloned);
-  } catch {
-    return "";
-  }
-}
+const workspaceMcpTools = new WorkspaceMcpToolCache({ loadMCPServers, loadMCPTools });
 
 export async function getOrLoadMCPToolsCached(
   config: AgentConfig,
   sessionId: string,
-  opts: {
-    log?: (line: string) => void;
-    loadMCPServers?: typeof loadMCPServers;
-    loadMCPTools?: typeof loadMCPTools;
-  } = {},
+  opts: WorkspaceMcpLoadOptions = {},
 ): Promise<{ tools: Record<string, unknown>; errors: string[] }> {
-  const loadMCPServersFn = opts.loadMCPServers ?? loadMCPServers;
-  const loadMCPToolsFn = opts.loadMCPTools ?? loadMCPTools;
-
-  const workspaceKey = path.resolve(config.projectCoworkDir);
-  const servers = await loadMCPServersFn(config, { log: opts.log });
-  const serversConfigJson = serializeServerConfigs(servers);
-
-  const cached = workspaceMcpCache.get(workspaceKey);
-
-  if (cached) {
-    if (cached.serversConfigJson === serversConfigJson) {
-      cached.sessionIds.add(sessionId);
-      return { tools: cached.tools, errors: cached.errors };
-    }
-
-    opts.log?.(`[MCP] Server configuration changed for workspace ${workspaceKey}. Reloading...`);
-    try {
-      await cached.close();
-    } catch (error) {
-      opts.log?.(
-        `[MCP] Error closing stale MCP cache for workspace ${workspaceKey}: ${String(error)}`,
-      );
-    }
-    workspaceMcpCache.delete(workspaceKey);
-  }
-
-  let loaded: { tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> } = {
-    tools: {},
-    errors: [],
-    close: async () => {},
-  };
-
-  if (servers.length > 0) {
-    loaded = await loadMCPToolsFn(servers, { log: opts.log });
-  }
-
-  const newCacheEntry: CachedWorkspaceMcp = {
-    serversConfigJson,
-    tools: loaded.tools,
-    errors: loaded.errors,
-    close: loaded.close,
-    sessionIds: new Set([sessionId]),
-  };
-
-  workspaceMcpCache.set(workspaceKey, newCacheEntry);
-  return { tools: loaded.tools, errors: loaded.errors };
+  return await workspaceMcpTools.load(config, sessionId, opts);
 }
 
 export async function closeMcpServersForSession(sessionId: string): Promise<void> {
-  for (const [workspaceKey, cached] of workspaceMcpCache.entries()) {
-    if (cached.sessionIds.has(sessionId)) {
-      cached.sessionIds.delete(sessionId);
-      if (cached.sessionIds.size === 0) {
-        try {
-          await cached.close();
-        } catch (error) {
-          // Session teardown has no log channel; keep the failure visible in server logs.
-          console.warn(
-            `[MCP] Error closing MCP servers for workspace ${workspaceKey}: ${String(error)}`,
-          );
-        }
-        workspaceMcpCache.delete(workspaceKey);
-      }
-    }
-  }
+  await workspaceMcpTools.closeSession(sessionId);
 }
 
 export const __internal = {
   normalizeMcpJsonSchema,
-  workspaceMcpCache,
+  workspaceMcpCache: workspaceMcpTools.entries,
 };

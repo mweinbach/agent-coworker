@@ -111,6 +111,42 @@ describe("providers/modelDiscoveryCache", () => {
     });
   });
 
+  test("isolates cache scopes without writing endpoint credentials to disk", async () => {
+    const paths = await tmpPaths("model-cache-scopes-");
+    const firstScope = "http://user:private-password@localhost:1111";
+    const secondScope = "http://localhost:2222";
+    const first = await writeModelDiscoveryCache(
+      paths,
+      "lmstudio",
+      {
+        provider: "lmstudio",
+        source: "local-http",
+        models: [{ id: "first", displayName: "First" }],
+      },
+      { scope: firstScope },
+    );
+    await writeModelDiscoveryCache(
+      paths,
+      "lmstudio",
+      {
+        provider: "lmstudio",
+        source: "local-http",
+        models: [{ id: "second", displayName: "Second" }],
+      },
+      { scope: secondScope },
+    );
+
+    expect(await readModelDiscoveryCache(paths, "lmstudio", firstScope)).toEqual(first);
+    expect(readModelDiscoveryCacheSync(paths, "lmstudio", firstScope)).toEqual(first);
+    expect(await readModelDiscoveryCache(paths, "lmstudio", secondScope)).toMatchObject({
+      models: [{ id: "second" }],
+    });
+    expect(await readModelDiscoveryCache(paths, "lmstudio")).toBeNull();
+    const firstPath = modelDiscoveryCachePath(paths, "lmstudio", firstScope);
+    expect(firstPath).not.toContain("private-password");
+    expect(await fs.readFile(firstPath, "utf8")).not.toContain("private-password");
+  });
+
   test("ignores invalid cache files", async () => {
     const paths = await tmpPaths("model-cache-invalid-");
     await fs.mkdir(path.dirname(modelDiscoveryCachePath(paths, "openai")), { recursive: true });

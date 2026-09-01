@@ -1,9 +1,84 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { isGitHubTokenHost, resolveGitHubToken } from "./githubToken";
+import { validateFileName } from "../platform/paths";
+import { raceWithAbort } from "../utils/abortSignal";
+import { invalidateGitHubToken, isGitHubTokenHost, resolveGitHubToken } from "./githubToken";
 
 export type FetchLike = typeof fetch;
+
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
+const DIRECTORY_LIMITS = {
+  concurrency: 4,
+  maxEntries: 10_000,
+  maxDepth: 32,
+  maxBytes: 256 * 1024 * 1024,
+  timeoutMs: 120_000,
+};
+
+type GitHubRequestOptions = { signal?: AbortSignal; timeoutMs?: number; maxBytes?: number };
+
+function boundedPositive(value: number | undefined, maximum: number, label: string): number {
+  if (value === undefined) return maximum;
+  if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+    throw new Error(`${label} must be a positive integer no greater than ${maximum}`);
+  }
+  return value;
+}
+
+function requestLifetime(signal: AbortSignal | undefined, timeoutMs: number, label: string) {
+  const controller = new AbortController();
+  const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  return {
+    signal: combined,
+    abort: (reason: unknown) => controller.abort(reason),
+    dispose: () => clearTimeout(timer),
+  };
+}
+
+function cancelResponse(response: Response, reason?: unknown): void {
+  void response.body?.cancel(reason).catch(() => {});
+}
+
+async function bufferResponseBody(
+  response: Response,
+  signal: AbortSignal,
+  maxBytes: number,
+): Promise<void> {
+  if (!response.body) return;
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    cancelResponse(response);
+    throw new Error(`GitHub response exceeded its ${maxBytes}-byte limit`);
+  }
+  const reader = response.body.getReader();
+  let bytes = 0;
+  let complete = false;
+  try {
+    while (true) {
+      const { done, value } = await raceWithAbort(
+        reader.read(),
+        signal,
+        "GitHub request cancelled",
+      );
+      if (done) {
+        complete = true;
+        return;
+      }
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw new Error(`GitHub response exceeded its ${maxBytes}-byte limit`);
+    }
+  } finally {
+    // A broken stream's cancel promise may never settle. Do not let cleanup
+    // extend the caller's deadline or retain reader ownership.
+    if (!complete) void reader.cancel(signal.reason).catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 export type GitHubContentEntry = {
   type: "file" | "dir";
@@ -67,19 +142,67 @@ async function githubHeaders(url: string): Promise<Record<string, string>> {
  * Authenticated GitHub GET with an anonymous retry: a stale or under-scoped
  * locally resolved token (gh keyring, git credential helper) must not break
  * access to public repos that anonymous requests could still read.
+ * All current consumers read complete JSON/text/file bodies. Buffer them under
+ * one headers-and-body deadline so those later reads cannot hang independently.
  */
 export async function fetchWithGitHubAuth(
   fetchImpl: FetchLike,
   url: string,
   extraHeaders?: Record<string, string>,
+  options: GitHubRequestOptions = {},
 ): Promise<Response> {
-  const headers = { ...(await githubHeaders(url)), ...extraHeaders };
-  const response = await fetchImpl(url, { headers });
-  if ((response.status === 401 || response.status === 403) && headers.Authorization) {
-    const { Authorization: _authorization, ...anonymousHeaders } = headers;
-    return await fetchImpl(url, { headers: anonymousHeaders });
+  const timeoutMs = boundedPositive(
+    options.timeoutMs,
+    REQUEST_TIMEOUT_MS,
+    "GitHub request timeout",
+  );
+  const maxBytes = boundedPositive(
+    options.maxBytes,
+    MAX_RESPONSE_BYTES,
+    "GitHub response byte limit",
+  );
+  const lifetime = requestLifetime(options.signal, timeoutMs, "GitHub request");
+  let ownedResponse: Response | undefined;
+  const request = async (headers: Record<string, string>) => {
+    lifetime.signal.throwIfAborted();
+    const pending = Promise.resolve()
+      .then(() => fetchImpl(url, { headers, signal: lifetime.signal }))
+      .then((response) => {
+        ownedResponse = response;
+        if (lifetime.signal.aborted) {
+          cancelResponse(response, lifetime.signal.reason);
+          lifetime.signal.throwIfAborted();
+        }
+        return response;
+      });
+    return await raceWithAbort(pending, lifetime.signal, "GitHub request cancelled");
+  };
+  try {
+    lifetime.signal.throwIfAborted();
+    const headers = {
+      ...(await raceWithAbort(githubHeaders(url), lifetime.signal, "GitHub request cancelled")),
+      ...extraHeaders,
+    };
+    let response = await request(headers);
+    if ((response.status === 401 || response.status === 403) && headers.Authorization) {
+      if (isGitHubTokenHost(url) && headers.Authorization.startsWith("Bearer ")) {
+        invalidateGitHubToken(headers.Authorization.slice("Bearer ".length));
+      }
+      cancelResponse(response);
+      const { Authorization: _authorization, ...anonymousHeaders } = headers;
+      response = await request(anonymousHeaders);
+    }
+    // Drain one tee under the deadline; the untouched original is now fully
+    // buffered and retains url/redirected/status metadata for its consumers.
+    await bufferResponseBody(response.clone(), lifetime.signal, maxBytes);
+    return response;
+  } catch (error) {
+    if (!lifetime.signal.aborted) lifetime.abort(error);
+    if (ownedResponse) cancelResponse(ownedResponse, lifetime.signal.reason);
+    throw lifetime.signal.reason;
+  } finally {
+    lifetime.dispose();
   }
-  return response;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -96,8 +219,17 @@ export async function fetchGitHubContent(
   repo: string,
   ref: string,
   githubPath: string,
+  signal?: AbortSignal,
 ): Promise<GitHubContentEntry | GitHubContentEntry[]> {
-  const response = await fetchWithGitHubAuth(fetchImpl, buildGitHubApiUrl(repo, ref, githubPath));
+  const response = await fetchWithGitHubAuth(
+    fetchImpl,
+    buildGitHubApiUrl(repo, ref, githubPath),
+    undefined,
+    {
+      signal,
+      maxBytes: MAX_CONTENT_BYTES,
+    },
+  );
   if (!response.ok) {
     throw new Error(
       `Failed to fetch ${repo}/${githubPath}@${ref}: ${await responseError(response)}`,
@@ -137,16 +269,21 @@ async function fetchGitHubDirectoryEntries(
   repo: string,
   ref: string,
   githubPath: string,
+  signal?: AbortSignal,
 ): Promise<GitHubContentEntry[]> {
-  const parsed = await fetchGitHubContent(fetchImpl, repo, ref, githubPath);
+  const parsed = await fetchGitHubContent(fetchImpl, repo, ref, githubPath, signal);
   if (!Array.isArray(parsed)) {
     throw new Error(`GitHub API returned a non-directory payload for ${repo}/${githubPath}@${ref}`);
   }
   return parsed;
 }
 
-export async function fetchGitHubFile(fetchImpl: FetchLike, downloadUrl: string): Promise<Buffer> {
-  const response = await fetchWithGitHubAuth(fetchImpl, downloadUrl);
+export async function fetchGitHubFile(
+  fetchImpl: FetchLike,
+  downloadUrl: string,
+  options: GitHubRequestOptions = {},
+): Promise<Buffer> {
+  const response = await fetchWithGitHubAuth(fetchImpl, downloadUrl, undefined, options);
   if (!response.ok) {
     throw new Error(`Failed to download ${downloadUrl}: ${await responseError(response)}`);
   }
@@ -161,31 +298,105 @@ export async function downloadGitHubDirectory(opts: {
   ref: string;
   githubPath: string;
   destDir: string;
+  signal?: AbortSignal;
+  limits?: Partial<typeof DIRECTORY_LIMITS>;
 }): Promise<void> {
   const { fetchImpl, repo, ref, githubPath, destDir } = opts;
-  await fs.mkdir(destDir, { recursive: true });
+  const limits = { ...DIRECTORY_LIMITS };
+  for (const key of Object.keys(limits) as Array<keyof typeof limits>) {
+    limits[key] = boundedPositive(opts.limits?.[key], limits[key], `GitHub directory ${key}`);
+  }
+  const lifetime = requestLifetime(opts.signal, limits.timeoutMs, "GitHub directory download");
+  type Work = {
+    type: "dir" | "file";
+    githubPath: string;
+    dest: string;
+    depth: number;
+    url?: string;
+  };
+  const queue: Work[] = [
+    { type: "dir", githubPath: trimSlashes(githubPath), dest: destDir, depth: 0 },
+  ];
+  const seen = new Set<string>();
+  let entryCount = 0;
+  let downloadedBytes = 0;
 
-  const entries = await fetchGitHubDirectoryEntries(fetchImpl, repo, ref, githubPath);
-  for (const entry of entries) {
-    if (entry.type === "dir") {
-      await downloadGitHubDirectory({
-        fetchImpl,
-        repo,
-        ref,
-        githubPath: entry.path,
-        destDir: path.join(destDir, entry.name),
+  const processEntry = async (work: Work): Promise<Work[]> => {
+    lifetime.signal.throwIfAborted();
+    if (work.type === "file") {
+      if (!work.url) throw new Error("GitHub file is missing its download URL");
+      const remaining = limits.maxBytes - downloadedBytes;
+      if (remaining <= 0) throw new Error("GitHub directory exceeded its byte limit");
+      const bytes = await fetchGitHubFile(fetchImpl, work.url, {
+        signal: lifetime.signal,
+        maxBytes: Math.min(MAX_RESPONSE_BYTES, remaining),
       });
-      continue;
+      downloadedBytes += bytes.length;
+      if (downloadedBytes > limits.maxBytes)
+        throw new Error("GitHub directory exceeded its byte limit");
+      lifetime.signal.throwIfAborted();
+      await fs.writeFile(work.dest, bytes, { signal: lifetime.signal });
+      return [];
     }
-
-    if (entry.type !== "file" || !entry.download_url) {
-      continue;
+    await fs.mkdir(work.dest, { recursive: true });
+    const entries = await fetchGitHubDirectoryEntries(
+      fetchImpl,
+      repo,
+      ref,
+      work.githubPath,
+      lifetime.signal,
+    );
+    entryCount += entries.length;
+    if (entryCount > limits.maxEntries)
+      throw new Error("GitHub directory exceeded its entry limit");
+    const children: Work[] = [];
+    for (const entry of entries) {
+      if (!entry || (entry.type !== "dir" && entry.type !== "file")) continue;
+      if (typeof entry.name !== "string" || !validateFileName(entry.name).ok) {
+        throw new Error("GitHub directory contains an invalid entry name");
+      }
+      const expectedPath = work.githubPath ? `${work.githubPath}/${entry.name}` : entry.name;
+      if (entry.path !== expectedPath || seen.has(expectedPath)) {
+        throw new Error("GitHub directory contains an invalid or duplicate entry path");
+      }
+      seen.add(expectedPath);
+      if (entry.type === "file" && !entry.download_url) continue;
+      if (work.depth + 1 > limits.maxDepth)
+        throw new Error("GitHub directory exceeded its depth limit");
+      children.push({
+        type: entry.type,
+        githubPath: expectedPath,
+        dest: path.join(work.dest, entry.name),
+        depth: work.depth + 1,
+        ...(entry.download_url ? { url: entry.download_url } : {}),
+      });
     }
-
-    const filePath = path.join(destDir, entry.name);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const bytes = await fetchGitHubFile(fetchImpl, entry.download_url);
-    await fs.writeFile(filePath, bytes);
+    return children;
+  };
+  try {
+    while (queue.length > 0) {
+      lifetime.signal.throwIfAborted();
+      const batch = queue.splice(0, limits.concurrency);
+      const results = await Promise.allSettled(
+        batch.map(async (work) => {
+          try {
+            return await processEntry(work);
+          } catch (error) {
+            lifetime.abort(error);
+            throw error;
+          }
+        }),
+      );
+      // Every started operation settles before the caller can remove its staging
+      // directory. The shared abort stops siblings and no new work is scheduled.
+      lifetime.signal.throwIfAborted();
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+        queue.push(...result.value);
+      }
+    }
+  } finally {
+    lifetime.dispose();
   }
 }
 

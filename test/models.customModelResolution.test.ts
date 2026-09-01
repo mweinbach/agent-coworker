@@ -13,6 +13,7 @@ import {
   reconcileReasoningProviderOptions,
   resolveModelMetadata,
 } from "../src/models/metadata";
+import { buildThreadReasoningOptionsPatch } from "../src/models/threadReasoningOptions";
 import { upsertCustomModel } from "../src/providers/customModels";
 import { writeModelDiscoveryCache } from "../src/providers/modelDiscoveryCache";
 import { getAiCoworkerPaths } from "../src/store/connections";
@@ -40,6 +41,23 @@ const DISCOVERED_REASONING_ID = "acme/discovered-reasoning-1";
 // from the OpenAI provider fallback ("high"); the resolved defaults must honor
 // the cached effort so config loading / child routing send the right payload.
 const DISCOVERED_REASONING_MEDIUM_ID = "acme/discovered-reasoning-medium";
+const DISCOVERED_REASONING_DEFAULT_CASES = [
+  {
+    id: "acme/discovered-reasoning-without-default",
+    reasoning: { availableEfforts: ["low", "medium"] },
+    expectedEffort: "low",
+  },
+  {
+    id: "acme/discovered-reasoning-stale-default",
+    reasoning: { defaultEffort: "xhigh", availableEfforts: ["low", "medium"] },
+    expectedEffort: "low",
+  },
+  {
+    id: "acme/discovered-reasoning-max-only",
+    reasoning: { availableEfforts: ["max"] },
+    expectedEffort: "max",
+  },
+] as const;
 // An id present in BOTH the custom store and the discovery cache (as a vision
 // model). Selection/resume must prefer the richer discovered metadata over the
 // generic custom placeholder so it is not downgraded to text-only.
@@ -117,6 +135,11 @@ beforeAll(async () => {
         displayName: "Discovered Reasoning Medium",
         reasoning: { defaultEffort: "medium", availableEfforts: ["low", "medium", "high"] },
       },
+      ...DISCOVERED_REASONING_DEFAULT_CASES.map(({ id, reasoning }) => ({
+        id,
+        displayName: id,
+        reasoning: { ...reasoning, availableEfforts: [...reasoning.availableEfforts] },
+      })),
       {
         id: DISCOVERED_AND_CUSTOM_VISION_ID,
         displayName: "Dup Vision",
@@ -125,11 +148,91 @@ beforeAll(async () => {
       },
     ],
   });
+  await writeModelDiscoveryCache(paths, "codex-cli", {
+    provider: "codex-cli",
+    source: "app-server",
+    models: [
+      {
+        id: "gpt-5.4-mini",
+        displayName: "Discovered GPT-5.4 Mini",
+        reasoning: { defaultEffort: "high", availableEfforts: ["low", "high", "xhigh"] },
+      },
+    ],
+  });
 });
 
 afterAll(async () => {
   await fs.rm(homeWithStore, { recursive: true, force: true });
   await fs.rm(emptyHome, { recursive: true, force: true });
+});
+
+describe("thread reasoning overrides", () => {
+  test.each([
+    { provider: "codex-cli", model: "gpt-5.4-mini", thinking: "xhigh" },
+    { provider: "openai", model: "gpt-5.5", thinking: "minimal" },
+    { provider: "google", model: "gemini-3.1-pro-preview", thinking: "minimal" },
+  ] as const)("rejects an unadvertised effort for $provider:$model", (selection) => {
+    expect(() => buildThreadReasoningOptionsPatch({ ...selection, home: emptyHome })).toThrow(
+      `Unsupported reasoning effort for ${selection.provider}:${selection.model}`,
+    );
+  });
+
+  test("preserves current settings when the selected model supports the effort", () => {
+    const current = { "codex-cli": { reasoningEffort: "low", serviceTier: "priority" } } as const;
+    expect(
+      buildThreadReasoningOptionsPatch({
+        provider: "codex-cli",
+        model: "gpt-5.6-sol",
+        thinking: "max",
+        current,
+        home: emptyHome,
+      }),
+    ).toEqual({ "codex-cli": { reasoningEffort: "max", serviceTier: "priority" } });
+    expect(current["codex-cli"].reasoningEffort).toBe("low");
+  });
+
+  test("validates discovered choices using the supplied auth home", () => {
+    const selection = {
+      provider: "openai",
+      model: DISCOVERED_REASONING_MEDIUM_ID,
+      thinking: "xhigh",
+    } as const;
+    expect(() => buildThreadReasoningOptionsPatch({ ...selection, home: homeWithStore })).toThrow(
+      `Unsupported reasoning effort for openai:${DISCOVERED_REASONING_MEDIUM_ID}`,
+    );
+    expect(buildThreadReasoningOptionsPatch({ ...selection, home: emptyHome })).toEqual({
+      openai: { reasoningEffort: "xhigh" },
+    });
+    expect(
+      buildThreadReasoningOptionsPatch({
+        ...selection,
+        thinking: "medium",
+        home: homeWithStore,
+      }),
+    ).toEqual({ openai: { reasoningEffort: "medium" } });
+  });
+
+  test("accepts runtime-discovered efforts beyond a static model's catalog", () => {
+    expect(
+      buildThreadReasoningOptionsPatch({
+        provider: "codex-cli",
+        model: "gpt-5.4-mini",
+        thinking: "xhigh",
+        home: homeWithStore,
+      }),
+    ).toEqual({ "codex-cli": { reasoningEffort: "xhigh" } });
+  });
+
+  test("does not invent restrictions for custom models without discovered choices", () => {
+    expect(
+      buildThreadReasoningOptionsPatch({
+        provider: "openai",
+        model: CUSTOM_OPENAI_REASONING_ID,
+        thinking: "high",
+        home: homeWithStore,
+      }),
+    ).toEqual({ openai: { reasoningEffort: "high" } });
+  });
 });
 
 describe("isConfiguredCustomModelIdSync", () => {
@@ -216,6 +319,22 @@ describe("getDiscoveredModelMetadataSync", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.providerOptionsDefaults.reasoningEffort).toBe("medium");
   });
+
+  test.each(DISCOVERED_REASONING_DEFAULT_CASES)(
+    "keeps the resolved reasoning default within advertised choices for $id",
+    async ({ id, reasoning, expectedEffort }) => {
+      const opts = { home: homeWithStore };
+      const discovered = getDiscoveredModelMetadataSync("openai", id, opts);
+      expect(discovered?.providerOptionsDefaults.reasoningEffort).toBe(expectedEffort);
+      expect(discovered?.supportedReasoningEfforts).toEqual(reasoning.availableEfforts);
+      expect(
+        getKnownResolvedModelMetadata("openai", id, opts)?.providerOptionsDefaults.reasoningEffort,
+      ).toBe(expectedEffort);
+      expect(
+        (await resolveModelMetadata("openai", id, opts)).providerOptionsDefaults.reasoningEffort,
+      ).toBe(expectedEffort);
+    },
+  );
 
   test("drops reasoning defaults when the cached entry has no reasoning info", () => {
     const resolved = getDiscoveredModelMetadataSync("openai", DISCOVERED_ID, {

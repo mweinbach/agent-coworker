@@ -1310,12 +1310,77 @@ describe("loadConfig", () => {
     expect(cfg.observability?.recordOutputs).toBe(true);
   });
 
-  test("loads observability payload settings from project config", async () => {
+  test("project config cannot redirect inherited observability credentials", async () => {
     const { cwd, home } = await makeTmpDirs();
 
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      observabilityEnabled: true,
+      observability: {
+        baseUrl: "https://trusted.langfuse.example/",
+        publicKey: "pk-lf-user",
+        secretKey: "sk-lf-user",
+      },
+    });
     await writeJson(path.join(cwd, ".cowork", "config.json"), {
       observability: {
+        baseUrl: "https://untrusted.example",
+        tracingEnvironment: "project-tests",
+        release: "project-release",
+      },
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.observability?.baseUrl).toBe("https://trusted.langfuse.example");
+    expect(cfg.observability?.otelEndpoint).toBe(
+      "https://trusted.langfuse.example/api/public/otel/v1/traces",
+    );
+    expect(cfg.observability?.publicKey).toBe("pk-lf-user");
+    expect(cfg.observability?.secretKey).toBe("sk-lf-user");
+    expect(cfg.observability?.tracingEnvironment).toBe("project-tests");
+    expect(cfg.observability?.release).toBe("project-release");
+  });
+
+  test("project config cannot enable observability or payload recording", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      observabilityEnabled: false,
+      observability: { recordInputs: false, recordOutputs: false },
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      observabilityEnabled: true,
+      observability: {
+        baseUrl: "https://untrusted.example",
+        publicKey: "pk-lf-project",
+        secretKey: "sk-lf-project",
         recordInputs: true,
+        recordOutputs: true,
+      },
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.recordInputs).toBe(false);
+    expect(cfg.observability?.recordOutputs).toBe(false);
+    expect(cfg.observability?.publicKey).toBeUndefined();
+    expect(cfg.observability?.secretKey).toBeUndefined();
+  });
+
+  test("project config can disable inherited observability and payload recording", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".cowork", "config", "config.json"), {
+      observabilityEnabled: true,
+      observability: { recordInputs: true, recordOutputs: true },
+    });
+    await writeJson(path.join(cwd, ".cowork", "config.json"), {
+      observabilityEnabled: false,
+      observability: {
+        baseUrl: 42,
+        recordInputs: "false",
         recordOutputs: false,
       },
     });
@@ -1327,8 +1392,22 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.observability?.recordInputs).toBe(true);
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.recordInputs).toBe(false);
     expect(cfg.observability?.recordOutputs).toBe(false);
+
+    const envOverride = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_ENABLED: "true",
+        AGENT_OBSERVABILITY_RECORD_PAYLOADS: "true",
+      },
+    });
+    expect(envOverride.observabilityEnabled).toBe(true);
+    expect(envOverride.observability?.recordInputs).toBe(true);
+    expect(envOverride.observability?.recordOutputs).toBe(true);
   });
 
   test("enabled observability remains non-fatal when Langfuse keys are missing", async () => {

@@ -4,6 +4,7 @@ import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig, PluginCatalogEntry, PluginScope } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import { nowIso } from "../utils/typeGuards";
 import { canonicalDefaultMarketplacePluginIdForTombstone } from "./remoteMarketplace";
 
@@ -217,17 +218,23 @@ async function mutateScopeDocument(
 ): Promise<void> {
   const paths = buildConfigPaths(config);
   const filePath = scope === "workspace" ? paths.workspace : paths.user;
-  const current = await readDocument(filePath);
-  const next: PluginOverrideDocument = {
-    version: CURRENT_DOCUMENT_VERSION,
-    updatedAt: nowIso(),
-    plugins: { ...(current.plugins ?? {}) },
-    skills: { ...(current.skills ?? {}) },
-    mcpServers: { ...(current.mcpServers ?? {}) },
-    removedDefaultPlugins: { ...(current.removedDefaultPlugins ?? {}) },
-  };
-  mutate(next);
-  await writeDocument(filePath, next);
+  await withFileLock(
+    filePath,
+    async () => {
+      const current = await readDocument(filePath);
+      const next: PluginOverrideDocument = {
+        version: CURRENT_DOCUMENT_VERSION,
+        updatedAt: nowIso(),
+        plugins: { ...(current.plugins ?? {}) },
+        skills: { ...(current.skills ?? {}) },
+        mcpServers: { ...(current.mcpServers ?? {}) },
+        removedDefaultPlugins: { ...(current.removedDefaultPlugins ?? {}) },
+      };
+      mutate(next);
+      await writeDocument(filePath, next);
+    },
+    { lockRoot: fileLockRootForCoworkHome(config.userCoworkDir) },
+  );
 }
 
 export async function setPluginEnabled(opts: {

@@ -18,6 +18,69 @@ async function makeTmpHome(): Promise<string> {
 }
 
 describe("providers/bedrockShared", () => {
+  test("aborts stalled discovery and releases the SDK client", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const original = {
+      listFoundationModels: Bedrock.prototype.listFoundationModels,
+      listInferenceProfiles: Bedrock.prototype.listInferenceProfiles,
+      listCustomModelDeployments: Bedrock.prototype.listCustomModelDeployments,
+      listProvisionedModelThroughputs: Bedrock.prototype.listProvisionedModelThroughputs,
+      listImportedModels: Bedrock.prototype.listImportedModels,
+      destroy: Bedrock.prototype.destroy,
+    };
+    let release!: () => void;
+    let requestSignal: AbortSignal | undefined;
+    let destroyed = 0;
+    Bedrock.prototype.listFoundationModels = (async (_params, options) => {
+      requestSignal = options?.abortSignal as AbortSignal | undefined;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { $metadata: {}, modelSummaries: [] };
+    }) as typeof Bedrock.prototype.listFoundationModels;
+    Bedrock.prototype.listInferenceProfiles = async () => ({
+      $metadata: {},
+      inferenceProfileSummaries: [],
+    });
+    Bedrock.prototype.listCustomModelDeployments = async () => ({
+      $metadata: {},
+      modelDeploymentSummaries: [],
+    });
+    Bedrock.prototype.listProvisionedModelThroughputs = async () => ({
+      $metadata: {},
+      provisionedModelSummaries: [],
+    });
+    Bedrock.prototype.listImportedModels = async () => ({ $metadata: {}, modelSummaries: [] });
+    Bedrock.prototype.destroy = () => {
+      destroyed += 1;
+    };
+    try {
+      const pending = refreshBedrockDiscoveryCache({
+        paths,
+        env: {
+          AWS_ACCESS_KEY_ID: "test-only",
+          AWS_SECRET_ACCESS_KEY: "test-only",
+          AWS_REGION: "us-east-1",
+        },
+        timeoutMs: 10,
+      });
+      const result = await Promise.race([
+        pending,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+      ]);
+      release?.();
+      await pending;
+      expect(result).not.toBeNull();
+      expect(result?.ok).toBe(false);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(destroyed).toBe(1);
+    } finally {
+      Object.assign(Bedrock.prototype, original);
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("masks Bedrock credential values while preserving non-secret fields", () => {
     const masked = maskBedrockFieldValues({
       accessKeyId: "AKIASECRET1234",

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { removeWithRetry } from "../platform/fs";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { fileLockRootForCoworkHome, withFileLock } from "../utils/fileLock";
 import {
   type ClaimedSkillImprovementJob,
   type CompletedTurnSkillUsage,
@@ -90,10 +90,6 @@ const stateSchema = z
   .passthrough();
 
 const RUN_HISTORY_LIMIT = 50;
-/** How long a state-file write lock may exist before another writer breaks it. */
-const STATE_LOCK_STALE_MS = 10_000;
-const STATE_LOCK_RETRY_MS = 25;
-const STATE_LOCK_MAX_WAIT_MS = 5_000;
 
 function emptyState(): SkillImprovementState {
   return {
@@ -144,8 +140,6 @@ function recoverStaleRunningJobs(state: SkillImprovementState, nowMs: number): v
 export class SkillImprovementJobStore {
   readonly rootDir: string;
   readonly statePath: string;
-
-  private updateQueue: Promise<unknown> = Promise.resolve();
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
@@ -456,66 +450,16 @@ export class SkillImprovementJobStore {
   private async update(
     mutator: (state: SkillImprovementState) => void | Promise<void>,
   ): Promise<void> {
-    const run = this.updateQueue.then(async () => {
-      const releaseLock = await this.acquireStateLock();
-      try {
+    await withFileLock(
+      this.statePath,
+      async () => {
         const state = await this.read();
         await mutator(state);
         await fs.mkdir(this.rootDir, { recursive: true });
         await writeTextFileAtomic(this.statePath, `${JSON.stringify(state, null, 2)}\n`);
-      } finally {
-        await releaseLock();
-      }
-    });
-    this.updateQueue = run.catch(() => undefined);
-    await run;
-  }
-
-  /**
-   * Cross-process advisory lock around read-modify-write of state.json. The
-   * state file is shared by every server process (one per workspace), so an
-   * unlocked write could clobber a concurrent enqueue/finish from another
-   * process. Writers hold the lock for milliseconds; anything older than
-   * STATE_LOCK_STALE_MS is treated as a crashed writer and broken.
-   */
-  private async acquireStateLock(): Promise<() => Promise<void>> {
-    const lockPath = path.join(this.rootDir, "state.lock");
-    await fs.mkdir(this.rootDir, { recursive: true });
-    const deadline = Date.now() + STATE_LOCK_MAX_WAIT_MS;
-    for (;;) {
-      try {
-        const handle = await fs.open(lockPath, "wx");
-        await handle
-          .writeFile(JSON.stringify({ pid: process.pid, lockedAt: new Date().toISOString() }))
-          .catch(() => {});
-        return async () => {
-          await handle.close().catch(() => {});
-          await removeWithRetry(lockPath, { bestEffort: true });
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") {
-          throw error;
-        }
-      }
-      let lockAge: number | null = null;
-      let isEnoent = false;
-      try {
-        const stat = await fs.stat(lockPath);
-        lockAge = Date.now() - stat.mtimeMs;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-          isEnoent = true;
-        }
-      }
-      if (isEnoent) {
-        continue;
-      }
-      if ((lockAge !== null && lockAge >= STATE_LOCK_STALE_MS) || Date.now() >= deadline) {
-        await removeWithRetry(lockPath, { bestEffort: true });
-        continue;
-      }
-      await new Promise((resolve) => setTimeout(resolve, STATE_LOCK_RETRY_MS));
-    }
+      },
+      { lockRoot: fileLockRootForCoworkHome(this.rootDir) },
+    );
   }
 }
 

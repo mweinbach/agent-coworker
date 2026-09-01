@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
@@ -610,6 +612,71 @@ describe("runtime auth injection", () => {
 });
 
 describe("loadMCPTools", () => {
+  test("discovers every paginated tool and rejects repeated cursors", async () => {
+    const connect = spyOn(McpClient.prototype, "connect").mockResolvedValue(undefined);
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const transportClose = spyOn(StdioClientTransport.prototype, "close").mockResolvedValue(
+      undefined,
+    );
+    const listTools = spyOn(McpClient.prototype, "listTools");
+    const server: MCPServerConfig = {
+      name: "paged",
+      retries: 0,
+      transport: { type: "stdio", command: "unused" },
+    };
+    try {
+      listTools
+        .mockResolvedValueOnce({
+          tools: [{ name: "first", inputSchema: { type: "object" } }],
+          nextCursor: "second-page",
+        })
+        .mockResolvedValueOnce({ tools: [{ name: "second", inputSchema: { type: "object" } }] });
+      const loaded = await loadMCPTools([server]);
+      try {
+        expect(Object.keys(loaded.tools)).toEqual(["mcp__paged__first", "mcp__paged__second"]);
+        expect(listTools).toHaveBeenNthCalledWith(2, { cursor: "second-page" });
+      } finally {
+        await loaded.close();
+      }
+      listTools.mockResolvedValue({ tools: [], nextCursor: "repeated" });
+      const repeated = await loadMCPTools([server]);
+      expect(repeated.errors[0]).toContain("repeated tools cursor");
+      await repeated.close();
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      transportClose.mockRestore();
+      listTools.mockRestore();
+    }
+  });
+
+  test("closes the client and transport when initialization fails", async () => {
+    const connect = spyOn(McpClient.prototype, "connect").mockRejectedValue(
+      new Error("initialization failed"),
+    );
+    const close = spyOn(McpClient.prototype, "close").mockResolvedValue(undefined);
+    const transportClose = spyOn(StdioClientTransport.prototype, "close").mockResolvedValue(
+      undefined,
+    );
+    try {
+      const loaded = await loadMCPTools([
+        {
+          name: "broken",
+          retries: 0,
+          transport: { type: "stdio", command: "unused" },
+        },
+      ]);
+      expect(loaded.errors[0]).toContain("initialization failed");
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(transportClose).toHaveBeenCalledTimes(1);
+      await loaded.close();
+    } finally {
+      connect.mockRestore();
+      close.mockRestore();
+      transportClose.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     mockCreateMCPClient.mockReset();
     mockCreateMCPClient.mockImplementation(async (_opts: any) => ({

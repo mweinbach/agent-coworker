@@ -811,11 +811,15 @@ function resolveRelativeFileHref(rawHref: string, basePath: string | null): stri
     return null;
   }
   // Strip a query/fragment so `Foo.docx?x=1` still resolves.
-  const cleaned = rawHref
-    .replace(/[?#].*$/, "")
-    .replace(/\\/g, "/")
-    .replace(/^\.\//, "");
-  if (!cleaned || cleaned.includes("://") || /[<>:"|?*\0]/.test(cleaned)) {
+  const withoutDecorations = rawHref.replace(/[?#].*$/, "");
+  let decoded = withoutDecorations;
+  try {
+    decoded = decodeURIComponent(withoutDecorations);
+  } catch {
+    // A literal percent in a filename is not necessarily URL encoding.
+  }
+  const cleaned = decoded.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!cleaned || isAbsoluteDesktopPath(cleaned) || /[<>:"|?*\0]/.test(cleaned)) {
     return null;
   }
   const lastSegment = cleaned.split("/").filter(Boolean).pop() ?? "";

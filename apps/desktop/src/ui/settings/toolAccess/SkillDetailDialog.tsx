@@ -49,7 +49,9 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
     ? ["delete", "disable", "enable", "update", "copy:project", "copy:global"]
         .map(
           (action) =>
-            operationsByKey[operationKey("skill", action, selectedInstallation.installationId)],
+            operationsByKey[
+              operationKey("skill", action, selectedInstallation.installationId, workspaceId)
+            ],
         )
         .find((operation) => operation?.status === "pending" || operation?.status === "error")
     : undefined;

@@ -96,11 +96,58 @@ describe("desktop sources carousel", () => {
       expect(onOpenSource).toHaveBeenCalledWith(
         "https://example.com/articles/hero-ui-migration-guide",
       );
+      expect(container.querySelector("img")).toBeNull();
 
       await act(async () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+
+  test("names the source navigation controls and scrolls in both directions", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const scrollBy = mock((_options: ScrollToOptions) => {});
+    try {
+      await act(async () => {
+        root.render(
+          createElement(CitationSourcesCarousel, {
+            defaultOpen: true,
+            sources: [
+              { title: "First source", url: "https://internal.example/one" },
+              { title: "Second source", url: "https://internal.example/two" },
+            ],
+          }),
+        );
+      });
+      const viewport = container.querySelector<HTMLDivElement>(".overflow-x-auto");
+      if (!viewport) throw new Error("missing sources viewport");
+      Object.defineProperties(viewport, {
+        clientWidth: { configurable: true, value: 176 },
+        scrollWidth: { configurable: true, value: 360 },
+        scrollLeft: { configurable: true, writable: true, value: 0 },
+      });
+      viewport.scrollBy = scrollBy;
+      await act(async () => viewport.dispatchEvent(new harness.dom.window.Event("scroll")));
+      const next = container.querySelector<HTMLButtonElement>('button[aria-label="Next sources"]');
+      if (!next) throw new Error("missing named next control");
+      await act(async () => next.click());
+      expect(scrollBy).toHaveBeenLastCalledWith({ left: 180, behavior: "smooth" });
+
+      viewport.scrollLeft = 180;
+      await act(async () => viewport.dispatchEvent(new harness.dom.window.Event("scroll")));
+      const previous = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Previous sources"]',
+      );
+      if (!previous) throw new Error("missing named previous control");
+      await act(async () => previous.click());
+      expect(scrollBy).toHaveBeenLastCalledWith({ left: -180, behavior: "smooth" });
+      expect(container.querySelector("img")).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
       harness.restore();
     }
   });

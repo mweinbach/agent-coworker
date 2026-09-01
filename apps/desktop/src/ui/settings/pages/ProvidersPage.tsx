@@ -104,6 +104,7 @@ export function ProvidersPage({
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
+  const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const operationsByKey = useAppStore((s) => s.operationsByKey);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const checkCodexAppServerStatus = useAppStore((s) => s.checkCodexAppServerStatus);
@@ -280,23 +281,13 @@ export function ProvidersPage({
     refreshProviderAndRuntimeStatus,
   ]);
 
-  useEffect(() => {
-    if (!providerLastAuthResult?.ok) return;
-    const providerMethods = authMethodsForProvider(providerLastAuthResult.provider);
-    const method = providerMethods.find(
-      (candidate) => candidate.id === providerLastAuthResult.methodId,
-    );
-    if (method?.type !== "api") return;
-    const stateKey = methodStateKey(
-      providerLastAuthResult.provider,
-      providerLastAuthResult.methodId,
-    );
+  // Only the acknowledged submission owns its draft; a status refresh or an
+  // auth event from another connection must not discard an in-progress edit.
+  const completeCredentialSave = (provider: ProviderName, method: ProviderAuthMethod) => {
+    const stateKey = methodStateKey(provider, method.id);
+    const status = useAppStore.getState().providerStatusByName[provider];
     if ((method.fields?.length ?? 0) > 0) {
-      const rawMasks =
-        providerStatusByName[providerLastAuthResult.provider]?.methodId ===
-        providerLastAuthResult.methodId
-          ? providerStatusByName[providerLastAuthResult.provider]?.savedFieldMasks
-          : undefined;
+      const rawMasks = status?.methodId === method.id ? status.savedFieldMasks : undefined;
       const nextMasks = Object.fromEntries(
         Object.entries(rawMasks ?? {}).filter(
           (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -307,10 +298,7 @@ export function ProvidersPage({
       setOptimisticFieldMasksByMethod((s) => ({ ...s, [stateKey]: nextMasks }));
       return;
     }
-    const refreshedMask =
-      providerStatusByName[providerLastAuthResult.provider]?.savedApiKeyMasks?.[
-        providerLastAuthResult.methodId
-      ];
+    const refreshedMask = status?.savedApiKeyMasks?.[method.id];
     const nextMask =
       typeof refreshedMask === "string" && refreshedMask.trim().length > 0
         ? refreshedMask
@@ -319,7 +307,7 @@ export function ProvidersPage({
     setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
     setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
     setOptimisticApiKeyMaskByMethod((s) => ({ ...s, [stateKey]: nextMask }));
-  }, [authMethodsForProvider, providerLastAuthResult, providerStatusByName]);
+  };
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod, code?: string) => {
     void (async () => {
@@ -339,6 +327,10 @@ export function ProvidersPage({
   }) => {
     const stateKey = methodStateKey(opts.provider, opts.method.id);
     const isStructuredMethod = (opts.method.fields?.length ?? 0) > 0;
+    const siblingProvider =
+      opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
+        ? siblingOpenCodeProvider(opts.provider)
+        : null;
     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
     const credentialValues = credentialValuesByMethod[stateKey] ?? {};
     const codeValue = oauthCodesByMethod[stateKey] ?? "";
@@ -353,6 +345,11 @@ export function ProvidersPage({
       operationsByKey[
         operationKey("provider", `callback:${opts.method.id.trim() || "missing"}`, opts.provider)
       ],
+      siblingProvider
+        ? operationsByKey[
+            operationKey("provider", `copy-api-key:${siblingProvider}`, opts.provider)
+          ]
+        : undefined,
     ].filter((operation) => operation !== undefined);
     const methodOperation =
       methodOperations.find((operation) => operation.status === "pending") ??
@@ -382,10 +379,6 @@ export function ProvidersPage({
       providerLastAuthResult?.provider === opts.provider &&
       providerLastAuthResult?.methodId === opts.method.id
         ? providerLastAuthResult
-        : null;
-    const siblingProvider =
-      opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
-        ? siblingOpenCodeProvider(opts.provider)
         : null;
     const siblingStatus = siblingProvider ? providerStatusByName[siblingProvider] : null;
     const siblingSavedApiKeyMask = siblingStatus?.savedApiKeyMasks?.api_key;
@@ -487,14 +480,19 @@ export function ProvidersPage({
                     type="button"
                     disabled={!canConnectProvider || !canSaveStructuredMethod || methodPending}
                     title={!canConnectProvider ? "Add a workspace first." : undefined}
-                    onClick={() => {
+                    onClick={async () => {
                       const nextValues = Object.fromEntries(
                         (opts.method.fields ?? []).map((field) => [
                           field.id,
                           (credentialValues[field.id] ?? "").trim(),
                         ]),
                       );
-                      void setProviderConfig(opts.provider, opts.method.id, nextValues);
+                      const result = await setProviderConfig(
+                        opts.provider,
+                        opts.method.id,
+                        nextValues,
+                      );
+                      if (result.ok) completeCredentialSave(opts.provider, opts.method);
                     }}
                   >
                     Save
@@ -573,8 +571,13 @@ export function ProvidersPage({
                   type="button"
                   disabled={!canConnectProvider || !apiKeyValue.trim() || methodPending}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
-                  onClick={() => {
-                    void setProviderApiKey(opts.provider, opts.method.id, apiKeyValue.trim());
+                  onClick={async () => {
+                    const result = await setProviderApiKey(
+                      opts.provider,
+                      opts.method.id,
+                      apiKeyValue.trim(),
+                    );
+                    if (result.ok) completeCredentialSave(opts.provider, opts.method);
                   }}
                 >
                   Save
@@ -584,10 +587,11 @@ export function ProvidersPage({
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={!canConnectProvider}
+                  disabled={!canConnectProvider || methodPending}
                   title={!canConnectProvider ? "Add a workspace first." : undefined}
-                  onClick={() => {
-                    void copyProviderApiKey(opts.provider, siblingProvider);
+                  onClick={async () => {
+                    const result = await copyProviderApiKey(opts.provider, siblingProvider);
+                    if (result.ok) completeCredentialSave(opts.provider, opts.method);
                   }}
                 >
                   {`Use ${siblingDisplayName} key`}
@@ -680,6 +684,7 @@ export function ProvidersPage({
       (entry): entry is ProviderCatalogEntry => entry.id === provider,
     );
     const connected = Boolean(status?.authorized || status?.verified);
+    const logoutOperation = operationsByKey[operationKey("provider", "logout", provider)];
     const methods =
       provider === "codex-cli" && connected
         ? []
@@ -938,6 +943,29 @@ export function ProvidersPage({
               id={`provider-panel-${provider}`}
               className="flex flex-col gap-3.5 border-t app-border-subtle px-3 py-3"
             >
+              {provider === "codex-cli" && connected ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+                    Disconnect to sign in with a different account.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={logoutOperation?.status === "pending"}
+                    onClick={async () => {
+                      const result = await logoutProviderAuth(provider);
+                      if (result.ok && surface === "models") {
+                        setExpandedSectionId(sectionId);
+                        setNewProviderOpen(true);
+                      }
+                    }}
+                  >
+                    {logoutOperation?.status === "pending" ? "Disconnecting…" : "Disconnect"}
+                  </Button>
+                </div>
+              ) : null}
+              {provider === "codex-cli" ? <OperationFeedback operation={logoutOperation} /> : null}
               {methods.map((method) =>
                 renderAuthMethod({
                   provider,

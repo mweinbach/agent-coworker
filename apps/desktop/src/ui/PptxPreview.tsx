@@ -17,6 +17,10 @@ import {
 import { useElementWidth } from "../lib/useElementWidth";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
+import {
+  PresentationPreviewNotice,
+  type PresentationPreviewNoticeProps,
+} from "./PresentationPreviewNotice";
 
 type PptxPreviewProps = {
   path: string;
@@ -44,6 +48,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
   const [slides, setSlides] = useState<PresentationSlide[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [layoutMode, setLayoutMode] = useState<"deck" | "grid">("deck");
@@ -64,6 +69,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
     const loadRevision = fileChangeRevision;
     setLoading(true);
     setError(null);
+    setNotice({});
     setSlides([]);
     setActiveIndex(0);
     setLoadedPath(null);
@@ -85,6 +91,7 @@ export function PptxPreview({ path }: PptxPreviewProps) {
         const response = resource.value;
         if (response.ok) {
           setSlides(response.slides);
+          setNotice({ renderingMode: response.renderingMode, warnings: response.warnings });
           setActiveIndex(0);
         } else {
           setError(response.error.message || "Failed to render PowerPoint deck.");
@@ -193,6 +200,8 @@ export function PptxPreview({ path }: PptxPreviewProps) {
           </Button>
         </div>
       </div>
+
+      {!visibleLoading && !visibleError ? <PresentationPreviewNotice {...notice} /> : null}
 
       <div className="relative flex min-h-0 flex-1 pt-2">
         {visibleLoading ? (

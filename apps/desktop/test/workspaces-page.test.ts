@@ -3,6 +3,8 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { operationError } from "../src/app/store.helpers/operations";
+import type { WorkspaceRecord } from "../src/app/types";
 import { DESKTOP_API_OVERRIDE_KEY } from "../src/lib/desktopApiOverride";
 import { installDesktopCommandsBridge } from "./helpers/desktopCommandsBridge";
 import {
@@ -93,6 +95,7 @@ const { useAppStore } = await import("../src/app/store");
 const { persistNow } = await import("../src/app/store.helpers");
 const defaultStoreActions = {
   updateWorkspaceDefaults: useAppStore.getState().updateWorkspaceDefaults,
+  restartWorkspaceServer: useAppStore.getState().restartWorkspaceServer,
 };
 
 function setupWorkspacePageJsdom() {
@@ -1393,6 +1396,235 @@ describe("desktop workspaces page", () => {
       }
       harness.restore();
     }
+  });
+
+  for (const updateAccepted of [false, true]) {
+    test(`${updateAccepted ? "restarts after an accepted" : "does not restart after a rejected"} execution-mode change`, async () => {
+      const harness = setupWorkspacePageJsdom();
+      let root: ReturnType<typeof createRoot> | null = null;
+      const workspace: WorkspaceRecord = {
+        id: "execution-settings",
+        name: "Execution settings",
+        path: "/tmp/execution-settings",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        lastOpenedAt: "2026-09-01T00:00:00.000Z",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: false,
+        yolo: false,
+      };
+      const update = mock(async () =>
+        updateAccepted
+          ? { ok: true as const, value: undefined }
+          : { ok: false as const, error: operationError("Settings could not be saved") },
+      );
+      const restart = mock(async () => {});
+
+      try {
+        useAppStore.setState({
+          perWorkspaceSettings: true,
+          desktopFeatureFlags: {
+            ...useAppStore.getState().desktopFeatureFlags,
+            workspaceLifecycle: true,
+          },
+          workspaces: [workspace],
+          selectedWorkspaceId: workspace.id,
+          updateWorkspaceDefaults: update,
+          restartWorkspaceServer: restart,
+        });
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        root = createRoot(container);
+        await act(async () => root?.render(createElement(WorkspacesPage)));
+        const toggle = container.querySelector<HTMLButtonElement>('[aria-label="YOLO mode"]');
+        if (!toggle) throw new Error("missing execution-mode toggle");
+        await act(async () => {
+          toggle.click();
+          await flushUi();
+        });
+
+        expect(update).toHaveBeenCalledWith(workspace.id, { yolo: true });
+        expect(restart).toHaveBeenCalledTimes(updateAccepted ? 1 : 0);
+        if (updateAccepted) expect(restart).toHaveBeenCalledWith(workspace.id);
+      } finally {
+        if (root) await act(async () => root?.unmount());
+        harness.restore();
+      }
+    });
+  }
+
+  describe("profile draft ownership", () => {
+    const initialWorkspace = {
+      id: "profile-a",
+      userName: "Alex",
+      userProfile: { instructions: "Be concise", work: "Engineering", details: "" },
+    };
+    const otherWorkspace = {
+      id: "profile-b",
+      userName: "Blair",
+      userProfile: { instructions: "Explain decisions", work: "Design", details: "" },
+    };
+    let harness: ReturnType<typeof setupWorkspacePageJsdom>;
+    let root: ReturnType<typeof createRoot>;
+    let container: HTMLElement;
+
+    beforeEach(() => {
+      harness = setupWorkspacePageJsdom();
+      const element = harness.dom.window.document.getElementById("root");
+      if (!element) throw new Error("missing root");
+      container = element;
+      root = createRoot(container);
+    });
+
+    afterEach(async () => {
+      await act(async () => root.unmount());
+      harness.restore();
+    });
+
+    async function renderProfile(
+      workspace = initialWorkspace,
+      updateWorkspaceDefaults = async () => ({ ok: true }),
+    ) {
+      await act(async () => {
+        root.render(
+          createElement(WorkspaceUserProfileCard, { workspace, updateWorkspaceDefaults }),
+        );
+      });
+    }
+
+    function field(label: string) {
+      const element = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        `[aria-label="${label}"]`,
+      );
+      if (!element) throw new Error(`missing ${label} field`);
+      return element;
+    }
+
+    function saveButton() {
+      const button = container.querySelector<HTMLButtonElement>("button");
+      if (!button) throw new Error("missing profile save button");
+      return button;
+    }
+
+    async function editName(value: string) {
+      await act(async () => {
+        const input = field("User name");
+        const setter = Object.getOwnPropertyDescriptor(
+          harness.dom.window.HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        if (!setter) throw new Error("missing input value setter");
+        setter.call(input, value);
+        // React is loaded by the Bun preload before jsdom, so drive the
+        // rendered change handler as well as the DOM event.
+        const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+        if (!propsKey) throw new Error("missing React input props");
+        const props = (input as unknown as Record<string, unknown>)[propsKey] as {
+          onChange: (event: { target: typeof input; currentTarget: typeof input }) => void;
+        };
+        props.onChange({ target: input, currentTarget: input });
+        input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+      });
+      expect(saveButton().disabled).toBe(false);
+    }
+
+    for (const edited of [false, true]) {
+      test(`resets ${edited ? "edited" : "pristine"} profile fields when the workspace changes`, async () => {
+        await renderProfile();
+        if (edited) await editName("Unsaved Alex");
+
+        await renderProfile(otherWorkspace);
+
+        expect(field("User name").value).toBe("Blair");
+        expect(field("Work context").value).toBe("Design");
+        expect(field("Profile instructions").value).toBe("Explain decisions");
+        expect(saveButton().disabled).toBe(true);
+      });
+    }
+
+    test("refreshes pristine fields without replacing edits in the same workspace", async () => {
+      await renderProfile();
+      await editName("Unsaved Alex");
+
+      await renderProfile({
+        ...initialWorkspace,
+        userProfile: { ...initialWorkspace.userProfile, work: "Infrastructure" },
+      });
+
+      expect(field("User name").value).toBe("Unsaved Alex");
+      expect(field("Work context").value).toBe("Infrastructure");
+      expect(saveButton().disabled).toBe(false);
+    });
+
+    test("follows updated saved values when the same workspace has no edits", async () => {
+      await renderProfile();
+      await renderProfile({ ...initialWorkspace, userName: "Updated Alex" });
+
+      expect(field("User name").value).toBe("Updated Alex");
+      expect(saveButton().disabled).toBe(true);
+    });
+
+    test("preserves the submitted draft through optimistic rollback after a failed save", async () => {
+      let finishSave: (result: { ok: boolean }) => void = () => {};
+      const pendingSave = new Promise<{ ok: boolean }>((resolve) => {
+        finishSave = resolve;
+      });
+      const update = mock(async () => pendingSave);
+      await renderProfile(initialWorkspace, update);
+      await editName("Unsaved Alex");
+      await act(async () => saveButton().click());
+      await renderProfile({ ...initialWorkspace, userName: "Unsaved Alex" }, update);
+      await renderProfile(initialWorkspace, update);
+      await act(async () => finishSave({ ok: false }));
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(field("User name").value).toBe("Unsaved Alex");
+      expect(saveButton().disabled).toBe(false);
+      expect(container.textContent).not.toContain("Saved successfully");
+    });
+
+    test("normalizes the acknowledged draft and marks the saved profile clean", async () => {
+      let finishSave: (result: { ok: boolean }) => void = () => {};
+      const pendingSave = new Promise<{ ok: boolean }>((resolve) => {
+        finishSave = resolve;
+      });
+      const update = mock(async () => pendingSave);
+      await renderProfile(initialWorkspace, update);
+      await editName("  Updated Alex  ");
+      await act(async () => saveButton().click());
+      await renderProfile({ ...initialWorkspace, userName: "Updated Alex" }, update);
+      await act(async () => finishSave({ ok: true }));
+
+      expect(update).toHaveBeenCalledWith(
+        initialWorkspace.id,
+        {
+          userName: "Updated Alex",
+          userProfile: initialWorkspace.userProfile,
+        },
+        undefined,
+      );
+      expect(field("User name").value).toBe("Updated Alex");
+      expect(saveButton().disabled).toBe(true);
+      expect(container.textContent).toContain("Saved successfully");
+    });
+
+    test("an old workspace save cannot change the newly selected profile", async () => {
+      let finishSave: (result: { ok: boolean }) => void = () => {};
+      const pendingSave = new Promise<{ ok: boolean }>((resolve) => {
+        finishSave = resolve;
+      });
+      const update = mock(async () => pendingSave);
+      await renderProfile(initialWorkspace, update);
+      await editName("Updated Alex");
+      await act(async () => saveButton().click());
+      await renderProfile(otherWorkspace, update);
+      await act(async () => finishSave({ ok: true }));
+
+      expect(field("User name").value).toBe("Blair");
+      expect(saveButton().disabled).toBe(true);
+      expect(container.textContent).not.toContain("Saved successfully");
+    });
   });
 
   test("typing into workspace profile fields does not trigger a render loop", async () => {

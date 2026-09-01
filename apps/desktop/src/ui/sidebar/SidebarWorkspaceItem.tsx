@@ -60,6 +60,7 @@ export type SidebarWorkspaceItemProps = {
   onStartEditing: (threadId: string, currentTitle: string) => void;
   onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
   onToggleThreadList: (workspaceId: string) => void;
+  onToggleTaskList: (workspaceId: string) => void;
   onWorkspaceContextMenu: (
     event: MouseEvent<HTMLElement>,
     workspaceId: string,
@@ -67,11 +68,13 @@ export type SidebarWorkspaceItemProps = {
   ) => void;
   onWorkspaceOpenChange: (workspaceId: string, nextOpen: boolean) => void;
   reorderEnabled: boolean;
+  searchActive: boolean;
   selectedThreadId: string | null;
   selectedTaskId: string | null;
   selectThread: (threadId: string) => void;
   selectTask: (taskId: string) => void;
   showAllThreads: boolean;
+  showAllTasks: boolean;
   visibleThreads: ThreadRecord[];
   workspace: WorkspaceRecord;
   workspaceThreads: ThreadRecord[];
@@ -100,14 +103,17 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
   onStartEditing,
   onThreadContextMenu,
   onToggleThreadList,
+  onToggleTaskList,
   onWorkspaceContextMenu,
   onWorkspaceOpenChange,
   reorderEnabled,
+  searchActive,
   selectedThreadId,
   selectedTaskId,
   selectThread,
   selectTask,
   showAllThreads,
+  showAllTasks,
   visibleThreads,
   workspace,
   workspaceThreads,
@@ -231,6 +237,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
         <CollapsibleTrigger asChild>
           <Button
             aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
+            disabled={searchActive}
             className="sidebar-symbol-slot group h-6 w-6 shrink-0 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
             size="icon-sm"
             type="button"
@@ -360,7 +367,7 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                     ))}
                   </div>
 
-                  {workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
+                  {!searchActive && workspaceThreads.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
                     <Button
                       className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted transition-colors duration-200 hover:text-foreground"
                       onClick={() => onToggleThreadList(workspace.id)}
@@ -377,7 +384,10 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                       <div className="app-text-secondary px-2.5 pt-1 app-type-caption font-semibold uppercase tracking-[0.14em]">
                         Tasks
                       </div>
-                      {visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS).map((task) => (
+                      {(showAllTasks
+                        ? visibleTasks
+                        : visibleTasks.slice(0, MAX_VISIBLE_SIDEBAR_ITEMS)
+                      ).map((task) => (
                         <Button
                           key={task.id}
                           aria-current={task.id === selectedTaskId ? "page" : undefined}
@@ -405,6 +415,20 @@ export const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                           </span>
                         </Button>
                       ))}
+                      {!searchActive && visibleTasks.length > MAX_VISIBLE_SIDEBAR_ITEMS ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          aria-label={`${showAllTasks ? "Show fewer" : "Show all"} tasks in ${workspace.name}`}
+                          aria-expanded={showAllTasks}
+                          className="sidebar-lift px-2.5 py-1 text-left app-type-caption font-medium app-text-muted hover:text-foreground"
+                          onClick={() => onToggleTaskList(workspace.id)}
+                        >
+                          {showAllTasks
+                            ? "Show fewer tasks"
+                            : `Show ${visibleTasks.length - MAX_VISIBLE_SIDEBAR_ITEMS} more tasks`}
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </>

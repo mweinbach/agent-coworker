@@ -148,11 +148,11 @@ describe("FeedRow visible user messages", () => {
     expect(html).not.toContain("assistant_instructions");
   });
 
-  test("degrades malformed canvas payloads to a readable document chip", () => {
+  test("renders malformed canvas payloads as literal text", () => {
     const html = htmlFor(userMessage("malformed-canvas", '<canvas_request version="1">broken'));
-    expect(html).toContain("Document");
     expect(html).toContain('aria-label="Message from you"');
-    expect(html).not.toContain("&lt;canvas_request");
+    expect(html).toContain("&lt;canvas_request");
+    expect(html).toContain("broken");
     expect(html).not.toContain("<canvas_request version");
   });
 });
@@ -177,6 +177,30 @@ describe("resolveUserAttachmentPreviewSrc", () => {
 });
 
 describe("FeedRow message copy", () => {
+  test.each([
+    "[1,2,3]",
+    "[x]",
+    "Explain this:\n\nAttached: is a word in this example",
+    "<canvas_request>please inspect this malformed envelope",
+  ])("renders and copies ambiguous text without changing it: %s", async (text) => {
+    copyTextMock.mockClear();
+    copyTextMock.mockImplementation(async () => {});
+    const { harness, container, root } = await renderInteractive(userMessage("literal-copy", text));
+    try {
+      expect(container.querySelector('[data-slot="bubble-content"]')?.textContent).toBe(text);
+      expect(container.querySelector('[data-slot="attachment-group"]')).toBeNull();
+      const button = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Copy message"]',
+      );
+      if (!button) throw new Error("missing copy button");
+      await act(async () => button.click());
+      expect(copyTextMock).toHaveBeenCalledWith(text);
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
   test("copies the visible mixed-message text instead of persistence markup", async () => {
     copyTextMock.mockClear();
     copyTextMock.mockImplementation(async () => {});

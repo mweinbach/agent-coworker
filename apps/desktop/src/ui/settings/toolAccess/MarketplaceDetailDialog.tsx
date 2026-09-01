@@ -79,12 +79,12 @@ export function MarketplaceDetailDialog({ workspaceId }: { workspaceId: string }
     selectedId === null
       ? undefined
       : [
-          operationsByKey[operationKey("marketplace", "remove", selectedId)],
+          operationsByKey[operationKey("marketplace", "remove", selectedId, workspaceId)],
           installingKey?.startsWith("plugin:")
-            ? operationsByKey[operationKey("plugin", "install")]
+            ? operationsByKey[operationKey("plugin", "install", workspaceId)]
             : undefined,
           installingKey?.startsWith("skill:")
-            ? operationsByKey[operationKey("skill", "install")]
+            ? operationsByKey[operationKey("skill", "install", workspaceId)]
             : undefined,
         ].find((operation) => operation?.status === "pending" || operation?.status === "error");
 

@@ -160,6 +160,51 @@ describe("mobile control stores", () => {
     expect(useMemoryStore.getState().error).toBeNull();
   });
 
+  test.each(["create", "upsert"] as const)(
+    "memory forwards explicit %s mode through the shared RPC schema",
+    async (mode) => {
+      const { client, calls } = createFakeClient(() => ({
+        event: { type: "memory_list", memories: [] },
+      }));
+      setActiveCoworkJsonRpcClient(client);
+
+      await expect(
+        useMemoryStore
+          .getState()
+          .upsertMemory("workspace", "  project-notes  ", "Exact content", mode),
+      ).resolves.toBe(true);
+      expect(calls).toEqual([
+        {
+          method: "cowork/memory/upsert",
+          params: {
+            cwd: workspaceCwd,
+            scope: "workspace",
+            id: "project-notes",
+            content: "Exact content",
+            mode,
+          },
+        },
+      ]);
+    },
+  );
+
+  test("rejected create mode retains existing memories and the server collision error", async () => {
+    const existing = [{ id: "hot", content: "Existing memory" }] as never[];
+    const collision = 'Memory "hot" already exists. Edit it or use a different title.';
+    const { client, calls } = createFakeClient(() => {
+      throw new Error(collision);
+    });
+    setActiveCoworkJsonRpcClient(client);
+    useMemoryStore.setState({ entries: existing });
+
+    await expect(
+      useMemoryStore.getState().upsertMemory("workspace", " ", "New draft", "create"),
+    ).resolves.toBe(false);
+    expect(calls[0]?.params).toMatchObject({ id: "hot", mode: "create" });
+    expect(useMemoryStore.getState().entries).toBe(existing);
+    expect(useMemoryStore.getState().error).toBe(collision);
+  });
+
   test.each(["callback", "api-key"])(
     "MCP %s preserves a rejected auth challenge for retry",
     async (method) => {

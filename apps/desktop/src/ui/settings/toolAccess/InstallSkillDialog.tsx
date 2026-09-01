@@ -124,7 +124,7 @@ export function InstallSkillDialog({
   const previewSkillInstall = useAppStore((s) => s.previewSkillInstall);
   const installSkills = useAppStore((s) => s.installSkills);
   const installOperation = useAppStore(
-    (state) => state.operationsByKey[operationKey("skill", "install")],
+    (state) => state.operationsByKey[operationKey("skill", "install", workspaceId)],
   );
   const anchorWorkspace = useAppStore(
     (s) => s.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,

@@ -265,10 +265,24 @@ export function MemoryPage({
     [workspaces, selectedWorkspaceId],
   );
   const runtime = activeTarget ? workspaceRuntimeById[activeTarget.workspaceId] : null;
+  const activeTargetWorkspaceId = activeTarget?.workspaceId;
+  const activeTargetPath = activeTarget?.targetPath;
+  const controlSessionReady = Boolean(runtime?.controlSessionId);
   const operationsByKey = useAppStore((s) => s.operationsByKey);
   const saveOperation = activeTarget
     ? operationsByKey[operationKey("memory", "save", activeTarget.workspaceId)]
     : undefined;
+  const saveFeedbackOperation =
+    saveOperation?.status === "error"
+      ? {
+          ...saveOperation,
+          error: {
+            ...saveOperation.error,
+            message: "Memory not saved",
+            repairAction: saveOperation.error.message,
+          },
+        }
+      : saveOperation;
   const advancedMemoryOperation = activeTarget
     ? operationsByKey[operationKey("memory", "advanced", activeTarget.workspaceId)]
     : undefined;
@@ -439,9 +453,14 @@ export function MemoryPage({
   }, [activeTarget, requestMemories, advancedMemoryEnabled]);
 
   useEffect(() => {
-    if (!activeTarget) return;
-    void requestSkillImprovementStatus(activeTarget.workspaceId, { cwd: activeTarget.targetPath });
-  }, [activeTarget, requestSkillImprovementStatus]);
+    if (!activeTargetWorkspaceId || !activeTargetPath || !controlSessionReady) return;
+    void requestSkillImprovementStatus(activeTargetWorkspaceId, { cwd: activeTargetPath });
+  }, [
+    activeTargetWorkspaceId,
+    activeTargetPath,
+    controlSessionReady,
+    requestSkillImprovementStatus,
+  ]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -519,6 +538,7 @@ export function MemoryPage({
       draft.content.trim(),
       {
         cwd: activeTarget.targetPath,
+        mode: editingEntry ? "upsert" : "create",
       },
     );
     if (result.ok) {
@@ -1248,28 +1268,33 @@ export function MemoryPage({
                     />
                   </div>
                 </div>
-                <OperationFeedback operation={saveOperation} className="mt-3" />
               </div>
-              <DialogFooter className="shrink-0 border-t app-border-subtle px-5 py-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={closeDialog}
-                  disabled={saveOperation?.status === "pending"}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => void handleSave()}
-                  disabled={!draft.content.trim() || saveOperation?.status === "pending"}
-                >
-                  {saveOperation?.status === "pending"
-                    ? "Saving…"
-                    : editingEntry
-                      ? "Save changes"
-                      : "Add remembered fact"}
-                </Button>
+              <DialogFooter className="shrink-0 flex-col border-t app-border-subtle px-5 py-4 sm:flex-col">
+                <OperationFeedback
+                  operation={saveFeedbackOperation}
+                  className="max-h-32 overflow-y-auto"
+                />
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={closeDialog}
+                    disabled={saveOperation?.status === "pending"}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={!draft.content.trim() || saveOperation?.status === "pending"}
+                  >
+                    {saveOperation?.status === "pending"
+                      ? "Saving…"
+                      : editingEntry
+                        ? "Save changes"
+                        : "Add remembered fact"}
+                  </Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>

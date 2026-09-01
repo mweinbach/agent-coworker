@@ -71,6 +71,7 @@ export default function MemoryScreen() {
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [draftMode, setDraftMode] = useState<"create" | "upsert">("create");
   const [draftScope, setDraftScope] = useState<"workspace" | "user">("workspace");
   const [draftId, setDraftId] = useState("");
   const [draftContent, setDraftContent] = useState("");
@@ -93,11 +94,17 @@ export default function MemoryScreen() {
     setIsSaving(true);
     const revision = draftRevision.current;
     try {
-      const saved = await upsertMemory(draftScope, draftId.trim() || "hot", draftContent.trim());
+      const saved = await upsertMemory(
+        draftScope,
+        draftId.trim() || "hot",
+        draftContent.trim(),
+        draftMode,
+      );
       if (!saved || revision !== draftRevision.current) return;
       setDraftId("");
       setDraftContent("");
       setDraftScope("workspace");
+      setDraftMode("create");
       setEditorOpen(false);
     } finally {
       savingRef.current = false;
@@ -118,6 +125,7 @@ export default function MemoryScreen() {
 
   const openEditor = (entry?: (typeof entries)[number]) => {
     draftRevision.current += 1;
+    setDraftMode(entry ? "upsert" : "create");
     if (entry) {
       setDraftScope(entry.scope);
       setDraftId(entry.id);
@@ -194,6 +202,7 @@ export default function MemoryScreen() {
               if (editorOpen) {
                 draftRevision.current += 1;
                 setEditorOpen(false);
+                setDraftMode("create");
                 setDraftId("");
                 setDraftContent("");
                 return;
@@ -218,8 +227,8 @@ export default function MemoryScreen() {
 
       {editorOpen ? (
         <SectionCard
-          title="Memory editor"
-          description="Blank IDs default to hot so the current workspace cache updates immediately."
+          title={draftMode === "create" ? "Add memory" : "Edit memory"}
+          description="Blank IDs use hot. Add will not replace an existing entry; use Edit to update it."
         >
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", gap: 8 }}>

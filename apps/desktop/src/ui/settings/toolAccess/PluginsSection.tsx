@@ -109,7 +109,9 @@ export function PluginsSection({
             const operation = ["enable", "disable"]
               .map(
                 (action) =>
-                  operationsByKey[operationKey("plugin", action, plugin.scope, plugin.id)],
+                  operationsByKey[
+                    operationKey("plugin", action, plugin.scope, plugin.id, workspaceId)
+                  ],
               )
               .find(
                 (candidate) => candidate?.status === "pending" || candidate?.status === "error",

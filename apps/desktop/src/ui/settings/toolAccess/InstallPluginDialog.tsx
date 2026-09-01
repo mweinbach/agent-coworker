@@ -117,7 +117,7 @@ export function InstallPluginDialog({
   const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
   const installPlugins = useAppStore((state) => state.installPlugins);
   const installOperation = useAppStore(
-    (state) => state.operationsByKey[operationKey("plugin", "install")],
+    (state) => state.operationsByKey[operationKey("plugin", "install", workspaceId)],
   );
   const anchorWorkspace = useAppStore(
     (state) => state.workspaces.find((workspace) => workspace.id === workspaceId) ?? null,

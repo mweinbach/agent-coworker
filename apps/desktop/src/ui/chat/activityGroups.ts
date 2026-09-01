@@ -196,6 +196,12 @@ export function firstActivityTimestampMs(items: ActivityFeedItem[]): number | nu
 
 type FeedItemRenderItem = Extract<ChatRenderItem, { kind: "feed-item" }>;
 const feedItemWrapperCache = new WeakMap<FeedItem, FeedItemRenderItem>();
+type ActivityGroupRenderItem = Extract<ChatRenderItem, { kind: "activity-group" }>;
+const activityGroupCache = new WeakMap<ActivityFeedItem, ActivityGroupRenderItem>();
+const assistantActivityCache = new WeakMap<
+  Extract<FeedItem, { kind: "message" }>,
+  Extract<FeedItem, { kind: "reasoning" }>
+>();
 
 function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
   let cached = feedItemWrapperCache.get(item);
@@ -209,13 +215,36 @@ function getFeedItemWrapper(item: FeedItem): FeedItemRenderItem {
 function assistantAsActivityReasoning(
   item: Extract<FeedItem, { kind: "message" }>,
 ): Extract<FeedItem, { kind: "reasoning" }> {
-  return {
+  const cached = assistantActivityCache.get(item);
+  if (cached) return cached;
+  const reasoning: Extract<FeedItem, { kind: "reasoning" }> = {
     id: item.id,
     kind: "reasoning",
     mode: "summary",
     ts: item.ts,
     text: item.text,
   };
+  assistantActivityCache.set(item, reasoning);
+  return reasoning;
+}
+
+function reuseActivityGroup(group: ActivityGroupRenderItem): ActivityGroupRenderItem {
+  const first = group.items[0];
+  if (!first) return group;
+  const cached = activityGroupCache.get(first);
+  // Feed items are immutable. Retaining the group also retains its memoized
+  // timeline and Markdown while a different message is streaming.
+  if (
+    cached?.id === group.id &&
+    cached.items.length === group.items.length &&
+    cached.items.every((item, index) => item === group.items[index]) &&
+    cached.recoveredToolIds.length === group.recoveredToolIds.length &&
+    cached.recoveredToolIds.every((id, index) => id === group.recoveredToolIds[index])
+  ) {
+    return cached;
+  }
+  activityGroupCache.set(first, group);
+  return group;
 }
 
 function isCompactAssistantProgress(item: Extract<FeedItem, { kind: "message" }>): boolean {
@@ -412,7 +441,9 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
   }
 
   flushGroup();
-  return mergeTurnActivity(items);
+  return mergeTurnActivity(items).map((item) =>
+    item.kind === "activity-group" ? reuseActivityGroup(item) : item,
+  );
 }
 
 /**

@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -474,52 +476,69 @@ describe("desktop usage page", () => {
     expect(html).toContain("Usage");
   });
 
-  test("handles models with unavailable pricing gracefully", () => {
-    const html = renderToStaticMarkup(
-      createElement(UsagePage, {
-        aggregate: {
-          totalCostUsd: null,
-          costTrackingAvailable: false,
-          totalTokens: 2400,
-          totalPromptTokens: 2000,
-          totalCompletionTokens: 400,
-          totalCachedPromptTokens: 0,
-          totalCacheWritePromptTokens: 0,
-          totalReasoningOutputTokens: 0,
-          totalTurns: 2,
-          totalSessions: 1,
-          providers: [
-            {
-              provider: "openai",
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-5.2",
-                  turns: 2,
-                  sessions: 1,
-                  totalPromptTokens: 2000,
-                  totalCompletionTokens: 400,
-                  totalCachedPromptTokens: 0,
-                  totalCacheWritePromptTokens: 0,
-                  totalReasoningOutputTokens: 0,
-                  totalTokens: 2400,
-                  estimatedCostUsd: null,
-                },
-              ],
+  test("renders unpriced usage and collapses provider groups on the first click", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+    const document = harness.dom.window.document;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(
+          createElement(UsagePage, {
+            aggregate: {
+              totalCostUsd: null,
+              costTrackingAvailable: false,
               totalTokens: 2400,
+              totalPromptTokens: 2000,
+              totalCompletionTokens: 400,
               totalCachedPromptTokens: 0,
               totalCacheWritePromptTokens: 0,
               totalReasoningOutputTokens: 0,
               totalTurns: 2,
-              estimatedCostUsd: null,
+              totalSessions: 1,
+              providers: [
+                {
+                  provider: "openai",
+                  models: [
+                    {
+                      provider: "openai",
+                      model: "gpt-5.2",
+                      turns: 2,
+                      sessions: 1,
+                      totalPromptTokens: 2000,
+                      totalCompletionTokens: 400,
+                      totalCachedPromptTokens: 0,
+                      totalCacheWritePromptTokens: 0,
+                      totalReasoningOutputTokens: 0,
+                      totalTokens: 2400,
+                      estimatedCostUsd: null,
+                    },
+                  ],
+                  totalTokens: 2400,
+                  totalCachedPromptTokens: 0,
+                  totalCacheWritePromptTokens: 0,
+                  totalReasoningOutputTokens: 0,
+                  totalTurns: 2,
+                  estimatedCostUsd: null,
+                },
+              ],
             },
-          ],
-        },
-      } as any),
-    );
-
-    expect(html).toContain("No pricing");
-    expect(html).toContain("gpt-5.2");
-    expect(html).toContain("2.4k");
+          }),
+        );
+      });
+      expect(document.body.textContent).toContain("No pricing");
+      expect(document.body.textContent).toContain("gpt-5.2");
+      expect(document.body.textContent).toContain("2.4k");
+      const providerButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.includes("openai"),
+      );
+      if (!providerButton) throw new Error("Missing provider toggle");
+      await act(async () => providerButton.click());
+      expect(document.body.textContent).not.toContain("gpt-5.2");
+      await act(async () => providerButton.click());
+      expect(document.body.textContent).toContain("gpt-5.2");
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
   });
 });

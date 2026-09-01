@@ -8,6 +8,10 @@ import {
 } from "../lib/filePreviewResource";
 import { useFileChangeRevision } from "../lib/useFileChangeRevision";
 import { cn } from "../lib/utils";
+import {
+  PresentationPreviewNotice,
+  type PresentationPreviewNoticeProps,
+} from "./PresentationPreviewNotice";
 
 type SlidePreviewProps = {
   path: string;
@@ -27,6 +31,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
   const [slide, setSlide] = useState<{ pngBase64: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PresentationPreviewNoticeProps>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const previousRefreshTrigger = useRef(refreshTrigger);
@@ -46,6 +51,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
     const loadRevision = fileChangeRevision;
     setLoading(true);
     setError(null);
+    setNotice({});
     setSlide(null);
     setLoadedPath(null);
     void (async () => {
@@ -66,6 +72,7 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
         const response = resource.value;
         if (response.ok && response.slides.length > 0) {
           setSlide(response.slides[0] ?? null);
+          setNotice({ renderingMode: response.renderingMode, warnings: response.warnings });
         } else if (!response.ok) {
           setError(response.error.message || "Failed to render slide.");
         } else {
@@ -129,6 +136,8 @@ export function SlidePreview({ path, refreshTrigger }: SlidePreviewProps) {
           Refresh
         </Button>
       </div>
+
+      {!visibleLoading && !visibleError ? <PresentationPreviewNotice {...notice} /> : null}
 
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-md border app-border-subtle bg-muted/15 p-3">
         {visibleLoading ? (

@@ -59,6 +59,21 @@ function setupQuickChatJsdom() {
   });
 }
 
+function makeThread(id: string) {
+  return {
+    id,
+    workspaceId: "workspace-1",
+    title: id,
+    createdAt: "2026-03-24T09:00:00.000Z",
+    lastMessageAt: "2026-03-24T09:00:00.000Z",
+    status: "active" as const,
+    sessionId: null,
+    messageCount: 0,
+    lastEventSeq: 0,
+    draft: true,
+  };
+}
+
 async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -135,6 +150,123 @@ describe("quick chat shell", () => {
         root.unmount();
       });
     } finally {
+      harness.restore();
+    }
+  });
+
+  test("does not reselect the launch thread after starting a new chat", async () => {
+    const harness = setupQuickChatJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      harness.dom.reconfigure({
+        url: "http://localhost/?window=quick-chat&threadId=launch-thread",
+      });
+      const selectThread = mock(async (threadId: string) => {
+        useAppStore.setState({ selectedThreadId: threadId });
+      });
+      const newThread = mock(async () => {
+        useAppStore.setState({ selectedThreadId: "new-thread" });
+        return true;
+      });
+      resetAppStore({
+        threads: [makeThread("launch-thread"), makeThread("new-thread")],
+        selectedThreadId: "launch-thread",
+        selectThread,
+        newThread,
+      });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root?.render(
+          createElement(QuickChatShell, { init: async () => {}, ready: true, startupError: null }),
+        );
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Start a new chat"]')?.click();
+      });
+
+      expect(newThread).toHaveBeenCalledTimes(1);
+      expect(useAppStore.getState().selectedThreadId).toBe("new-thread");
+      expect(selectThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("waits for the launch thread to hydrate without creating another chat", async () => {
+    const harness = setupQuickChatJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      harness.dom.reconfigure({
+        url: "http://localhost/?window=quick-chat&threadId=launch-thread",
+      });
+      const selectThread = mock(async (threadId: string) => {
+        useAppStore.setState({ selectedThreadId: threadId });
+      });
+      const newThread = mock(async () => true);
+      resetAppStore({ selectThread, newThread });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root?.render(
+          createElement(QuickChatShell, { init: async () => {}, ready: true, startupError: null }),
+        );
+      });
+      expect(newThread).not.toHaveBeenCalled();
+
+      await act(async () => {
+        useAppStore.setState({ threads: [makeThread("launch-thread")] });
+      });
+      expect(selectThread).toHaveBeenCalledTimes(1);
+      expect(selectThread).toHaveBeenCalledWith("launch-thread");
+      expect(useAppStore.getState().selectedThreadId).toBe("launch-thread");
+    } finally {
+      if (root) await act(async () => root?.unmount());
+      harness.restore();
+    }
+  });
+
+  test("honors a new chat before the launch thread finishes hydrating", async () => {
+    const harness = setupQuickChatJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      harness.dom.reconfigure({
+        url: "http://localhost/?window=quick-chat&threadId=launch-thread",
+      });
+      const selectThread = mock(async (threadId: string) => {
+        useAppStore.setState({ selectedThreadId: threadId });
+      });
+      const newThread = mock(async () => {
+        useAppStore.setState({
+          threads: [makeThread("new-thread")],
+          selectedThreadId: "new-thread",
+        });
+        return true;
+      });
+      resetAppStore({ selectThread, newThread });
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+      await act(async () => {
+        root?.render(
+          createElement(QuickChatShell, { init: async () => {}, ready: true, startupError: null }),
+        );
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('[aria-label="Start a new chat"]')?.click();
+      });
+      await act(async () => {
+        useAppStore.setState({ threads: [makeThread("launch-thread"), makeThread("new-thread")] });
+      });
+
+      expect(newThread).toHaveBeenCalledTimes(1);
+      expect(useAppStore.getState().selectedThreadId).toBe("new-thread");
+      expect(selectThread).not.toHaveBeenCalled();
+    } finally {
+      if (root) await act(async () => root?.unmount());
       harness.restore();
     }
   });

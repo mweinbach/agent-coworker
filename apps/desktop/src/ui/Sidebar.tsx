@@ -9,6 +9,7 @@ import {
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
+  XIcon,
 } from "lucide-react";
 import {
   type MouseEvent,
@@ -110,6 +111,8 @@ export const Sidebar = memo(function Sidebar() {
     setExpandedWorkspaceSections,
     expandedThreadLists,
     setExpandedThreadLists,
+    expandedTaskLists,
+    setExpandedTaskLists,
     projectsOpen,
     setProjectsOpen,
     chatsOpen,
@@ -214,6 +217,9 @@ export const Sidebar = memo(function Sidebar() {
   }, [threads]);
 
   const threadSearchQuery = threadSearch.trim().toLowerCase();
+  const searchActive = threadSearchQuery.length > 0;
+  const visibleProjectsOpen = projectsOpen || searchActive;
+  const visibleChatsOpen = chatsOpen || searchActive;
   const threadMatchesSearch = useCallback(
     (title: string | undefined) => {
       if (!threadSearchQuery) return true;
@@ -234,7 +240,7 @@ export const Sidebar = memo(function Sidebar() {
     () => normalizeSidebarSectionOrder(sidebarSectionOrder),
     [sidebarSectionOrder],
   );
-  const sectionReorderEnabled = orderedSectionKeys.length > 1;
+  const sectionReorderEnabled = orderedSectionKeys.length > 1 && !searchActive;
 
   const toggleThreadList = useCallback(
     (workspaceId: string) => {
@@ -246,7 +252,18 @@ export const Sidebar = memo(function Sidebar() {
     [setExpandedThreadLists],
   );
 
-  const reorderEnabled = workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1;
+  const toggleTaskList = useCallback(
+    (workspaceId: string) => {
+      setExpandedTaskLists((current) => ({
+        ...current,
+        [workspaceId]: !current[workspaceId],
+      }));
+    },
+    [setExpandedTaskLists],
+  );
+
+  const reorderEnabled =
+    workspaceLifecycleEnabled && visibleProjectWorkspaces.length > 1 && !searchActive;
 
   const handleWorkspaceOpenChange = useCallback(
     (workspaceId: string, nextOpen: boolean) => {
@@ -538,26 +555,40 @@ export const Sidebar = memo(function Sidebar() {
     ],
   );
 
-  const workspaceItems = visibleProjectWorkspaces.map((workspace) => {
+  const workspaceItems = visibleProjectWorkspaces.flatMap((workspace) => {
     const active = workspace.id === activeProjectWorkspaceId;
-    const expanded = expandedWorkspaceSections[workspace.id] ?? false;
-    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter((thread) =>
-      threadMatchesSearch(thread.title),
+    const expanded = searchActive || (expandedWorkspaceSections[workspace.id] ?? false);
+    const workspaceMatchesSearch = searchActive && threadMatchesSearch(workspace.name);
+    const workspaceThreads = (threadsByWorkspaceId.get(workspace.id) ?? []).filter(
+      (thread) => workspaceMatchesSearch || threadMatchesSearch(thread.title),
     );
-    const workspaceTasks = taskSummariesByWorkspaceId[workspace.id] ?? [];
+    const workspaceTasks = tasksEnabled
+      ? (taskSummariesByWorkspaceId[workspace.id] ?? []).filter(
+          (task) => workspaceMatchesSearch || threadMatchesSearch(task.title),
+        )
+      : [];
+    if (
+      searchActive &&
+      !workspaceMatchesSearch &&
+      workspaceThreads.length === 0 &&
+      workspaceTasks.length === 0
+    ) {
+      return [];
+    }
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
       sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
-    const showAllThreads = threadSearchQuery ? true : expandedThreadLists[workspace.id] === true;
+    const showAllThreads = searchActive || expandedThreadLists[workspace.id] === true;
+    const showAllTasks = searchActive || expandedTaskLists[workspace.id] === true;
     const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
       workspaceThreads,
       showAllThreads,
       MAX_VISIBLE_SIDEBAR_ITEMS,
     );
 
-    return (
+    return [
       <SidebarWorkspaceItem
         key={workspace.id}
         active={active}
@@ -577,14 +608,17 @@ export const Sidebar = memo(function Sidebar() {
         onStartEditing={startEditing}
         onThreadContextMenu={handleThreadContextMenu}
         onToggleThreadList={toggleThreadList}
+        onToggleTaskList={toggleTaskList}
         onWorkspaceContextMenu={handleWorkspaceContextMenu}
         onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
+        searchActive={searchActive}
         selectedThreadId={sidebarSelectedThreadId}
         selectedTaskId={effectiveView === "task" ? selectedTaskId : null}
         selectTask={handleSelectTask}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
+        showAllTasks={showAllTasks}
         visibleThreads={visibleThreads}
         workspace={workspace}
         workspaceThreads={workspaceThreads}
@@ -593,9 +627,14 @@ export const Sidebar = memo(function Sidebar() {
         onGenerateMemoryForThread={generateMemoryForThread}
         onDeleteHistoryForThread={deleteThreadHistoryWithConfirm}
         onArchiveThread={archiveThreadWithConfirm}
-      />
-    );
+      />,
+    ];
   });
+  const visibleSectionKeys = orderedSectionKeys.filter(
+    (section) =>
+      !searchActive ||
+      (section === "projects" ? workspaceItems.length > 0 : oneOffChatThreads.length > 0),
+  );
 
   const chatSection = (
     <div className="flex flex-col gap-2">
@@ -608,8 +647,9 @@ export const Sidebar = memo(function Sidebar() {
             Chats
           </span>
           <Button
-            aria-expanded={chatsOpen}
-            aria-label={chatsOpen ? "Collapse chats" : "Expand chats"}
+            aria-expanded={visibleChatsOpen}
+            aria-label={visibleChatsOpen ? "Collapse chats" : "Expand chats"}
+            disabled={searchActive}
             className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setChatsOpen((open) => !open)}
@@ -618,7 +658,7 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
           >
             <ChevronDownIcon
-              className={cn("h-4 w-4 transition-transform", chatsOpen ? "" : "-rotate-90")}
+              className={cn("h-4 w-4 transition-transform", visibleChatsOpen ? "" : "-rotate-90")}
             />
           </Button>
         </div>
@@ -635,7 +675,7 @@ export const Sidebar = memo(function Sidebar() {
           </Button>
         </div>
       </div>
-      {chatsOpen ? (
+      {visibleChatsOpen ? (
         oneOffChatThreads.length === 0 ? (
           <div className="px-3 py-2 app-type-caption app-text-muted italic">No chats yet</div>
         ) : (
@@ -699,8 +739,9 @@ export const Sidebar = memo(function Sidebar() {
             Projects
           </span>
           <Button
-            aria-expanded={projectsOpen}
-            aria-label={projectsOpen ? "Collapse projects" : "Expand projects"}
+            aria-expanded={visibleProjectsOpen}
+            aria-label={visibleProjectsOpen ? "Collapse projects" : "Expand projects"}
+            disabled={searchActive}
             className="size-6 shrink-0 rounded-md bg-transparent app-text-muted hover:app-hover-wash hover:text-foreground opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-150"
             data-sidebar-section-action="true"
             onClick={() => setProjectsOpen((open) => !open)}
@@ -709,7 +750,10 @@ export const Sidebar = memo(function Sidebar() {
             variant="ghost"
           >
             <ChevronDownIcon
-              className={cn("h-4 w-4 transition-transform", projectsOpen ? "" : "-rotate-90")}
+              className={cn(
+                "h-4 w-4 transition-transform",
+                visibleProjectsOpen ? "" : "-rotate-90",
+              )}
             />
           </Button>
         </div>
@@ -728,7 +772,7 @@ export const Sidebar = memo(function Sidebar() {
         </div>
       </div>
 
-      {projectsOpen ? (
+      {visibleProjectsOpen ? (
         bootstrapLoading && projectWorkspaces.length === 0 ? (
           <div
             className="rounded-md border app-border-subtle app-fill-subtle px-4 py-4 text-center app-type-caption app-text-muted"
@@ -817,14 +861,28 @@ export const Sidebar = memo(function Sidebar() {
           New Chat
         </Button>
       ) : null}
-      <div className="px-0.5 pb-0.5">
+      <div className="relative px-0.5 pb-0.5">
         <Input
           value={threadSearch}
           onChange={(event) => setThreadSearch(event.target.value)}
-          placeholder="Search chats"
-          aria-label="Search chats"
-          className="h-8 rounded-lg app-border-subtle app-fill-subtle px-2.5 app-type-body shadow-none"
+          placeholder={tasksEnabled ? "Search chats, projects, tasks" : "Search chats and projects"}
+          aria-label={
+            tasksEnabled ? "Search chats, projects, and tasks" : "Search chats and projects"
+          }
+          className="h-8 rounded-lg app-border-subtle app-fill-subtle pl-2.5 pr-8 app-type-body shadow-none"
         />
+        {searchActive ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Clear search"
+            className="absolute right-1.5 top-1 size-6"
+            onClick={() => setThreadSearch("")}
+          >
+            <XIcon />
+          </Button>
+        ) : null}
       </div>
       {interactionCount > 0 ? (
         <Button
@@ -879,9 +937,14 @@ export const Sidebar = memo(function Sidebar() {
         axis="y"
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto pr-1"
         onReorder={handleSectionReorder}
-        values={orderedSectionKeys}
+        values={visibleSectionKeys}
       >
-        {orderedSectionKeys.map((sectionKey) => (
+        {searchActive && visibleSectionKeys.length === 0 ? (
+          <div role="status" className="px-2.5 py-4 app-type-body app-text-muted">
+            No matches for “{threadSearch.trim()}”
+          </div>
+        ) : null}
+        {visibleSectionKeys.map((sectionKey) => (
           <SidebarSectionFrame
             key={sectionKey}
             reorderEnabled={sectionReorderEnabled}

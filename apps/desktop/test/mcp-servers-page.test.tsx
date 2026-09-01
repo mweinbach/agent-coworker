@@ -365,7 +365,7 @@ describe("MCP servers settings page", () => {
     }
   });
 
-  test("edit icon opens the server editor without expanding inline details", async () => {
+  test("keeps connector edits through same-workspace refreshes and resets them for another target", async () => {
     const harness = setupJsdom({
       includeAnimationFrame: true,
       setupWindow: (dom) => {
@@ -373,6 +373,7 @@ describe("MCP servers settings page", () => {
         (dom.window.HTMLElement.prototype as { detachEvent?: () => void }).detachEvent = () => {};
       },
     });
+    const requestServers = mock(async () => {});
     let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -420,7 +421,7 @@ describe("MCP servers settings page", () => {
               mcpValidationByName: {},
             },
           },
-          requestWorkspaceMcpServers: mock(async () => {}),
+          requestWorkspaceMcpServers: requestServers,
         });
       });
 
@@ -432,7 +433,52 @@ describe("MCP servers settings page", () => {
       expect(editButton).not.toBeNull();
 
       expect(container.textContent).not.toContain("Connection");
-      expect(editButton).not.toBeNull();
+
+      await act(async () => {
+        editButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const nameInput =
+        harness.dom.window.document.querySelector<HTMLInputElement>("#mcp-connector-name");
+      expect(nameInput?.value).toBe("grep");
+      if (!nameInput) throw new Error("missing connector name input");
+
+      await act(async () => {
+        setInputValue(harness, nameInput, "updated-connector");
+      });
+      await act(async () => {
+        // Reconnect/config events replace the record even when its identity
+        // and all settings are unchanged.
+        useAppStore.setState((state) => ({
+          workspaces: state.workspaces.map((workspace) => ({ ...workspace })),
+        }));
+      });
+
+      expect(
+        harness.dom.window.document.querySelector<HTMLInputElement>("#mcp-connector-name")?.value,
+      ).toBe("updated-connector");
+      expect(requestServers).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        const workspace = useAppStore.getState().workspaces[0];
+        if (!workspace) throw new Error("missing workspace");
+        useAppStore.setState({
+          workspaces: [workspace, { ...workspace, id: "ws-2", path: "/tmp/other-workspace" }],
+          selectedWorkspaceId: "ws-2",
+        });
+      });
+
+      expect(harness.dom.window.document.querySelector('[role="dialog"]')).toBeNull();
+      expect(requestServers).toHaveBeenLastCalledWith("ws-2");
+
+      await act(async () => {
+        Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent?.includes("Add connector"))
+          ?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(
+        harness.dom.window.document.querySelector<HTMLInputElement>("#mcp-connector-name")?.value,
+      ).toBe("");
     } finally {
       if (root) {
         await act(async () => {

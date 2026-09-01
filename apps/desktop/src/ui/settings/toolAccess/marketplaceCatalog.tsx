@@ -81,7 +81,9 @@ export function AvailableSkillsGrid({
 }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const installSkills = useAppStore((s) => s.installSkills);
-  const installOperation = useAppStore((s) => s.operationsByKey[operationKey("skill", "install")]);
+  const installOperation = useAppStore(
+    (s) => s.operationsByKey[operationKey("skill", "install", workspaceId)],
+  );
 
   const skillsCatalog = runtime?.skillsCatalog ?? null;
   const skillsLoading = runtime?.skillCatalogLoading ?? false;
@@ -154,7 +156,9 @@ export function AvailablePluginsSection({
 }) {
   const runtime = useAppStore((s) => s.workspaceRuntimeById[workspaceId]);
   const installPlugins = useAppStore((s) => s.installPlugins);
-  const installOperation = useAppStore((s) => s.operationsByKey[operationKey("plugin", "install")]);
+  const installOperation = useAppStore(
+    (s) => s.operationsByKey[operationKey("plugin", "install", workspaceId)],
+  );
 
   const pluginsCatalog = runtime?.pluginsCatalog ?? null;
   const pluginPendingKeys = runtime?.pluginMutationPendingKeys ?? {};
@@ -275,7 +279,8 @@ export function MarketplaceSourcesList({ workspaceId }: { workspaceId: string })
       ) : (
         marketplaces.map((entry) => {
           const displayName = entry.displayName || entry.repo;
-          const removeOperation = operationsByKey[operationKey("marketplace", "remove", entry.id)];
+          const removeOperation =
+            operationsByKey[operationKey("marketplace", "remove", entry.id, workspaceId)];
           const removePending =
             marketplacePendingKeys[marketplaceRemovePendingKey(entry.id)] === true ||
             removeOperation?.status === "pending";

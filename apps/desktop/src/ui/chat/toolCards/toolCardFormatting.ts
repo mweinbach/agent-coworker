@@ -527,7 +527,8 @@ function buildDetailsRows(
     const exitCode = getRecordValue(result, ["exitCode"]);
     const resultCount = getRecordValue(result, ["count"]);
     const provider = getRecordValue(result, ["provider"]);
-    const error = getRecordValue(result, ["error", "message", "reason"]);
+    const error = getRecordValue(result, ["error"]);
+    const message = getRecordValue(result, ["message", "reason"]);
     const urlResults = Array.isArray(result.results) ? result.results.length : undefined;
     const places = Array.isArray(result.places) ? result.places.length : undefined;
     const widgetContextToken = getRecordValue(result, ["widgetContextToken"]);
@@ -539,6 +540,12 @@ function buildDetailsRows(
     if (widgetContextToken !== undefined) rows.push({ label: "Widget", value: "Available" });
     if (provider !== undefined) rows.push({ label: "Provider", value: toText(provider) });
     if (error !== undefined) rows.push({ label: "Error", value: truncate(toText(error), 140) });
+    else if (message !== undefined) {
+      rows.push({
+        label: state === "output-error" || state === "output-denied" ? "Error" : "Message",
+        value: truncate(toText(message), 140),
+      });
+    }
   }
 
   return rows;

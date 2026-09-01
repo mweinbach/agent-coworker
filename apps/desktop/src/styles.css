@@ -395,6 +395,27 @@ samp {
   box-shadow: none;
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppresses box shadows, including system-colored focus rings. */
+  :root
+  :where(
+    button,
+    [role="button"],
+    [role="treeitem"],
+    a,
+    input,
+    textarea,
+    select,
+    [role="separator"],
+    .app-focus-ring
+  ):focus-visible,
+  :root [data-slot="message-composer"] textarea:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
 .app-topbar {
   -webkit-app-region: drag;
   user-select: none;
@@ -793,13 +814,6 @@ samp {
   .settings-section {
     animation: none;
   }
-
-  .activity-thinking-shimmer {
-    animation: none;
-    background-image: none;
-    -webkit-text-fill-color: var(--text-muted);
-    color: var(--text-muted);
-  }
 }
 
 .activity-thinking-shimmer {
@@ -821,6 +835,14 @@ samp {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: activityThinkingShimmer 1.25s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .activity-thinking-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 
 /*

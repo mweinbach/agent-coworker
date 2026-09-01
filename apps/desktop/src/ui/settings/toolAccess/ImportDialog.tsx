@@ -425,11 +425,18 @@ export function ImportDialog({ workspaceId, kind }: { workspaceId: string; kind:
                 {items.map((item) => {
                   const globalOperation =
                     operationsByKey[
-                      operationKey("import", item.kind, item.source, item.id, "user")
+                      operationKey("import", item.kind, item.source, item.id, "user", workspaceId)
                     ];
                   const workspaceOperation =
                     operationsByKey[
-                      operationKey("import", item.kind, item.source, item.id, "workspace")
+                      operationKey(
+                        "import",
+                        item.kind,
+                        item.source,
+                        item.id,
+                        "workspace",
+                        workspaceId,
+                      )
                     ];
                   const operation = [globalOperation, workspaceOperation].find(
                     (candidate) => candidate?.status === "pending" || candidate?.status === "error",

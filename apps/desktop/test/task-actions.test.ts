@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-import type {
-  TaskArtifactDetail,
-  TaskArtifactRevision,
-  TaskQuestion,
-  TaskRecord,
+import {
+  type TaskArtifactDetail,
+  type TaskArtifactRevision,
+  type TaskQuestion,
+  type TaskRecord,
+  type TaskSummary,
+  taskSummarySchema,
 } from "../../../src/shared/tasks";
 import {
   type CreationDraftError,
@@ -105,6 +107,10 @@ function taskCreationInput() {
     decisions: [],
     reviewRequired: true,
   };
+}
+
+function taskSummaryRecord(overrides: Partial<TaskRecord> = {}): TaskSummary {
+  return taskSummarySchema.strip().parse(taskRecord(overrides));
 }
 
 function artifactDetail(overrides: Partial<TaskArtifactDetail> = {}): TaskArtifactDetail {
@@ -237,9 +243,9 @@ function createHarness(options: { workspacePath?: string } = {}) {
     newTaskWorkspaceId: null as string | null,
     newTaskWorkspaceRequestId: 0,
     view: "chat",
-    taskSummariesByWorkspaceId: {},
+    taskSummariesByWorkspaceId: {} as Record<string, TaskSummary[]>,
     tasksById: {} as Record<string, TaskRecord>,
-    taskListLoadingByWorkspaceId: {},
+    taskListLoadingByWorkspaceId: {} as Record<string, boolean>,
     taskLifecycleRequestByTaskId: {},
     taskError: null as string | null,
     taskCreationDraft: createEmptyTaskCreationDraft(0, "ws-1") as TaskCreationDraft,
@@ -314,6 +320,137 @@ describe("desktop task actions", () => {
 
   afterEach(() => {
     setRendererPlatform(null);
+  });
+
+  test("an old task read cannot replace a newer task notification", async () => {
+    const harness = createHarness();
+    harness.state.tasksById["task-1"] = taskRecord();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      started.resolve();
+      return gate.promise;
+    });
+    const read = actions.selectTask("task-1");
+    await started.promise;
+    notificationRouter?.({
+      kind: "notification",
+      method: "task/updated",
+      params: {
+        cwd: taskRecord().workspacePath,
+        task: taskRecord({ revision: 3, title: "Latest task title", status: "completed" }),
+      },
+    });
+    gate.resolve({ task: taskRecord({ revision: 2, title: "Old title" }) });
+    await read;
+
+    expect(harness.state.tasksById["task-1"]).toMatchObject({
+      revision: 3,
+      title: "Latest task title",
+      status: "completed",
+    });
+    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]?.[0]?.revision).toBe(3);
+  });
+
+  test("an old task list preserves updates received while the list was loading", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      started.resolve();
+      return gate.promise;
+    });
+    const refresh = actions.refreshTasks("ws-1");
+    await started.promise;
+    for (const task of [taskRecord({ revision: 4 }), taskRecord({ id: "task-new", revision: 1 })]) {
+      notificationRouter?.({
+        kind: "notification",
+        method: "task/updated",
+        params: { cwd: task.workspacePath, task },
+      });
+    }
+    gate.resolve({ tasks: [taskSummaryRecord({ revision: 2 })] });
+    await refresh;
+
+    const summaries = harness.state.taskSummariesByWorkspaceId["ws-1"] ?? [];
+    expect(summaries.find((task) => task.id === "task-1")?.revision).toBe(4);
+    expect(summaries.some((task) => task.id === "task-new")).toBe(true);
+  });
+
+  test("a task selection cannot steal newer navigation", async () => {
+    const harness = createHarness();
+    harness.state.tasksById["task-1"] = taskRecord();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      started.resolve();
+      return gate.promise;
+    });
+    const selection = actions.selectTask("task-1");
+    await started.promise;
+    invalidateNavigationIntent();
+    harness.state.view = "settings";
+    gate.resolve({ task: taskRecord({ revision: 3 }) });
+    await selection;
+
+    expect(harness.state.view).toBe("settings");
+    expect(harness.state.selectedThreadId).toBe("chat-1");
+    expect(harness.state.tasksById["task-1"]?.revision).toBe(3);
+    expect(harness.reconnectThread).not.toHaveBeenCalled();
+  });
+
+  test("aborting a task refresh clears the loading state it owns", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    const gate = Promise.withResolvers<Record<string, unknown>>();
+    const started = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      started.resolve();
+      return gate.promise;
+    });
+    const controller = new AbortController();
+    const refresh = actions.refreshTasks("ws-1", { signal: controller.signal });
+    await started.promise;
+    controller.abort();
+    gate.resolve({ tasks: [] });
+    await refresh;
+
+    expect(harness.state.taskListLoadingByWorkspaceId["ws-1"]).toBe(false);
+    expect(harness.state.taskError).toBeNull();
+  });
+
+  test("an old task refresh cannot clear a newer refresh loading state", async () => {
+    const harness = createHarness();
+    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+    const firstGate = Promise.withResolvers<Record<string, unknown>>();
+    const secondGate = Promise.withResolvers<Record<string, unknown>>();
+    const firstStarted = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    requestJsonRpc.mockImplementationOnce(async () => {
+      firstStarted.resolve();
+      return firstGate.promise;
+    });
+    requestJsonRpc.mockImplementationOnce(async () => {
+      secondStarted.resolve();
+      return secondGate.promise;
+    });
+    const first = actions.refreshTasks("ws-1");
+    await firstStarted.promise;
+    const second = actions.refreshTasks("ws-1");
+    await secondStarted.promise;
+    firstGate.resolve({ tasks: [taskSummaryRecord({ revision: 1 })] });
+    await first;
+    try {
+      expect(harness.state.taskListLoadingByWorkspaceId["ws-1"]).toBe(true);
+    } finally {
+      secondGate.resolve({ tasks: [taskSummaryRecord({ revision: 2 })] });
+      await second;
+    }
+    expect(harness.state.taskListLoadingByWorkspaceId["ws-1"]).toBe(false);
+    expect(harness.state.taskSummariesByWorkspaceId["ws-1"]?.[0]?.revision).toBe(2);
   });
 
   test("a delayed task is recorded without stealing newer navigation", async () => {
@@ -1072,70 +1209,92 @@ describe("desktop task actions", () => {
     ]);
   });
 
-  test("starts an artifact revision and focuses the returned task thread", async () => {
-    const harness = createHarness();
-    const actions = createTaskActions(harness.set as never, harness.get as never, deps);
-    Object.assign(harness.state, actions);
-    const focusedThread = {
-      id: "task-thread-revision",
-      taskId: "task-1",
-      sessionId: "task-session-revision",
-      title: "Revise report",
-      createdBy: "coordinator" as const,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    const nextTask = taskRecord({
-      revision: 3,
-      threads: [...taskRecord().threads, focusedThread],
-      threadCount: 2,
-    });
-    harness.state.tasksById["task-1"] = taskRecord({ revision: 2 });
-    const revision: TaskArtifactRevision = {
-      id: "revision-1",
-      taskId: "task-1",
-      artifactId: "artifact-1",
-      workItemId: "work-1",
-      taskThreadId: focusedThread.id,
-      sessionId: focusedThread.sessionId,
-      baseVersionId: "version-1",
-      priorVersionId: "version-1",
-      status: "active",
-      instruction: "Tighten the recommendation.",
-      createdAt: NOW,
-      updatedAt: NOW,
-      completedAt: null,
-    };
-    requestJsonRpc.mockImplementationOnce(async () => ({
-      task: nextTask,
-      detail: artifactDetail({ activeRevision: revision }),
-      revision,
-      thread: { id: focusedThread.sessionId },
-    }));
+  test.each([false, true])(
+    "artifact revision respects newer navigation (%s)",
+    async (navigateAway) => {
+      const harness = createHarness();
+      const actions = createTaskActions(harness.set as never, harness.get as never, deps);
+      Object.assign(harness.state, actions);
+      const focusedThread = {
+        id: "task-thread-revision",
+        taskId: "task-1",
+        sessionId: "task-session-revision",
+        title: "Revise report",
+        createdBy: "coordinator" as const,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      const nextTask = taskRecord({
+        revision: 3,
+        threads: [...taskRecord().threads, focusedThread],
+        threadCount: 2,
+      });
+      harness.state.tasksById["task-1"] = taskRecord({ revision: 2 });
+      const revision: TaskArtifactRevision = {
+        id: "revision-1",
+        taskId: "task-1",
+        artifactId: "artifact-1",
+        workItemId: "work-1",
+        taskThreadId: focusedThread.id,
+        sessionId: focusedThread.sessionId,
+        baseVersionId: "version-1",
+        priorVersionId: "version-1",
+        status: "active",
+        instruction: "Tighten the recommendation.",
+        createdAt: NOW,
+        updatedAt: NOW,
+        completedAt: null,
+      };
+      const gate = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      requestJsonRpc.mockImplementationOnce(async () => {
+        started.resolve();
+        await gate.promise;
+        return {
+          task: nextTask,
+          detail: artifactDetail({ activeRevision: revision }),
+          revision,
+          thread: { id: focusedThread.sessionId },
+        };
+      });
 
-    const detail = await actions.startTaskArtifactRevision(
-      "task-1",
-      "artifact-1",
-      "version-1",
-      "  Tighten the recommendation.  ",
-    );
+      const request = actions.startTaskArtifactRevision(
+        "task-1",
+        "artifact-1",
+        "version-1",
+        "  Tighten the recommendation.  ",
+      );
+      await started.promise;
+      if (navigateAway) {
+        invalidateNavigationIntent();
+        harness.state.view = "settings";
+      }
+      gate.resolve();
+      const detail = await request;
 
-    expect(harness.state.taskError).toBeNull();
-    expect(detail.ok && detail.value.activeRevision?.id).toBe("revision-1");
-    expect(requestJsonRpc.mock.calls.at(-1)?.[4]).toEqual({
-      taskId: "task-1",
-      artifactId: "artifact-1",
-      baseVersionId: "version-1",
-      instruction: "Tighten the recommendation.",
-      expectedRevision: 2,
-    });
-    expect(harness.state.selectedTaskId).toBe("task-1");
-    expect(harness.state.selectedThreadId).toBe(focusedThread.sessionId);
-    expect(harness.reconnectThread).toHaveBeenCalledWith(focusedThread.sessionId, undefined, {
-      skipWorkspaceSelect: true,
-      refreshSnapshot: true,
-    });
-  });
+      expect(harness.state.taskError).toBeNull();
+      expect(detail.ok && detail.value.activeRevision?.id).toBe("revision-1");
+      expect(requestJsonRpc.mock.calls.at(-1)?.[4]).toEqual({
+        taskId: "task-1",
+        artifactId: "artifact-1",
+        baseVersionId: "version-1",
+        instruction: "Tighten the recommendation.",
+        expectedRevision: 2,
+      });
+      if (navigateAway) {
+        expect(harness.state.view).toBe("settings");
+        expect(harness.state.selectedThreadId).toBe("chat-1");
+        expect(harness.reconnectThread).not.toHaveBeenCalled();
+      } else {
+        expect(harness.state.selectedTaskId).toBe("task-1");
+        expect(harness.state.selectedThreadId).toBe(focusedThread.sessionId);
+        expect(harness.reconnectThread).toHaveBeenCalledWith(focusedThread.sessionId, undefined, {
+          skipWorkspaceSelect: true,
+          refreshSnapshot: true,
+        });
+      }
+    },
+  );
 
   test("does not retry a conflicting artifact restore", async () => {
     const harness = createHarness();

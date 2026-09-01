@@ -88,6 +88,32 @@ function toPrettyJson(value: unknown): string {
   }
 }
 
+function RawToolPayload({ item }: { item: Extract<ActivityFeedItem, { kind: "tool" }> }) {
+  const argsText = useMemo(() => toPrettyJson(item.args), [item.args]);
+  const resultText = useMemo(() => toPrettyJson(item.result), [item.result]);
+  return (
+    <>
+      {argsText ? (
+        <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg app-fill-subtle p-2 app-type-caption app-text-secondary">
+          {argsText}
+        </pre>
+      ) : null}
+      {resultText ? (
+        <pre
+          className={cn(
+            "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
+            item.state === "output-error" || item.state === "output-denied"
+              ? "bg-destructive/[0.06] text-destructive"
+              : "app-fill-subtle app-text-secondary",
+          )}
+        >
+          {resultText}
+        </pre>
+      ) : null}
+    </>
+  );
+}
+
 function ToolRowSummary({
   title,
   subtitle,
@@ -181,9 +207,7 @@ function ToolTimelineNode({
       ),
     [formatting.details, formatting.subtitle],
   );
-  const argsText = useMemo(() => toPrettyJson(item.args), [item.args]);
-  const resultText = useMemo(() => toPrettyJson(item.result), [item.result]);
-  const hasRawPayload = Boolean(argsText || resultText);
+  const hasRawPayload = item.args !== undefined || item.result !== undefined;
   const hasDetails = detailRows.length > 0 || hasRawPayload || Boolean(item.approval);
   const shouldAutoExpand =
     item.state === "approval-requested" ||
@@ -260,23 +284,7 @@ function ToolTimelineNode({
               Raw input/output
             </CollapsibleTrigger>
             <CollapsibleContent>
-              {argsText ? (
-                <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg app-fill-subtle p-2 app-type-caption app-text-secondary">
-                  {argsText}
-                </pre>
-              ) : null}
-              {resultText ? (
-                <pre
-                  className={cn(
-                    "mt-1.5 max-h-48 overflow-auto rounded-lg p-2 text-xs leading-relaxed",
-                    item.state === "output-error" || item.state === "output-denied"
-                      ? "bg-destructive/[0.06] text-destructive"
-                      : "app-fill-subtle app-text-secondary",
-                  )}
-                >
-                  {resultText}
-                </pre>
-              ) : null}
+              {rawOpen ? <RawToolPayload item={item} /> : null}
             </CollapsibleContent>
           </Collapsible>
         ) : null}

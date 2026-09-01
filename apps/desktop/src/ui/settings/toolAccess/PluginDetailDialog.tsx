@@ -115,11 +115,11 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     : false;
   const selectedOperation = plugin
     ? [
-        operationsByKey[operationKey("plugin", "install")],
-        operationsByKey[operationKey("plugin", "enable", plugin.scope, plugin.id)],
-        operationsByKey[operationKey("plugin", "disable", plugin.scope, plugin.id)],
-        operationsByKey[operationKey("plugin", "delete", plugin.scope, plugin.id)],
-        operationsByKey[operationKey("plugin", "update", plugin.scope, plugin.id)],
+        operationsByKey[operationKey("plugin", "install", workspaceId)],
+        operationsByKey[operationKey("plugin", "enable", plugin.scope, plugin.id, workspaceId)],
+        operationsByKey[operationKey("plugin", "disable", plugin.scope, plugin.id, workspaceId)],
+        operationsByKey[operationKey("plugin", "delete", plugin.scope, plugin.id, workspaceId)],
+        operationsByKey[operationKey("plugin", "update", plugin.scope, plugin.id, workspaceId)],
       ].find((operation) => operation?.status === "pending" || operation?.status === "error")
     : undefined;
   const operationPending = selectedOperation?.status === "pending";
@@ -260,7 +260,12 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                           .map(
                             (action) =>
                               operationsByKey[
-                                operationKey("skill", action, installation.installationId)
+                                operationKey(
+                                  "skill",
+                                  action,
+                                  installation.installationId,
+                                  workspaceId,
+                                )
                               ],
                           )
                           .find(

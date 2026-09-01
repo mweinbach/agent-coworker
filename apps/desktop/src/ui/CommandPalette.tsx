@@ -1,4 +1,6 @@
+import { defaultFilter } from "cmdk";
 import {
+  ClipboardListIcon,
   ClipboardPlusIcon,
   FolderIcon,
   HistoryIcon,
@@ -8,10 +10,15 @@ import {
   SparklesIcon,
   SquareIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../app/store";
 import { isStandardChatThread } from "../app/threadFilters";
-import { isOneOffChatWorkspace, type ThreadRecord, type WorkspaceRecord } from "../app/types";
+import {
+  isOneOffChatWorkspace,
+  type TaskSummary,
+  type ThreadRecord,
+  type WorkspaceRecord,
+} from "../app/types";
 import {
   CommandDialog,
   CommandEmpty,
@@ -43,6 +50,16 @@ const IS_APPLE =
 const MOD = IS_APPLE ? "⌘" : "Ctrl";
 const SHIFT = IS_APPLE ? "⇧" : "Shift";
 
+function searchPaletteEntries<T>(
+  entries: T[],
+  query: string,
+  keywords: (entry: T) => string[],
+  recentLimit = 8,
+): T[] {
+  if (!query.trim()) return entries.slice(0, recentLimit);
+  return entries.filter((entry) => defaultFilter("", query, keywords(entry)) > 0);
+}
+
 /**
  * Cmd/Ctrl+K command palette. Surfaces recent chats, workspaces, settings
  * pages, and skills so power users can navigate without the mouse. All data
@@ -53,9 +70,12 @@ export const CommandPalette = memo(function CommandPalette({
   open,
   onOpenChange,
 }: CommandPaletteProps) {
+  const [searchQuery, setSearchQuery] = useState("");
   const threads = useAppStore((s) => s.threads);
   const workspaces = useAppStore((s) => s.workspaces);
+  const taskSummariesByWorkspaceId = useAppStore((s) => s.taskSummariesByWorkspaceId);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const selectedThreadBusy = useAppStore((s) =>
     s.selectedThreadId ? s.threadRuntimeById[s.selectedThreadId]?.busy === true : false,
   );
@@ -66,16 +86,15 @@ export const CommandPalette = memo(function CommandPalette({
 
   const selectThread = useAppStore((s) => s.selectThread);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const selectTask = useAppStore((s) => s.selectTask);
   const openSettings = useAppStore((s) => s.openSettings);
   const openSkills = useAppStore((s) => s.openSkills);
   const openNewTask = useAppStore((s) => s.openNewTask);
   const cancelThread = useAppStore((s) => s.cancelThread);
 
-  // Recent ordinary chat threads, newest first.
-  const recentThreads = useMemo(() => {
-    const eligible = threads.filter((thread) => isStandardChatThread(thread));
-    return [...eligible].sort((a, b) => (b.lastMessageAt > a.lastMessageAt ? 1 : -1)).slice(0, 8);
-  }, [threads]);
+  useEffect(() => {
+    if (!open) setSearchQuery("");
+  }, [open]);
 
   const workspaceNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -83,13 +102,46 @@ export const CommandPalette = memo(function CommandPalette({
     return map;
   }, [workspaces]);
 
+  const recentThreads = useMemo(() => {
+    const eligible = threads
+      .filter((thread) => isStandardChatThread(thread))
+      .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
+    return searchPaletteEntries(eligible, searchQuery, (thread) => [
+      "chat",
+      thread.title || "New chat",
+      workspaceNameById.get(thread.workspaceId) ?? "",
+    ]);
+  }, [searchQuery, threads, workspaceNameById]);
+
   // Project workspaces (exclude one-off chats) — these are the navigable ones.
   const projectWorkspaces = useMemo(
-    () => workspaces.filter((ws) => !isOneOffChatWorkspace(ws)),
-    [workspaces],
+    () =>
+      searchPaletteEntries(
+        workspaces.filter((ws) => !isOneOffChatWorkspace(ws)),
+        searchQuery,
+        (workspace) => ["project", "workspace", workspace.name],
+      ),
+    [searchQuery, workspaces],
   );
 
-  // Installed skills across the active workspace's catalog.
+  const tasks = useMemo(() => {
+    if (!tasksEnabled) return [];
+    const entries = workspaces
+      .flatMap((workspace) =>
+        (taskSummariesByWorkspaceId[workspace.id] ?? []).map((task) => ({
+          task,
+          workspaceName: workspace.name,
+        })),
+      )
+      .sort((a, b) => b.task.updatedAt.localeCompare(a.task.updatedAt));
+    return searchPaletteEntries(entries, searchQuery, ({ task, workspaceName }) => [
+      "task",
+      task.title,
+      workspaceName,
+    ]);
+  }, [searchQuery, tasksEnabled, taskSummariesByWorkspaceId, workspaces]);
+
+  // Installed skills across the known workspace catalogs.
   const skills = useMemo(() => {
     const entries: { name: string; description: string; installationId: string }[] = [];
     const seen = new Set<string>();
@@ -105,10 +157,14 @@ export const CommandPalette = memo(function CommandPalette({
           installationId: inst.installationId,
         });
       }
-      if (entries.length >= 12) break;
     }
-    return entries;
-  }, [workspaces, workspaceRuntimeById]);
+    return searchPaletteEntries(
+      entries,
+      searchQuery,
+      (skill) => ["skill", skill.name, skill.description],
+      12,
+    );
+  }, [searchQuery, workspaces, workspaceRuntimeById]);
 
   const settingsPages = useMemo(
     () =>
@@ -136,11 +192,17 @@ export const CommandPalette = memo(function CommandPalette({
     [selectWorkspace, close],
   );
 
+  const handleSelectTask = useCallback(
+    (taskId: string) => {
+      void selectTask(taskId);
+      close();
+    },
+    [selectTask, close],
+  );
+
   const handleOpenSettings = useCallback(
-    (page: string) => {
-      // Cast: SettingsPageId is a string union; the palette only ever lists
-      // ids produced by getSettingsGroups, so the cast is sound.
-      openSettings(page as Parameters<typeof openSettings>[0]);
+    (page: Parameters<typeof openSettings>[0]) => {
+      openSettings(page);
       close();
     },
     [openSettings, close],
@@ -176,7 +238,11 @@ export const CommandPalette = memo(function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Search chats, workspaces, settings, skills…" />
+      <CommandInput
+        value={searchQuery}
+        onValueChange={setSearchQuery}
+        placeholder="Search chats, projects, tasks, settings, skills…"
+      />
       <CommandList>
         <CommandEmpty>No results.</CommandEmpty>
 
@@ -214,7 +280,7 @@ export const CommandPalette = memo(function CommandPalette({
         {recentThreads.length > 0 ? (
           <>
             <CommandSeparator />
-            <CommandGroup heading="Recent chats">
+            <CommandGroup heading={searchQuery.trim() ? "Chats" : "Recent chats"}>
               {recentThreads.map((thread) => (
                 <ThreadCommandItem
                   key={thread.id}
@@ -228,11 +294,28 @@ export const CommandPalette = memo(function CommandPalette({
           </>
         ) : null}
 
+        {tasks.length > 0 ? (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading={searchQuery.trim() ? "Tasks" : "Recent tasks"}>
+              {tasks.map(({ task, workspaceName }) => (
+                <TaskCommandItem
+                  key={task.id}
+                  task={task}
+                  workspaceName={workspaceName}
+                  isSelected={task.id === selectedTaskId}
+                  onSelect={handleSelectTask}
+                />
+              ))}
+            </CommandGroup>
+          </>
+        ) : null}
+
         {projectWorkspaces.length > 0 ? (
           <>
             <CommandSeparator />
             <CommandGroup heading="Workspaces">
-              {projectWorkspaces.slice(0, 8).map((ws) => (
+              {projectWorkspaces.map((ws) => (
                 <WorkspaceCommandItem key={ws.id} workspace={ws} onSelect={handleSelectWorkspace} />
               ))}
             </CommandGroup>
@@ -265,7 +348,8 @@ export const CommandPalette = memo(function CommandPalette({
               {skills.map((skill) => (
                 <CommandItem
                   key={skill.installationId}
-                  value={`skill ${skill.name}`}
+                  value={`skill ${skill.installationId}`}
+                  keywords={[skill.name, skill.description]}
                   onSelect={handleOpenSkills}
                 >
                   <SparklesIcon />
@@ -293,7 +377,11 @@ const ThreadCommandItem = memo(function ThreadCommandItem({
 }) {
   const title = thread.title || "New chat";
   return (
-    <CommandItem value={`thread ${title}`} onSelect={() => onSelect(thread.id)}>
+    <CommandItem
+      value={`thread ${thread.id}`}
+      keywords={["chat", title, workspaceName ?? ""]}
+      onSelect={() => onSelect(thread.id)}
+    >
       <HistoryIcon />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {workspaceName ? (
@@ -301,6 +389,33 @@ const ThreadCommandItem = memo(function ThreadCommandItem({
           {workspaceName}
         </span>
       ) : null}
+      {isSelected ? <span className="sr-only">(current)</span> : null}
+    </CommandItem>
+  );
+});
+
+const TaskCommandItem = memo(function TaskCommandItem({
+  task,
+  workspaceName,
+  isSelected,
+  onSelect,
+}: {
+  task: TaskSummary;
+  workspaceName: string;
+  isSelected: boolean;
+  onSelect: (taskId: string) => void;
+}) {
+  return (
+    <CommandItem
+      value={`task ${task.id}`}
+      keywords={[task.title, workspaceName]}
+      onSelect={() => onSelect(task.id)}
+    >
+      <ClipboardListIcon />
+      <span className="min-w-0 flex-1 truncate">{task.title}</span>
+      <span className="ml-auto max-w-[40%] truncate text-xs text-muted-foreground">
+        {workspaceName}
+      </span>
       {isSelected ? <span className="sr-only">(current)</span> : null}
     </CommandItem>
   );
@@ -314,7 +429,11 @@ const WorkspaceCommandItem = memo(function WorkspaceCommandItem({
   onSelect: (workspaceId: string) => void;
 }) {
   return (
-    <CommandItem value={`workspace ${workspace.name}`} onSelect={() => onSelect(workspace.id)}>
+    <CommandItem
+      value={`workspace ${workspace.id}`}
+      keywords={["project", workspace.name]}
+      onSelect={() => onSelect(workspace.id)}
+    >
       <FolderIcon />
       <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
     </CommandItem>

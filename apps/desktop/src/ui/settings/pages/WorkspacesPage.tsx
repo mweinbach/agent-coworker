@@ -752,12 +752,34 @@ function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspa
   };
 }
 
-export function WorkspaceUserProfileCard({
+type WorkspaceUserProfileDraft = ReturnType<typeof buildUserProfileDraft>;
+
+function profileDraftsMatch(left: WorkspaceUserProfileDraft, right: WorkspaceUserProfileDraft) {
+  return (
+    left.userName === right.userName &&
+    left.instructions === right.instructions &&
+    left.work === right.work &&
+    left.details === right.details
+  );
+}
+
+export function WorkspaceUserProfileCard(props: WorkspaceUserProfileCardProps) {
+  return (
+    <WorkspaceUserProfileEditor
+      key={`${props.workspace.id}:${props.scopedToTarget ? "target" : "settings"}`}
+      {...props}
+    />
+  );
+}
+
+function WorkspaceUserProfileEditor({
   workspace,
   updateWorkspaceDefaults,
   scopedToTarget = false,
 }: WorkspaceUserProfileCardProps) {
-  const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
+  const savedProfile = useMemo(() => buildUserProfileDraft(workspace), [workspace]);
+  const [draft, setDraft] = useState(savedProfile);
+  const baselineRef = useRef(savedProfile);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const operation = useAppStore(
@@ -768,52 +790,34 @@ export function WorkspaceUserProfileCard({
   );
   const operationPending = operation?.status === "pending";
 
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-  const savedProfileKey = useMemo(
-    () =>
-      `${workspace.id}\u0000${workspace.userName ?? ""}\u0000${
-        normalizeWorkspaceUserProfile(workspace.userProfile).instructions
-      }\u0000${normalizeWorkspaceUserProfile(workspace.userProfile).work}\u0000${
-        normalizeWorkspaceUserProfile(workspace.userProfile).details
-      }`,
-    [workspace],
-  );
-  const savedProfileDraftRef = useRef(buildUserProfileDraft(workspace));
-  const savedProfileKeyRef = useRef(savedProfileKey);
-  if (savedProfileKeyRef.current !== savedProfileKey) {
-    savedProfileKeyRef.current = savedProfileKey;
-    savedProfileDraftRef.current = buildUserProfileDraft(workspace);
-  }
-
   useEffect(() => {
-    // Only re-seed the draft when the saved profile content (or workspace id)
-    // actually changes. Unrelated workspace object-identity churn (provider
-    // status refreshes, remote defaults updates) must not wipe in-progress
-    // typing. If the user has unsaved edits, those always win.
-    const profileKey = savedProfileKey;
-    const next = savedProfileDraftRef.current;
-    const current = draftRef.current;
-    const isDirty =
-      current.userName !== next.userName ||
-      current.instructions !== next.instructions ||
-      current.work !== next.work ||
-      current.details !== next.details;
-    if (isDirty) return;
-    savedProfileKeyRef.current = profileKey;
-    setDraft(next);
+    // A pending save may publish optimistic data and then roll it back. Keep
+    // the accepted baseline until it settles so failures cannot erase edits.
+    if (saving || profileDraftsMatch(savedProfile, baselineRef.current)) return;
+    const previous = baselineRef.current;
+    baselineRef.current = savedProfile;
+    setDraft((current) => ({
+      userName: current.userName === previous.userName ? savedProfile.userName : current.userName,
+      instructions:
+        current.instructions === previous.instructions
+          ? savedProfile.instructions
+          : current.instructions,
+      work: current.work === previous.work ? savedProfile.work : current.work,
+      details: current.details === previous.details ? savedProfile.details : current.details,
+    }));
     setSaveSuccess(false);
-  }, [savedProfileKey]);
+  }, [savedProfile, saving]);
 
-  const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
-  const isDirty =
-    draft.userName !== (workspace.userName ?? "") ||
-    draft.instructions !== currentProfile.instructions ||
-    draft.work !== currentProfile.work ||
-    draft.details !== currentProfile.details;
+  const isDirty = !profileDraftsMatch(draft, savedProfile);
 
   const handleSave = async () => {
-    if (!isDirty || operationPending) return;
+    if (!isDirty || saving || operationPending) return;
+    const submitted = {
+      userName: draft.userName.trim(),
+      instructions: draft.instructions.trim(),
+      work: draft.work.trim(),
+      details: draft.details.trim(),
+    };
     setSaving(true);
     setSaveSuccess(false);
 
@@ -821,11 +825,11 @@ export function WorkspaceUserProfileCard({
       const result = await updateWorkspaceDefaults(
         workspace.id,
         {
-          userName: draft.userName.trim(),
+          userName: submitted.userName,
           userProfile: {
-            instructions: draft.instructions.trim(),
-            work: draft.work.trim(),
-            details: draft.details.trim(),
+            instructions: submitted.instructions,
+            work: submitted.work,
+            details: submitted.details,
           },
         },
         scopedToTarget ? { scope: "target" } : undefined,
@@ -833,8 +837,9 @@ export function WorkspaceUserProfileCard({
       if (result && typeof result === "object" && "ok" in result && result.ok === false) {
         return;
       }
+      baselineRef.current = submitted;
+      setDraft(submitted);
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
     } finally {
       setSaving(false);
     }
@@ -1279,11 +1284,10 @@ export function WorkspacesPage({ surface = "defaults" }: { surface?: WorkspacesP
                         defaultAction: "cancel",
                       });
                       if (confirmed) {
-                        void updateWorkspaceDefaults(ws.id, { yolo: next }).then(() => {
-                          if (workspaceLifecycleEnabled) {
-                            return restartWorkspaceServer(ws.id);
-                          }
-                        });
+                        const result = await updateWorkspaceDefaults(ws.id, { yolo: next });
+                        if (result.ok && workspaceLifecycleEnabled) {
+                          await restartWorkspaceServer(ws.id);
+                        }
                       }
                     }}
                   />

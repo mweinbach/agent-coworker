@@ -518,13 +518,13 @@ const LiveTimerLabel = memo(function LiveTimerLabel(props: {
   const displayElapsedLabel = liveElapsedLabel ?? summaryElapsedLabel;
   const agentsSuffix = formatActiveAgentsSuffix(activeAgentLabels);
 
-  if (hasUnrecoveredIssue) {
-    return displayElapsedLabel ? `Couldn't finish after ${displayElapsedLabel}` : "Couldn't finish";
-  }
-
   if (live) {
     const base = displayElapsedLabel ? `Working for ${displayElapsedLabel}` : "Working";
     return `${base}${agentsSuffix}`;
+  }
+
+  if (hasUnrecoveredIssue) {
+    return displayElapsedLabel ? `Couldn't finish after ${displayElapsedLabel}` : "Couldn't finish";
   }
 
   return displayElapsedLabel ? `Worked for ${displayElapsedLabel}` : "Worked";
@@ -682,7 +682,9 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: {
         ) : null}
         {hasUnrecoveredIssue ? (
           <span className="sr-only" role="alert">
-            Cowork could not finish this activity.
+            {props.live
+              ? "A tool failed. Cowork is still working."
+              : "Cowork could not finish this activity."}
           </span>
         ) : null}
       </>

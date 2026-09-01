@@ -235,7 +235,7 @@ export function UsagePage(props: UsagePageProps = {}) {
 
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const toggleProvider = (provider: string) => {
-    setExpandedProviders((prev) => ({ ...prev, [provider]: !prev[provider] }));
+    setExpandedProviders((prev) => ({ ...prev, [provider]: !(prev[provider] ?? true) }));
   };
 
   const [parent] = useAutoAnimate();
@@ -357,6 +357,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                   {/* Provider header */}
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-colors hover:bg-card/60"
                     onClick={() => toggleProvider(group.provider)}
                   >

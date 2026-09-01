@@ -1,6 +1,6 @@
-import { ChevronRightIcon, LinkIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, LinkIcon } from "lucide-react";
 import { memo, useCallback, useRef, useState } from "react";
-import { Button } from "../../components/ui/button";
+import { AccessibleIconButton, Button } from "../../components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
@@ -12,15 +12,6 @@ export type SourceItem = {
   url: string;
   title?: string;
 };
-
-function faviconUrl(siteUrl: string): string {
-  try {
-    const { hostname } = new URL(siteUrl);
-    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
-  } catch {
-    return "";
-  }
-}
 
 function displayDomain(siteUrl: string): string {
   try {
@@ -60,30 +51,17 @@ function displayTitle(source: SourceItem): string {
   return titleFromUrlSlug(source.url) ?? displayDomain(source.url);
 }
 
-function FaviconImage({ url, className }: { url: string; className?: string }) {
-  const [failed, setFailed] = useState(false);
-  const src = faviconUrl(url);
-
-  if (!src || failed) {
-    return (
-      <div
-        className={cn(
-          "app-type-label flex items-center justify-center rounded bg-muted uppercase text-muted-foreground",
-          className,
-        )}
-      >
-        {displayDomain(url).charAt(0)}
-      </div>
-    );
-  }
-
+function SourceIcon({ url, className }: { url: string; className?: string }) {
   return (
-    <img
-      src={src}
-      alt=""
-      className={cn("rounded object-contain", className)}
-      onError={() => setFailed(true)}
-    />
+    <div
+      aria-hidden="true"
+      className={cn(
+        "app-type-label flex items-center justify-center rounded bg-muted uppercase text-muted-foreground",
+        className,
+      )}
+    >
+      {displayDomain(url).charAt(0)}
+    </div>
   );
 }
 
@@ -105,7 +83,7 @@ function SourceCard({
       className="h-auto w-44 shrink-0 justify-start gap-2.5 rounded-lg border app-border-subtle bg-card px-3 py-2.5 text-left shadow-none transition-colors hover:app-border-default hover:bg-accent/50"
       onClick={() => onOpenSource?.(source.url)}
     >
-      <FaviconImage url={source.url} className="size-5 shrink-0" />
+      <SourceIcon url={source.url} className="size-5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium text-foreground">{title}</div>
         <div className="app-type-caption truncate text-muted-foreground">{domain}</div>
@@ -158,58 +136,28 @@ function SourcesCarouselBody({
       </div>
 
       {canScrollLeft ? (
-        <Button
+        <AccessibleIconButton
           type="button"
           variant="ghost"
           size="icon-sm"
+          label="Previous sources"
           className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
           onClick={() => scrollBy(-180)}
         >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 12 12"
-            fill="none"
-            className="text-foreground"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path
-              d="M7.5 2.5L4 6l3.5 3.5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </Button>
+          <ChevronLeftIcon className="size-3 text-foreground" aria-hidden />
+        </AccessibleIconButton>
       ) : null}
       {canScrollRight ? (
-        <Button
+        <AccessibleIconButton
           type="button"
           variant="ghost"
           size="icon-sm"
+          label="Next sources"
           className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
           onClick={() => scrollBy(180)}
         >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 12 12"
-            fill="none"
-            className="text-foreground"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path
-              d="M4.5 2.5L8 6l-3.5 3.5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </Button>
+          <ChevronRightIcon className="size-3 text-foreground" aria-hidden />
+        </AccessibleIconButton>
       ) : null}
     </div>
   );

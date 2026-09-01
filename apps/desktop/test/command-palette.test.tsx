@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { TaskSummary } from "../src/app/types";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -53,6 +54,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
     },
     selectThread: mock(() => Promise.resolve()),
     selectWorkspace: mock(() => Promise.resolve()),
+    selectTask: mock(() => Promise.resolve()),
     openSettings: mock(() => {}),
     openSkills: mock(() => Promise.resolve()),
     openNewChatLanding: mock(() => Promise.resolve()),
@@ -68,6 +70,56 @@ function setupPaletteJsdom() {
   // cmdk calls scrollIntoView on the selected item; jsdom doesn't implement it.
   harness.dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   return harness;
+}
+
+function makeWorkspace(index: number) {
+  return {
+    id: `ws-${index}`,
+    name: `Workspace ${index}`,
+    path: `/tmp/workspace-${index}`,
+    workspaceKind: "project" as const,
+    createdAt: "2026-03-24T00:00:00.000Z",
+    lastOpenedAt: "2026-03-24T00:00:00.000Z",
+    defaultEnableMcp: true,
+    defaultBackupsEnabled: true,
+    yolo: false,
+  };
+}
+
+function makeThread(index: number) {
+  const timestamp = `2026-03-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`;
+  return {
+    id: `thread-${index}`,
+    workspaceId: `ws-${index}`,
+    title: `Chat ${index}`,
+    createdAt: timestamp,
+    lastMessageAt: timestamp,
+    status: "active" as const,
+    sessionId: `session-${index}`,
+    messageCount: 1,
+    lastEventSeq: 1,
+  };
+}
+
+function makeTask(index: number): TaskSummary {
+  const timestamp = `2026-03-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`;
+  return {
+    id: `task-${index}`,
+    workspacePath: "/tmp/workspace-0",
+    title: `Task ${index}`,
+    objective: "Complete the task",
+    status: "draft",
+    revision: 0,
+    reviewRequired: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    threadCount: 1,
+    completedWorkItemCount: 0,
+    totalWorkItemCount: 1,
+    activeBlockerCount: 0,
+    pendingQuestionCount: 0,
+    blockingQuestionCount: 0,
+  };
 }
 
 describe("CommandPalette", () => {
@@ -87,6 +139,105 @@ describe("CommandPalette", () => {
     });
     useAppStore.setState(defaultStoreState);
     harness.restore();
+  });
+
+  async function search(value: string) {
+    const input = harness.dom.window.document.querySelector<HTMLInputElement>(
+      "[data-slot='command-input']",
+    );
+    if (!input) throw new Error("missing command input");
+    await act(async () => {
+      input.focus();
+      const setValue = Object.getOwnPropertyDescriptor(
+        harness.dom.window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      if (!setValue) throw new Error("missing input value setter");
+      setValue.call(input, value);
+      input.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+      input.dispatchEvent(new harness.dom.window.KeyboardEvent("keyup", { bubbles: true }));
+    });
+    return input;
+  }
+
+  test("finds older chats and projects outside the initial recent lists", async () => {
+    const workspaces = Array.from({ length: 12 }, (_, index) => makeWorkspace(index));
+    workspaces[11] = { ...workspaces[11]!, name: "Migration archive project" };
+    const threads = Array.from({ length: 12 }, (_, index) => makeThread(index));
+    threads[0] = { ...threads[0]!, title: "Migration archive chat" };
+    resetAppStore({ threads, workspaces });
+    await act(async () => {
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
+    });
+
+    await search("Migration archive");
+
+    const body = harness.dom.window.document.body;
+    expect(body.textContent).toContain("Migration archive chat");
+    expect(body.textContent).toContain("Migration archive project");
+    expect(body.textContent).not.toContain("Workspace 1");
+  });
+
+  test("selects duplicate chat titles independently with the keyboard", async () => {
+    const selectThread = mock(async (_threadId: string) => {});
+    resetAppStore({
+      workspaces: [makeWorkspace(0), makeWorkspace(1)],
+      threads: [
+        { ...makeThread(0), title: "Repeated chat title" },
+        { ...makeThread(1), title: "Repeated chat title" },
+      ],
+      selectThread,
+    });
+    await act(async () => {
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
+    });
+    const input = await search("Repeated chat title");
+    await act(async () => {
+      input.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    await act(async () => {
+      input.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+
+    expect(selectThread).toHaveBeenCalledWith("thread-0");
+    expect(
+      harness.dom.window.document.querySelectorAll(
+        "[data-slot='command-item'][aria-selected='true']",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("searches every enabled task and selects it without opening its internal chat", async () => {
+    const tasks = Array.from({ length: 12 }, (_, index) => makeTask(index));
+    tasks[0] = { ...tasks[0]!, title: "Older launch checklist" };
+    const selectTask = mock(async (_taskId: string) => {});
+    const selectThread = mock(async (_threadId: string) => {});
+    resetAppStore({
+      workspaces: [makeWorkspace(0)],
+      taskSummariesByWorkspaceId: { "ws-0": tasks },
+      desktopFeatureFlags: { ...defaultStoreState.desktopFeatureFlags, tasks: true },
+      selectTask,
+      selectThread,
+    });
+    await act(async () => {
+      root.render(createElement(CommandPalette, { open: true, onOpenChange: () => {} }));
+    });
+    const input = await search("Older launch checklist");
+    expect(harness.dom.window.document.body.textContent).toContain("Older launch checklist");
+    await act(async () => {
+      input.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(selectTask).toHaveBeenCalledWith("task-0");
+    expect(selectThread).not.toHaveBeenCalled();
   });
 
   test("renders recent threads and workspaces when open", () => {

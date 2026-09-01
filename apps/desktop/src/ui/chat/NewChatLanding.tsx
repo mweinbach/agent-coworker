@@ -200,6 +200,11 @@ export function NewChatLanding() {
   const readinessPending =
     !readinessBlocked &&
     (readiness.result?.checks.some((entry) => entry.status === "pending") ?? false);
+  const showReadinessNotice =
+    (readiness.checking && !readiness.result) ||
+    Boolean(readinessRepairError) ||
+    readinessBlocked ||
+    readinessPending;
   // Startup work is queued server-side by `turn/start`, so a pending check must
   // not gate the send. `checking` is intentionally not part of this: the pending
   // recheck loop toggles it every second and would flicker the submit button.
@@ -436,12 +441,15 @@ export function NewChatLanding() {
   }, [targetWorkspace]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col items-center justify-center overflow-hidden bg-panel px-5 py-10">
+    <div
+      data-slot="new-chat-landing"
+      className="relative flex h-full min-h-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-panel px-5 py-6"
+    >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute left-1/2 top-[42%] size-[min(44rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--surface-landing-accent-glow)]"
+        className="pointer-events-none absolute left-1/2 top-[42%] aspect-square w-[min(44rem,92%)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[image:var(--surface-landing-accent-glow)]"
       />
-      <div className="relative flex w-full max-w-[52rem] flex-col items-center gap-9">
+      <div className="relative my-auto flex w-full max-w-[52rem] shrink-0 flex-col items-center gap-6">
         <header className="flex max-w-[34rem] flex-col items-center gap-3 text-center">
           <h1 className="text-balance text-[2.125rem] font-medium leading-[1.08] tracking-[-0.035em] text-foreground sm:text-[2.75rem]">
             What should we work on?
@@ -450,41 +458,46 @@ export function NewChatLanding() {
             Describe a task, idea, or question — Cowork will take it from here.
           </p>
         </header>
-        <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
-          {starterPrompts.map((starter) => (
-            <Button
-              key={starter.id}
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={composerLocked}
-              className="h-8 rounded-full app-border-subtle bg-background/70 px-3 app-type-caption font-medium app-text-muted transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:app-border-default hover:bg-background hover:text-foreground"
-              onClick={() => {
-                updateComposerText(starter.prompt);
-                requestAnimationFrame(() => textareaRef.current?.focus());
-              }}
-            >
-              {starter.label}
-            </Button>
-          ))}
-        </div>
-        <div className="w-full max-w-[42rem]">
-          <CreationReadinessNotice
-            checking={readiness.checking}
-            error={readinessRepairError ?? readiness.error}
-            result={readiness.result}
-            repairing={repairingReadiness}
-            onRepair={(action) => void repairReadiness(action)}
-            onRetry={readiness.refresh}
-          />
-        </div>
+        {!composerText && !hasPendingAttachments ? (
+          <div className="flex w-full max-w-[42rem] flex-wrap items-center justify-center gap-2">
+            {starterPrompts.map((starter) => (
+              <Button
+                key={starter.id}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={composerLocked}
+                className="h-8 rounded-full app-border-subtle bg-background/70 px-3 app-type-caption font-medium app-text-muted transition-[transform,background-color,color,border-color] duration-150 hover:-translate-y-px hover:app-border-default hover:bg-background hover:text-foreground"
+                onClick={() => {
+                  updateComposerText(starter.prompt);
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+              >
+                {starter.label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        {showReadinessNotice ? (
+          <div className="w-full max-w-[42rem]">
+            <CreationReadinessNotice
+              checking={readiness.checking}
+              error={readinessRepairError ?? readiness.error}
+              result={readiness.result}
+              repairing={repairingReadiness}
+              onRepair={(action) => void repairReadiness(action)}
+              onRetry={readiness.refresh}
+            />
+          </div>
+        ) : null}
         <MessageComposerRoot
-          className="w-full max-w-[42rem] rounded-composer app-border-subtle bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
+          className="w-full max-w-[42rem] flex-none rounded-composer app-border-subtle bg-background/94 app-shadow-overlay backdrop-blur-md transition-shadow focus-within:shadow-[var(--shadow-popover)]"
           fileDrop={submitting ? undefined : { onFiles: ingestAttachmentFiles }}
         >
           <MessageComposerAttachments
             attachments={pendingAttachments}
             onRemove={removeAttachment}
+            disabled={composerLocked}
           />
           <MessageComposerSubmissionNotice
             submission={composerSubmission}
@@ -529,6 +542,7 @@ export function NewChatLanding() {
                 catalog={mentionCatalog}
                 ariaLabel="New chat message"
                 textareaClassName="min-h-[5.5rem] app-type-body-lg placeholder:text-muted-foreground/75"
+                textareaScrollClassName="max-h-[min(18rem,45dvh)] overflow-y-auto"
                 onPasteFiles={(files) => void ingestAttachmentFiles(files)}
                 onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
                   const isComposing = isImeComposing(event.nativeEvent);

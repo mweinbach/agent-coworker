@@ -139,6 +139,13 @@ const fetchSkills = mock(async () => {});
 const fetchBackups = mock(async () => {});
 const refreshProviders = mock(async () => {});
 const applyDefaults = mock(async (..._args: any[]) => false);
+const configuredMemory = {
+  id: "hot",
+  scope: "workspace" as const,
+  content: "Existing memory remains unchanged",
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+};
 const configuredMcp = {
   name: "docs",
   transport: {
@@ -251,15 +258,48 @@ async function mount(Screen: () => ReactNode) {
 }
 
 describe("mobile workspace editor recovery", () => {
-  test.each(["ios", "android"] as const)("%s retains failed memory drafts", async (os) => {
-    platform = os;
-    const screen = await mount(MemoryScreen);
-    await screen.press("Add memory entry");
-    await screen.change("Memory content", "  Keep this memory\n");
-    await screen.press("Save memory entry");
-    expect(saveMemory).toHaveBeenCalledTimes(1);
-    expect(screen.input("Memory content").value).toBe("  Keep this memory\n");
-  });
+  test.each(["ios", "android"] as const)(
+    "%s retains duplicate Add memory drafts and shows the server collision error",
+    async (os) => {
+      platform = os;
+      const collision = 'Memory "hot" already exists. Edit it or use a different title.';
+      useMemoryStore.setState({ entries: [configuredMemory] });
+      saveMemory.mockImplementation(async () => {
+        useMemoryStore.setState({ error: collision });
+        return false;
+      });
+      const screen = await mount(MemoryScreen);
+      await screen.press("Add memory entry");
+      await screen.change("Memory entry ID", "  hot  ");
+      await screen.change("Memory content", "  Keep this memory\n");
+      await screen.press("Save memory entry");
+      expect(saveMemory).toHaveBeenCalledTimes(1);
+      expect(saveMemory).toHaveBeenCalledWith("workspace", "hot", "Keep this memory", "create");
+      expect(screen.input("Memory entry ID").value).toBe("  hot  ");
+      expect(screen.input("Memory content").value).toBe("  Keep this memory\n");
+      expect(screen.container.textContent).toContain(collision);
+      expect(screen.container.textContent).toContain(configuredMemory.content);
+    },
+  );
+
+  test.each(["ios", "android"] as const)(
+    "%s explicitly updates existing memory and resets the next Add to create-only",
+    async (os) => {
+      platform = os;
+      useMemoryStore.setState({ entries: [configuredMemory] });
+      saveMemory.mockImplementation(async () => true);
+      const screen = await mount(MemoryScreen);
+      await screen.press("Edit hot");
+      await screen.change("Memory content", "Edited memory");
+      await screen.press("Save memory entry");
+      expect(saveMemory).toHaveBeenLastCalledWith("workspace", "hot", "Edited memory", "upsert");
+
+      await screen.press("Add memory entry");
+      await screen.change("Memory content", "New memory");
+      await screen.press("Save memory entry");
+      expect(saveMemory).toHaveBeenLastCalledWith("workspace", "hot", "New memory", "create");
+    },
+  );
 
   test("does not erase a newer memory edit when an earlier save succeeds", async () => {
     let resolveSave: (saved: boolean) => void = () => {};

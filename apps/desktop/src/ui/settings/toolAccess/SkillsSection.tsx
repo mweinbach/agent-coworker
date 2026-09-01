@@ -142,7 +142,9 @@ export function SkillsSection({
             const operation = ["enable", "disable"]
               .map(
                 (action) =>
-                  operationsByKey[operationKey("skill", action, installation.installationId)],
+                  operationsByKey[
+                    operationKey("skill", action, installation.installationId, workspaceId)
+                  ],
               )
               .find(
                 (candidate) => candidate?.status === "pending" || candidate?.status === "error",

@@ -238,4 +238,23 @@ describe("tool card formatting ask summaries", () => {
     expect(formatToolCard("commandExecution", undefined, "", "output-available").subtitle).toBe("");
     expect(formatToolCard("todoWrite", undefined, undefined, "output-available").subtitle).toBe("");
   });
+
+  test("labels successful tool messages as messages, not errors", () => {
+    const result = formatToolCard(
+      "saveApiKey",
+      undefined,
+      { message: "API key saved." },
+      "output-available",
+    );
+    expect(result.details).toContainEqual({ label: "Message", value: "API key saved." });
+    expect(result.details.some((row) => row.label === "Error")).toBe(false);
+  });
+
+  test.each(["output-error", "output-denied"] as const)(
+    "keeps message-based failure details for %s",
+    (state) => {
+      const result = formatToolCard("read", undefined, { message: "Access unavailable" }, state);
+      expect(result.details).toContainEqual({ label: "Error", value: "Access unavailable" });
+    },
+  );
 });

@@ -511,6 +511,75 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("rounded-xl border border-border/32");
   });
 
+  test("keeps a live turn working when a tool fails without hiding the failure", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        live: true,
+        liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+        items: [
+          {
+            id: "failed-read",
+            kind: "tool",
+            ts: "2024-01-01T00:00:00.000Z",
+            name: "read",
+            state: "output-error",
+            result: { error: "missing file" },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    expect(doc.body.textContent).toContain("Working for 5s");
+    expect(doc.body.textContent).toContain("missing file");
+    expect(doc.body.textContent).not.toContain("Couldn't finish");
+    expect(doc.body.textContent).not.toContain("could not finish");
+    expect(doc.querySelector('[role="alert"]')?.textContent).toContain("still working");
+  });
+
+  test("serializes raw tool output only after its disclosure opens", async () => {
+    const harness = setupJsdom();
+    const container = harness.dom.window.document.getElementById("root")!;
+    const root = createRoot(container);
+    const serialize = mock(() => ({ data: "large tool output" }));
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ActivityGroupCard, {
+            live: true,
+            liveNowMs: Date.parse("2024-01-01T00:00:05.000Z"),
+            items: [
+              {
+                id: "tool",
+                kind: "tool",
+                ts: "2024-01-01T00:00:00.000Z",
+                name: "read",
+                state: "output-available",
+                result: { toJSON: serialize },
+              },
+            ],
+          }),
+        );
+      });
+      expect(serialize).not.toHaveBeenCalled();
+      const toolToggle = container.querySelector<HTMLButtonElement>(
+        '[data-activity-entry-kind="tool"] button',
+      );
+      if (!toolToggle) throw new Error("missing tool disclosure");
+      await act(async () => toolToggle.click());
+      expect(serialize).not.toHaveBeenCalled();
+      const rawToggle = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Raw input/output"),
+      );
+      if (!rawToggle) throw new Error("missing raw output disclosure");
+      await act(async () => rawToggle.click());
+      expect(serialize).toHaveBeenCalledTimes(1);
+      expect(container.querySelector("pre")?.textContent).toContain("large tool output");
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
+
   test("falls back to the first activity timestamp for live elapsed time", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

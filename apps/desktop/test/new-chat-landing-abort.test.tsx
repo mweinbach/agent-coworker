@@ -32,7 +32,7 @@ async function flushEffects(): Promise<void> {
   });
 }
 
-describe("NewChatLanding creation abort guard", () => {
+describe("NewChatLanding", () => {
   let harness: ReturnType<typeof setupJsdom>;
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
@@ -84,6 +84,27 @@ describe("NewChatLanding creation abort guard", () => {
       providerCatalog: [],
     });
   }
+
+  test("offers starter prompts only while the draft is empty", async () => {
+    seedLandingState(() => false);
+    act(() => root.render(createElement(NewChatLanding)));
+    await flushEffects();
+
+    const findStarter = () =>
+      Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Summarize this repo",
+      );
+    expect(container.querySelector("textarea")?.value).toBe("Start this chat");
+    expect(findStarter()).toBeUndefined();
+
+    act(() => useAppStore.getState().setComposerText(""));
+    await flushEffects();
+    expect(findStarter()).toBeDefined();
+    act(() => findStarter()?.click());
+    await flushEffects();
+    expect(container.querySelector("textarea")?.value).toContain("Summarize this repository");
+    expect(findStarter()).toBeUndefined();
+  });
 
   test("unmount after a committed chat selection does not abort creation", async () => {
     let capturedSignal: AbortSignal | undefined;

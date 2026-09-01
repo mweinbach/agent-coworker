@@ -88,6 +88,7 @@ const { __internalFilePreviewResources, workspaceFileChangeEvents } = await impo
   "../src/lib/filePreviewResource"
 );
 const { FilePreviewModal, __internalFilePreviewModal } = await import("../src/ui/FilePreviewModal");
+const { CodeFilePreview } = await import("../src/ui/CodeFilePreview");
 
 function setupPreviewJsdom() {
   return setupJsdom({
@@ -596,6 +597,39 @@ describe("file preview modal", () => {
       harness.restore();
     }
   });
+
+  test.serial("keeps nested Markdown fences literal in a source file preview", async () => {
+    const harness = setupPreviewJsdom();
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing root");
+    const root = createRoot(container);
+    const content = [
+      'const fence = "```";',
+      "````",
+      "# Literal heading, not a rendered heading",
+      "```````",
+      "**Literal emphasis**",
+      "````",
+    ].join("\n");
+
+    try {
+      await act(async () => {
+        root.render(createElement(CodeFilePreview, { content, filePath: "/workspace/source.txt" }));
+        await flushUi();
+      });
+
+      expect(container.querySelectorAll('[data-streamdown="code-block"]')).toHaveLength(1);
+      expect(container.querySelector("h1, strong")).toBeNull();
+      const renderedLines = Array.from(
+        container.querySelectorAll("code > span"),
+        (line) => line.textContent,
+      );
+      expect(renderedLines.join("\n")).toBe(content);
+    } finally {
+      await act(async () => root.unmount());
+      harness.restore();
+    }
+  });
 });
 
 describe("file preview Windows paths", () => {
@@ -710,4 +744,18 @@ describe("file preview Windows paths", () => {
       "C:\\Users\\Max\\assets\\figure & 1.png",
     );
   });
+
+  test.each(["reports/100%.txt", "reports/%ZZ.txt", "reports/%E0%A4.txt"])(
+    "preserves a literal filename when URI decoding fails: %s",
+    (relativePath) => {
+      const tree = {
+        type: "root",
+        children: [{ type: "link", url: relativePath, children: [] }],
+      };
+
+      __internalFilePreviewModal.createRemarkResolveRelativeLinks("/workspace/preview.md")()(tree);
+
+      expect(localPathFromCoworkFileUrl(tree.children[0].url)).toBe(`/workspace/${relativePath}`);
+    },
+  );
 });

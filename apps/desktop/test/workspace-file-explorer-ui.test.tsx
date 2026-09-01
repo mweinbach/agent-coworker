@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -53,7 +53,9 @@ const isStaleDirectoryListingErrorMock = mock(() => false);
 const watchWorkspaceDirectoryMock = mock(async () => true);
 const unwatchWorkspaceDirectoryMock = mock(async () => {});
 const onWorkspaceFileChangedMock = mock(() => () => {});
-const showContextMenuMock = mock(async () => null);
+const showContextMenuMock = mock<WorkspaceFileExplorerCommands["showContextMenu"]>(
+  async () => null,
+);
 const explorerCommands: WorkspaceFileExplorerCommands = {
   clearDirectoryListingScope: clearDirectoryListingScopeMock,
   invalidateDirectoryListing: invalidateDirectoryListingMock,
@@ -64,11 +66,18 @@ const explorerCommands: WorkspaceFileExplorerCommands = {
   unwatchWorkspaceDirectory: unwatchWorkspaceDirectoryMock,
   watchWorkspaceDirectory: watchWorkspaceDirectoryMock,
 };
+const originalExplorerActions = {
+  openFilePreview: useAppStore.getState().openFilePreview,
+  openWorkspaceFile: useAppStore.getState().openWorkspaceFile,
+  revealWorkspaceFile: useAppStore.getState().revealWorkspaceFile,
+  copyWorkspaceFilePath: useAppStore.getState().copyWorkspaceFilePath,
+};
 
 function resetAppStore() {
   const state = useAppStore.getState();
   useAppStore.setState({
     ...state,
+    ...originalExplorerActions,
     ready: true,
     bootstrapPhase: "ready",
     workspaces: [
@@ -98,6 +107,7 @@ function resetAppStore() {
     workspaceExplorerRefreshById: {},
     showHiddenFiles: false,
     contextSidebarCollapsed: false,
+    notifications: [],
   } as any);
 }
 
@@ -124,6 +134,43 @@ async function unmountExplorer(root: Root | null): Promise<void> {
   });
 }
 
+async function mountExplorerForInteraction() {
+  const harness = setupJsdom({
+    includeAnimationFrame: true,
+    extraGlobals: { ResizeObserver: MockResizeObserver },
+  });
+  const container = harness.dom.window.document.getElementById("root");
+  if (!container) throw new Error("missing root");
+  const root = createRoot(container);
+  const cleanup = async () => {
+    await unmountExplorer(root);
+    harness.restore();
+  };
+  try {
+    await act(async () => {
+      root.render(
+        createElement(WorkspaceFileExplorer, { commands: explorerCommands, workspaceId }),
+      );
+      await flushUi();
+    });
+    const clickEntry = async (name: string) => {
+      const entry = [...container.querySelectorAll<HTMLElement>('[role="treeitem"]')].find((row) =>
+        row.textContent?.includes(name),
+      );
+      if (!entry) throw new Error(`missing explorer entry ${name}`);
+      await act(async () => {
+        entry.click();
+        await flushUi();
+      });
+      return entry;
+    };
+    return { harness, container, root, clickEntry, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
 describe("workspace file explorer UI", () => {
   beforeEach(() => {
     rootEntries = [makeFileEntry("README.md", 1700000000000)];
@@ -141,6 +188,150 @@ describe("workspace file explorer UI", () => {
     watchWorkspaceDirectoryMock.mockClear();
     resetAppStore();
   });
+
+  afterEach(() => {
+    useAppStore.setState(originalExplorerActions);
+  });
+
+  test.serial("keeps the open file selected when a preview transition is refused", async () => {
+    const firstPath = `${rootPath}/README.md`;
+    rootEntries.push(makeFileEntry("other.md", 1700000001000));
+    useAppStore.setState({ openFilePreview: async () => false });
+    const explorer = await mountExplorerForInteraction();
+    try {
+      await act(async () => {
+        useAppStore.getState().selectWorkspaceFile(workspaceId, firstPath);
+        useAppStore.setState({ filePreview: { path: firstPath } });
+      });
+      const target = await explorer.clickEntry("other.md");
+
+      expect(useAppStore.getState().workspaceExplorerById[workspaceId]?.selectedPath).toBe(
+        firstPath,
+      );
+      expect(useAppStore.getState().filePreview?.path).toBe(firstPath);
+      expect(target.getAttribute("aria-selected")).toBe("false");
+    } finally {
+      await explorer.cleanup();
+    }
+  });
+
+  test.serial("selects only the latest acknowledged preview request", async () => {
+    const firstPath = `${rootPath}/README.md`;
+    const second = createDeferred<boolean>();
+    const third = createDeferred<boolean>();
+    rootEntries.push(
+      makeFileEntry("second.md", 1700000001000),
+      makeFileEntry("third.md", 1700000002000),
+    );
+    useAppStore.setState({
+      openFilePreview: async ({ path }) =>
+        path.endsWith("second.md") ? await second.promise : await third.promise,
+    });
+    const explorer = await mountExplorerForInteraction();
+    try {
+      await act(async () => {
+        useAppStore.getState().selectWorkspaceFile(workspaceId, firstPath);
+      });
+      await explorer.clickEntry("second.md");
+      await explorer.clickEntry("third.md");
+      expect(useAppStore.getState().workspaceExplorerById[workspaceId]?.selectedPath).toBe(
+        firstPath,
+      );
+
+      await act(async () => {
+        third.resolve(true);
+        await flushUi();
+      });
+      expect(useAppStore.getState().workspaceExplorerById[workspaceId]?.selectedPath).toBe(
+        `${rootPath}/third.md`,
+      );
+      await act(async () => {
+        second.resolve(true);
+        await flushUi();
+      });
+      expect(useAppStore.getState().workspaceExplorerById[workspaceId]?.selectedPath).toBe(
+        `${rootPath}/third.md`,
+      );
+    } finally {
+      second.resolve(false);
+      third.resolve(false);
+      await explorer.cleanup();
+    }
+  });
+
+  test.serial("shows initial loading and lets a failed directory read be retried", async () => {
+    const pendingListing = createDeferred<typeof rootEntries>();
+    const slowPath = `${rootPath}/slow-listing`;
+    listDirectoryImpl = async () => await pendingListing.promise;
+    useAppStore.setState((state) => ({
+      workspaces: state.workspaces.map((workspace) => ({ ...workspace, path: slowPath })),
+      workspaceExplorerById: {
+        [workspaceId]: {
+          ...state.workspaceExplorerById[workspaceId]!,
+          rootPath: slowPath,
+          currentPath: slowPath,
+        },
+      },
+    }));
+    const explorer = await mountExplorerForInteraction();
+    try {
+      expect(explorer.container.querySelector('[role="status"]')?.textContent).toContain(
+        "Loading files",
+      );
+      await act(async () => {
+        pendingListing.reject(new Error("Directory is temporarily unavailable"));
+        await flushUi();
+      });
+      expect(explorer.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Directory is temporarily unavailable",
+      );
+      listDirectoryImpl = async () => rootEntries;
+      const retry = explorer.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Retry loading workspace files"]',
+      );
+      expect(retry).not.toBeNull();
+      await act(async () => {
+        retry?.click();
+        await flushUi();
+      });
+
+      expect(explorer.container.textContent).toContain("README.md");
+      expect(explorer.container.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      pendingListing.resolve([]);
+      await explorer.cleanup();
+    }
+  });
+
+  for (const action of ["open", "reveal", "copy"] as const) {
+    test.serial(`reports a failed ${action} action from the file menu`, async () => {
+      showContextMenuMock.mockResolvedValueOnce(action);
+      const fail = async () => {
+        throw new Error("Filesystem action unavailable");
+      };
+      useAppStore.setState({
+        openWorkspaceFile: fail,
+        revealWorkspaceFile: fail,
+        copyWorkspaceFilePath: fail,
+      });
+      const explorer = await mountExplorerForInteraction();
+      try {
+        await act(async () => {
+          explorer.container
+            .querySelector<HTMLButtonElement>('button[aria-label="More options for README.md"]')
+            ?.click();
+          await flushUi();
+        });
+
+        const notification = useAppStore.getState().notifications.at(-1);
+        expect(notification?.kind).toBe("error");
+        expect(notification?.detail).toContain("Filesystem action unavailable");
+        expect(notification?.audience).toBe("foreground");
+      } finally {
+        await explorer.cleanup();
+      }
+    });
+  }
 
   test.serial(
     "uses effective drawer visibility instead of the persisted context preference",

@@ -219,6 +219,7 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
     return workspaceId ? (workspaces.find((entry) => entry.id === workspaceId) ?? null) : null;
   }, [workspaces, selectedWorkspaceId]);
   const canChooseLocation = projectWorkspace !== null;
+  const workspaceId = workspace?.id ?? null;
 
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const operationsByKey = useAppStore((s) => s.operationsByKey);
@@ -256,13 +257,12 @@ export function McpServersPage({ filterQuery = "" }: { filterQuery?: string } = 
   const isCreating = editorState?.mode === "create";
 
   useEffect(() => {
-    if (!workspace) return;
     clearAutoValidateTimer();
     setEditorState(null);
     setDraft(defaultDraftState());
     setValidationServerKeyByName({});
-    void requestWorkspaceMcpServers(workspace.id);
-  }, [workspace?.id, requestWorkspaceMcpServers, workspace, clearAutoValidateTimer]);
+    if (workspaceId) void requestWorkspaceMcpServers(workspaceId);
+  }, [workspaceId, requestWorkspaceMcpServers, clearAutoValidateTimer]);
 
   useEffect(() => clearAutoValidateTimer, [clearAutoValidateTimer]);
 

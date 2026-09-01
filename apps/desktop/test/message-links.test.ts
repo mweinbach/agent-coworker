@@ -168,6 +168,29 @@ describe("desktop message local file links", () => {
     expect(tree.children[0]?.children[0]?.url).toBe("../outside/secret.png");
   });
 
+  test.each([
+    ["reports/My%20Report.pdf?download=1#summary", "/workspace/reports/My Report.pdf"],
+    ["reports/%E6%97%A5%E6%9C%AC%E8%AA%9E.pdf", "/workspace/reports/日本語.pdf"],
+    ["reports/100%complete.pdf", "/workspace/reports/100%complete.pdf"],
+    ["reports/%252e%252e.pdf", "/workspace/reports/%2e%2e.pdf"],
+  ])("decodes relative file paths exactly once: %s", (href, expectedPath) => {
+    const link = { type: "link", url: href, children: [{ type: "text", value: "Report" }] };
+    rewriteDesktopFileLinksInTree(link, "/workspace");
+    expect(decodeDesktopLocalFileHref(link.url)).toBe(expectedPath);
+  });
+
+  test.each([
+    "%2e%2e/outside.pdf",
+    "reports/%2e%2e/%2e%2e/outside.pdf",
+    "%2fetc%2fsecret.pdf",
+    "reports/%5C..%5C..%5Csecret.pdf",
+    "reports/%00secret.pdf",
+  ])("rejects decoded traversal and unsafe relative paths: %s", (href) => {
+    const link = { type: "link", url: href, children: [{ type: "text", value: "Report" }] };
+    rewriteDesktopFileLinksInTree(link, "/workspace");
+    expect(link.url).toBe(href);
+  });
+
   test("rewrites custom app links into desktop-safe hrefs before sanitize", () => {
     const tree = {
       type: "root",

@@ -1,5 +1,5 @@
 import { ArrowUpRightIcon, SquarePenIcon, XIcon } from "lucide-react";
-import { type CSSProperties, useEffect, useMemo, useRef } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useAppStore } from "../../app/store";
 import { isStandardChatThread } from "../../app/threadFilters";
@@ -30,7 +30,9 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   const selectThread = useAppStore((s) => s.selectThread);
   const requestedThreadId = getDesktopWindowThreadId();
   const requestedNewThread = shouldStartNewQuickChatThread();
-  const startedRequestedNewThreadRef = useRef(false);
+  const startupSelectionRef = useRef<{ handled: boolean; selectedThreadId?: string | null }>({
+    handled: false,
+  });
   const startupPresentation = startupStagePresentation(bootstrapStage);
 
   const activeThread = useMemo(
@@ -50,57 +52,53 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   );
 
   useEffect(() => {
-    if (!ready || startupError || !requestedThreadId) {
+    const startupSelection = startupSelectionRef.current;
+    if (!ready || startupError || startupSelection.handled) {
       return;
     }
+    // The URL is an initial navigation request. A later user selection wins,
+    // even when the requested thread has not finished hydrating yet.
     if (
-      !threads.some(
-        (thread) =>
-          thread.id === requestedThreadId && isStandardChatThread(thread, { includeDrafts: true }),
-      )
+      startupSelection.selectedThreadId !== undefined &&
+      startupSelection.selectedThreadId !== selectedThreadId &&
+      selectedThreadId !== requestedThreadId
     ) {
+      startupSelection.handled = true;
       return;
     }
-    if (selectedThreadId === requestedThreadId) {
-      return;
-    }
-    void selectThread(requestedThreadId);
-  }, [ready, requestedThreadId, selectThread, selectedThreadId, startupError, threads]);
-
-  useEffect(() => {
-    if (!ready || startupError) {
-      return;
-    }
-    if (
-      requestedThreadId &&
-      threads.some(
-        (thread) =>
-          thread.id === requestedThreadId && isStandardChatThread(thread, { includeDrafts: true }),
-      )
-    ) {
-      return;
-    }
-    if (requestedNewThread) {
-      if (startedRequestedNewThreadRef.current) {
+    startupSelection.selectedThreadId = selectedThreadId;
+    if (requestedThreadId) {
+      if (
+        !threads.some(
+          (thread) =>
+            thread.id === requestedThreadId &&
+            isStandardChatThread(thread, { includeDrafts: true }),
+        )
+      ) {
         return;
       }
-      startedRequestedNewThreadRef.current = true;
-      void newThread();
+      startupSelection.handled = true;
+      if (selectedThreadId !== requestedThreadId) void selectThread(requestedThreadId);
       return;
     }
-    if (activeThread) {
-      return;
-    }
-    void newThread();
+    startupSelection.handled = true;
+    if (requestedNewThread || !activeThread) void newThread();
   }, [
+    activeThread,
     newThread,
     ready,
     requestedNewThread,
     requestedThreadId,
-    activeThread,
+    selectedThreadId,
+    selectThread,
     startupError,
     threads,
   ]);
+
+  const startNewChat = useCallback(() => {
+    startupSelectionRef.current.handled = true;
+    void newThread();
+  }, [newThread]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -156,7 +154,8 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
               size="icon-sm"
               className="h-9 w-9 rounded-full border app-border-subtle bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
               aria-label="Start a new chat"
-              onClick={() => void newThread()}
+              disabled={!ready || startupError !== null}
+              onClick={startNewChat}
               style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
             >
               <SquarePenIcon />

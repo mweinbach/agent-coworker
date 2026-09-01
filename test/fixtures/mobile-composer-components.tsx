@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { act, type ComponentType, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { setupJsdom } from "../../apps/desktop/test/jsdomHarness";
 
@@ -209,6 +210,26 @@ const platformComponents = [
 ] as const satisfies ReadonlyArray<readonly [string, ComponentType<ComposerProps>]>;
 
 describe("mobile composer platform components", () => {
+  test("android exposes a submitting message as busy and disabled", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AndroidComposerBar, {
+        value: "Sending this message",
+        onChangeText: () => undefined,
+        onSubmit: () => undefined,
+        onStop: () => undefined,
+        canEdit: true,
+        canSubmit: false,
+        isSubmitting: true,
+        isBusy: false,
+        isStopping: false,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Sending message"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('disabled=""');
+  });
+
   test.each(platformComponents)(
     "%s renders editable first-character policy and a locked Stop action",
     async (_platform, ComposerBar) => {

@@ -20,6 +20,16 @@ type ConnectPageProps = {
 
 type DiscoveredWorkspace = { name: string; path: string };
 
+type ConnectionState =
+  | { kind: "idle"; error: string | null }
+  | { kind: "connecting"; status: string }
+  | { kind: "choosing-workspace"; serverUrl: string; workspaces: DiscoveredWorkspace[] };
+
+type ConnectionAttempt = {
+  controller: AbortController;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
 // Turn a ws:// URL into the matching http:// URL (strips the /ws suffix if present).
 function toHttpBase(wsUrl: string): string {
   try {
@@ -33,25 +43,35 @@ function toHttpBase(wsUrl: string): string {
 }
 
 // Fetch the server's declared workspace (its --dir). One HTTP hop that also verifies reachability.
-async function fetchServerWorkspaces(serverWsUrl: string): Promise<DiscoveredWorkspace[]> {
+async function fetchServerWorkspaces(
+  serverWsUrl: string,
+  signal: AbortSignal,
+): Promise<DiscoveredWorkspace[]> {
   const base = toHttpBase(serverWsUrl);
-  const res = await fetch(`${base}/cowork/workspaces`, { headers: browserAccessHeaders() });
+  const res = await fetch(`${base}/cowork/workspaces`, {
+    headers: browserAccessHeaders(serverWsUrl),
+    signal,
+  });
   if (!res.ok) throw new Error(`Server returned ${res.status} from /cowork/workspaces`);
   const data = (await res.json()) as { workspaces?: DiscoveredWorkspace[] };
   return Array.isArray(data.workspaces) ? data.workspaces : [];
 }
 
-async function supportsDesktopService(serverWsUrl: string): Promise<boolean> {
+async function supportsDesktopService(serverWsUrl: string, signal: AbortSignal): Promise<boolean> {
   const base = toHttpBase(serverWsUrl);
-  const res = await fetch(`${base}/cowork/desktop/state`, { headers: browserAccessHeaders() });
+  const res = await fetch(`${base}/cowork/desktop/state`, {
+    headers: browserAccessHeaders(serverWsUrl),
+    signal,
+  });
   return res.ok;
 }
 
 // Open a WebSocket with the jsonrpc subprotocol and resolve once the handshake succeeds (or reject
 // on any close/error before that). Catches config mistakes (wrong port, wrong subprotocol, server
 // not running) *before* we hand control to the main app.
-function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
+function probeWebSocket(url: string, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
     let settled = false;
     let ws: WebSocket;
     try {
@@ -60,39 +80,31 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
       reject(err instanceof Error ? err : new Error(String(err)));
       return;
     }
-    const timer = setTimeout(() => {
+    const finish = (error?: unknown) => {
       if (settled) return;
       settled = true;
+      signal.removeEventListener("abort", onAbort);
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("error", onError);
+      ws.removeEventListener("close", onClose);
       try {
         ws.close();
       } catch {
-        // ignore close races after timeout
+        // The peer may already have closed the probe.
       }
-      reject(new Error(`Timed out after ${timeoutMs}ms connecting to ${url}`));
-    }, timeoutMs);
-    ws.addEventListener("open", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        ws.close();
-      } catch {
-        // ignore close races after open
-      }
-      resolve();
-    });
-    ws.addEventListener("error", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`Failed to connect to ${url}. Is the server running?`));
-    });
-    ws.addEventListener("close", (ev) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`Connection closed (${ev.code}) before handshake completed.`));
-    });
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onAbort = () => finish(signal.reason);
+    const onOpen = () => finish();
+    const onError = () =>
+      finish(new Error("Failed to connect. Check the server address and that Cowork is running."));
+    const onClose = (event: CloseEvent) =>
+      finish(new Error(`Connection closed (${event.code}) before handshake completed.`));
+    signal.addEventListener("abort", onAbort, { once: true });
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("error", onError);
+    ws.addEventListener("close", onClose);
   });
 }
 
@@ -101,94 +113,109 @@ export function ConnectPage({
   initialError = null,
   initialServerUrl = null,
 }: ConnectPageProps) {
-  const defaultUrl = normalizeWebServerUrl(
-    initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl(),
+  const [serverUrl, setServerUrl] = useState(() =>
+    normalizeWebServerUrl(initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl()),
   );
-  const [serverUrl, setServerUrl] = useState(defaultUrl);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(initialError);
-  const [discovered, setDiscovered] = useState<DiscoveredWorkspace[]>([]);
-  const triedAutoConnect = useRef(false);
+  const [connection, setConnection] = useState<ConnectionState>({
+    kind: "idle",
+    error: initialError,
+  });
+  const initialUrl = useRef(serverUrl);
+  const activeAttempt = useRef<ConnectionAttempt | null>(null);
+  const onConnected = useRef(onConnect);
+  useEffect(() => {
+    onConnected.current = onConnect;
+  }, [onConnect]);
 
-  const connectWithPath = useCallback(
-    async (url: string, workspacePath: string) => {
-      const normalizedUrl = normalizeWebServerUrl(url);
-      setBusy(true);
-      setError(null);
-      try {
-        setStatus("Checking server…");
-        await probeWebSocket(normalizedUrl);
-        configureWebAdapter(normalizedUrl, workspacePath);
-        window.cowork = createWebAdapter();
-        setStatus(null);
-        onConnect();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus(null);
-        setBusy(false);
-      }
-    },
-    [onConnect],
-  );
+  const cancelAttempt = useCallback(() => {
+    const attempt = activeAttempt.current;
+    activeAttempt.current = null;
+    if (!attempt) return;
+    clearTimeout(attempt.timeout);
+    attempt.controller.abort();
+  }, []);
 
   // Ask the server what path it's serving, then connect. Single-click Connect flow.
-  const connectViaDiscovery = useCallback(
-    async (url: string) => {
+  const connect = useCallback(
+    async (url: string, selectedWorkspacePath?: string) => {
+      cancelAttempt();
       const normalizedUrl = normalizeWebServerUrl(url);
-      setBusy(true);
-      setError(null);
-      try {
-        setStatus("Checking server…");
-        await probeWebSocket(normalizedUrl);
-
-        setStatus("Loading desktop state…");
-        if (await supportsDesktopService(normalizedUrl)) {
-          configureWebAdapter(normalizedUrl, "");
-          window.cowork = createWebAdapter();
-          setStatus(null);
-          onConnect();
-          return;
-        }
-
-        setStatus("Finding workspace…");
-        const workspaces = await fetchServerWorkspaces(normalizedUrl);
-        if (workspaces.length === 0) {
-          throw new Error(
-            "Server is running but reports no workspace. Restart it with --dir <path>.",
+      const controller = new AbortController();
+      const { signal } = controller;
+      const attempt: ConnectionAttempt = {
+        controller,
+        timeout: setTimeout(() => {
+          controller.abort(
+            new Error("Connection timed out. Check the server address and try again."),
           );
+        }, 10_000),
+      };
+      activeAttempt.current = attempt;
+      setConnection({ kind: "connecting", status: "Checking server…" });
+      try {
+        await probeWebSocket(normalizedUrl, signal);
+        signal.throwIfAborted();
+
+        let workspacePath = selectedWorkspacePath;
+        if (workspacePath === undefined) {
+          setConnection({ kind: "connecting", status: "Loading desktop state…" });
+          const desktopService = await supportsDesktopService(normalizedUrl, signal);
+          signal.throwIfAborted();
+          if (desktopService) {
+            workspacePath = "";
+          } else {
+            setConnection({ kind: "connecting", status: "Finding workspace…" });
+            const workspaces = await fetchServerWorkspaces(normalizedUrl, signal);
+            signal.throwIfAborted();
+            if (workspaces.length === 0) {
+              throw new Error(
+                "Server is running but reports no workspace. Restart it with --dir <path>.",
+              );
+            }
+            if (workspaces.length > 1) {
+              setConnection({ kind: "choosing-workspace", serverUrl: normalizedUrl, workspaces });
+              return;
+            }
+            workspacePath = workspaces[0].path;
+          }
         }
-        if (workspaces.length > 1) {
-          // Surface the picker; don't auto-pick.
-          setDiscovered(workspaces);
-          setStatus(null);
-          setBusy(false);
-          return;
-        }
-        await connectWithPath(normalizedUrl, workspaces[0].path);
+
+        configureWebAdapter(normalizedUrl, workspacePath);
+        window.cowork = createWebAdapter();
+        setConnection({ kind: "idle", error: null });
+        onConnected.current();
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus(null);
-        setBusy(false);
+        if (activeAttempt.current === attempt) {
+          const failure = signal.aborted ? signal.reason : err;
+          setConnection({
+            kind: "idle",
+            error: failure instanceof Error ? failure.message : String(failure),
+          });
+        }
+      } finally {
+        clearTimeout(attempt.timeout);
+        if (activeAttempt.current === attempt) activeAttempt.current = null;
       }
     },
-    [connectWithPath, onConnect],
+    [cancelAttempt],
   );
 
-  // On first mount, try the auto-connect flow (same-origin URL should Just Work behind Vite proxy).
   useEffect(() => {
-    if (triedAutoConnect.current) return;
-    triedAutoConnect.current = true;
-    void connectViaDiscovery(serverUrl);
-  }, [connectViaDiscovery, serverUrl]);
+    void connect(initialUrl.current);
+    return cancelAttempt;
+  }, [cancelAttempt, connect]);
+
+  const busy = connection.kind === "connecting";
+  const status = connection.kind === "connecting" ? connection.status : null;
+  const error = connection.kind === "idle" ? connection.error : null;
 
   const handleConnect = () => {
-    void connectViaDiscovery(serverUrl);
+    void connect(serverUrl);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !isImeComposing(e.nativeEvent) && !busy && serverUrl) {
+    if (e.key === "Enter" && !isImeComposing(e.nativeEvent) && !busy && serverUrl.trim()) {
       handleConnect();
     }
   };
@@ -199,16 +226,16 @@ export function ConnectPage({
         <h1 className="m-0 mb-1 text-xl font-semibold tracking-tight">Cowork</h1>
         <p className="mb-5 text-[13px] text-muted-foreground">Connect to a running Cowork server</p>
 
-        {discovered.length > 1 ? (
+        {connection.kind === "choosing-workspace" ? (
           <>
             <p className="mb-2 text-xs text-muted-foreground">Select a workspace:</p>
             <div className="mb-4 flex flex-col gap-1">
-              {discovered.map((ws) => (
+              {connection.workspaces.map((ws) => (
                 <Button
                   type="button"
                   key={ws.path}
                   variant="outline"
-                  onClick={() => void connectWithPath(serverUrl, ws.path)}
+                  onClick={() => void connect(connection.serverUrl, ws.path)}
                   disabled={busy}
                   className="h-auto w-full flex-col items-start justify-start gap-0.5 px-3 py-2 text-left whitespace-normal"
                 >
@@ -220,21 +247,45 @@ export function ConnectPage({
           </>
         ) : null}
 
-        <Button
-          type="button"
-          onClick={handleConnect}
-          disabled={busy || !serverUrl}
-          className="mb-3 w-full"
-        >
-          {busy ? (status ?? "Connecting…") : "Connect"}
-        </Button>
+        <div className="mb-3 flex gap-2">
+          <Button
+            type="button"
+            onClick={handleConnect}
+            disabled={busy || !serverUrl.trim()}
+            className="flex-1"
+          >
+            {busy ? "Connecting…" : "Connect"}
+          </Button>
+          {busy ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                cancelAttempt();
+                setConnection({ kind: "idle", error: null });
+              }}
+            >
+              Cancel
+            </Button>
+          ) : null}
+        </div>
 
-        {status && !error ? <p className="mb-3 text-xs text-muted-foreground">{status}</p> : null}
+        {status ? (
+          <p role="status" aria-live="polite" className="mb-3 text-xs text-muted-foreground">
+            {status}
+          </p>
+        ) : null}
 
-        {error ? <p className="mb-3 text-xs text-destructive">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="mb-3 text-xs text-destructive">
+            {error}
+          </p>
+        ) : null}
 
         <button
           type="button"
+          aria-expanded={showAdvanced}
+          aria-controls="connect-advanced"
           onClick={() => setShowAdvanced((v) => !v)}
           className={`bg-transparent p-0 text-xs text-muted-foreground hover:text-foreground ${
             showAdvanced ? "mb-3" : ""
@@ -244,7 +295,7 @@ export function ConnectPage({
         </button>
 
         {showAdvanced ? (
-          <div className="flex flex-col gap-2">
+          <div id="connect-advanced" className="flex flex-col gap-2">
             <label
               htmlFor="connect-server-url"
               className="text-xs font-medium text-muted-foreground"
@@ -255,7 +306,11 @@ export function ConnectPage({
               id="connect-server-url"
               type="text"
               value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
+              onChange={(e) => {
+                cancelAttempt();
+                setServerUrl(e.target.value);
+                setConnection({ kind: "idle", error: null });
+              }}
               onKeyDown={handleKeyDown}
               placeholder="ws://127.0.0.1:7337/ws"
             />

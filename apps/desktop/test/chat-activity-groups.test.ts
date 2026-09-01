@@ -11,6 +11,66 @@ import {
 } from "../src/ui/chat/activityGroups";
 
 describe("desktop chat activity groups", () => {
+  test("preserves historical activity identity while a later answer streams", () => {
+    const ts = "2024-01-01T00:00:00.000Z";
+    const feed: FeedItem[] = [
+      { id: "u1", kind: "message", role: "user", ts, text: "First request" },
+      { id: "t1", kind: "tool", ts, name: "read", state: "output-available" },
+      { id: "p1", kind: "message", role: "assistant", ts, text: "I will check another file." },
+      { id: "t2", kind: "tool", ts, name: "read", state: "output-available" },
+      { id: "a1", kind: "message", role: "assistant", ts, text: "First answer" },
+      { id: "u2", kind: "message", role: "user", ts, text: "Next request" },
+      { id: "a2", kind: "message", role: "assistant", ts, text: "Second" },
+    ];
+    const original = buildChatRenderItems(feed);
+    const updated = buildChatRenderItems([
+      ...feed.slice(0, -1),
+      { id: "a2", kind: "message", role: "assistant", ts, text: "Second answer" },
+    ]);
+    expect(original[1]?.kind).toBe("activity-group");
+    expect(updated[1]).toBe(original[1]);
+
+    const changedToolFeed = [...feed];
+    changedToolFeed[3] = {
+      id: "t2",
+      kind: "tool",
+      ts,
+      name: "read",
+      state: "output-error",
+      result: { error: "missing" },
+    };
+    expect(buildChatRenderItems(changedToolFeed)[1]).not.toBe(original[1]);
+  });
+
+  test("invalidates a cached failure group when a later turn recovers it", () => {
+    const ts = "2024-01-01T00:00:00.000Z";
+    const failed: FeedItem = {
+      id: "failed",
+      kind: "tool",
+      ts,
+      name: "read",
+      state: "output-error",
+      result: { error: "missing" },
+    };
+    const before = buildChatRenderItems([failed]);
+    const after = buildChatRenderItems([
+      failed,
+      { id: "u2", kind: "message", role: "user", ts, text: "Retry" },
+      {
+        id: "retry",
+        kind: "tool",
+        ts,
+        name: "read",
+        state: "output-available",
+        retryOf: "failed",
+        result: "found",
+      },
+    ]);
+    expect(after[0]).not.toBe(before[0]);
+    if (after[0]?.kind !== "activity-group") throw new Error("missing activity");
+    expect(unresolvedToolFailureIds(after[0].items, after[0].recoveredToolIds)).toEqual([]);
+  });
+
   test("groups consecutive reasoning and tool items into one activity block", () => {
     const feed: FeedItem[] = [
       {

@@ -37,7 +37,7 @@ export function AddMarketplaceDialog({
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const addMarketplace = useAppStore((state) => state.addMarketplace);
   const addOperation = useAppStore(
-    (state) => state.operationsByKey[operationKey("marketplace", "add")],
+    (state) => state.operationsByKey[operationKey("marketplace", "add", workspaceId)],
   );
 
   const addPending =

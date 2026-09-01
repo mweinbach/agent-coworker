@@ -208,7 +208,12 @@ function createRemarkResolveRelativeLinks(previewFilePath: string) {
           /* not a valid URL, skip */
         }
       } else if (!isAbsolutePath(href)) {
-        const decodedHref = decodeURIComponent(href.split("#")[0]?.split("?")[0] ?? href);
+        let decodedHref = href.split("#")[0]?.split("?")[0] ?? href;
+        try {
+          decodedHref = decodeURIComponent(decodedHref);
+        } catch {
+          // Percent signs can be literal filename characters, not URL escapes.
+        }
         localPath = resolveRelativePath(previewFilePath, decodedHref);
       }
 

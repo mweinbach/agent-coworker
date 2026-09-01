@@ -563,7 +563,10 @@ export function SettingsShell() {
                   data-settings-page={activePage.id}
                   className={cn(isBackupPage ? "flex min-h-0 flex-1 flex-col" : "")}
                 >
-                  <InlineErrorBoundary label="This settings page couldn't be rendered.">
+                  <InlineErrorBoundary
+                    key={activePage.id}
+                    label="This settings page couldn't be rendered."
+                  >
                     {activePage.render()}
                   </InlineErrorBoundary>
                 </div>

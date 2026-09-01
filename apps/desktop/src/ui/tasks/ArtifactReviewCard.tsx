@@ -310,7 +310,11 @@ export function ArtifactReviewCard({
       setLoadingDetail(false);
       if (!next) return;
       setDetail(next);
-      setSelectedVersionId(next.latestVersionId);
+      setSelectedVersionId((current) =>
+        current && next.versions.some((version) => version.id === current)
+          ? current
+          : next.latestVersionId,
+      );
     });
   }, [artifact.id, detailRequestKey, readArtifact, taskId]);
 

@@ -17,6 +17,7 @@ type MemoryStoreState = {
     scope: "workspace" | "user",
     id: string | undefined,
     content: string,
+    mode?: "create" | "upsert",
   ): Promise<boolean>;
   deleteMemory(scope: "workspace" | "user", id: string): Promise<void>;
   setFilterScope(scope: "all" | "workspace" | "user"): void;
@@ -53,7 +54,12 @@ export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
     }
   },
 
-  async upsertMemory(scope: "workspace" | "user", id: string | undefined, content: string) {
+  async upsertMemory(
+    scope: "workspace" | "user",
+    id: string | undefined,
+    content: string,
+    mode: "create" | "upsert" = "upsert",
+  ) {
     set({ error: null });
     try {
       const { client, cwd } = getClientAndCwd();
@@ -62,6 +68,7 @@ export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
         scope,
         id: id?.trim() ? id.trim() : "hot",
         content,
+        mode,
       });
       set({ entries: result.event.memories });
       void saveToOfflineCache("memories", result.event.memories);

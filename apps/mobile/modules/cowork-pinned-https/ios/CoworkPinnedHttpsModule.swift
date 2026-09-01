@@ -27,18 +27,19 @@ internal struct PinnedHttpsRequest: Record {
 }
 
 public final class CoworkPinnedHttpsModule: Module {
-  private var streamTasks: [String: URLSessionDataTask] = [:]
-  private let streamTasksQueue = DispatchQueue(
-    label: "co.weinbach.cowork.mobile.pinnedhttps.streamTasks"
-  )
+  private let streamTasks = PinnedHttpsStreamRegistry()
 
   public func definition() -> ModuleDefinition {
     Name("CoworkPinnedHttps")
 
     Events("pinnedHttpsStreamEvent")
 
+    OnDestroy {
+      self.streamTasks.invalidate()
+    }
+
     AsyncFunction("fetchPinnedHttps") { (request: PinnedHttpsRequest) async throws -> [String: Any] in
-      guard let url = URL(string: request.url) else {
+      guard let url = pinnedHttpsUrl(request.url) else {
         throw InvalidPinnedHttpsUrlException(request.url)
       }
 
@@ -77,7 +78,7 @@ public final class CoworkPinnedHttpsModule: Module {
     }
 
     AsyncFunction("closePinnedHttpsStream") { (streamId: String) -> Void in
-      self.removeStreamTask(for: streamId)?.cancel()
+      self.streamTasks.remove(for: streamId)?.cancel()
     }
   }
 
@@ -85,7 +86,7 @@ public final class CoworkPinnedHttpsModule: Module {
     guard let streamId = request.streamId else {
       throw MissingStreamIdException()
     }
-    guard let url = URL(string: request.url) else {
+    guard let url = pinnedHttpsUrl(request.url) else {
       throw InvalidPinnedHttpsUrlException(request.url)
     }
 
@@ -103,36 +104,35 @@ public final class CoworkPinnedHttpsModule: Module {
       onEvent: { [weak self] event in
         self?.sendEvent("pinnedHttpsStreamEvent", event)
       },
-      onComplete: { [weak self] in
-        self?.removeStreamTask(for: streamId)
+      onComplete: { [weak self] task in
+        self?.streamTasks.complete(task, for: streamId)
       }
     )
     let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
     let task = session.dataTask(with: urlRequest)
-    setStreamTask(task, for: streamId)
+    streamTasks.insert(task, for: streamId)
     task.resume()
-  }
-
-  private func setStreamTask(_ task: URLSessionDataTask, for streamId: String) {
-    streamTasksQueue.sync {
-      streamTasks[streamId] = task
-    }
-  }
-
-  private func removeStreamTask(for streamId: String) -> URLSessionDataTask? {
-    streamTasksQueue.sync {
-      streamTasks.removeValue(forKey: streamId)
-    }
   }
 }
 
-private class PinnedHttpsSessionDelegate: NSObject, URLSessionDelegate {
+private class PinnedHttpsSessionDelegate: NSObject, URLSessionTaskDelegate {
   private let certSha256: String
   private let spkiSha256: String
 
   init(certSha256: String, spkiSha256: String) {
     self.certSha256 = certSha256.lowercased()
     self.spkiSha256 = spkiSha256
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    // Paired endpoints never redirect; keep authenticated requests on the pinned origin.
+    completionHandler(nil)
   }
 
   func urlSession(
@@ -164,7 +164,7 @@ private class PinnedHttpsSessionDelegate: NSObject, URLSessionDelegate {
 private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSessionDataDelegate {
   private let streamId: String
   private let onEvent: ([String: Any?]) -> Void
-  private let onComplete: () -> Void
+  private let onComplete: (URLSessionTask) -> Void
   private var pendingUtf8 = Data()
   private var didSendTerminalEvent = false
 
@@ -173,7 +173,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
     certSha256: String,
     spkiSha256: String,
     onEvent: @escaping ([String: Any?]) -> Void,
-    onComplete: @escaping () -> Void
+    onComplete: @escaping (URLSessionTask) -> Void
   ) {
     self.streamId = streamId
     self.onEvent = onEvent
@@ -223,7 +223,7 @@ private final class PinnedHttpsStreamDelegate: PinnedHttpsSessionDelegate, URLSe
         "message": "Event stream closed.",
       ])
     }
-    onComplete()
+    onComplete(task)
     session.finishTasksAndInvalidate()
   }
 

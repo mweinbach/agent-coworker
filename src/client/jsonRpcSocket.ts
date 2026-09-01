@@ -200,6 +200,7 @@ export class JsonRpcSocket {
 
   private ws: WebSocketLike | null = null;
   private ready = Promise.withResolvers<void>();
+  private readySettled = false;
   private initialized = false;
   private reconnectAttempt = 0;
   private reconnectTimer: unknown = null;
@@ -271,9 +272,19 @@ export class JsonRpcSocket {
 
   private resetReadyPromise() {
     this.ready = Promise.withResolvers<void>();
+    this.readySettled = false;
     void this.ready.promise.catch(() => {
       // prevent unhandled rejection noise for callers that never await readiness
     });
+  }
+
+  private settleReadyPromise(error?: Error) {
+    this.readySettled = true;
+    if (error) {
+      this.ready.reject(error);
+    } else {
+      this.ready.resolve();
+    }
   }
 
   connect() {
@@ -281,7 +292,9 @@ export class JsonRpcSocket {
     this.cancelReconnect();
     this.intentionalClose = false;
     this.reconnectExhausted = false;
-    this.resetReadyPromise();
+    if (this.readySettled) {
+      this.resetReadyPromise();
+    }
     this.doConnect();
   }
 
@@ -294,6 +307,7 @@ export class JsonRpcSocket {
     this.serverSupportsToolRetryLineage = false;
     this.pendingInitializationFailure = null;
     const closedError = new Error("socket closed");
+    this.settleReadyPromise(closedError);
     this.rejectQueuedRequests(closedError);
     this.rejectPendingRequests(closedError, false);
     try {
@@ -415,7 +429,7 @@ export class JsonRpcSocket {
       if (!this.intentionalClose && this.autoReconnect) {
         this.scheduleReconnect(failure);
       } else {
-        this.ready.reject(failure);
+        this.settleReadyPromise(failure);
         this.rejectQueuedRequests(failure);
         this.onClose?.(failure.message);
       }
@@ -431,7 +445,7 @@ export class JsonRpcSocket {
       }
       this.clearOpenTimeout();
       this.armHandshakeTimeout(ws);
-      void this.performHandshake().catch((error) => {
+      void this.performHandshake(ws).catch((error) => {
         const formatted = error instanceof Error ? error : new Error(String(error));
         this.failInitialization(ws, formatted);
       });
@@ -506,7 +520,7 @@ export class JsonRpcSocket {
         this.scheduleReconnect(failure);
       } else {
         if (!wasInitialized) {
-          this.ready.reject(failure);
+          this.settleReadyPromise(failure);
         }
         this.rejectQueuedRequests(failure);
         this.onClose?.(failure.message);
@@ -514,7 +528,7 @@ export class JsonRpcSocket {
     });
   }
 
-  private async performHandshake(): Promise<void> {
+  private async performHandshake(ws: WebSocketLike): Promise<void> {
     const initializeParams = (includeToolRetryLineage: boolean) => ({
       clientInfo: this.clientInfo,
       capabilities: {
@@ -532,6 +546,9 @@ export class JsonRpcSocket {
         initializeParams(this.toolRetryLineage),
       );
     } catch (error) {
+      if (this.ws !== ws) {
+        return;
+      }
       const requestError = error as JsonRpcRequestError;
       if (
         !this.toolRetryLineage ||
@@ -541,6 +558,9 @@ export class JsonRpcSocket {
       }
       this.serverSupportsToolRetryLineage = false;
       initializeResult = await this.sendRequestNow("initialize", initializeParams(false));
+    }
+    if (this.ws !== ws) {
+      return;
     }
     const capabilities =
       initializeResult &&
@@ -554,15 +574,14 @@ export class JsonRpcSocket {
       capabilities !== null &&
       "toolRetryLineage" in capabilities &&
       capabilities.toolRetryLineage === true;
-    const ws = this.ws;
-    if (!ws || ws.readyState !== this.WebSocketImpl.OPEN) {
+    if (ws.readyState !== this.WebSocketImpl.OPEN) {
       throw new Error("Failed to send initialized notification");
     }
     ws.send(JSON.stringify({ method: "initialized" }));
     this.clearHandshakeTimeout();
     this.initialized = true;
     this.reconnectAttempt = 0;
-    this.ready.resolve();
+    this.settleReadyPromise();
     this.flushQueuedOperations();
     if (this.ws === ws && this.initialized) {
       this.onOpen?.();
@@ -745,7 +764,7 @@ export class JsonRpcSocket {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) {
       this.reconnectExhausted = true;
       const exhaustedError = new Error("max reconnect attempts exceeded");
-      this.ready.reject(exhaustedError);
+      this.settleReadyPromise(exhaustedError);
       this.rejectQueuedRequests(exhaustedError);
       this.onReconnectExhausted?.(exhaustedError.message);
       this.onClose?.(exhaustedError.message);

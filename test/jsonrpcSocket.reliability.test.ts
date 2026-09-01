@@ -4,6 +4,138 @@ import { JsonRpcSocket } from "../src/client/jsonRpcSocket";
 import { createManualTimers, FakeWebSocket, flushMicrotasks } from "./helpers/chaos";
 
 describe("JsonRpcSocket foundational reliability", () => {
+  test.each(["opening", "handshaking", "reconnecting"] as const)(
+    "settles readiness when closed while %s",
+    async (phase) => {
+      FakeWebSocket.reset();
+      FakeWebSocket.autoOpen = phase !== "opening";
+
+      class AsyncCloseWebSocket extends FakeWebSocket {
+        override close() {
+          queueMicrotask(() => super.close());
+        }
+      }
+
+      const timers = createManualTimers();
+      const socket = new JsonRpcSocket({
+        url: "ws://example.test/ws",
+        clientInfo: { name: "desktop" },
+        WebSocketImpl: AsyncCloseWebSocket as never,
+        autoReconnect: true,
+        timers: timers.scheduler as never,
+      });
+
+      socket.connect();
+      await flushMicrotasks();
+      if (phase === "reconnecting") {
+        await FakeWebSocket.latest().completeHandshake();
+        FakeWebSocket.latest().close();
+        await flushMicrotasks();
+      }
+
+      const readiness = socket.readyPromise.then(
+        () => "ready",
+        (error: Error) => error.message,
+      );
+      socket.close();
+
+      await expect(
+        Promise.race([readiness, flushMicrotasks().then(() => "pending")]),
+      ).resolves.toBe("socket closed");
+      expect(timers.timeoutCallbacks).toHaveLength(0);
+
+      FakeWebSocket.autoOpen = true;
+      socket.connect();
+      await flushMicrotasks();
+      await FakeWebSocket.latest().completeHandshake();
+      await expect(socket.readyPromise).resolves.toBeUndefined();
+      socket.close();
+    },
+  );
+
+  test("preserves readiness waiters when reconnecting manually during backoff", async () => {
+    FakeWebSocket.reset();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/ws",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as never,
+      autoReconnect: true,
+      timers: createManualTimers().scheduler as never,
+    });
+
+    try {
+      socket.connect();
+      await flushMicrotasks();
+      await FakeWebSocket.latest().completeHandshake();
+      FakeWebSocket.latest().close();
+      const readiness = socket.readyPromise.then(() => "ready");
+
+      socket.connect();
+      await flushMicrotasks();
+      await FakeWebSocket.latest().completeHandshake();
+
+      await expect(
+        Promise.race([readiness, flushMicrotasks().then(() => "pending")]),
+      ).resolves.toBe("ready");
+    } finally {
+      socket.close();
+    }
+  });
+
+  test.each(["successful", "rejected"] as const)(
+    "does not apply a stale %s handshake to a replacement connection",
+    async (outcome) => {
+      FakeWebSocket.reset();
+      let opened = 0;
+      const socket = new JsonRpcSocket({
+        url: "ws://example.test/ws",
+        clientInfo: { name: "desktop" },
+        WebSocketImpl: FakeWebSocket as never,
+        toolRetryLineage: true,
+        timers: createManualTimers().scheduler as never,
+        onOpen: () => {
+          opened += 1;
+        },
+      });
+
+      try {
+        socket.connect();
+        await flushMicrotasks();
+        const previous = FakeWebSocket.latest();
+        const initialize = previous.sentMessages()[0];
+        const response =
+          outcome === "successful"
+            ? { result: { capabilities: { toolRetryLineage: true } } }
+            : { error: { code: -32602, message: "Unknown capability: toolRetryLineage" } };
+        const delivery = previous.emitMessage(JSON.stringify({ id: initialize?.id, ...response }));
+
+        // Replace the connection after its reply is dispatched but before the
+        // asynchronous handshake continuation consumes that reply.
+        queueMicrotask(() =>
+          queueMicrotask(() => {
+            socket.close();
+            socket.connect();
+          }),
+        );
+        await delivery;
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        const current = FakeWebSocket.latest();
+        expect(current).not.toBe(previous);
+        expect(current.sentMessages().map((message) => message.method)).toEqual(["initialize"]);
+        expect(opened).toBe(0);
+        expect(socket.supportsToolRetryLineage).toBe(false);
+
+        await current.completeHandshake();
+        await expect(socket.readyPromise).resolves.toBeUndefined();
+        expect(opened).toBe(1);
+      } finally {
+        socket.close();
+      }
+    },
+  );
+
   test("bounds an unanswered request so callers never remain pending forever", async () => {
     FakeWebSocket.reset();
     const timers = createManualTimers();

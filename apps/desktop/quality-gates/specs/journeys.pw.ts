@@ -198,7 +198,9 @@ test("covers project chat streaming, approval, stop, steer, cancellation, and co
   });
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await expect(page.getByText("Stop current turn", { exact: true })).toBeVisible();
-  await expect(page.getByPlaceholder("Search chats, workspaces, settings, skills…")).toBeFocused();
+  await expect(
+    page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox"),
+  ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
   await expect(composer).toBeFocused();
@@ -370,14 +372,17 @@ test.describe("connection recovery", () => {
     expect(beforeDisconnect.activeSocketConnections).toBeGreaterThan(0);
     await quality.disconnectTransport();
     await expect(
-      page.getByText("Connection lost. Your draft is safe; reconnect to continue."),
+      page.getByText(
+        "Connection lost. Reconnecting automatically… Your draft and current response are safe.",
+        { exact: true },
+      ),
     ).toBeVisible();
-    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
+    const connectionBanner = page.locator('[data-slot="connection-banner"]');
+    await expect(connectionBanner).toHaveCount(1);
+    await expect(
+      connectionBanner.getByRole("button", { name: "Loading Reconnecting…", exact: true }),
+    ).toBeDisabled();
     expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
-
-    await page.getByRole("button", { name: "Reconnect" }).click();
-    await expect(page.getByText("Reconnecting this chat… Your draft is safe.")).toBeVisible();
     expect(await page.evaluate(() => window.__coworkQualityGate?.isReady())).toBe(false);
     await quality.releaseTransport();
     await expect
@@ -391,10 +396,9 @@ test.describe("connection recovery", () => {
     await expect
       .poll(async () => page.evaluate(() => window.__coworkQualityGate?.isReady()))
       .toBe(true);
-    await expect(
-      page.getByText("Reconnected. Your draft and conversation are intact."),
-    ).toBeVisible();
+    await expect(connectionBanner).toHaveCount(0);
     await expect(composer).toHaveValue("Preserve this draft while the connection recovers.");
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(scrolledAway.scrollTop);
     expect(await page.evaluate(() => window.__coworkQualityGate?.getFeedItemIds())).toEqual(
       originalFeedIds,
     );
@@ -411,8 +415,6 @@ test.describe("connection recovery", () => {
       ...(originalFeedIds ?? []),
       newItemId,
     ]);
-    await page.getByRole("button", { name: "Dismiss connection status" }).click();
-    await expect(page.locator('[data-slot="connection-banner"]')).toHaveCount(0);
   });
 });
 

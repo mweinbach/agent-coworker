@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -66,7 +66,7 @@ type ServerManagerTestInternals = {
     string,
     ServerManagerTestHandle & {
       url: string;
-      mobileH3: null;
+      mobileH3: Awaited<ReturnType<ServerManagerInstance["startWorkspaceServer"]>>["mobileH3"];
     }
   >;
   pendingStarts: Map<string, ServerManagerTestHandle>;
@@ -79,6 +79,8 @@ type ServerManagerTestInternals = {
     signal: NodeJS.Signals | null,
   ) => void;
 };
+
+type ServerManagerInstance = InstanceType<typeof ServerManager>;
 
 function createFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
@@ -1528,4 +1530,171 @@ describe("desktop server manager bun crash detection", () => {
     expect(childPending.exitCode).toBe(0);
     expect(exits).toEqual([]);
   });
+});
+
+describe("mobile trust request cancellation", () => {
+  const device = {
+    deviceId: "phone-1",
+    fingerprint: "fingerprint",
+    displayName: "Phone",
+    lastPairedAt: null,
+    lastConnectedAt: null,
+    permissions: {
+      turns: true,
+      serverRequests: false,
+      providerAuth: false,
+      mcpAuth: false,
+      workspaceSettings: false,
+      backups: false,
+      conversations: false,
+    },
+  };
+  const payload = {
+    trustedDevices: [],
+    trustedDevice: { ...device, permissions: { ...device.permissions, turns: false } },
+  };
+  const requests = [
+    {
+      name: "list",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.listMobileH3TrustedDevices("ws-trust", signal),
+    },
+    {
+      name: "revoke",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.revokeMobileH3TrustedDevice("ws-trust", device.deviceId, signal),
+    },
+    {
+      name: "revoke all",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.revokeMobileH3TrustedDevices("ws-trust", signal),
+    },
+    {
+      name: "update permissions",
+      invoke: (manager: ServerManagerInstance, signal: AbortSignal) =>
+        manager.updateMobileH3TrustedDevicePermissions(
+          "ws-trust",
+          device.deviceId,
+          { turns: false },
+          signal,
+        ),
+    },
+  ];
+
+  function createTrustManager(fetchImpl: typeof fetch) {
+    const manager = new ServerManager({ fetch: fetchImpl });
+    const handle = {
+      child: createFakeChild(),
+      url: "ws://127.0.0.1:7337/ws",
+      cleanup() {},
+      mobileH3: {
+        url: "https://127.0.0.1:7443",
+        port: 7443,
+        hostHints: ["127.0.0.1"],
+        ticket: "ticket",
+        adminToken: "token",
+        certSha256: "cert",
+        spkiSha256: "spki",
+        identityPub: "identity",
+        nonce: "nonce",
+        expiresAt: 1,
+        trustedDevice: device,
+        trustedDevices: [device],
+      },
+    };
+    getServerManagerTestInternals(manager).servers.set("ws-trust", handle);
+    return { manager, handle };
+  }
+
+  test.each(requests)(
+    "$name forwards cancellation without disabling successful requests",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const fetchImpl = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(init?.signal).toBe(controller.signal);
+        return Response.json(payload);
+      });
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      try {
+        await invoke(manager, controller.signal);
+        expect(handle.mobileH3).not.toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests)(
+    "$name does not dispatch an already cancelled request",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      controller.abort(new Error("Relay stopped"));
+      const fetchImpl = mock(async () => Response.json(payload));
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager } = createTrustManager(fetchImpl as typeof fetch);
+      try {
+        await expect(invoke(manager, controller.signal)).rejects.toThrow("Relay stopped");
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests)(
+    "$name ignores a response received after cancellation",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const response = Promise.withResolvers<Response>();
+      const fetchImpl = mock(() => response.promise);
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      const outcome = Promise.allSettled([invoke(manager, controller.signal)]);
+      controller.abort(new Error("Relay stopped"));
+      response.resolve(Response.json(payload));
+      try {
+        const [result] = await outcome;
+        expect(result?.status).toBe("rejected");
+        expect(handle.mobileH3).toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test.each(requests.filter(({ name }) => name === "list" || name === "update permissions"))(
+    "$name ignores a body decoded after cancellation",
+    async ({ invoke }) => {
+      const controller = new AbortController();
+      const bodyStarted = Promise.withResolvers<void>();
+      const body = Promise.withResolvers<typeof payload>();
+      const response = Response.json(payload);
+      response.json = () => {
+        bodyStarted.resolve();
+        return body.promise;
+      };
+      const fetchImpl = mock(async () => response);
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fetchImpl as typeof fetch);
+      const { manager, handle } = createTrustManager(fetchImpl as typeof fetch);
+      const before = handle.mobileH3;
+      const outcome = Promise.allSettled([invoke(manager, controller.signal)]);
+      await bodyStarted.promise;
+      controller.abort(new Error("Relay stopped"));
+      body.resolve(payload);
+      try {
+        const [result] = await outcome;
+        expect(result?.status).toBe("rejected");
+        expect(handle.mobileH3).toBe(before);
+      } finally {
+        fetchSpy.mockRestore();
+        await manager.stopAll();
+      }
+    },
+  );
 });

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createFakeChild, type FakeChild } from "./helpers/fakeServerChild";
 import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
@@ -28,6 +28,37 @@ const electronMockOverrides = {
 
 setElectronMockOverrides(electronMockOverrides);
 mock.module("electron", () => createElectronMock());
+
+const childProcess = await import("node:child_process");
+const validation = await import("../electron/services/validation");
+const localLogs = await import("../electron/services/localLogs");
+let validateWorkspace = async (_workspacePath: string): Promise<void> => {};
+const spawnedChildren: FakeChild[] = [];
+let spawnServer = (): FakeChild => {
+  const child = createFakeChild();
+  spawnedChildren.push(child);
+  queueMicrotask(() => child.emitServerListening());
+  return child;
+};
+
+mock.module("node:child_process", () => ({
+  ...childProcess,
+  spawn: () => spawnServer(),
+}));
+mock.module("../electron/services/validation", () => ({
+  ...validation,
+  assertWorkspaceDirectory: (workspacePath: string) => validateWorkspace(workspacePath),
+}));
+mock.module("../electron/services/localLogs", () => ({
+  ...localLogs,
+  writeLocalLog() {},
+}));
+mock.module("../electron/services/windowsSandboxReadiness", () => ({
+  async writeWindowsSandboxReadiness() {},
+  async readWindowsSandboxReadiness() {
+    return null;
+  },
+}));
 
 const { ServerManager, __internal } = await import("../electron/services/serverManager");
 
@@ -82,8 +113,172 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 const RUNNING_URL = "ws://127.0.0.1:1234/ws";
+const START_OPTIONS = {
+  workspaceId: "ws-start",
+  workspacePath: process.cwd(),
+  yolo: false,
+};
+
+beforeEach(() => {
+  setElectronMockOverrides(electronMockOverrides);
+  validateWorkspace = async () => {};
+  spawnedChildren.length = 0;
+  spawnServer = () => {
+    const child = createFakeChild();
+    spawnedChildren.push(child);
+    queueMicrotask(() => child.emitServerListening());
+    return child;
+  };
+});
+
+afterEach(() => {
+  for (const child of spawnedChildren) child.kill();
+});
 
 describe("chaos: desktop server manager", () => {
+  test("concurrent starts own one child and stopAll reaps it", async () => {
+    const gate = Promise.withResolvers<void>();
+    validateWorkspace = () => gate.promise;
+    const manager = new ServerManager();
+    const starts = Promise.allSettled([
+      manager.startWorkspaceServer(START_OPTIONS),
+      manager.startWorkspaceServer(START_OPTIONS),
+    ]);
+    gate.resolve();
+    try {
+      const results = await starts;
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      expect(spawnedChildren).toHaveLength(1);
+    } finally {
+      await manager.stopAll();
+    }
+    expect(spawnedChildren.every((child) => child.exitCode !== null)).toBe(true);
+  });
+
+  test.each(["workspace", "all"] as const)(
+    "%s stop cancels preflight before it can launch a child",
+    async (scope) => {
+      const gate = Promise.withResolvers<void>();
+      validateWorkspace = () => gate.promise;
+      const manager = new ServerManager();
+      const started = Promise.allSettled([manager.startWorkspaceServer(START_OPTIONS)]);
+      const stopping =
+        scope === "workspace"
+          ? manager.stopWorkspaceServer(START_OPTIONS.workspaceId)
+          : manager.stopAll();
+      await stopping;
+      gate.resolve();
+      try {
+        const [result] = await started;
+        expect(result?.status).toBe("rejected");
+        expect(spawnedChildren).toHaveLength(0);
+      } finally {
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test("preflight is visible as starting before a child exists", async () => {
+    const gate = Promise.withResolvers<void>();
+    validateWorkspace = () => gate.promise;
+    const manager = new ServerManager();
+    const started = Promise.allSettled([manager.startWorkspaceServer(START_OPTIONS)]);
+    try {
+      const status = await manager.getWorkspaceServerStatus(START_OPTIONS.workspaceId);
+      expect(status.reason).toBe("starting");
+      expect(spawnedChildren).toHaveLength(0);
+    } finally {
+      const stopping = manager.stopWorkspaceServer(START_OPTIONS.workspaceId);
+      gate.resolve();
+      await started;
+      await stopping;
+      await manager.stopAll();
+    }
+  });
+
+  test("a deliberate start after workspace stop is not replaced by stale preflight", async () => {
+    const gate = Promise.withResolvers<void>();
+    validateWorkspace = () => gate.promise;
+    const manager = new ServerManager();
+    const obsoleteStart = Promise.allSettled([manager.startWorkspaceServer(START_OPTIONS)]);
+    await manager.stopWorkspaceServer(START_OPTIONS.workspaceId);
+    validateWorkspace = async () => {};
+    try {
+      await manager.startWorkspaceServer(START_OPTIONS);
+      gate.resolve();
+      const [result] = await obsoleteStart;
+      expect(result?.status).toBe("rejected");
+      expect(spawnedChildren).toHaveLength(1);
+    } finally {
+      gate.resolve();
+      await manager.stopAll();
+    }
+  });
+
+  test("stopping an owned child during startup rejects without publishing readiness", async () => {
+    const spawned = Promise.withResolvers<FakeChild>();
+    spawnServer = () => {
+      const child = createFakeChild();
+      spawnedChildren.push(child);
+      spawned.resolve(child);
+      return child;
+    };
+    const manager = new ServerManager();
+    const started = Promise.allSettled([manager.startWorkspaceServer(START_OPTIONS)]);
+    const child = await spawned.promise;
+    try {
+      await manager.stopWorkspaceServer(START_OPTIONS.workspaceId);
+      child.emitServerListening();
+      const [result] = await started;
+      expect(result?.status).toBe("rejected");
+      expect(child.exitCode).not.toBeNull();
+      expect(internalsOf(manager).servers.size).toBe(0);
+    } finally {
+      await manager.stopAll();
+    }
+  });
+
+  test.each(["start", "restart"] as const)(
+    "stop cancels %s replacement while the old child is shutting down",
+    async (operation) => {
+      const manager = new ServerManager();
+      const oldChild = registerRunningServer(manager, START_OPTIONS.workspaceId, RUNNING_URL);
+      const killStarted = Promise.withResolvers<void>();
+      oldChild.kill = () => {
+        killStarted.resolve();
+        return true;
+      };
+      const started = Promise.allSettled([
+        operation === "start"
+          ? manager.startWorkspaceServer({ ...START_OPTIONS, forceRestart: true })
+          : manager.restartWorkspaceServer(START_OPTIONS),
+      ]);
+      await killStarted.promise;
+      const stopping = manager.stopWorkspaceServer(START_OPTIONS.workspaceId);
+      oldChild.killWith(0, null);
+      try {
+        await stopping;
+        const [result] = await started;
+        expect(result?.status).toBe("rejected");
+        expect(spawnedChildren).toHaveLength(0);
+      } finally {
+        await manager.stopAll();
+      }
+    },
+  );
+
+  test("stopAll closes admission for later renderer startup calls", async () => {
+    const manager = new ServerManager();
+    await manager.stopAll();
+    const [result] = await Promise.allSettled([manager.startWorkspaceServer(START_OPTIONS)]);
+    try {
+      expect(result?.status).toBe("rejected");
+      expect(spawnedChildren).toHaveLength(0);
+    } finally {
+      await manager.stopAll();
+    }
+  });
+
   test("scenario 1: killing the server after server_listening is detected and reported", async () => {
     const exits: ExitEvent[] = [];
     const manager = new ServerManager({

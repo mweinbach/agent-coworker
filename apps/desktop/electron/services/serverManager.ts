@@ -27,6 +27,7 @@ import {
   resolveCrashReportingConfig,
 } from "../../../../src/telemetry/crashReporting";
 import { captureProductEvent } from "../../../../src/telemetry/productAnalytics";
+import { raceWithAbort } from "../../../../src/utils/abortSignal";
 import type {
   normalizePrivacyTelemetrySettings,
   PersistedPrivacyTelemetrySettings,
@@ -67,6 +68,7 @@ const STDERR_TAIL_LIMIT = 16_384;
 const SERVER_LOG_FILE_NAME = "server.log";
 const MIRROR_SERVER_OUTPUT_PREFIX = "[cowork-server";
 const SKIP_WINDOWS_SANDBOX_SETUP_ENV = "COWORK_DESKTOP_SKIP_WINDOWS_SANDBOX_SETUP";
+const SERVER_START_CANCELLED_MESSAGE = "Workspace server startup was cancelled.";
 let windowsSandboxSetupAttempted = false;
 
 const OBSERVABILITY_ENV_PREFIXES = ["AGENT_OBSERVABILITY_", "LANGFUSE_"] as const;
@@ -1228,6 +1230,10 @@ function shouldReuseExistingWorkspaceServer(
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
   private readonly pendingStarts = new Map<string, PendingServerHandle>();
+  private readonly pendingOperations = new Map<string, Promise<void>>();
+  private readonly startupControllers = new Map<string, Set<AbortController>>();
+  private stopped = false;
+  private stopPromise: Promise<void> | null = null;
   private readonly suppressedExitNotifications = new WeakSet<ServerChildProcess>();
   private readonly startCountsByWorkspace = new Map<string, number>();
   private readonly lastExitByWorkspace = new Map<
@@ -1272,6 +1278,9 @@ export class ServerManager {
 
   async getWorkspaceServerStatus(workspaceId: string): Promise<WorkspaceServerStatus> {
     assertSafeId(workspaceId, "workspaceId");
+    if (this.hasActiveStartup(workspaceId)) {
+      return { workspaceId, running: false, url: null, reason: "starting" };
+    }
     const pending = this.pendingStarts.get(workspaceId);
     if (pending) {
       if (pending.child.exitCode === null && pending.child.signalCode === null) {
@@ -1323,10 +1332,41 @@ export class ServerManager {
   async startWorkspaceServer(
     opts: StartWorkspaceServerOptions,
   ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
+    const { workspaceId } = opts;
+    assertSafeId(workspaceId, "workspaceId");
+    if (this.stopped) throw new Error("Workspace server manager is stopped.");
+
+    const controller = new AbortController();
+    const controllers = this.startupControllers.get(workspaceId) ?? new Set<AbortController>();
+    controllers.add(controller);
+    this.startupControllers.set(workspaceId, controllers);
+    try {
+      const result = await this.runWorkspaceOperation(workspaceId, async () => {
+        controller.signal.throwIfAborted();
+        return await this.startWorkspaceServerOwned(opts, controller.signal);
+      });
+      controller.signal.throwIfAborted();
+      return result;
+    } finally {
+      controllers.delete(controller);
+      if (controllers.size === 0 && this.startupControllers.get(workspaceId) === controllers) {
+        this.startupControllers.delete(workspaceId);
+      }
+    }
+  }
+
+  private async startWorkspaceServerOwned(
+    opts: StartWorkspaceServerOptions,
+    signal: AbortSignal,
+  ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
     const { workspaceId, workspacePath, yolo } = opts;
 
-    assertSafeId(workspaceId, "workspaceId");
-    await assertWorkspaceDirectory(workspacePath);
+    await raceWithAbort(
+      assertWorkspaceDirectory(workspacePath),
+      signal,
+      SERVER_START_CANCELLED_MESSAGE,
+    );
+    signal.throwIfAborted();
     const startedAt = Date.now();
     const productAnalyticsState =
       opts.productAnalyticsState ?? this.options.getProductAnalyticsState?.() ?? null;
@@ -1344,6 +1384,7 @@ export class ServerManager {
             this.pendingStarts.delete(workspaceId);
           }
           existing.cleanup();
+          signal.throwIfAborted();
         } else {
           captureProductEvent("workspace_server_started", {
             eventSource: "main",
@@ -1393,13 +1434,19 @@ export class ServerManager {
       yolo,
     });
 
-    await ensureWindowsSandboxReady(workspacePath);
+    await raceWithAbort(
+      ensureWindowsSandboxReady(workspacePath),
+      signal,
+      SERVER_START_CANCELLED_MESSAGE,
+    );
+    signal.throwIfAborted();
 
     const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
     const outputMirror = shouldMirrorServerOutput() ? createServerOutputMirror() : null;
 
     for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+      signal.throwIfAborted();
       const serverEnv = buildServerEnv(opts.featureFlags, {
         includeBundledFoundationModelsSdk: !useSource,
         includeBundledWindowsAiElectron: !useSource,
@@ -1474,14 +1521,22 @@ export class ServerManager {
       });
 
       try {
-        const listening = await waitForServerListening(child, {
-          onCoworkRuntimeBootstrapProgress: opts.onCoworkRuntimeBootstrapProgress,
-          onStdoutLine: outputMirror
-            ? (line) => {
-                outputMirror.writeLine("stdout", line);
-              }
-            : undefined,
-        });
+        const listening = await raceWithAbort(
+          waitForServerListening(child, {
+            onCoworkRuntimeBootstrapProgress: opts.onCoworkRuntimeBootstrapProgress,
+            onStdoutLine: outputMirror
+              ? (line) => {
+                  outputMirror.writeLine("stdout", line);
+                }
+              : undefined,
+          }),
+          signal,
+          SERVER_START_CANCELLED_MESSAGE,
+        );
+        signal.throwIfAborted();
+        if (child.exitCode !== null || child.signalCode !== null) {
+          throw new Error("Workspace server exited before startup completed.");
+        }
         const url = appendBrowserAccessToken(listening.url, listening.browserAccessToken);
         logServerManagerEvent("workspace server listening", {
           workspaceId,
@@ -1521,6 +1576,7 @@ export class ServerManager {
           this.pendingStarts.delete(workspaceId);
         }
         cleanupOnce();
+        signal.throwIfAborted();
 
         const shouldRetry =
           useSource &&
@@ -1596,7 +1652,14 @@ export class ServerManager {
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {
     assertSafeId(workspaceId, "workspaceId");
+    for (const controller of this.startupControllers.get(workspaceId) ?? []) {
+      controller.abort(new Error(SERVER_START_CANCELLED_MESSAGE));
+    }
+    if (this.stopPromise) return await this.stopPromise;
+    await this.runWorkspaceOperation(workspaceId, () => this.stopWorkspaceServerOwned(workspaceId));
+  }
 
+  private async stopWorkspaceServerOwned(workspaceId: string): Promise<void> {
     const pending = this.pendingStarts.get(workspaceId);
     if (pending) {
       this.pendingStarts.delete(workspaceId);
@@ -1619,25 +1682,35 @@ export class ServerManager {
   async restartWorkspaceServer(
     opts: StartWorkspaceServerOptions,
   ): Promise<{ url: string; mobileH3: ServerListening["mobileH3"] }> {
-    await this.stopWorkspaceServer(opts.workspaceId);
-    return await this.startWorkspaceServer(opts);
+    return await this.startWorkspaceServer({ ...opts, forceRestart: true });
   }
 
-  async listMobileH3TrustedDevices(workspaceId: string): Promise<MobileRelayTrustedPhoneDevice[]> {
+  async listMobileH3TrustedDevices(
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<MobileRelayTrustedPhoneDevice[]> {
     assertSafeId(workspaceId, "workspaceId");
+    signal?.throwIfAborted();
     const handle = this.servers.get(workspaceId);
     if (!handle?.mobileH3) {
       throw new Error("Mobile H3 endpoint is not running.");
     }
-    const response = await fetch(`${toHttpServerUrl(handle.url)}/mobile-h3/trusted`, {
-      headers: {
-        authorization: `Bearer ${handle.mobileH3.adminToken}`,
+    const response = await (this.options.fetch ?? fetch)(
+      `${toHttpServerUrl(handle.url)}/mobile-h3/trusted`,
+      {
+        signal,
+        headers: {
+          authorization: `Bearer ${handle.mobileH3.adminToken}`,
+        },
       },
-    });
+    );
+    signal?.throwIfAborted();
     if (!response.ok) {
       throw new Error(`Failed to list mobile trust records: HTTP ${response.status}.`);
     }
-    const payload = trustedDevicesResponseSchema.parse(await response.json());
+    const body = await response.json();
+    signal?.throwIfAborted();
+    const payload = trustedDevicesResponseSchema.parse(body);
     handle.mobileH3 = {
       ...handle.mobileH3,
       trustedDevice: payload.trustedDevices[0] ?? null,
@@ -1646,21 +1719,28 @@ export class ServerManager {
     return payload.trustedDevices;
   }
 
-  async revokeMobileH3TrustedDevice(workspaceId: string, deviceId: string): Promise<void> {
+  async revokeMobileH3TrustedDevice(
+    workspaceId: string,
+    deviceId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     assertSafeId(workspaceId, "workspaceId");
+    signal?.throwIfAborted();
     const handle = this.servers.get(workspaceId);
     if (!handle?.mobileH3) {
       throw new Error("Mobile H3 endpoint is not running.");
     }
-    const response = await fetch(
+    const response = await (this.options.fetch ?? fetch)(
       `${toHttpServerUrl(handle.url)}/mobile-h3/trusted/${encodeURIComponent(deviceId)}`,
       {
+        signal,
         method: "DELETE",
         headers: {
           authorization: `Bearer ${handle.mobileH3.adminToken}`,
         },
       },
     );
+    signal?.throwIfAborted();
     if (!response.ok) {
       throw new Error(`Failed to revoke mobile trust record: HTTP ${response.status}.`);
     }
@@ -1678,15 +1758,18 @@ export class ServerManager {
     workspaceId: string,
     deviceId: string,
     permissions: Partial<Record<MobileRelayTrustedDevicePermissionKey, boolean>>,
+    signal?: AbortSignal,
   ): Promise<MobileRelayTrustedPhoneDevice> {
     assertSafeId(workspaceId, "workspaceId");
+    signal?.throwIfAborted();
     const handle = this.servers.get(workspaceId);
     if (!handle?.mobileH3) {
       throw new Error("Mobile H3 endpoint is not running.");
     }
-    const response = await fetch(
+    const response = await (this.options.fetch ?? fetch)(
       `${toHttpServerUrl(handle.url)}/mobile-h3/trusted/${encodeURIComponent(deviceId)}/permissions`,
       {
+        signal,
         method: "PATCH",
         headers: {
           authorization: `Bearer ${handle.mobileH3.adminToken}`,
@@ -1695,10 +1778,12 @@ export class ServerManager {
         body: JSON.stringify({ permissions }),
       },
     );
+    signal?.throwIfAborted();
     if (!response.ok) {
       throw new Error(`Failed to update mobile trust permissions: HTTP ${response.status}.`);
     }
     const payload = (await response.json()) as { trustedDevice?: MobileRelayTrustedPhoneDevice };
+    signal?.throwIfAborted();
     if (!payload.trustedDevice) {
       throw new Error("Mobile H3 endpoint returned an invalid trust record.");
     }
@@ -1717,18 +1802,24 @@ export class ServerManager {
     return payload.trustedDevice;
   }
 
-  async revokeMobileH3TrustedDevices(workspaceId: string): Promise<void> {
+  async revokeMobileH3TrustedDevices(workspaceId: string, signal?: AbortSignal): Promise<void> {
     assertSafeId(workspaceId, "workspaceId");
+    signal?.throwIfAborted();
     const handle = this.servers.get(workspaceId);
     if (!handle?.mobileH3) {
       throw new Error("Mobile H3 endpoint is not running.");
     }
-    const response = await fetch(`${toHttpServerUrl(handle.url)}/mobile-h3/trusted`, {
-      method: "DELETE",
-      headers: {
-        authorization: `Bearer ${handle.mobileH3.adminToken}`,
+    const response = await (this.options.fetch ?? fetch)(
+      `${toHttpServerUrl(handle.url)}/mobile-h3/trusted`,
+      {
+        signal,
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${handle.mobileH3.adminToken}`,
+        },
       },
-    });
+    );
+    signal?.throwIfAborted();
     if (!response.ok) {
       throw new Error(`Failed to revoke mobile trust records: HTTP ${response.status}.`);
     }
@@ -1740,6 +1831,21 @@ export class ServerManager {
   }
 
   async stopAll(): Promise<void> {
+    if (this.stopPromise) return await this.stopPromise;
+    this.stopped = true;
+    for (const controllers of this.startupControllers.values()) {
+      for (const controller of controllers) {
+        controller.abort(new Error(SERVER_START_CANCELLED_MESSAGE));
+      }
+    }
+    this.stopPromise = (async () => {
+      await Promise.all(this.pendingOperations.values());
+      await this.stopAllOwnedServers();
+    })();
+    return await this.stopPromise;
+  }
+
+  private async stopAllOwnedServers(): Promise<void> {
     const entries = [...this.servers.entries()];
     this.servers.clear();
     const pendingEntries = [...this.pendingStarts.entries()];
@@ -1761,10 +1867,38 @@ export class ServerManager {
     await Promise.all(killPromises);
   }
 
+  private hasActiveStartup(workspaceId: string): boolean {
+    for (const controller of this.startupControllers.get(workspaceId) ?? []) {
+      if (!controller.signal.aborted) return true;
+    }
+    return false;
+  }
+
+  private async runWorkspaceOperation<T>(
+    workspaceId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.pendingOperations.get(workspaceId) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pendingOperations.set(workspaceId, settled);
+    try {
+      return await result;
+    } finally {
+      if (this.pendingOperations.get(workspaceId) === settled) {
+        this.pendingOperations.delete(workspaceId);
+      }
+    }
+  }
+
   getDiagnostics(): ServerManagerDiagnostics {
     const workspaceIds = new Set<string>([
       ...this.servers.keys(),
       ...this.pendingStarts.keys(),
+      ...this.startupControllers.keys(),
       ...this.startCountsByWorkspace.keys(),
       ...this.lastExitByWorkspace.keys(),
     ]);
@@ -1777,9 +1911,10 @@ export class ServerManager {
           running:
             Boolean(handle) && handle?.child.exitCode === null && handle.child.signalCode === null,
           starting:
-            Boolean(pending) &&
-            pending?.child.exitCode === null &&
-            pending.child.signalCode === null,
+            this.hasActiveStartup(workspaceId) ||
+            (Boolean(pending) &&
+              pending?.child.exitCode === null &&
+              pending.child.signalCode === null),
           currentServerUrl: stripUrlSecrets(handle?.url ?? null),
           restartCount: Math.max(0, (this.startCountsByWorkspace.get(workspaceId) ?? 0) - 1),
           lastChildExit: this.lastExitByWorkspace.get(workspaceId) ?? null,

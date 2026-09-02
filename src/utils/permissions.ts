@@ -162,34 +162,6 @@ function writeTargetCrossesProtectedMetadata(config: AgentConfig, resolvedTarget
   }
 }
 
-export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
-  const resolved = path.resolve(filePath);
-  if (!isCanonicalPathInsideRoots(resolved, writeRoots(config))) {
-    return false;
-  }
-  return !writeTargetCrossesProtectedMetadata(config, resolved);
-}
-
-export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
-  const resolved = path.resolve(filePath);
-  if (isInsideCredentialDir(resolved, config)) return false;
-  try {
-    const canonicalTarget = canonicalizeExistingPrefixSync(resolved);
-    const canonicalDenyDirs = credentialReadDenyDirs(config).map((dir) =>
-      canonicalizeExistingPrefixSync(dir),
-    );
-    if (
-      isInsideCredentialDir(canonicalTarget, config) ||
-      canonicalDenyDirs.some((dir) => isPathInside(dir, canonicalTarget))
-    ) {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return isCanonicalPathInsideRoots(filePath, readRoots(config));
-}
-
 /**
  * Canonicalization for permission boundaries uses THE single engine
  * (platform/paths: NATIVE realpath + longest-existing-prefix walk). The local
@@ -214,22 +186,6 @@ function canonicalizeExistingPrefixSync(targetPath: string): string {
 
 function canonicalizeRootSync(rootPath: string): string {
   return canonicalizeExistingPrefixSync(rootPath);
-}
-
-function isCanonicalPathInsideRoots(filePath: string, roots: string[]): boolean {
-  const resolved = path.resolve(filePath);
-  if (!isPathInsideAnyRoot(resolved, roots)) {
-    return false;
-  }
-
-  try {
-    const canonicalTarget = canonicalizeExistingPrefixSync(resolved);
-    return roots
-      .map((root) => canonicalizeRootSync(root))
-      .some((root) => isPathInside(root, canonicalTarget));
-  } catch {
-    return false;
-  }
 }
 
 export async function assertWritePathAllowed(

@@ -47,7 +47,7 @@ import { ArtifactVersionStore } from "./ArtifactVersionStore";
 import {
   buildTaskReviewMaterialSnapshot,
   fingerprintTaskReviewMaterial,
-  getPendingTaskReviewFromRecords,
+  getPendingTaskReview,
   getTaskReviewRoundsFromRecords,
   stableStringify,
   type TaskReviewArtifactFileSnapshot,
@@ -3703,7 +3703,7 @@ export class TaskCoordinator {
 
     const reviews = this.options.sessionDb.listTaskReviews(task.id);
     const rounds = getTaskReviewRoundsFromRecords(reviews);
-    const pending = getPendingTaskReviewFromRecords(reviews);
+    const pending = getPendingTaskReview(rounds);
     if (pending) {
       throw new Error(
         `Review round ${pending.round} feedback must be addressed before another review`,
@@ -3799,8 +3799,8 @@ export class TaskCoordinator {
     const task = this.requireTask(input.taskId, input.workspacePath);
     assertExpectedTaskRevision(task, input.expectedRevision);
     assertTaskAcceptsMutation(task);
-    const pending = getPendingTaskReviewFromRecords(
-      this.options.sessionDb.listTaskReviews(task.id),
+    const pending = getPendingTaskReview(
+      getTaskReviewRoundsFromRecords(this.options.sessionDb.listTaskReviews(task.id)),
     );
     if (!pending) throw new Error("Task has no unaddressed review feedback");
     if (pending.reviewId !== input.reviewId) {
@@ -3891,7 +3891,7 @@ export class TaskCoordinator {
       (round) =>
         round.verdict === "pass" && round.materialFingerprint === materialForCompletion.fingerprint,
     );
-    const pendingReview = getPendingTaskReviewFromRecords(reviews);
+    const pendingReview = getPendingTaskReview(reviewRounds);
     if (pendingReview) {
       throw new Error(`Review round ${pendingReview.round} feedback must be addressed`);
     }

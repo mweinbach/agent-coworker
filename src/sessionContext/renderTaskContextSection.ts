@@ -1,5 +1,5 @@
 import {
-  getPendingTaskReviewForContext,
+  getPendingTaskReview,
   getTaskReviewRoundsForContext,
 } from "../server/tasks/taskReviewPolicy";
 import { MAX_TASK_REVIEW_ROUNDS, type TaskContextSnapshot } from "../shared/tasks";
@@ -91,9 +91,9 @@ export function renderTaskContextSection(context: TaskContextSnapshot | null | u
   }
 
   const requiredReviewRounds = context.reviewRounds ?? 0;
-  const pendingReview = getPendingTaskReviewForContext(context);
+  const reviews = getTaskReviewRoundsForContext(context);
+  const pendingReview = getPendingTaskReview(reviews);
   if (requiredReviewRounds > 0) {
-    const reviews = getTaskReviewRoundsForContext(context);
     lines.push(
       "",
       "### Required independent review loop",

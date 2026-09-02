@@ -4163,6 +4163,18 @@ describe("task mode persistence", () => {
 
   test("requires a fresh pass after an addressed optional review failure", async () => {
     const harness = await createHarness();
+    const listTaskReviews = harness.sessionDb.listTaskReviews.bind(harness.sessionDb);
+    const iterations: number[] = [];
+    const reviewReads = spyOn(harness.sessionDb, "listTaskReviews").mockImplementation((taskId) => {
+      const reviews = listTaskReviews(taskId).reverse();
+      const readIndex = iterations.push(0) - 1;
+      const iterate = reviews[Symbol.iterator].bind(reviews);
+      reviews[Symbol.iterator] = () => {
+        iterations[readIndex] += 1;
+        return iterate();
+      };
+      return reviews;
+    });
     try {
       let { task } = await createIndependentlyReviewedTask(harness, { reviewRounds: 2 });
       task = (await recordPass(harness, task, "reviewer-1")).task;
@@ -4170,6 +4182,9 @@ describe("task mode persistence", () => {
       const failed = await recordFail(harness, task, "reviewer-3");
       task = failed.task;
 
+      await expect(recordPass(harness, task, "reviewer-4")).rejects.toThrow(
+        "Review round 3 feedback must be addressed before another review",
+      );
       await expect(
         harness.coordinator.proposeCompletion({
           taskId: task.id,
@@ -4197,6 +4212,9 @@ describe("task mode persistence", () => {
         }),
       ).rejects.toThrow("fresh passing review");
 
+      await expect(recordPass(harness, task, "reviewer-1")).rejects.toThrow(
+        "Each independent review round must use a new reviewer agent",
+      );
       task = (await recordPass(harness, task, "reviewer-4")).task;
       task = await harness.coordinator.proposeCompletion({
         taskId: task.id,
@@ -4205,7 +4223,29 @@ describe("task mode persistence", () => {
         summary: "Ready after fresh review",
       });
       expect(task.status).toBe("awaiting_review");
+      const persistedReviews = listTaskReviews(task.id);
+      expect(
+        persistedReviews.map((review) => ({
+          round: review.round,
+          verdict: review.verdict,
+          feedback: review.feedback,
+          materialFingerprint: review.materialFingerprint,
+        })),
+      ).toEqual(
+        [1, 2, 3, 4].map((round) => ({
+          round,
+          verdict: round === 3 ? "fail" : "pass",
+          feedback:
+            round === 3
+              ? "VERDICT: FAIL\nreviewer-3 found a material acceptance gap."
+              : `VERDICT: PASS\nreviewer-${round} verified the current delivery.`,
+          materialFingerprint: persistedReviews[0]?.materialFingerprint,
+        })),
+      );
+      expect(iterations.length).toBeGreaterThan(0);
+      expect(iterations).toEqual(iterations.map(() => 1));
     } finally {
+      reviewReads.mockRestore();
       harness.sessionDb.close();
     }
   });

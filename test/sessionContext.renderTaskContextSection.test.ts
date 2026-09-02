@@ -81,6 +81,51 @@ describe("renderTaskContextSection", () => {
     expect(renderTaskContextSection(null)).toBe("");
   });
 
+  test("normalizes review history once for progress and pending feedback", () => {
+    let detailReads = 0;
+    const rendered = renderTaskContextSection({
+      id: "task-1",
+      title: "Analysis",
+      objective: "Compare vendors",
+      status: "working",
+      revision: 2,
+      activeThreadId: "thread-1",
+      reviewRounds: 2,
+      requirements: [],
+      workItems: [],
+      decisions: [],
+      questions: [],
+      blockers: [],
+      artifacts: [],
+      activity: [
+        {
+          id: "review-1",
+          seq: 1,
+          taskId: "task-1",
+          threadId: "thread-1",
+          workItemId: null,
+          kind: "review_completed",
+          summary: "Independent review: FAIL",
+          get detail() {
+            detailReads += 1;
+            return JSON.stringify({
+              round: 1,
+              verdict: "fail",
+              feedback: "Verify the sources.",
+              reviewerAgentId: "reviewer-1",
+              reviewerProvider: "openai",
+              reviewerModel: "gpt-5.4",
+            });
+          },
+          createdAt: "2026-06-19T12:00:00.000Z",
+        },
+      ],
+    });
+    expect(rendered).toContain("Progress: 1/2 minimum review rounds recorded");
+    expect(rendered).toContain("> Verify the sources.");
+    expect(detailReads).toBe(2);
+  });
+
   test("preserves completed work evidence when rebuilding task context", () => {
     const rendered = renderTaskContextSection({
       id: "task-1",

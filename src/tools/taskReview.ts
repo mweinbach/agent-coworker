@@ -1,8 +1,9 @@
 import { z } from "zod";
 
 import {
-  getPendingTaskReviewForContext,
+  getPendingTaskReview,
   getTaskReviewRoundsForContext,
+  type TaskReviewRound,
 } from "../server/tasks/taskReviewPolicy";
 import {
   MAX_TASK_REVIEW_ROUNDS,
@@ -26,8 +27,11 @@ const taskReviewInputSchema = z.preprocess(
     .strict(),
 );
 
-function reviewBriefing(context: TaskContextSnapshot, focus?: string): string {
-  const reviews = getTaskReviewRoundsForContext(context);
+function reviewBriefing(
+  context: TaskContextSnapshot,
+  reviews: readonly TaskReviewRound[],
+  focus?: string,
+): string {
   return [
     `Task: ${context.title}`,
     `Objective: ${context.objective}`,
@@ -99,7 +103,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
       const requiredRounds = context.reviewRounds ?? 0;
       if (requiredRounds === 0) throw new Error("This task does not require independent reviews");
       const priorRounds = getTaskReviewRoundsForContext(context);
-      const pending = getPendingTaskReviewForContext(context);
+      const pending = getPendingTaskReview(priorRounds);
       if (pending) {
         throw new Error(
           `Review round ${pending.round} feedback must be implemented and addressed first`,
@@ -123,7 +127,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
         nickname: `task-review-${round}`,
         taskType: "verify",
         contextMode: "brief",
-        briefing: reviewBriefing(context, input.focus),
+        briefing: reviewBriefing(context, priorRounds, input.focus),
       });
 
       try {
@@ -162,10 +166,7 @@ export function createTaskReviewTool(ctx: ToolContext) {
           verdict,
           feedback,
         });
-        const recorded = getTaskReviewRoundsForContext({
-          activity: result.task.activity,
-          reviews: result.task.reviews,
-        }).at(-1);
+        const recorded = getTaskReviewRoundsForContext(result.task).at(-1);
         if (!recorded || recorded.reviewerAgentId !== reviewer.agentId) {
           throw new Error("Recorded review could not be read from the task review state");
         }

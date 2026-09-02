@@ -138,24 +138,8 @@ export function getTaskReviewRoundsForContext(
     : getTaskReviewRounds(context.activity ?? []);
 }
 
-export function getPendingTaskReviewFromRecords(
-  reviews: readonly TaskReviewRecord[],
-): TaskReviewRound | null {
-  return (
-    getTaskReviewRoundsFromRecords(reviews).find(
-      (round) => round.verdict !== "pass" && round.addressedAt === null,
-    ) ?? null
-  );
-}
-
-export function getPendingTaskReviewForContext(
-  context: Pick<TaskContextSnapshot, "activity" | "reviews">,
-): TaskReviewRound | null {
-  return (
-    getTaskReviewRoundsForContext(context).find(
-      (round) => round.verdict !== "pass" && round.addressedAt === null,
-    ) ?? null
-  );
+export function getPendingTaskReview(rounds: readonly TaskReviewRound[]): TaskReviewRound | null {
+  return rounds.find((round) => round.verdict !== "pass" && round.addressedAt === null) ?? null;
 }
 
 function stableNormalize(value: unknown): unknown {
